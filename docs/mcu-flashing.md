@@ -14,7 +14,8 @@ Summary:
   fixed over serial.
 - Eboard: Flashforge's **64 KB serial bootloader** at 0x08000000, app at 0x08010000. The flasher
   never sends addresses, so it can't overwrite the bootloader. It waits after every reset.
-- IFS: own bootloader, app at 0x08010000; stays stock.
+- IFS: own bootloader below 0x08010000. It waits after power-on, and after `F37`, whose handler
+  erases its flag page at 0x0800D000. Klipper on it is opt-in (`/data/ad5x/ifs-klipper.enable`).
 - Stock reflashes the MCUs at boot **only when flag files exist** (`Update`, `UpdateM`). It does
   not read the firmware version on the MCUs, so mainline on the boards does not trigger a
   re-flash. Stock with mainline MCUs simply fails to talk to them (see "Stock against mainline MCUs").
@@ -45,8 +46,20 @@ every start (`S60ad5x-eboard`), before Klipper:
    complete (`S99ad5x-booted`): the try-once boot flag otherwise still
    points at the recovery OS, and a user who switches off at once lands
    there instead (found in the 2026-10-19 round trip below).
-3. When both report the wanted version, `/data/ad5x/klipper.enable` is
-   created once and Klipper starts.
+3. **IFS**, only with `/data/ad5x/ifs-klipper.enable`: Klipper `identify`
+   on `ttyS4` at 115200. Anything else: `ifsF37` (Flashforge's firmware and
+   ours with `CONFIG_FLASHFORGE_IFS` erase the bootloader's flag page and
+   reset into it), then `IFSCommand ifs.hex /dev/ttyS4`. A failure is logged
+   and doesn't hold Klipper back: `S61klipper` gives Klipper the IFS as an
+   MCU (`generic-flashforge-ifs.cfg`, through `ifs.cfg`'s include of
+   `/run/ad5x/ifs-mcu/*.cfg`) only while it answers as Klipper; otherwise
+   `ifs.py` uses Flashforge's firmware. By hand: `ad5x-mcu
+   flash-ifs` (this version), `flash-ifs HEX`, or `flash-ifs stock`
+   (Flashforge's `ifs.hex` back). When no bootloader answers, it keeps trying
+   for 2 minutes: unplug the IFS cable and plug it back in (the bootloader
+   always waits briefly after power-on).
+4. When the mainboard and eboard report the wanted version,
+   `/data/ad5x/klipper.enable` is created once and Klipper starts.
 
 The flashing tools are Flashforge's own, from this printer: stock keeps them
 in its control directory on the usershare partition (`/usr/prog` under
@@ -109,10 +122,10 @@ calls `NationsCommand` or `IAPCommand` (not in its strings).
 | Port | `/dev/ttyS2` (tool default) | `/dev/ttyS5` (argument; tool default too) | `/dev/ttyS4` |
 | Tool | `NationsCommand` ("Nations command line v1.0.0") | `IAPCommand` (an "stm32isp" derivative) | `ifsF37` + `IFSCommand` (same code as `IAPCommand`) |
 | Target | Nations ROM ISP bootloader (system memory) | Flashforge bootloader in flash 0x08000000–0x0800FFFF | IFS bootloader below 0x08010000 |
-| Entry | SoC sysfs GPIO **50** = 1 (BOOT0), GPIO **49** pulsed 0 for 200 ms then 1 (NRST), 200 ms settle. Repeated before every connect attempt | None: the bootloader runs after every reset and waits; the tool must catch it before anyone sends `A` | `ifsF37` sends `F37\r\n` at 115200; the IFS app sets a flag and resets into its bootloader (`docs/ifs-protocol.md`) |
+| Entry | SoC sysfs GPIO **50** = 1 (BOOT0), GPIO **49** pulsed 0 for 200 ms then 1 (NRST), 200 ms settle. Repeated before every connect attempt | None: the bootloader runs after every reset and waits; the tool must catch it before anyone sends `A` | `ifsF37` sends `F37\r\n` at 115200; the IFS app erases the bootloader's flag page (0x0800D000) and resets (AIRCR); the bootloader then waits. It also waits briefly after every power-on (`docs/ifs-protocol.md`) |
 | Link | 8N1. Tries 9600, 19200, 38400, 115200 (twice each; the help text claims a 115200 default, the code starts at 9600) | 115200 **8E1** | 115200 8E1 |
 | Protocol | Nations ISP: command bytes with `cr1/cr2` status replies (0xA0 ok, 0xB0 fail); reads BOOT version and UCID; erases by file size from 0x08000000; writes the raw `.bin` at 0x08000000 (hard-coded, `--a` not used by `-d`); `--v` CRC-verifies; `-r` sends the ISP system-reset command. BOOT0 goes low as soon as the connection is up, so the reset starts the app | Sync: send `C` (0x43); 0x06 = start, 0x07 = "Update :HD" (tool exits 0 **without flashing**, flag kept; meaning unknown). Frames of 1030 bytes: 0x01, frame number (u8), length (u16), 1024 data bytes (0xFF padded), CRC-16/XMODEM (poly 0x1021, init 0) over the data. 0x06 per frame; anything else → resend, **no retry limit**. End: 0x04, expect 0x06 | Same as eboard |
-| Addresses | From the tool (0x08000000) | **Not sent.** The tool cuts the hex into 1 KB blocks from its first address and sends them in order; the bootloader decides where they go. A gap in the hex bigger than a block would shift everything after it | Same |
+| Addresses | From the tool (0x08000000) | **Not sent.** The tool cuts the hex into 1 KB blocks from its first address and sends them in order; the bootloader decides where they go. Make the hex without gaps (`tools/build_mcu.sh` writes it from `klipper.bin`): how a gap is handled is unknown | Same |
 | File | Raw binary (`AD5X.bin`) | Intel hex (`ADM_App.hex`); start-address record unused by the tool | Intel hex (`ifs.hex`) |
 | Side effects | `rm -f $PWD/UpdateM` on success | `touch /root/N32` (nothing in `firmwareExe` reads it), `rm $PWD/Update` on success | None |
 
@@ -140,7 +153,7 @@ call it; its caller (probably zMod) is unconfirmed. `firmwareExe` starts stock K
 `MachineInfo::doUpdateIfs`, reached only from `on_btnIfs_clicked` (Machine Info screen, when not
 printing): sends `F37`, closes the port, runs
 `/usr/prog/PROGRAM/control/IFSCommand /usr/prog/PROGRAM/control/ifs.hex /dev/ttyS4`, then asks `F19`
-for the version. Never automatic. Leave it alone: the IFS stays stock.
+for the version. Never automatic.
 
 ## 2. Bootloaders and offsets
 
@@ -148,7 +161,7 @@ for the version. Never automatic. Leave it alone: the IFS stays stock.
 |---|---|---|---|---|---|
 | Mainboard | ROM ISP is mask ROM; can't be erased. Lost only through option bytes (read/write protection), which we never touch | Yes: `NationsCommand` with BOOT0/NRST, whatever is in flash | 0x08000000 | `CONFIG_STM32_FLASH_START_0000`, `FLASH_APPLICATION_ADDRESS=0x8000000` ✔ | `AD5X.bin`, SP 0x20020000, reset 0x08006DDD |
 | Eboard | Yes, if the bootloader writes only from 0x08010000 (it picks the address; the tool sends none). Not proven: we have no dump of it | Yes: power-cycle, don't send `A`, run `IAPCommand` | 0x08010000 | `CONFIG_STM32_FLASH_START_10000`, `FLASH_APPLICATION_ADDRESS=0x8010000` ✔ | `ADM_App.hex` 0x08010000–0x08018CAC, reset 0x08016A7D |
-| IFS | Unknown, not touched | `ifsF37` + `IFSCommand` | 0x08010000 | n/a | `ifs.hex` 0x08010000–0x0801A0D0 |
+| IFS | So far: written stock → Klipper → stock → Klipper (2026-10-25), the bootloader intact | Yes: power-cycle the IFS while `IFSCommand` retries, whatever is in flash | 0x08010000 | `CONFIG_STM32_FLASH_START_10000`, `CONFIG_FLASHFORGE_IFS` (stack within 32 KiB: the stock SP is 0x20007498, and a build with 0x20020000 most likely never started) ✔ | `ifs.hex` 0x08010000–0x0801A0D0 |
 
 Images checked on the laptop: `firmware/builds/v0.13.0-800-g9cb99754c/mainboard.bin` has its vector
 table at 0x08000000 (SP 0x20010000, reset 0x08006CE1). `eboard.hex` covers 0x08010000–0x0801A298

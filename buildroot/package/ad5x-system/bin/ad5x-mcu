@@ -15,7 +15,12 @@
 #     after power-on ("Ready" on ttyS5). If it waits and the last eboard
 #     flash on record isn't this version: IAPCommand, then start it ('A').
 #     If its application already runs (a warm restart) with another
-#     version: the screen asks for a power-cycle; the next start flashes it.
+#     version: the screen asks for a power-cycle; the next start flashes it;
+#   - IFS (filament unit), only with /data/ad5x/ifs-klipper.enable: Klipper
+#     "identify" on ttyS4 (115200); any other answer: ifsF37 (Flashforge's
+#     firmware and ours erase the bootloader's flag page and reset into it),
+#     then IFSCommand (stock's ifsF37, IFSCommand). A failure here doesn't
+#     hold Klipper back: printer.cfg says whether it needs the IFS.
 # Before writing a board, stock's own board update is armed (Update and
 # UpdateM in stock's control directory): Kiln OS never runs it, but if stock
 # ever starts again (a failed first start, ad5x-restore-stock) it flashes
@@ -31,9 +36,16 @@
 #                                      while Klipper runs: it holds the ports)
 #        ad5x-mcu flash-mainboard      flash the mainboard now (refused while
 #                                      Klipper runs)
+#        ad5x-mcu flash-ifs [HEX|stock] flash the IFS now: this version,
+#                                      HEX, or Flashforge's firmware back
+#                                      (refused while Klipper runs). If its
+#                                      bootloader doesn't answer, it keeps
+#                                      trying for 2 minutes: unplug the IFS
+#                                      cable and plug it back in
 #        ad5x-mcu arm-stock            arm stock's own board update
 #        ad5x-mcu tools                copy the flashing tools from stock
 # /data/ad5x/mcu.disable: "boot" only starts the eboard, flashes nothing.
+# /data/ad5x/ifs-klipper.enable: "boot" also keeps the IFS on this version.
 # Log: /data/ad5x/mcu/log.
 #
 # Test overrides: AD5X_DATA (/data), AD5X_SYS (/sys), AD5X_DEV (/dev),
@@ -48,12 +60,13 @@ TOOLS=$AD5X_DATA/ad5x/vendor/mcu
 LOG=$ST/log
 MB=$AD5X_DEV/ttyS2
 EB=$AD5X_DEV/ttyS5
+IFS_PORT=$AD5X_DEV/ttyS4
 WANT=$(cat "$AD5X_MCU_FW/VERSION" 2>/dev/null)
 
 say() { echo "ad5x-mcu: $*"; echo "$(date '+%F %T') $*" >> "$LOG" 2>/dev/null; }
 blog() { command -v ad5x-bootlog >/dev/null 2>&1 && ad5x-bootlog "  mcu: $*" 2>/dev/null; true; }
-ver() {	# PORT -> the version its firmware reports, empty if none answers
-	ad5x-mcu-version --port "$1" --baud 230400 --timeout "${2:-3}" 2>/dev/null
+ver() {	# PORT [BAUD] [TIMEOUT] -> the version its firmware reports, empty if none answers
+	ad5x-mcu-version --port "$1" --baud "${2:-230400}" --timeout "${3:-3}" 2>/dev/null
 }
 kernel() {
 	[ -n "$AD5X_KERNEL" ] && { echo "$AD5X_KERNEL"; return; }
@@ -129,6 +142,24 @@ tools() {	# make sure $TOOLS has NationsCommand and IAPCommand
 	return $rc
 }
 
+ifs_tools() {	# make sure $TOOLS has IFSCommand, ifsF37 and Flashforge's ifs.hex
+	[ -x "$TOOLS/IFSCommand" ] && [ -x "$TOOLS/ifsF37" ] && [ -f "$TOOLS/stock-ifs.hex" ] && return 0
+	us_mount ro || return 1
+	c=$(control_dir)
+	if [ -z "$c" ] || [ ! -f "$c/IFSCommand" ] || [ ! -f "$c/ifsF37" ] || [ ! -f "$c/ifs.hex" ]; then
+		say "no IFS flashing tools in stock's control directory (${c:-none} on usershare)"
+		us_umount; return 1
+	fi
+	mkdir -p "$TOOLS"
+	cp "$c/IFSCommand" "$c/ifsF37" "$TOOLS/" && cp "$c/ifs.hex" "$TOOLS/stock-ifs.hex" &&
+		chmod 755 "$TOOLS/IFSCommand" "$TOOLS/ifsF37" &&
+		( cd "$TOOLS" && sha256sum IFSCommand ifsF37 stock-ifs.hex > SHA256SUMS.ifs )
+	rc=$?
+	us_umount
+	[ $rc = 0 ] && say "IFS flashing tools copied from stock ${c##*/}"
+	return $rc
+}
+
 arm_stock() {	# stock's own board update at its next start
 	us_mount rw || return 1
 	c=$(control_dir)
@@ -189,6 +220,82 @@ flash_eboard() {	# the bootloader must be waiting
 	echo "$WANT" > "$ST/eboard"
 }
 
+limit() {	# SECONDS CMD...: run CMD, killed after SECONDS
+	l=$1; shift
+	"$@" & lp=$!
+	( sleep "$l"; kill $lp 2>/dev/null ) & lk=$!
+	wait $lp; lrc=$?
+	kill $lk 2>/dev/null
+	return $lrc
+}
+
+ifs_f19() {	# the version Flashforge's firmware on the IFS reports, empty if none answers
+	python3 - "$IFS_PORT" 2>/dev/null <<'EOF'
+import os, sys, termios, time
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+a = termios.tcgetattr(fd)
+a[0] = a[1] = a[3] = 0
+a[2] = termios.CS8 | termios.CREAD | termios.CLOCAL
+a[4] = a[5] = termios.B115200
+termios.tcsetattr(fd, termios.TCSANOW, a)
+termios.tcflush(fd, termios.TCIOFLUSH)
+os.write(fd, b"F19\r\n")
+time.sleep(1)
+try:
+    r = os.read(fd, 256).decode("ascii", "replace")
+except OSError:
+    r = ""
+if "version:" in r:
+    print(r.split("version:")[-1].strip(" ."))
+EOF
+}
+
+flash_ifs() {	# HEX WHAT: write HEX to the IFS (WHAT for the log)
+	ifs_tools || return 1
+	say "ifs: flashing $2 (IFSCommand)"
+	# Flashforge's firmware and ours (FLASHFORGE_IFS) erase the bootloader's
+	# flag page on F37 and reset into it; it then waits for IFSCommand
+	"$TOOLS/ifsF37" "$IFS_PORT" >/dev/null 2>&1
+	sleep 1
+	end=$(( $(date +%s) + ${IFS_WAIT:-0} )) told=
+	while :; do
+		w=$(mktemp -d)	# like IAPCommand, it may delete ./Update
+		# IFSCommand gives up after ~20 s without a bootloader, but resends
+		# a frame without limit
+		( cd "$w" && limit 300 "$TOOLS/IFSCommand" "$1" "$IFS_PORT" ) > "$ST/ifs.log" 2>&1
+		rc=$?
+		rm -rf "$w"
+		[ $rc = 0 ] && grep -q "STM32Write: success" "$ST/ifs.log" && return 0
+		if grep -q "Can not connect" "$ST/ifs.log" && [ "$(date +%s)" -lt $end ]; then
+			[ -n "$told" ] || say "ifs: no bootloader answers: unplug the IFS cable and plug it back in"
+			told=1; continue
+		fi
+		say "ifs: flashing failed (exit $rc, $ST/ifs.log)"
+		return 1
+	done
+}
+
+flash_ifs_klipper() {	# HEX [WANT]: Klipper firmware; WANT empty: any version
+	[ -f "$1" ] || { say "ifs: no $1"; return 1; }
+	flash_ifs "$1" "${2:-$1}" || return 1
+	sleep 2
+	v=$(ver "$IFS_PORT" 115200 3)
+	if [ -z "$v" ] || { [ -n "$2" ] && [ "$v" != "$2" ]; }; then
+		say "ifs: flashed, but it reports '${v:-nothing}'"; rm -f "$ST/ifs"; return 1
+	fi
+	echo "$v" > "$ST/ifs"
+	say "ifs: $v"
+}
+
+flash_ifs_stock() {	# Flashforge's ifs.hex back
+	ifs_tools && flash_ifs "$TOOLS/stock-ifs.hex" "Flashforge's firmware" || return 1
+	rm -f "$ST/ifs"
+	sleep 2
+	v=$(ifs_f19)
+	[ -n "$v" ] || { say "ifs: flashed, but Flashforge's firmware doesn't answer"; return 1; }
+	say "ifs: Flashforge's firmware $v"
+}
+
 boot() {
 	mkdir -p "$ST"
 	if [ -f "$AD5X_DATA/ad5x/mcu.disable" ]; then
@@ -236,7 +343,16 @@ boot() {
 		[ -n "$failed" ] || failed=power
 	fi
 	# a flashed mainboard: check what it runs now
-	[ -z "$mbflashed" ] || mv=$(ver "$MB" 1)
+	[ -z "$mbflashed" ] || mv=$(ver "$MB" 230400 1)
+	# IFS: only when asked for; a failure doesn't hold Klipper back
+	if [ -f "$AD5X_MCU_FW/ifs.hex" ] && [ -f "$AD5X_DATA/ad5x/ifs-klipper.enable" ]; then
+		iv=$(ver "$IFS_PORT" 115200 1)
+		if [ "$iv" != "$WANT" ]; then
+			say "ifs runs '${iv:-something else}', want $WANT"
+			{ arm && flash_ifs_klipper "$AD5X_MCU_FW/ifs.hex" "$WANT"; } ||
+				say "ifs: not updated (ad5x-mcu flash-ifs)"
+		fi
+	fi
 	if [ -z "$failed" ] && [ "$mv" = "$WANT" ]; then
 		blog "boards on $WANT"
 		if [ ! -f "$ST/klipper-enabled" ]; then
@@ -264,13 +380,20 @@ status() {
 	if klippy_running; then
 		echo "mainboard=(in use by Klipper)"
 		echo "eboard=(in use by Klipper)"
+		echo "ifs=(in use by Klipper)"
 	else
-		echo "mainboard=$(ver "$MB" 2)"
-		echo "eboard=$(ver "$EB" 2)"
+		echo "mainboard=$(ver "$MB" 230400 2)"
+		echo "eboard=$(ver "$EB" 230400 2)"
+		v=$(ver "$IFS_PORT" 115200 2)
+		[ -n "$v" ] || v=$(ifs_f19 | sed 's/^/flashforge /')
+		echo "ifs=$v"
 	fi
 	echo "eboard_flashed=$(cat "$ST/eboard" 2>/dev/null)"
+	echo "ifs_flashed=$(cat "$ST/ifs" 2>/dev/null)"
 	if [ -x "$TOOLS/NationsCommand" ]; then echo "tools=ok"; else echo "tools=missing"; fi
+	if [ -x "$TOOLS/IFSCommand" ] && [ -x "$TOOLS/ifsF37" ]; then echo "ifs_tools=ok"; else echo "ifs_tools=missing"; fi
 	[ -f "$AD5X_DATA/ad5x/mcu.disable" ] && echo "disabled=1"
+	[ -f "$AD5X_DATA/ad5x/ifs-klipper.enable" ] && echo "ifs_klipper_enabled=1"
 	true
 }
 
@@ -280,7 +403,16 @@ status) status ;;
 flash-mainboard)
 	klippy_running && { echo "ad5x-mcu: Klipper runs: /etc/init.d/S61klipper stop first" >&2; exit 1; }
 	mkdir -p "$ST"; [ -n "$WANT" ] && tools && arm_stock && flash_mainboard ;;
+flash-ifs)
+	klippy_running && { echo "ad5x-mcu: Klipper runs: /etc/init.d/S61klipper stop first" >&2; exit 1; }
+	mkdir -p "$ST"; arm_stock
+	export IFS_WAIT=120
+	case "$2" in
+	stock) flash_ifs_stock ;;
+	"") [ -n "$WANT" ] && flash_ifs_klipper "$AD5X_MCU_FW/ifs.hex" "$WANT" ;;
+	*) flash_ifs_klipper "$2" ;;
+	esac ;;
 arm-stock) mkdir -p "$ST"; arm_stock ;;
 tools) mkdir -p "$ST"; tools ;;
-*) sed -n '2,38p' "$0"; exit 2 ;;
+*) sed -n '2,49p' "$0"; exit 2 ;;
 esac

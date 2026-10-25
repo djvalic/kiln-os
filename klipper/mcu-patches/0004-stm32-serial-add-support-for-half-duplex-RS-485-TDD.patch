@@ -1,0 +1,299 @@
+From a068fce024a820fa1959c122c5f6b7689db98eb7 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sat, 24 Oct 2026 20:34:02 -0700
+Subject: [PATCH] stm32, serial: add support for half-duplex RS-485 TDD
+
+Add support for half-duplex RS-485 Time Division Duplexing (TDD)
+with Transmit Enable (DE) pin control on STM32 / N32G45x (specifically
+PA11 for the Flashforge Adventurer 5X IFS board).
+---
+ src/Kconfig              |  2 ++
+ src/command.c            |  6 +++-
+ src/generic/serial_irq.c | 59 +++++++++++++++++++++++++++++++++++-----
+ src/stm32/Kconfig        | 20 ++++++++++++++
+ src/stm32/serial.c       | 48 ++++++++++++++++++++++++++++++--
+ 5 files changed, 125 insertions(+), 10 deletions(-)
+
+diff --git a/src/Kconfig b/src/Kconfig
+index 7041ee0..4a87281 100644
+--- a/src/Kconfig
++++ b/src/Kconfig
+@@ -49,6 +49,8 @@ source "src/simulator/Kconfig"
+ # Generic configuration options for serial ports
+ config SERIAL
+     bool
++config SERIAL_RS485_TDD
++    bool
+ config SERIAL_BAUD
+     depends on SERIAL
+     int "Baud rate for serial port" if LOW_LEVEL_OPTIONS
+diff --git a/src/command.c b/src/command.c
+index 05780a7..83d2bec 100644
+--- a/src/command.c
++++ b/src/command.c
+@@ -135,9 +135,12 @@ command_encodef(uint8_t *buf, uint_fast8_t buf_size
+                 , const struct command_encoder *ce, va_list args)
+ {
+     uint_fast8_t max_size = READP(ce->max_size);
+-    if (max_size <= MESSAGE_MIN)
++    if (max_size <= MESSAGE_MIN) {
+         // Ack/Nak message
++        if (buf_size < MESSAGE_MIN)
++            return 0;
+         return max_size;
++    }
+     if (buf_size < max_size)
+         max_size = buf_size;
+     uint8_t *p = &buf[MESSAGE_HEADER_SIZE];
+@@ -267,6 +270,7 @@ command_lookup_parser(uint_fast16_t cmdid)
+ // Empty message (for ack/nak transmission)
+ const struct command_encoder encode_acknak PROGMEM = {
+     .max_size = MESSAGE_MIN,
++    .min_size = MESSAGE_MIN,
+ };
+ 
+ enum { CF_NEED_SYNC=1<<0, CF_NEED_VALID=1<<1 };
+diff --git a/src/generic/serial_irq.c b/src/generic/serial_irq.c
+index 4c05ef3..104e936 100644
+--- a/src/generic/serial_irq.c
++++ b/src/generic/serial_irq.c
+@@ -15,12 +15,21 @@
+ #include "serial_irq.h" // serial_enable_tx_irq
+ 
+ #define RX_BUFFER_SIZE 192
++#if CONFIG_SERIAL_RS485_TDD
++#define TX_BUFFER_SIZE 240
++#else
++#define TX_BUFFER_SIZE 96
++#endif
+ 
+ static uint8_t receive_buf[RX_BUFFER_SIZE], receive_pos;
+-static uint8_t transmit_buf[96], transmit_pos, transmit_max;
++static uint8_t transmit_buf[TX_BUFFER_SIZE], transmit_pos, transmit_max;
++#if CONFIG_SERIAL_RS485_TDD
++static uint8_t transmit_commit;
++DECL_CONSTANT("SERIAL_RS485_TDD", 1);
++#endif
++DECL_CONSTANT("RECEIVE_WINDOW", RX_BUFFER_SIZE);
+ 
+ DECL_CONSTANT("SERIAL_BAUD", CONFIG_SERIAL_BAUD);
+-DECL_CONSTANT("RECEIVE_WINDOW", RX_BUFFER_SIZE);
+ 
+ // Rx interrupt - store read data
+ void
+@@ -38,8 +47,13 @@ serial_rx_byte(uint_fast8_t data)
+ int
+ serial_get_tx_byte(uint8_t *pdata)
+ {
++#if CONFIG_SERIAL_RS485_TDD
++    if (transmit_pos >= transmit_commit)
++        return -1;
++#else
+     if (transmit_pos >= transmit_max)
+         return -1;
++#endif
+     *pdata = transmit_buf[transmit_pos++];
+     return 0;
+ }
+@@ -79,12 +93,20 @@ console_task(void)
+     if (ret > 0)
+         command_dispatch(receive_buf, pop_count);
+     if (ret) {
+-        if (CONFIG_HAVE_BOOTLOADER_REQUEST && ret < 0 && pop_count == 32
+-            && !memcmp(receive_buf, " \x1c Request Serial Bootloader!! ~", 32))
++        if (CONFIG_HAVE_BOOTLOADER_REQUEST && ret < 0
++            && ((pop_count == 32
++                 && !memcmp(receive_buf,
++                            " \x1c Request Serial Bootloader!! ~", 32))
++                || (pop_count >= 3 && !memcmp(receive_buf, "F37", 3))))
+             bootloader_request();
+         console_pop_input(pop_count);
+         if (ret > 0)
+             command_send_ack();
++#if CONFIG_SERIAL_RS485_TDD
++        writeb(&transmit_commit, readb(&transmit_max));
++        if (readb(&transmit_pos) < readb(&transmit_commit))
++            serial_enable_tx_irq();
++#endif
+     }
+ }
+ DECL_TASK(console_task);
+@@ -98,30 +120,53 @@ console_sendf(const struct command_encoder *ce, va_list args)
+     if (tpos >= tmax) {
+         tpos = tmax = 0;
+         writeb(&transmit_max, 0);
++#if CONFIG_SERIAL_RS485_TDD
++        writeb(&transmit_commit, 0);
++#endif
+         writeb(&transmit_pos, 0);
+     }
+-    if (tmax + READP(ce->max_size) > sizeof(transmit_buf)) {
+-        if (tmax - tpos + READP(ce->min_size) > sizeof(transmit_buf))
++    uint_fast8_t max_size = READP(ce->max_size);
++    uint_fast8_t limit = sizeof(transmit_buf);
++#if CONFIG_SERIAL_RS485_TDD
++    if (max_size > MESSAGE_MIN)
++        limit -= MESSAGE_MIN;
++#endif
++    if (tmax + max_size > limit) {
++        if (tmax - tpos + READP(ce->min_size) > limit)
+             // Not enough space for message
+             return;
+         // Disable TX irq and move buffer
+         writeb(&transmit_max, 0);
++#if CONFIG_SERIAL_RS485_TDD
++        uint_fast8_t tcommit = readb(&transmit_commit);
++        writeb(&transmit_commit, 0);
++#endif
+         tpos = readb(&transmit_pos);
+         tmax -= tpos;
+         memmove(&transmit_buf[0], &transmit_buf[tpos], tmax);
+         writeb(&transmit_pos, 0);
++#if CONFIG_SERIAL_RS485_TDD
++        tcommit = tcommit > tpos ? tcommit - tpos : 0;
++        writeb(&transmit_commit, tcommit);
++        writeb(&transmit_max, tmax);
++        if (tcommit)
++            serial_enable_tx_irq();
++#else
+         writeb(&transmit_max, tmax);
+         serial_enable_tx_irq();
++#endif
+     }
+ 
+     // Generate message
+     uint8_t *buf = &transmit_buf[tmax];
+     uint_fast8_t msglen = command_encode_and_frame(
+-        buf, sizeof(transmit_buf) - tmax, ce, args);
++        buf, limit - tmax, ce, args);
+     if (!msglen)
+         return;
+ 
+     // Start message transmit
+     writeb(&transmit_max, tmax + msglen);
++#if !CONFIG_SERIAL_RS485_TDD
+     serial_enable_tx_irq();
++#endif
+ }
+diff --git a/src/stm32/Kconfig b/src/stm32/Kconfig
+index 429538d..7b306c0 100644
+--- a/src/stm32/Kconfig
++++ b/src/stm32/Kconfig
+@@ -530,6 +530,26 @@ choice
+ endchoice
+ 
+ 
++
++config STM32_SERIAL_RS485_DE
++    bool "Enable RS485 Transmit Enable (DE) pin"
++    depends on SERIAL
++    select SERIAL_RS485_TDD
++    default n
++    help
++        Enable an RS485 Driver Enable (DE) pin. During transmit, the
++        DE pin is driven HIGH to enable the RS485 transmitter, and
++        returned LOW on transmission complete (TC) for receive mode.
++
++choice
++    prompt "RS485 DE pin"
++    depends on STM32_SERIAL_RS485_DE
++    default STM32_SERIAL_RS485_DE_PA11
++
++    config STM32_SERIAL_RS485_DE_PA11
++        bool "PA11"
++endchoice
++
+ config STM32_CANBUS_PB8_PB9
+     bool
+     default y if STM32_MMENU_CANBUS_PB8_PB9 || STM32_CMENU_CANBUS_PB8_PB9
+diff --git a/src/stm32/serial.c b/src/stm32/serial.c
+index b78b5af..0b62c7e 100644
+--- a/src/stm32/serial.c
++++ b/src/stm32/serial.c
+@@ -7,7 +7,9 @@
+ #include "autoconf.h" // CONFIG_SERIAL_BAUD
+ #include "board/armcm_boot.h" // armcm_enable_irq
+ #include "board/serial_irq.h" // serial_rx_byte
++#include "board/gpio.h" // gpio_out_setup, gpio_out_write
+ #include "command.h" // DECL_CONSTANT_STR
++#include "generic/armcm_timer.h" // udelay
+ #include "internal.h" // enable_pclock
+ #include "sched.h" // DECL_INIT
+ 
+@@ -68,6 +70,22 @@
+   #define GPIO_AF_MODE 8
+   #define USARTx USART6
+   #define USARTx_IRQn USART6_IRQn
++#elif CONFIG_STM32_SERIAL_UART6_PC5_PC4
++  DECL_CONSTANT_STR("RESERVE_PINS_serial", "PC5,PC4");
++  #define GPIO_Rx GPIO('C', 5)
++  #define GPIO_Tx GPIO('C', 4)
++  #define GPIO_AF_MODE 0
++  #define USARTx ((USART_TypeDef *)0x40015400)
++  #define USARTx_IRQn 75
++#endif
++
++#if CONFIG_STM32_SERIAL_RS485_DE
++#if CONFIG_STM32_SERIAL_RS485_DE_PA11
++  #define GPIO_DE GPIO('A', 11)
++  DECL_CONSTANT_STR("RESERVE_PINS_serial_rs485", "PA11");
++#endif
++static struct gpio_out de_pin;
++static uint8_t de_active;
+ #endif
+ 
+ #define CR1_FLAGS (USART_CR1_UE | USART_CR1_RE | USART_CR1_TE   \
+@@ -85,22 +103,48 @@ USARTx_IRQHandler(void)
+     if (sr & USART_SR_TXE && USARTx->CR1 & USART_CR1_TXEIE) {
+         uint8_t data;
+         int ret = serial_get_tx_byte(&data);
+-        if (ret)
++        if (ret) {
++#if CONFIG_STM32_SERIAL_RS485_DE
++            USARTx->SR = ~USART_SR_TC;
++            USARTx->CR1 = CR1_FLAGS | USART_CR1_TCIE;
++            return;
++#else
+             USARTx->CR1 = CR1_FLAGS;
+-        else
++#endif
++        } else {
+             USARTx->DR = data;
++        }
++    }
++#if CONFIG_STM32_SERIAL_RS485_DE
++    if (sr & USART_SR_TC && USARTx->CR1 & USART_CR1_TCIE) {
++        USARTx->SR = ~USART_SR_TC;
++        USARTx->CR1 = CR1_FLAGS;
++        gpio_out_write(de_pin, 0);
++        de_active = 0;
+     }
++#endif
+ }
+ 
+ void
+ serial_enable_tx_irq(void)
+ {
++#if CONFIG_STM32_SERIAL_RS485_DE
++    if (!de_active) {
++        udelay(200);
++        gpio_out_write(de_pin, 1);
++        udelay(30);
++        de_active = 1;
++    }
++#endif
+     USARTx->CR1 = CR1_FLAGS | USART_CR1_TXEIE;
+ }
+ 
+ void
+ serial_init(void)
+ {
++#if CONFIG_STM32_SERIAL_RS485_DE
++    de_pin = gpio_out_setup(GPIO_DE, 0);
++#endif
+     enable_pclock((uint32_t)USARTx);
+ 
+     uint32_t pclk = get_pclock_frequency((uint32_t)USARTx);
+-- 
+2.43.0
+

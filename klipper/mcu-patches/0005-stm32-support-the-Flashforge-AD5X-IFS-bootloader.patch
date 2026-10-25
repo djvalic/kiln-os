@@ -1,0 +1,91 @@
+From d8d57fd35ee54d9de0c90efe9a39c2317218d43c Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sun, 25 Oct 2026 12:00:00 -0700
+Subject: [PATCH] stm32: support the Flashforge AD5X IFS bootloader
+
+The AD5X IFS (filament unit) board's bootloader starts the application
+unless the flag page at 0x0800D000 is erased; the stock firmware
+erases it on "F37" (Flashforge's ifsF37 tool) before resetting.
+A plain reset, as for the eboard, makes Klipper on the IFS impossible
+to replace over serial. Add FLASHFORGE_IFS: erase that page on a
+bootloader request, and keep the stack within 32KiB (the stock IFS
+firmware's stack starts at 0x20007498; a stack at 0x20020000 left the
+board silent).
+---
+ src/stm32/Kconfig   | 12 ++++++++++++
+ src/stm32/stm32f1.c | 22 ++++++++++++++++++++++
+ 2 files changed, 34 insertions(+)
+
+diff --git a/src/stm32/Kconfig b/src/stm32/Kconfig
+index 7b306c052..2c8b5fdfa 100644
+--- a/src/stm32/Kconfig
++++ b/src/stm32/Kconfig
+@@ -257,6 +257,7 @@ config RAM_SIZE
+     default 0x9000 if MACH_STM32G07x
+     default 0x24000 if MACH_STM32G0Bx
+     default 0x20000 if MACH_STM32H7
++    default 0x8000 if FLASHFORGE_IFS # AD5X IFS: stock uses under 32KiB, its bootloader checks the stack pointer
+     default 0x20000 if MACH_N32G455 # AD5X: as stock; the eboard bootloader checks the stack pointer
+     default 0x10000 if MACH_N32G45x
+ 
+@@ -541,6 +542,17 @@ config STM32_SERIAL_RS485_DE
+         DE pin is driven HIGH to enable the RS485 transmitter, and
+         returned LOW on transmission complete (TC) for receive mode.
+ 
++config FLASHFORGE_IFS
++    bool "Flashforge AD5X IFS bootloader" if LOW_LEVEL_OPTIONS
++    depends on MACH_N32G455 && STM32_FLASH_START_10000
++    default n
++    help
++        Build for the Flashforge AD5X IFS (filament unit) board: keep
++        the stack within 32KiB of RAM, and on a bootloader request
++        (such as "F37" from Flashforge's ifsF37 tool) erase the
++        bootloader's flag page at 0x0800D000, as the stock firmware
++        does, so that its bootloader waits for IFSCommand.
++
+ choice
+     prompt "RS485 DE pin"
+     depends on STM32_SERIAL_RS485_DE
+diff --git a/src/stm32/stm32f1.c b/src/stm32/stm32f1.c
+index 343d2c011..4c6a70d35 100644
+--- a/src/stm32/stm32f1.c
++++ b/src/stm32/stm32f1.c
+@@ -343,6 +343,26 @@ flashforge_bootloader_request(void)
+    NVIC_SystemReset();
+ }
+ 
++// Reboot into serial bootloader of Flashforge AD5X IFS MCU: like the
++// stock firmware's F37, erase the page holding the bootloader's flag
++// so that it waits for a new application instead of starting this one
++static void
++flashforge_ifs_bootloader_request(void)
++{
++    irq_disable();
++    FLASH->KEYR = 0x45670123;
++    FLASH->KEYR = 0xCDEF89AB;
++    FLASH->SR = FLASH_SR_EOP | FLASH_SR_WRPRTERR | FLASH_SR_PGERR;
++    FLASH->CR |= FLASH_CR_PER;
++    FLASH->AR = 0x0800D000;
++    FLASH->CR |= FLASH_CR_STRT;
++    while (FLASH->SR & FLASH_SR_BSY)
++        ;
++    FLASH->CR &= ~FLASH_CR_PER;
++    FLASH->CR |= FLASH_CR_LOCK;
++    NVIC_SystemReset();
++}
++
+ // Handle reboot requests
+ void
+ bootloader_request(void)
+@@ -352,6 +372,8 @@ bootloader_request(void)
+         usb_hid_bootloader();
+     else if (CONFIG_STM32_FLASH_START_2000)
+         usb_stm32duino_bootloader();
++    else if (CONFIG_FLASHFORGE_IFS)
++        flashforge_ifs_bootloader_request();
+     else if (CONFIG_MACH_N32G455 && CONFIG_STM32_FLASH_START_10000)
+         flashforge_bootloader_request();
+ }
+-- 
+2.43.0
+

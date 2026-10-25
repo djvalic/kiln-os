@@ -1,0 +1,57 @@
+From 04826a4f534799e10b41d70f2c087e1ee5853cbb Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sun, 25 Oct 2026 15:30:00 -0700
+Subject: [PATCH] serial: on half-duplex RS-485, answer valid blocks only
+
+With SERIAL_RS485_TDD the MCU transmits what it has queued when it gets
+its turn. That turn was taken on any input, also on bytes that don't
+form a valid block: a stray byte at a bus turnaround then started a
+transmission while the host could be sending, and the collision cost
+both sides their block. Seen on the AD5X IFS as invalid bytes and
+retransmits whenever replies were pending (TMC UART traffic), up to a
+"Timer too close" shutdown while feeding.
+---
+ src/command.c            |  3 ++-
+ src/generic/serial_irq.c | 12 +++++++++---
+ 2 files changed, 11 insertions(+), 4 deletions(-)
+
+diff --git a/src/command.c b/src/command.c
+index 83d2becd5..78feb5dd2 100644
+--- a/src/command.c
++++ b/src/command.c
+@@ -304,7 +304,8 @@ command_find_block(uint8_t *buf, uint_fast8_t buf_len, uint_fast8_t *pop_count)
+     // Check sequence number
+     if (msgseq != next_sequence) {
+         // Lost message - discard messages until it is retransmitted
+-        goto nak;
++        command_sendf(&encode_acknak);
++        return -2;
+     }
+     next_sequence = ((msgseq + 1) & MESSAGE_SEQ_MASK) | MESSAGE_DEST;
+     return 1;
+diff --git a/src/generic/serial_irq.c b/src/generic/serial_irq.c
+index 104e9365c..f830d4899 100644
+--- a/src/generic/serial_irq.c
++++ b/src/generic/serial_irq.c
+@@ -103,9 +103,15 @@ console_task(void)
+         if (ret > 0)
+             command_send_ack();
+ #if CONFIG_SERIAL_RS485_TDD
+-        writeb(&transmit_commit, readb(&transmit_max));
+-        if (readb(&transmit_pos) < readb(&transmit_commit))
+-            serial_enable_tx_irq();
++        // Our turn on the bus only after a valid block (in sequence, or
++        // not: -2, nak queued): a stray byte at a bus turnaround must not
++        // start a transmission that would collide with the host's next
++        // block
++        if (ret > 0 || ret == -2) {
++            writeb(&transmit_commit, readb(&transmit_max));
++            if (readb(&transmit_pos) < readb(&transmit_commit))
++                serial_enable_tx_irq();
++        }
+ #endif
+     }
+ }
+-- 
+2.43.0
+

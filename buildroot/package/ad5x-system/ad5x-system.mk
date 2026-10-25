@@ -82,6 +82,8 @@ define AD5X_SYSTEM_INSTALL_MCU_FIRMWARE
 	mkdir -p $(TARGET_DIR)/usr/share/ad5x/mcu
 	cp $(AD5X_SYSTEM_MCU_DIR)/mainboard.bin $(AD5X_SYSTEM_MCU_DIR)/eboard.hex \
 		$(AD5X_SYSTEM_MCU_DIR)/SHA256SUMS $(TARGET_DIR)/usr/share/ad5x/mcu/
+	[ ! -f $(AD5X_SYSTEM_MCU_DIR)/ifs.hex ] || \
+		cp $(AD5X_SYSTEM_MCU_DIR)/ifs.hex $(TARGET_DIR)/usr/share/ad5x/mcu/
 	echo $(AD5X_SYSTEM_MCU_VERSION) > $(TARGET_DIR)/usr/share/ad5x/mcu/VERSION
 	python3 $(AD5X_SYSTEM_TOOLS)/make_install_screens.py --boards \
 		$(TARGET_DIR)/usr/share/ad5x/screens >/dev/null
