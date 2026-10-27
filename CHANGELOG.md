@@ -10,13 +10,14 @@ the release has no section of its own yet (rename it after the release).
 - **Spoolman grams on the slot tile**: a slot linked to a Spoolman spool shows its remaining grams under the material (for example 750g), where it used to show nothing. Slots without a Spoolman link are unchanged (HelixScreen patch 0027, `ams_state.cpp`).
 
 ### Changed
+- **IFS wording on the screen**: the touch screen says IFS where it said AMS (Bambu's name for its system): the "AMS is busy" and "No AMS Detected" messages, the wizard and print-start text, and the telemetry labels. Patch 0028. Code names (AmsState, ams_*) are unchanged.
 - **IFS channel count in one place** (`klipper/extras/ifs.py`): the four channels come from one constant, and the reply parser and the status lists follow it. No change on the printer: still four channels. This is groundwork for other IFS hardware; it does not add support for any.
 - **New logo and brand guide** (`docs/brand/`): a frost-blue ring with four gaps, one per IFS slot, and a solid K. One colour; the slot is read by position. App icon and lockup included.
 
 ## v0.0.27
 
 ### Added
-- **Spoolman spool per IFS slot on the screen** (with the `kiln-spoolman` plugin only): the spool a slot was given with `SPOOLMAN_SET_SLOT` is linked to that slot in HelixScreen, and its name and remaining grams show in the AMS slot view. Without the plugin, or without Spoolman, nothing changes (HelixScreen patch 0026, `ams_backend_ad5x_ifs.cpp`). A spool picked on the screen stays until the plugin's value changes; clearing a slot in the plugin does not unlink it on the screen.
+- **Spoolman spool per IFS slot on the screen** (with the `kiln-spoolman` plugin only): the spool a slot was given with `SPOOLMAN_SET_SLOT` is linked to that slot in HelixScreen, and its name and remaining grams show in the IFS slot view. Without the plugin, or without Spoolman, nothing changes (HelixScreen patch 0026, `ams_backend_ad5x_ifs.cpp`). A spool picked on the screen stays until the plugin's value changes; clearing a slot in the plugin does not unlink it on the screen.
 
 ### Changed
 - **HelixScreen v1.1.0-beta.13**: the screen moves from beta.11 to beta.13. Patches 0011 (home layout), 0013 (keyboard underscore) and 0016 (network menu) are rebased onto it.

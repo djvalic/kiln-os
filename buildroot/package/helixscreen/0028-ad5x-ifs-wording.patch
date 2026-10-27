@@ -1,0 +1,613 @@
+diff --git a/src/ui/ui_notification_history.cpp b/src/ui/ui_notification_history.cpp
+index f25291b..f8a86f5 100644
+--- a/src/ui/ui_notification_history.cpp
++++ b/src/ui/ui_notification_history.cpp
+@@ -164,7 +164,7 @@ void NotificationHistory::seed_test_data() {
+     warning_entry.timestamp_ms = now - (45 * 60 * 1000); // 45 min ago
+     warning_entry.severity = ToastSeverity::WARNING;
+     strncpy(warning_entry.title, "Filament Low", sizeof(warning_entry.title) - 1);
+-    strncpy(warning_entry.message, "AMS slot 1 has less than 10m of filament remaining.",
++    strncpy(warning_entry.message, "IFS slot 1 has less than 10m of filament remaining.",
+             sizeof(warning_entry.message) - 1);
+     warning_entry.was_modal = false;
+     warning_entry.was_read = false;
+diff --git a/src/ui/ui_settings_telemetry_data.cpp b/src/ui/ui_settings_telemetry_data.cpp
+index f7ea74a..171e364 100644
+--- a/src/ui/ui_settings_telemetry_data.cpp
++++ b/src/ui/ui_settings_telemetry_data.cpp
+@@ -508,7 +508,7 @@ void TelemetryDataOverlay::populate_events() {
+             // AMS
+             if (event.contains("ams") && event["ams"].is_object()) {
+                 const auto& a = event["ams"];
+-                std::string line = "AMS:";
++                std::string line = "IFS:";
+                 if (a.contains("type") && a["type"].is_string()) {
+                     line += " " + a["type"].get<std::string>();
+                 }
+diff --git a/src/ui/ui_wizard_summary.cpp b/src/ui/ui_wizard_summary.cpp
+index f197f0f..df1961b 100644
+--- a/src/ui/ui_wizard_summary.cpp
++++ b/src/ui/ui_wizard_summary.cpp
+@@ -266,7 +266,7 @@ void WizardSummaryStep::init_subjects() {
+         "- **Printer type** (kinematics, build volume — NOT your printer name)\n"
+         "- **Print outcomes** (completed vs failed, duration, temps)\n"
+         "- **Crash reports** (stack traces to fix bugs)\n"
+-        "- **Feature usage** (which panels you use, AMS, input shaper, etc.)\n\n"
++        "- **Feature usage** (which panels you use, IFS, input shaper, etc.)\n\n"
+         "## What we NEVER collect\n"
+         "- Your name, location, or IP address\n"
+         "- File names or G-code content\n"
+diff --git a/src/ui/ui_wizard_telemetry.cpp b/src/ui/ui_wizard_telemetry.cpp
+index 4a4bf79..a76a6aa 100644
+--- a/src/ui/ui_wizard_telemetry.cpp
++++ b/src/ui/ui_wizard_telemetry.cpp
+@@ -45,7 +45,7 @@ void WizardTelemetryStep::init_subjects() {
+         "- **Printer type** (kinematics, build volume — NOT your printer name)\n"
+         "- **Print outcomes** (completed vs failed, duration, temps)\n"
+         "- **Crash reports** (stack traces to fix bugs)\n"
+-        "- **Feature usage** (which panels you use, AMS, input shaper, etc.)\n\n"
++        "- **Feature usage** (which panels you use, IFS, input shaper, etc.)\n\n"
+         "## What we NEVER collect\n"
+         "- Your name, location, or IP address\n"
+         "- File names or G-code content\n"
+diff --git a/ui_xml/translations/de.xml b/ui_xml/translations/de.xml
+index e38c1ea..114d3a8 100644
+--- a/ui_xml/translations/de.xml
++++ b/ui_xml/translations/de.xml
+@@ -193,10 +193,10 @@
+   <translation tag="AFC&apos;s remember_spool is retaining spool info in firmware; that takes precedence over this toggle" de="AFCs remember_spool behält Spuleninfos in der Firmware; das hat Vorrang vor diesem Schalter"/>
+   <translation tag="AI detection" de="AI-Erkennung"/>
+   <translation tag="ALL DEVICES" de="ALLE GERÄTE"/>
+-  <translation tag="AMS" de="AMS"/>
+-  <translation tag="AMS Active: " de="AMS aktiv: "/>
+-  <translation tag="AMS is busy" de="AMS ist beschäftigt"/>
+-  <translation tag="AMS/MMU system not detected" de="AMS/MMU-System nicht erkannt"/>
++  <translation tag="AMS" de="IFS"/>
++  <translation tag="AMS Active: " de="IFS aktiv: "/>
++  <translation tag="AMS is busy" de="IFS ist beschäftigt"/>
++  <translation tag="AMS/MMU system not detected" de="IFS/MMU-System nicht erkannt"/>
+   <translation tag="API not available" de="API nicht verfügbar"/>
+   <translation tag="APPEARANCE" de="ERSCHEINUNGSBILD"/>
+   <translation tag="AUTO FANS" de="AUTO-LÜFTER"/>
+@@ -276,7 +276,7 @@
+   <translation tag="Always Show Bypass Spool" de="Bypass-Spule immer anzeigen"/>
+   <translation tag="Always show Android navigation bar instead of using gestures" de="Android-Navigationsleiste immer anzeigen statt Gesten zu nutzen"/>
+   <translation tag="Ambient Transfer" de="Umgebungswärmeübertragung"/>
+-  <translation tag="AmsIdentify" de="AMS identifizieren"/>
++  <translation tag="AmsIdentify" de="IFS identifizieren"/>
+   <translation tag="An accelerometer was detected on your printer." de="Ein Beschleunigungssensor wurde an Ihrem Drucker erkannt."/>
+   <translation tag="An app on your network is asking to connect to this printer." de="Eine App in Ihrem Netzwerk möchte sich mit diesem Drucker verbinden."/>
+   <translation tag="An error occurred during calibration." de="Bei der Kalibrierung ist ein Fehler aufgetreten."/>
+@@ -480,7 +480,7 @@
+   <translation tag="Bypass disabled" de="Bypass deaktiviert"/>
+   <translation tag="Bypass enabled" de="Bypass aktiviert"/>
+   <translation tag="Bypass failed" de="Bypass fehlgeschlagen"/>
+-  <translation tag="Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?" de="Bypass ist aktiv, aber dieser Druck verwendet AMS-Slots. Der Drucker verweigert möglicherweise das Laden eines Slots, solange Bypass-Filament im Werkzeugkopf ist. Entfernen Sie das Filament und deaktivieren Sie Bypass, bevor Sie drucken. Trotzdem starten?"/>
++  <translation tag="Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?" de="Bypass ist aktiv, aber dieser Druck verwendet IFS-Slots. Der Drucker verweigert möglicherweise das Laden eines Slots, solange Bypass-Filament im Werkzeugkopf ist. Entfernen Sie das Filament und deaktivieren Sie Bypass, bevor Sie drucken. Trotzdem starten?"/>
+   <translation tag="Bypass mode is not currently active" de="Der Bypass-Modus ist derzeit nicht aktiv"/>
+   <translation tag="Bypass off macro" de="Bypass-aus-Makro"/>
+   <translation tag="Bypass on macro" de="Bypass-ein-Makro"/>
+@@ -2246,7 +2246,7 @@
+   <translation tag="Niimbot (Bluetooth)" de="Niimbot (Bluetooth)"/>
+   <translation tag="No" de="Nein"/>
+   <translation tag="No ACE unit was found." de="Keine ACE-Einheit gefunden."/>
+-  <translation tag="No AMS Detected" de="Kein AMS erkannt"/>
++  <translation tag="No AMS Detected" de="Kein IFS erkannt"/>
+   <translation tag="No API connection" de="Keine API-Verbindung"/>
+   <translation tag="No Bluetooth printer selected — pick one in settings" de="Kein Bluetooth-Drucker ausgewählt — in den Einstellungen auswählen"/>
+   <translation tag="No Bluetooth printers found" de="Keine Bluetooth-Drucker gefunden"/>
+@@ -3739,8 +3739,8 @@
+   <translation tag="The speed of one fan you choose" de="Drehzahl eines gewählten Lüfters"/>
+   <translation tag="The time, date, and system uptime" de="Uhrzeit, Datum und Betriebszeit"/>
+   <translation tag="The timelapse or logs folder overlaps a protected folder, so cleanup is off." de="Der Zeitraffer- oder Protokoll-Ordner überlappt einen geschützten Ordner, daher ist die Bereinigung ausgeschaltet."/>
+-  <translation tag="The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?" de="Im Werkzeugkopf befindet sich Filament, aber kein AMS-Slot meldet es als geladen. Ziehen Sie es vor dem Drucken manuell heraus. Trotzdem starten?"/>
+-  <translation tag="The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?" de="Im Werkzeugkopf befindet sich Filament, aber kein AMS-Slot meldet es als geladen. Der Drucker verweigert möglicherweise das Laden eines Slots, bis er geleert ist. Trotzdem starten?"/>
++  <translation tag="The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?" de="Im Werkzeugkopf befindet sich Filament, aber kein IFS-Slot meldet es als geladen. Ziehen Sie es vor dem Drucken manuell heraus. Trotzdem starten?"/>
++  <translation tag="The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?" de="Im Werkzeugkopf befindet sich Filament, aber kein IFS-Slot meldet es als geladen. Der Drucker verweigert möglicherweise das Laden eines Slots, bis er geleert ist. Trotzdem starten?"/>
+   <translation tag="The toolhead sensor indicates filament is already loaded. Proceed with load anyway?" de="Der Werkzeugkopfsensor zeigt an, dass Filament bereits geladen ist. Trotzdem mit dem Laden fortfahren?"/>
+   <translation tag="The toolhead sensor indicates no filament is present. Proceed with unload anyway?" de="Der Werkzeugkopfsensor zeigt an, dass kein Filament vorhanden ist. Trotzdem mit dem Entladen fortfahren?"/>
+   <translation tag="The unit is already running another operation. Wait for it to finish, or reset the CFS if it stays stuck" de="Die Einheit führt bereits einen anderen Vorgang aus. Abwarten, bis er beendet ist, oder das CFS zurücksetzen, falls es hängen bleibt"/>
+diff --git a/ui_xml/translations/en.xml b/ui_xml/translations/en.xml
+index bc82451..6894177 100644
+--- a/ui_xml/translations/en.xml
++++ b/ui_xml/translations/en.xml
+@@ -193,10 +193,10 @@
+   <translation tag="AFC&apos;s remember_spool is retaining spool info in firmware; that takes precedence over this toggle" en="AFC&apos;s remember_spool is retaining spool info in firmware; that takes precedence over this toggle"/>
+   <translation tag="AI detection" en="AI detection"/>
+   <translation tag="ALL DEVICES" en="ALL DEVICES"/>
+-  <translation tag="AMS" en="AMS"/>
+-  <translation tag="AMS Active: " en="AMS Active: "/>
+-  <translation tag="AMS is busy" en="AMS is busy"/>
+-  <translation tag="AMS/MMU system not detected" en="AMS/MMU system not detected"/>
++  <translation tag="AMS" en="IFS"/>
++  <translation tag="AMS Active: " en="IFS Active: "/>
++  <translation tag="AMS is busy" en="IFS is busy"/>
++  <translation tag="AMS/MMU system not detected" en="IFS/MMU system not detected"/>
+   <translation tag="API not available" en="API not available"/>
+   <translation tag="APPEARANCE" en="APPEARANCE"/>
+   <translation tag="AUTO FANS" en="AUTO FANS"/>
+@@ -480,7 +480,7 @@
+   <translation tag="Bypass disabled" en="Bypass disabled"/>
+   <translation tag="Bypass enabled" en="Bypass enabled"/>
+   <translation tag="Bypass failed" en="Bypass failed"/>
+-  <translation tag="Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?" en="Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?"/>
++  <translation tag="Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?" en="Bypass is active, but this print uses IFS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?"/>
+   <translation tag="Bypass mode is not currently active" en="Bypass mode is not currently active"/>
+   <translation tag="Bypass off macro" en="Bypass off macro"/>
+   <translation tag="Bypass on macro" en="Bypass on macro"/>
+@@ -2246,7 +2246,7 @@
+   <translation tag="Niimbot (Bluetooth)" en="Niimbot (Bluetooth)"/>
+   <translation tag="No" en="No"/>
+   <translation tag="No ACE unit was found." en="No ACE unit was found."/>
+-  <translation tag="No AMS Detected" en="No AMS Detected"/>
++  <translation tag="No AMS Detected" en="No IFS Detected"/>
+   <translation tag="No API connection" en="No API connection"/>
+   <translation tag="No Bluetooth printer selected — pick one in settings" en="No Bluetooth printer selected — pick one in settings"/>
+   <translation tag="No Bluetooth printers found" en="No Bluetooth printers found"/>
+@@ -3739,8 +3739,8 @@
+   <translation tag="The speed of one fan you choose" en="The speed of one fan you choose"/>
+   <translation tag="The time, date, and system uptime" en="The time, date, and system uptime"/>
+   <translation tag="The timelapse or logs folder overlaps a protected folder, so cleanup is off." en="The timelapse or logs folder overlaps a protected folder, so cleanup is off."/>
+-  <translation tag="The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?" en="The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?"/>
+-  <translation tag="The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?" en="The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?"/>
++  <translation tag="The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?" en="The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?"/>
++  <translation tag="The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?" en="The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?"/>
+   <translation tag="The toolhead sensor indicates filament is already loaded. Proceed with load anyway?" en="The toolhead sensor indicates filament is already loaded. Proceed with load anyway?"/>
+   <translation tag="The toolhead sensor indicates no filament is present. Proceed with unload anyway?" en="The toolhead sensor indicates no filament is present. Proceed with unload anyway?"/>
+   <translation tag="The unit is already running another operation. Wait for it to finish, or reset the CFS if it stays stuck" en="The unit is already running another operation. Wait for it to finish, or reset the CFS if it stays stuck"/>
+diff --git a/ui_xml/translations/es.xml b/ui_xml/translations/es.xml
+index 15bfcdf..b6ad7d1 100644
+--- a/ui_xml/translations/es.xml
++++ b/ui_xml/translations/es.xml
+@@ -193,10 +193,10 @@
+   <translation tag="AFC&apos;s remember_spool is retaining spool info in firmware; that takes precedence over this toggle" es="El parámetro remember_spool de AFC retiene la información de la bobina en el firmware; eso tiene prioridad sobre esta opción"/>
+   <translation tag="AI detection" es="Detección AI"/>
+   <translation tag="ALL DEVICES" es="TODOS LOS DISPOSITIVOS"/>
+-  <translation tag="AMS" es="AMS"/>
+-  <translation tag="AMS Active: " es="AMS activo: "/>
+-  <translation tag="AMS is busy" es="El AMS está ocupado"/>
+-  <translation tag="AMS/MMU system not detected" es="No se detectó el sistema AMS/MMU"/>
++  <translation tag="AMS" es="IFS"/>
++  <translation tag="AMS Active: " es="IFS activo: "/>
++  <translation tag="AMS is busy" es="El IFS está ocupado"/>
++  <translation tag="AMS/MMU system not detected" es="No se detectó el sistema IFS/MMU"/>
+   <translation tag="API not available" es="API no disponible"/>
+   <translation tag="APPEARANCE" es="APARIENCIA"/>
+   <translation tag="AUTO FANS" es="VENTILADORES AUTO"/>
+@@ -276,7 +276,7 @@
+   <translation tag="Always Show Bypass Spool" es="Mostrar siempre la bobina de bypass"/>
+   <translation tag="Always show Android navigation bar instead of using gestures" es="Mostrar siempre la barra de navegación de Android en lugar de usar gestos"/>
+   <translation tag="Ambient Transfer" es="Transferencia ambiente"/>
+-  <translation tag="AmsIdentify" es="Identificar AMS"/>
++  <translation tag="AmsIdentify" es="Identificar IFS"/>
+   <translation tag="An accelerometer was detected on your printer." es="Se detectó un acelerómetro en su impresora."/>
+   <translation tag="An app on your network is asking to connect to this printer." es="Una aplicación de su red quiere conectarse a esta impresora."/>
+   <translation tag="An error occurred during calibration." es="Ocurrió un error durante la calibración."/>
+@@ -480,7 +480,7 @@
+   <translation tag="Bypass disabled" es="Bypass desactivado"/>
+   <translation tag="Bypass enabled" es="Bypass activado"/>
+   <translation tag="Bypass failed" es="Error en bypass"/>
+-  <translation tag="Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?" es="El bypass está activo, pero esta impresión usa ranuras AMS. La impresora puede negarse a cargar una ranura mientras haya filamento de bypass en el cabezal. Retire el filamento y desactive el bypass antes de imprimir. ¿Iniciar de todos modos?"/>
++  <translation tag="Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?" es="El bypass está activo, pero esta impresión usa ranuras IFS. La impresora puede negarse a cargar una ranura mientras haya filamento de bypass en el cabezal. Retire el filamento y desactive el bypass antes de imprimir. ¿Iniciar de todos modos?"/>
+   <translation tag="Bypass mode is not currently active" es="El modo bypass no está activo actualmente"/>
+   <translation tag="Bypass off macro" es="Macro de bypass desactivado"/>
+   <translation tag="Bypass on macro" es="Macro de bypass activado"/>
+@@ -2246,7 +2246,7 @@
+   <translation tag="Niimbot (Bluetooth)" es="Niimbot (Bluetooth)"/>
+   <translation tag="No" es="No"/>
+   <translation tag="No ACE unit was found." es="No se encontró ninguna unidad ACE."/>
+-  <translation tag="No AMS Detected" es="No se detectó AMS"/>
++  <translation tag="No AMS Detected" es="No se detectó IFS"/>
+   <translation tag="No API connection" es="Sin conexión a la API"/>
+   <translation tag="No Bluetooth printer selected — pick one in settings" es="No hay impresora Bluetooth seleccionada — elige una en ajustes"/>
+   <translation tag="No Bluetooth printers found" es="No se encontraron impresoras Bluetooth"/>
+@@ -3739,8 +3739,8 @@
+   <translation tag="The speed of one fan you choose" es="La velocidad de un ventilador elegido"/>
+   <translation tag="The time, date, and system uptime" es="Hora, fecha y tiempo de actividad"/>
+   <translation tag="The timelapse or logs folder overlaps a protected folder, so cleanup is off." es="La carpeta de timelapse o de registros se solapa con una carpeta protegida, por eso la limpieza está desactivada."/>
+-  <translation tag="The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?" es="El cabezal tiene filamento, pero ninguna ranura del AMS informa que esté cargado. Retírelo manualmente antes de imprimir. ¿Iniciar de todos modos?"/>
+-  <translation tag="The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?" es="El cabezal tiene filamento, pero ninguna ranura del AMS informa que esté cargado. La impresora puede negarse a cargar una ranura hasta que se vacíe. ¿Iniciar de todos modos?"/>
++  <translation tag="The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?" es="El cabezal tiene filamento, pero ninguna ranura del IFS informa que esté cargado. Retírelo manualmente antes de imprimir. ¿Iniciar de todos modos?"/>
++  <translation tag="The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?" es="El cabezal tiene filamento, pero ninguna ranura del IFS informa que esté cargado. La impresora puede negarse a cargar una ranura hasta que se vacíe. ¿Iniciar de todos modos?"/>
+   <translation tag="The toolhead sensor indicates filament is already loaded. Proceed with load anyway?" es="El sensor del cabezal indica que ya hay filamento cargado. ¿Continuar con la carga de todos modos?"/>
+   <translation tag="The toolhead sensor indicates no filament is present. Proceed with unload anyway?" es="El sensor del cabezal indica que no hay filamento presente. ¿Continuar con la descarga de todos modos?"/>
+   <translation tag="The unit is already running another operation. Wait for it to finish, or reset the CFS if it stays stuck" es="La unidad ya está ejecutando otra operación. Espere a que termine, o reinicie el CFS si se queda bloqueado"/>
+diff --git a/ui_xml/translations/fr.xml b/ui_xml/translations/fr.xml
+index 223fed4..fafc4ac 100644
+--- a/ui_xml/translations/fr.xml
++++ b/ui_xml/translations/fr.xml
+@@ -193,10 +193,10 @@
+   <translation tag="AFC&apos;s remember_spool is retaining spool info in firmware; that takes precedence over this toggle" fr="Le paramètre remember_spool d&apos;AFC retient les informations de bobine dans le firmware ; il prime sur cette option"/>
+   <translation tag="AI detection" fr="Détection AI"/>
+   <translation tag="ALL DEVICES" fr="TOUS LES APPAREILS"/>
+-  <translation tag="AMS" fr="AMS"/>
+-  <translation tag="AMS Active: " fr="AMS actif : "/>
+-  <translation tag="AMS is busy" fr="L&apos;AMS est occupé"/>
+-  <translation tag="AMS/MMU system not detected" fr="Système AMS/MMU non détecté"/>
++  <translation tag="AMS" fr="IFS"/>
++  <translation tag="AMS Active: " fr="IFS actif : "/>
++  <translation tag="AMS is busy" fr="L&apos;IFS est occupé"/>
++  <translation tag="AMS/MMU system not detected" fr="Système IFS/MMU non détecté"/>
+   <translation tag="API not available" fr="API non disponible"/>
+   <translation tag="APPEARANCE" fr="APPARENCE"/>
+   <translation tag="AUTO FANS" fr="VENTILATEURS AUTO"/>
+@@ -276,7 +276,7 @@
+   <translation tag="Always Show Bypass Spool" fr="Toujours afficher la bobine de bypass"/>
+   <translation tag="Always show Android navigation bar instead of using gestures" fr="Toujours afficher la barre de navigation Android au lieu des gestes"/>
+   <translation tag="Ambient Transfer" fr="Transfert ambiant"/>
+-  <translation tag="AmsIdentify" fr="Identifier l&apos;AMS"/>
++  <translation tag="AmsIdentify" fr="Identifier l&apos;IFS"/>
+   <translation tag="An accelerometer was detected on your printer." fr="Un accéléromètre a été détecté sur votre imprimante."/>
+   <translation tag="An app on your network is asking to connect to this printer." fr="Une application de votre réseau demande à se connecter à cette imprimante."/>
+   <translation tag="An error occurred during calibration." fr="Une erreur s&apos;est produite pendant la calibration."/>
+@@ -480,7 +480,7 @@
+   <translation tag="Bypass disabled" fr="Bypass désactivé"/>
+   <translation tag="Bypass enabled" fr="Bypass activé"/>
+   <translation tag="Bypass failed" fr="Échec du bypass"/>
+-  <translation tag="Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?" fr="Le bypass est actif, mais cette impression utilise les slots de l&apos;AMS. L&apos;imprimante peut refuser de charger un slot tant que du filament bypass se trouve dans la tête d&apos;outil. Retirez le filament et désactivez le bypass avant d&apos;imprimer. Démarrer quand même ?"/>
++  <translation tag="Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?" fr="Le bypass est actif, mais cette impression utilise les slots de l&apos;IFS. L&apos;imprimante peut refuser de charger un slot tant que du filament bypass se trouve dans la tête d&apos;outil. Retirez le filament et désactivez le bypass avant d&apos;imprimer. Démarrer quand même ?"/>
+   <translation tag="Bypass mode is not currently active" fr="Le mode bypass n&apos;est pas actif actuellement"/>
+   <translation tag="Bypass off macro" fr="Macro de désactivation du bypass"/>
+   <translation tag="Bypass on macro" fr="Macro d&apos;activation du bypass"/>
+@@ -2246,7 +2246,7 @@
+   <translation tag="Niimbot (Bluetooth)" fr="Niimbot (Bluetooth)"/>
+   <translation tag="No" fr="Non"/>
+   <translation tag="No ACE unit was found." fr="Aucune unité ACE trouvée."/>
+-  <translation tag="No AMS Detected" fr="Aucun AMS détecté"/>
++  <translation tag="No AMS Detected" fr="Aucun IFS détecté"/>
+   <translation tag="No API connection" fr="Aucune connexion API"/>
+   <translation tag="No Bluetooth printer selected — pick one in settings" fr="Aucune imprimante Bluetooth sélectionnée — choisissez-en une dans les paramètres"/>
+   <translation tag="No Bluetooth printers found" fr="Aucune imprimante Bluetooth trouvée"/>
+@@ -3739,8 +3739,8 @@
+   <translation tag="The speed of one fan you choose" fr="La vitesse d&apos;un ventilateur choisi"/>
+   <translation tag="The time, date, and system uptime" fr="Heure, date et temps de fonctionnement"/>
+   <translation tag="The timelapse or logs folder overlaps a protected folder, so cleanup is off." fr="Le dossier timelapse ou de logs chevauche un dossier protégé, le nettoyage est donc désactivé."/>
+-  <translation tag="The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?" fr="La tête d&apos;outil contient du filament mais aucun slot de l&apos;AMS ne le signale comme chargé. Retirez-le manuellement avant d&apos;imprimer. Démarrer quand même ?"/>
+-  <translation tag="The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?" fr="La tête d&apos;outil contient du filament mais aucun slot de l&apos;AMS ne le signale comme chargé. L&apos;imprimante peut refuser de charger un slot tant qu&apos;il n&apos;est pas vidé. Démarrer quand même ?"/>
++  <translation tag="The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?" fr="La tête d&apos;outil contient du filament mais aucun slot de l&apos;IFS ne le signale comme chargé. Retirez-le manuellement avant d&apos;imprimer. Démarrer quand même ?"/>
++  <translation tag="The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?" fr="La tête d&apos;outil contient du filament mais aucun slot de l&apos;IFS ne le signale comme chargé. L&apos;imprimante peut refuser de charger un slot tant qu&apos;il n&apos;est pas vidé. Démarrer quand même ?"/>
+   <translation tag="The toolhead sensor indicates filament is already loaded. Proceed with load anyway?" fr="Le capteur de la tête d&apos;outil indique que du filament est déjà chargé. Procéder au chargement quand même ?"/>
+   <translation tag="The toolhead sensor indicates no filament is present. Proceed with unload anyway?" fr="Le capteur de la tête d&apos;outil indique qu&apos;aucun filament n&apos;est présent. Procéder au déchargement quand même ?"/>
+   <translation tag="The unit is already running another operation. Wait for it to finish, or reset the CFS if it stays stuck" fr="L&apos;unité exécute déjà une autre opération. Attendez la fin, ou réinitialisez le CFS s&apos;il reste bloqué"/>
+diff --git a/ui_xml/translations/it.xml b/ui_xml/translations/it.xml
+index c1d2c50..28c7c9a 100644
+--- a/ui_xml/translations/it.xml
++++ b/ui_xml/translations/it.xml
+@@ -193,10 +193,10 @@
+   <translation tag="AFC&apos;s remember_spool is retaining spool info in firmware; that takes precedence over this toggle" it="remember_spool di AFC conserva le informazioni sulla bobina nel firmware; ha la precedenza su questa opzione"/>
+   <translation tag="AI detection" it="Rilevamento AI"/>
+   <translation tag="ALL DEVICES" it="TUTTI I DISPOSITIVI"/>
+-  <translation tag="AMS" it="AMS"/>
+-  <translation tag="AMS Active: " it="AMS attivo: "/>
+-  <translation tag="AMS is busy" it="AMS occupato"/>
+-  <translation tag="AMS/MMU system not detected" it="Sistema AMS/MMU non rilevato"/>
++  <translation tag="AMS" it="IFS"/>
++  <translation tag="AMS Active: " it="IFS attivo: "/>
++  <translation tag="AMS is busy" it="IFS occupato"/>
++  <translation tag="AMS/MMU system not detected" it="Sistema IFS/MMU non rilevato"/>
+   <translation tag="API not available" it="API non disponibile"/>
+   <translation tag="APPEARANCE" it="ASPETTO"/>
+   <translation tag="AUTO FANS" it="VENTOLE AUTO"/>
+@@ -276,7 +276,7 @@
+   <translation tag="Always Show Bypass Spool" it="Mostra sempre bobina di bypass"/>
+   <translation tag="Always show Android navigation bar instead of using gestures" it="Mostra sempre la barra di navigazione Android invece dei gesti"/>
+   <translation tag="Ambient Transfer" it="Trasferimento ambiente"/>
+-  <translation tag="AmsIdentify" it="Identifica AMS"/>
++  <translation tag="AmsIdentify" it="Identifica IFS"/>
+   <translation tag="An accelerometer was detected on your printer." it="È stato rilevato un accelerometro sulla stampante."/>
+   <translation tag="An app on your network is asking to connect to this printer." it="Un&apos;app sulla tua rete chiede di connettersi a questa stampante."/>
+   <translation tag="An error occurred during calibration." it="Si è verificato un errore durante la calibrazione."/>
+@@ -480,7 +480,7 @@
+   <translation tag="Bypass disabled" it="Bypass disabilitato"/>
+   <translation tag="Bypass enabled" it="Bypass abilitato"/>
+   <translation tag="Bypass failed" it="Bypass fallito"/>
+-  <translation tag="Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?" it="Il bypass è attivo, ma questa stampa usa gli slot AMS. La stampante potrebbe rifiutare il caricamento di uno slot mentre il filamento del bypass è nella testina. Rimuovi il filamento e disattiva il bypass prima di stampare. Avviare comunque?"/>
++  <translation tag="Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?" it="Il bypass è attivo, ma questa stampa usa gli slot IFS. La stampante potrebbe rifiutare il caricamento di uno slot mentre il filamento del bypass è nella testina. Rimuovi il filamento e disattiva il bypass prima di stampare. Avviare comunque?"/>
+   <translation tag="Bypass mode is not currently active" it="La modalità bypass non è attiva"/>
+   <translation tag="Bypass off macro" it="Macro di disattivazione bypass"/>
+   <translation tag="Bypass on macro" it="Macro di attivazione bypass"/>
+@@ -2246,7 +2246,7 @@
+   <translation tag="Niimbot (Bluetooth)" it="Niimbot (Bluetooth)"/>
+   <translation tag="No" it="No"/>
+   <translation tag="No ACE unit was found." it="Nessuna unità ACE trovata."/>
+-  <translation tag="No AMS Detected" it="Nessun AMS rilevato"/>
++  <translation tag="No AMS Detected" it="Nessun IFS rilevato"/>
+   <translation tag="No API connection" it="Nessuna connessione API"/>
+   <translation tag="No Bluetooth printer selected — pick one in settings" it="Nessuna stampante Bluetooth selezionata — sceglierne una nelle impostazioni"/>
+   <translation tag="No Bluetooth printers found" it="Nessuna stampante Bluetooth trovata"/>
+@@ -3739,8 +3739,8 @@
+   <translation tag="The speed of one fan you choose" it="La velocità di una ventola a scelta"/>
+   <translation tag="The time, date, and system uptime" it="Ora, data e tempo di attività"/>
+   <translation tag="The timelapse or logs folder overlaps a protected folder, so cleanup is off." it="La cartella timelapse o di log sovrappone una cartella protetta, quindi la pulizia è disattivata."/>
+-  <translation tag="The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?" it="La testina contiene filamento ma nessuno slot AMS lo riporta come caricato. Estrailo manualmente prima di stampare. Avviare comunque?"/>
+-  <translation tag="The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?" it="La testina contiene filamento ma nessuno slot AMS lo riporta come caricato. La stampante potrebbe rifiutare il caricamento di uno slot finché non viene svuotata. Avviare comunque?"/>
++  <translation tag="The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?" it="La testina contiene filamento ma nessuno slot IFS lo riporta come caricato. Estrailo manualmente prima di stampare. Avviare comunque?"/>
++  <translation tag="The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?" it="La testina contiene filamento ma nessuno slot IFS lo riporta come caricato. La stampante potrebbe rifiutare il caricamento di uno slot finché non viene svuotata. Avviare comunque?"/>
+   <translation tag="The toolhead sensor indicates filament is already loaded. Proceed with load anyway?" it="Il sensore della testina indica che il filamento è già caricato. Procedere comunque con il caricamento?"/>
+   <translation tag="The toolhead sensor indicates no filament is present. Proceed with unload anyway?" it="Il sensore della testina indica che nessun filamento è presente. Procedere comunque con lo scaricamento?"/>
+   <translation tag="The unit is already running another operation. Wait for it to finish, or reset the CFS if it stays stuck" it="L&apos;unità sta già eseguendo un&apos;altra operazione. Attendere il completamento, oppure reimpostare il CFS se resta bloccato"/>
+diff --git a/ui_xml/translations/ja.xml b/ui_xml/translations/ja.xml
+index b890e52..c3c8767 100644
+--- a/ui_xml/translations/ja.xml
++++ b/ui_xml/translations/ja.xml
+@@ -193,10 +193,10 @@
+   <translation tag="AFC&apos;s remember_spool is retaining spool info in firmware; that takes precedence over this toggle" ja="AFC の remember_spool がファームウェア側でスプール情報を保持しているため、このトグル設定より優先されます"/>
+   <translation tag="AI detection" ja="AI 検出"/>
+   <translation tag="ALL DEVICES" ja="すべてのデバイス"/>
+-  <translation tag="AMS" ja="AMS"/>
+-  <translation tag="AMS Active: " ja="AMS 有効: "/>
+-  <translation tag="AMS is busy" ja="AMS はビジー状態です"/>
+-  <translation tag="AMS/MMU system not detected" ja="AMS/MMU システムが検出されません"/>
++  <translation tag="AMS" ja="IFS"/>
++  <translation tag="AMS Active: " ja="IFS 有効: "/>
++  <translation tag="AMS is busy" ja="IFS はビジー状態です"/>
++  <translation tag="AMS/MMU system not detected" ja="IFS/MMU システムが検出されません"/>
+   <translation tag="API not available" ja="APIが利用できません"/>
+   <translation tag="APPEARANCE" ja="外観"/>
+   <translation tag="AUTO FANS" ja="自動ファン"/>
+@@ -276,7 +276,7 @@
+   <translation tag="Always Show Bypass Spool" ja="バイパススプールを常に表示"/>
+   <translation tag="Always show Android navigation bar instead of using gestures" ja="ジェスチャーの代わりにAndroidナビゲーションバーを常に表示"/>
+   <translation tag="Ambient Transfer" ja="環境熱伝達"/>
+-  <translation tag="AmsIdentify" ja="AMSを識別"/>
++  <translation tag="AmsIdentify" ja="IFSを識別"/>
+   <translation tag="An accelerometer was detected on your printer." ja="プリンターで加速度センサーが検出されました。"/>
+   <translation tag="An app on your network is asking to connect to this printer." ja="ネットワーク上のアプリがこのプリンターへの接続を求めています。"/>
+   <translation tag="An error occurred during calibration." ja="キャリブレーション中にエラーが発生しました。"/>
+@@ -480,7 +480,7 @@
+   <translation tag="Bypass disabled" ja="バイパス無効"/>
+   <translation tag="Bypass enabled" ja="バイパス有効"/>
+   <translation tag="Bypass failed" ja="バイパスに失敗しました"/>
+-  <translation tag="Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?" ja="バイパスが有効ですが、この印刷はAMSスロットを使用します。バイパスのフィラメントがツールヘッドにある間は、プリンターがスロットの装填を拒否する場合があります。印刷前にフィラメントを取り除き、バイパスをオフにしてください。それでも印刷を開始しますか？"/>
++  <translation tag="Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?" ja="バイパスが有効ですが、この印刷はIFSスロットを使用します。バイパスのフィラメントがツールヘッドにある間は、プリンターがスロットの装填を拒否する場合があります。印刷前にフィラメントを取り除き、バイパスをオフにしてください。それでも印刷を開始しますか？"/>
+   <translation tag="Bypass mode is not currently active" ja="バイパスモードは現在アクティブではありません"/>
+   <translation tag="Bypass off macro" ja="バイパスオフのマクロ"/>
+   <translation tag="Bypass on macro" ja="バイパスオンのマクロ"/>
+@@ -2246,7 +2246,7 @@
+   <translation tag="Niimbot (Bluetooth)" ja="Niimbot (Bluetooth)"/>
+   <translation tag="No" ja="いいえ"/>
+   <translation tag="No ACE unit was found." ja="ACEユニットが見つかりません。"/>
+-  <translation tag="No AMS Detected" ja="AMS が検出されません"/>
++  <translation tag="No AMS Detected" ja="IFS が検出されません"/>
+   <translation tag="No API connection" ja="API 接続なし"/>
+   <translation tag="No Bluetooth printer selected — pick one in settings" ja="Bluetooth プリンターが選択されていません — 設定で選択してください"/>
+   <translation tag="No Bluetooth printers found" ja="Bluetooth プリンターが見つかりません"/>
+@@ -3739,8 +3739,8 @@
+   <translation tag="The speed of one fan you choose" ja="選んだファン1つの速度"/>
+   <translation tag="The time, date, and system uptime" ja="時間、日付、稼働時間"/>
+   <translation tag="The timelapse or logs folder overlaps a protected folder, so cleanup is off." ja="タイムラプスまたはログのフォルダーが保護されたフォルダーと重なっているため、クリーンアップはオフになっています。"/>
+-  <translation tag="The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?" ja="ツールヘッドにフィラメントがありますが、装填済みと報告しているAMSスロットはありません。印刷前に手動で引き抜いてください。それでも印刷を開始しますか？"/>
+-  <translation tag="The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?" ja="ツールヘッドにフィラメントがありますが、装填済みと報告しているAMSスロットはありません。取り除くまで、プリンターがスロットの装填を拒否する場合があります。それでも印刷を開始しますか？"/>
++  <translation tag="The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?" ja="ツールヘッドにフィラメントがありますが、装填済みと報告しているIFSスロットはありません。印刷前に手動で引き抜いてください。それでも印刷を開始しますか？"/>
++  <translation tag="The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?" ja="ツールヘッドにフィラメントがありますが、装填済みと報告しているIFSスロットはありません。取り除くまで、プリンターがスロットの装填を拒否する場合があります。それでも印刷を開始しますか？"/>
+   <translation tag="The toolhead sensor indicates filament is already loaded. Proceed with load anyway?" ja="ツールヘッドセンサーがフィラメント装填済みを検出しました。それでも装填を続行しますか？"/>
+   <translation tag="The toolhead sensor indicates no filament is present. Proceed with unload anyway?" ja="ツールヘッドセンサーがフィラメント未検出を報告しました。それでもアンロードを続行しますか？"/>
+   <translation tag="The unit is already running another operation. Wait for it to finish, or reset the CFS if it stays stuck" ja="ユニットは既に別の処理を実行中です。完了を待つか、固まったままの場合は CFS をリセットしてください"/>
+diff --git a/ui_xml/translations/pt.xml b/ui_xml/translations/pt.xml
+index 60e9e1f..05af1fe 100644
+--- a/ui_xml/translations/pt.xml
++++ b/ui_xml/translations/pt.xml
+@@ -193,10 +193,10 @@
+   <translation tag="AFC&apos;s remember_spool is retaining spool info in firmware; that takes precedence over this toggle" pt="O remember_spool do AFC retém informações do carretel no firmware; isso tem precedência sobre esta opção"/>
+   <translation tag="AI detection" pt="Detecção por AI"/>
+   <translation tag="ALL DEVICES" pt="TODOS OS DISPOSITIVOS"/>
+-  <translation tag="AMS" pt="AMS"/>
+-  <translation tag="AMS Active: " pt="AMS Ativo: "/>
+-  <translation tag="AMS is busy" pt="O AMS está ocupado"/>
+-  <translation tag="AMS/MMU system not detected" pt="Sistema AMS/MMU não detectado"/>
++  <translation tag="AMS" pt="IFS"/>
++  <translation tag="AMS Active: " pt="IFS Ativo: "/>
++  <translation tag="AMS is busy" pt="O IFS está ocupado"/>
++  <translation tag="AMS/MMU system not detected" pt="Sistema IFS/MMU não detectado"/>
+   <translation tag="API not available" pt="API não disponível"/>
+   <translation tag="APPEARANCE" pt="APARÊNCIA"/>
+   <translation tag="AUTO FANS" pt="VENTOINHAS AUTO"/>
+@@ -276,7 +276,7 @@
+   <translation tag="Always Show Bypass Spool" pt="Sempre Mostrar Carretel de Bypass"/>
+   <translation tag="Always show Android navigation bar instead of using gestures" pt="Mostrar sempre a barra de navegação Android em vez de usar gestos"/>
+   <translation tag="Ambient Transfer" pt="Transferência Ambiente"/>
+-  <translation tag="AmsIdentify" pt="Identificar AMS"/>
++  <translation tag="AmsIdentify" pt="Identificar IFS"/>
+   <translation tag="An accelerometer was detected on your printer." pt="Um acelerômetro foi detectado na sua impressora."/>
+   <translation tag="An app on your network is asking to connect to this printer." pt="Um aplicativo na sua rede quer conectar-se a esta impressora."/>
+   <translation tag="An error occurred during calibration." pt="Ocorreu um erro durante a calibração."/>
+@@ -480,7 +480,7 @@
+   <translation tag="Bypass disabled" pt="Bypass desativado"/>
+   <translation tag="Bypass enabled" pt="Bypass ativado"/>
+   <translation tag="Bypass failed" pt="Falha no bypass"/>
+-  <translation tag="Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?" pt="O bypass está ativo, mas esta impressão usa slots AMS. A impressora pode não conseguir carregar um slot enquanto houver filamento de bypass no cabeçote. Remova o filamento e desative o bypass antes de imprimir. Iniciar mesmo assim?"/>
++  <translation tag="Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?" pt="O bypass está ativo, mas esta impressão usa slots IFS. A impressora pode não conseguir carregar um slot enquanto houver filamento de bypass no cabeçote. Remova o filamento e desative o bypass antes de imprimir. Iniciar mesmo assim?"/>
+   <translation tag="Bypass mode is not currently active" pt="O modo bypass não está ativo no momento"/>
+   <translation tag="Bypass off macro" pt="Macro de desligar bypass"/>
+   <translation tag="Bypass on macro" pt="Macro de ligar bypass"/>
+@@ -2246,7 +2246,7 @@
+   <translation tag="Niimbot (Bluetooth)" pt="Niimbot (Bluetooth)"/>
+   <translation tag="No" pt="Não"/>
+   <translation tag="No ACE unit was found." pt="Nenhuma unidade ACE encontrada."/>
+-  <translation tag="No AMS Detected" pt="Nenhum AMS detectado"/>
++  <translation tag="No AMS Detected" pt="Nenhum IFS detectado"/>
+   <translation tag="No API connection" pt="Sem conexão com a API"/>
+   <translation tag="No Bluetooth printer selected — pick one in settings" pt="Nenhuma impressora Bluetooth selecionada — escolha uma nas configurações"/>
+   <translation tag="No Bluetooth printers found" pt="Nenhuma impressora Bluetooth encontrada"/>
+@@ -3739,8 +3739,8 @@
+   <translation tag="The speed of one fan you choose" pt="A velocidade de uma ventoinha escolhida"/>
+   <translation tag="The time, date, and system uptime" pt="Hora, data e tempo ativo"/>
+   <translation tag="The timelapse or logs folder overlaps a protected folder, so cleanup is off." pt="A pasta de timelapse ou de logs sobrepõe-se a uma pasta protegida, por isso a limpeza está desligada."/>
+-  <translation tag="The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?" pt="O cabeçote tem filamento, mas nenhum slot AMS o reporta como carregado. Retire-o manualmente antes de imprimir. Iniciar mesmo assim?"/>
+-  <translation tag="The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?" pt="O cabeçote tem filamento, mas nenhum slot AMS o reporta como carregado. A impressora pode não conseguir carregar um slot até que ele seja esvaziado. Iniciar mesmo assim?"/>
++  <translation tag="The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?" pt="O cabeçote tem filamento, mas nenhum slot IFS o reporta como carregado. Retire-o manualmente antes de imprimir. Iniciar mesmo assim?"/>
++  <translation tag="The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?" pt="O cabeçote tem filamento, mas nenhum slot IFS o reporta como carregado. A impressora pode não conseguir carregar um slot até que ele seja esvaziado. Iniciar mesmo assim?"/>
+   <translation tag="The toolhead sensor indicates filament is already loaded. Proceed with load anyway?" pt="O sensor do cabeçote indica que o filamento já está carregado. Prosseguir com o carregamento mesmo assim?"/>
+   <translation tag="The toolhead sensor indicates no filament is present. Proceed with unload anyway?" pt="O sensor do cabeçote indica que não há filamento presente. Prosseguir com o descarregamento mesmo assim?"/>
+   <translation tag="The unit is already running another operation. Wait for it to finish, or reset the CFS if it stays stuck" pt="A unidade já está executando outra operação. Aguarde a conclusão, ou reinicie o CFS se ele continuar travado"/>
+diff --git a/ui_xml/translations/ru.xml b/ui_xml/translations/ru.xml
+index 9e96049..78668d6 100644
+--- a/ui_xml/translations/ru.xml
++++ b/ui_xml/translations/ru.xml
+@@ -226,10 +226,10 @@
+   <translation tag="AFC&apos;s remember_spool is retaining spool info in firmware; that takes precedence over this toggle" ru="Параметр remember_spool в AFC сохраняет данные катушки в прошивке и имеет приоритет над этим переключателем"/>
+   <translation tag="AI detection" ru="AI-детекция"/>
+   <translation tag="ALL DEVICES" ru="ВСЕ УСТРОЙСТВА"/>
+-  <translation tag="AMS" ru="AMS"/>
+-  <translation tag="AMS Active: " ru="AMS активен: "/>
+-  <translation tag="AMS is busy" ru="AMS занят"/>
+-  <translation tag="AMS/MMU system not detected" ru="Система AMS/MMU не обнаружена"/>
++  <translation tag="AMS" ru="IFS"/>
++  <translation tag="AMS Active: " ru="IFS активен: "/>
++  <translation tag="AMS is busy" ru="IFS занят"/>
++  <translation tag="AMS/MMU system not detected" ru="Система IFS/MMU не обнаружена"/>
+   <translation tag="API not available" ru="API недоступен"/>
+   <translation tag="APPEARANCE" ru="ВНЕШНИЙ ВИД"/>
+   <translation tag="AUTO FANS" ru="АВТО ВЕНТИЛЯТОРЫ"/>
+@@ -309,7 +309,7 @@
+   <translation tag="Always Show Bypass Spool" ru="Всегда показывать катушку байпаса"/>
+   <translation tag="Always show Android navigation bar instead of using gestures" ru="Всегда показывать панель навигации Android вместо жестов"/>
+   <translation tag="Ambient Transfer" ru="Теплообмен с окружающей средой"/>
+-  <translation tag="AmsIdentify" ru="Определить AMS"/>
++  <translation tag="AmsIdentify" ru="Определить IFS"/>
+   <translation tag="An accelerometer was detected on your printer." ru="На вашем принтере обнаружен акселерометр."/>
+   <translation tag="An app on your network is asking to connect to this printer." ru="Приложение в вашей сети запрашивает подключение к этому принтеру."/>
+   <translation tag="An error occurred during calibration." ru="Во время калибровки произошла ошибка."/>
+@@ -519,7 +519,7 @@
+   <translation tag="Bypass disabled" ru="Байпас отключён"/>
+   <translation tag="Bypass enabled" ru="Байпас включён"/>
+   <translation tag="Bypass failed" ru="Ошибка байпаса"/>
+-  <translation tag="Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?" ru="Активен байпас, но эта печать использует слоты AMS. Принтер может отказаться загружать слот, пока филамент байпаса находится в печатающей головке. Извлеките филамент и выключите байпас перед печатью. Всё равно начать?"/>
++  <translation tag="Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?" ru="Активен байпас, но эта печать использует слоты IFS. Принтер может отказаться загружать слот, пока филамент байпаса находится в печатающей головке. Извлеките филамент и выключите байпас перед печатью. Всё равно начать?"/>
+   <translation tag="Bypass mode is not currently active" ru="Режим обхода сейчас не активен"/>
+   <translation tag="Bypass off macro" ru="Макрос выключения обхода"/>
+   <translation tag="Bypass on macro" ru="Макрос включения обхода"/>
+@@ -2291,7 +2291,7 @@
+   <translation tag="Niimbot (Bluetooth)" ru="Niimbot (Bluetooth)"/>
+   <translation tag="No" ru="Нет"/>
+   <translation tag="No ACE unit was found." ru="Блок ACE не найден."/>
+-  <translation tag="No AMS Detected" ru="AMS не обнаружен"/>
++  <translation tag="No AMS Detected" ru="IFS не обнаружен"/>
+   <translation tag="No API connection" ru="Нет соединения с API"/>
+   <translation tag="No Bluetooth printer selected — pick one in settings" ru="Bluetooth-принтер не выбран — выберите его в настройках"/>
+   <translation tag="No Bluetooth printers found" ru="Bluetooth-принтеры не найдены"/>
+@@ -3799,8 +3799,8 @@
+   <translation tag="The speed of one fan you choose" ru="Скорость выбранного вентилятора"/>
+   <translation tag="The time, date, and system uptime" ru="Время, дата и время работы системы"/>
+   <translation tag="The timelapse or logs folder overlaps a protected folder, so cleanup is off." ru="Папка таймлапсов или журналов пересекается с защищённой папкой, поэтому очистка выключена."/>
+-  <translation tag="The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?" ru="В печатающей головке есть филамент, но ни один слот AMS не сообщает о его загрузке. Извлеките его вручную перед печатью. Всё равно начать?"/>
+-  <translation tag="The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?" ru="В печатающей головке есть филамент, но ни один слот AMS не сообщает о его загрузке. Принтер может отказаться загружать слот, пока она не будет очищена. Всё равно начать?"/>
++  <translation tag="The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?" ru="В печатающей головке есть филамент, но ни один слот IFS не сообщает о его загрузке. Извлеките его вручную перед печатью. Всё равно начать?"/>
++  <translation tag="The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?" ru="В печатающей головке есть филамент, но ни один слот IFS не сообщает о его загрузке. Принтер может отказаться загружать слот, пока она не будет очищена. Всё равно начать?"/>
+   <translation tag="The toolhead sensor indicates filament is already loaded. Proceed with load anyway?" ru="Датчик печатающей головки показывает, что филамент уже загружен. Всё равно продолжить загрузку?"/>
+   <translation tag="The toolhead sensor indicates no filament is present. Proceed with unload anyway?" ru="Датчик печатающей головки показывает, что филамент отсутствует. Всё равно продолжить выгрузку?"/>
+   <translation tag="The unit is already running another operation. Wait for it to finish, or reset the CFS if it stays stuck" ru="Блок уже выполняет другую операцию. Дождитесь её завершения или сбросьте CFS, если он завис"/>
+diff --git a/ui_xml/translations/translations.xml b/ui_xml/translations/translations.xml
+index 6f11916..03f023f 100644
+--- a/ui_xml/translations/translations.xml
++++ b/ui_xml/translations/translations.xml
+@@ -226,10 +226,10 @@
+   <translation tag="AFC&apos;s remember_spool is retaining spool info in firmware; that takes precedence over this toggle" de="AFCs remember_spool behält Spuleninfos in der Firmware; das hat Vorrang vor diesem Schalter" en="AFC&apos;s remember_spool is retaining spool info in firmware; that takes precedence over this toggle" es="El parámetro remember_spool de AFC retiene la información de la bobina en el firmware; eso tiene prioridad sobre esta opción" fr="Le paramètre remember_spool d&apos;AFC retient les informations de bobine dans le firmware ; il prime sur cette option" it="remember_spool di AFC conserva le informazioni sulla bobina nel firmware; ha la precedenza su questa opzione" ja="AFC の remember_spool がファームウェア側でスプール情報を保持しているため、このトグル設定より優先されます" pt="O remember_spool do AFC retém informações do carretel no firmware; isso tem precedência sobre esta opção" ru="Параметр remember_spool в AFC сохраняет данные катушки в прошивке и имеет приоритет над этим переключателем" zh="AFC 的 remember_spool 会在固件中保留料盘信息；其优先级高于此开关"/>
+   <translation tag="AI detection" de="AI-Erkennung" en="AI detection" es="Detección AI" fr="Détection AI" it="Rilevamento AI" ja="AI 検出" pt="Detecção por AI" ru="AI-детекция" zh="AI 检测"/>
+   <translation tag="ALL DEVICES" de="ALLE GERÄTE" en="ALL DEVICES" es="TODOS LOS DISPOSITIVOS" fr="TOUS LES APPAREILS" it="TUTTI I DISPOSITIVI" ja="すべてのデバイス" pt="TODOS OS DISPOSITIVOS" ru="ВСЕ УСТРОЙСТВА" zh="所有设备"/>
+-  <translation tag="AMS" de="AMS" en="AMS" es="AMS" fr="AMS" it="AMS" ja="AMS" pt="AMS" ru="AMS" zh="AMS"/>
+-  <translation tag="AMS Active: " de="AMS aktiv: " en="AMS Active: " es="AMS activo: " fr="AMS actif : " it="AMS attivo: " ja="AMS 有効: " pt="AMS Ativo: " ru="AMS активен: " zh="AMS 已激活: "/>
+-  <translation tag="AMS is busy" de="AMS ist beschäftigt" en="AMS is busy" es="El AMS está ocupado" fr="L&apos;AMS est occupé" it="AMS occupato" ja="AMS はビジー状態です" pt="O AMS está ocupado" ru="AMS занят" zh="AMS 正忙"/>
+-  <translation tag="AMS/MMU system not detected" de="AMS/MMU-System nicht erkannt" en="AMS/MMU system not detected" es="No se detectó el sistema AMS/MMU" fr="Système AMS/MMU non détecté" it="Sistema AMS/MMU non rilevato" ja="AMS/MMU システムが検出されません" pt="Sistema AMS/MMU não detectado" ru="Система AMS/MMU не обнаружена" zh="未检测到 AMS/MMU 系统"/>
++  <translation tag="AMS" de="IFS" en="IFS" es="IFS" fr="IFS" it="IFS" ja="IFS" pt="IFS" ru="IFS" zh="IFS"/>
++  <translation tag="AMS Active: " de="IFS aktiv: " en="IFS Active: " es="IFS activo: " fr="IFS actif : " it="IFS attivo: " ja="IFS 有効: " pt="IFS Ativo: " ru="IFS активен: " zh="IFS 已激活: "/>
++  <translation tag="AMS is busy" de="IFS ist beschäftigt" en="IFS is busy" es="El IFS está ocupado" fr="L&apos;IFS est occupé" it="IFS occupato" ja="IFS はビジー状態です" pt="O IFS está ocupado" ru="IFS занят" zh="IFS 正忙"/>
++  <translation tag="AMS/MMU system not detected" de="IFS/MMU-System nicht erkannt" en="IFS/MMU system not detected" es="No se detectó el sistema IFS/MMU" fr="Système IFS/MMU non détecté" it="Sistema IFS/MMU non rilevato" ja="IFS/MMU システムが検出されません" pt="Sistema IFS/MMU não detectado" ru="Система IFS/MMU не обнаружена" zh="未检测到 IFS/MMU 系统"/>
+   <translation tag="API not available" de="API nicht verfügbar" en="API not available" es="API no disponible" fr="API non disponible" it="API non disponibile" ja="APIが利用できません" pt="API não disponível" ru="API недоступен" zh="API 不可用"/>
+   <translation tag="APPEARANCE" de="ERSCHEINUNGSBILD" en="APPEARANCE" es="APARIENCIA" fr="APPARENCE" it="ASPETTO" ja="外観" pt="APARÊNCIA" ru="ВНЕШНИЙ ВИД" zh="外观"/>
+   <translation tag="AUTO FANS" de="AUTO-LÜFTER" en="AUTO FANS" es="VENTILADORES AUTO" fr="VENTILATEURS AUTO" it="VENTOLE AUTO" ja="自動ファン" pt="VENTOINHAS AUTO" ru="АВТО ВЕНТИЛЯТОРЫ" zh="自动风扇"/>
+@@ -309,7 +309,7 @@
+   <translation tag="Always Show Bypass Spool" de="Bypass-Spule immer anzeigen" en="Always Show Bypass Spool" es="Mostrar siempre la bobina de bypass" fr="Toujours afficher la bobine de bypass" it="Mostra sempre bobina di bypass" ja="バイパススプールを常に表示" pt="Sempre Mostrar Carretel de Bypass" ru="Всегда показывать катушку байпаса" zh="始终显示旁路料盘"/>
+   <translation tag="Always show Android navigation bar instead of using gestures" de="Android-Navigationsleiste immer anzeigen statt Gesten zu nutzen" en="Always show Android navigation bar instead of using gestures" es="Mostrar siempre la barra de navegación de Android en lugar de usar gestos" fr="Toujours afficher la barre de navigation Android au lieu des gestes" it="Mostra sempre la barra di navigazione Android invece dei gesti" ja="ジェスチャーの代わりにAndroidナビゲーションバーを常に表示" pt="Mostrar sempre a barra de navegação Android em vez de usar gestos" ru="Всегда показывать панель навигации Android вместо жестов" zh="始终显示 Android 导航栏而不使用手势"/>
+   <translation tag="Ambient Transfer" de="Umgebungswärmeübertragung" en="Ambient Transfer" es="Transferencia ambiente" fr="Transfert ambiant" it="Trasferimento ambiente" ja="環境熱伝達" pt="Transferência Ambiente" ru="Теплообмен с окружающей средой" zh="环境传热"/>
+-  <translation tag="AmsIdentify" de="AMS identifizieren" en="AmsIdentify" es="Identificar AMS" fr="Identifier l&apos;AMS" it="Identifica AMS" ja="AMSを識別" pt="Identificar AMS" ru="Определить AMS" zh="识别 AMS"/>
++  <translation tag="AmsIdentify" de="IFS identifizieren" en="AmsIdentify" es="Identificar IFS" fr="Identifier l&apos;IFS" it="Identifica IFS" ja="IFSを識別" pt="Identificar IFS" ru="Определить IFS" zh="识别 IFS"/>
+   <translation tag="An accelerometer was detected on your printer." de="Ein Beschleunigungssensor wurde an Ihrem Drucker erkannt." en="An accelerometer was detected on your printer." es="Se detectó un acelerómetro en su impresora." fr="Un accéléromètre a été détecté sur votre imprimante." it="È stato rilevato un accelerometro sulla stampante." ja="プリンターで加速度センサーが検出されました。" pt="Um acelerômetro foi detectado na sua impressora." ru="На вашем принтере обнаружен акселерометр." zh="在您的打印机上检测到加速度计。"/>
+   <translation tag="An app on your network is asking to connect to this printer." de="Eine App in Ihrem Netzwerk möchte sich mit diesem Drucker verbinden." en="An app on your network is asking to connect to this printer." es="Una aplicación de su red quiere conectarse a esta impresora." fr="Une application de votre réseau demande à se connecter à cette imprimante." it="Un&apos;app sulla tua rete chiede di connettersi a questa stampante." ja="ネットワーク上のアプリがこのプリンターへの接続を求めています。" pt="Um aplicativo na sua rede quer conectar-se a esta impressora." ru="Приложение в вашей сети запрашивает подключение к этому принтеру." zh="网络中的某个应用请求连接到此打印机。"/>
+   <translation tag="An error occurred during calibration." de="Bei der Kalibrierung ist ein Fehler aufgetreten." en="An error occurred during calibration." es="Ocurrió un error durante la calibración." fr="Une erreur s&apos;est produite pendant la calibration." it="Si è verificato un errore durante la calibrazione." ja="キャリブレーション中にエラーが発生しました。" pt="Ocorreu um erro durante a calibração." ru="Во время калибровки произошла ошибка." zh="校准过程中发生错误。"/>
+@@ -519,7 +519,7 @@
+   <translation tag="Bypass disabled" de="Bypass deaktiviert" en="Bypass disabled" es="Bypass desactivado" fr="Bypass désactivé" it="Bypass disabilitato" ja="バイパス無効" pt="Bypass desativado" ru="Байпас отключён" zh="旁通已禁用"/>
+   <translation tag="Bypass enabled" de="Bypass aktiviert" en="Bypass enabled" es="Bypass activado" fr="Bypass activé" it="Bypass abilitato" ja="バイパス有効" pt="Bypass ativado" ru="Байпас включён" zh="旁通已启用"/>
+   <translation tag="Bypass failed" de="Bypass fehlgeschlagen" en="Bypass failed" es="Error en bypass" fr="Échec du bypass" it="Bypass fallito" ja="バイパスに失敗しました" pt="Falha no bypass" ru="Ошибка байпаса" zh="旁通失败"/>
+-  <translation tag="Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?" de="Bypass ist aktiv, aber dieser Druck verwendet AMS-Slots. Der Drucker verweigert möglicherweise das Laden eines Slots, solange Bypass-Filament im Werkzeugkopf ist. Entfernen Sie das Filament und deaktivieren Sie Bypass, bevor Sie drucken. Trotzdem starten?" en="Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?" es="El bypass está activo, pero esta impresión usa ranuras AMS. La impresora puede negarse a cargar una ranura mientras haya filamento de bypass en el cabezal. Retire el filamento y desactive el bypass antes de imprimir. ¿Iniciar de todos modos?" fr="Le bypass est actif, mais cette impression utilise les slots de l&apos;AMS. L&apos;imprimante peut refuser de charger un slot tant que du filament bypass se trouve dans la tête d&apos;outil. Retirez le filament et désactivez le bypass avant d&apos;imprimer. Démarrer quand même ?" it="Il bypass è attivo, ma questa stampa usa gli slot AMS. La stampante potrebbe rifiutare il caricamento di uno slot mentre il filamento del bypass è nella testina. Rimuovi il filamento e disattiva il bypass prima di stampare. Avviare comunque?" ja="バイパスが有効ですが、この印刷はAMSスロットを使用します。バイパスのフィラメントがツールヘッドにある間は、プリンターがスロットの装填を拒否する場合があります。印刷前にフィラメントを取り除き、バイパスをオフにしてください。それでも印刷を開始しますか？" pt="O bypass está ativo, mas esta impressão usa slots AMS. A impressora pode não conseguir carregar um slot enquanto houver filamento de bypass no cabeçote. Remova o filamento e desative o bypass antes de imprimir. Iniciar mesmo assim?" ru="Активен байпас, но эта печать использует слоты AMS. Принтер может отказаться загружать слот, пока филамент байпаса находится в печатающей головке. Извлеките филамент и выключите байпас перед печатью. Всё равно начать?" zh="旁路已启用，但此打印使用 AMS 槽位。当旁路耗材仍在工具头中时，打印机可能拒绝装载槽位。请在打印前取出耗材并关闭旁路。仍要开始打印吗？"/>
++  <translation tag="Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?" de="Bypass ist aktiv, aber dieser Druck verwendet IFS-Slots. Der Drucker verweigert möglicherweise das Laden eines Slots, solange Bypass-Filament im Werkzeugkopf ist. Entfernen Sie das Filament und deaktivieren Sie Bypass, bevor Sie drucken. Trotzdem starten?" en="Bypass is active, but this print uses IFS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?" es="El bypass está activo, pero esta impresión usa ranuras IFS. La impresora puede negarse a cargar una ranura mientras haya filamento de bypass en el cabezal. Retire el filamento y desactive el bypass antes de imprimir. ¿Iniciar de todos modos?" fr="Le bypass est actif, mais cette impression utilise les slots de l&apos;IFS. L&apos;imprimante peut refuser de charger un slot tant que du filament bypass se trouve dans la tête d&apos;outil. Retirez le filament et désactivez le bypass avant d&apos;imprimer. Démarrer quand même ?" it="Il bypass è attivo, ma questa stampa usa gli slot IFS. La stampante potrebbe rifiutare il caricamento di uno slot mentre il filamento del bypass è nella testina. Rimuovi il filamento e disattiva il bypass prima di stampare. Avviare comunque?" ja="バイパスが有効ですが、この印刷はIFSスロットを使用します。バイパスのフィラメントがツールヘッドにある間は、プリンターがスロットの装填を拒否する場合があります。印刷前にフィラメントを取り除き、バイパスをオフにしてください。それでも印刷を開始しますか？" pt="O bypass está ativo, mas esta impressão usa slots IFS. A impressora pode não conseguir carregar um slot enquanto houver filamento de bypass no cabeçote. Remova o filamento e desative o bypass antes de imprimir. Iniciar mesmo assim?" ru="Активен байпас, но эта печать использует слоты IFS. Принтер может отказаться загружать слот, пока филамент байпаса находится в печатающей головке. Извлеките филамент и выключите байпас перед печатью. Всё равно начать?" zh="旁路已启用，但此打印使用 IFS 槽位。当旁路耗材仍在工具头中时，打印机可能拒绝装载槽位。请在打印前取出耗材并关闭旁路。仍要开始打印吗？"/>
+   <translation tag="Bypass mode is not currently active" de="Der Bypass-Modus ist derzeit nicht aktiv" en="Bypass mode is not currently active" es="El modo bypass no está activo actualmente" fr="Le mode bypass n&apos;est pas actif actuellement" it="La modalità bypass non è attiva" ja="バイパスモードは現在アクティブではありません" pt="O modo bypass não está ativo no momento" ru="Режим обхода сейчас не активен" zh="旁通模式当前未启用"/>
+   <translation tag="Bypass off macro" de="Bypass-aus-Makro" en="Bypass off macro" es="Macro de bypass desactivado" fr="Macro de désactivation du bypass" it="Macro di disattivazione bypass" ja="バイパスオフのマクロ" pt="Macro de desligar bypass" ru="Макрос выключения обхода" zh="关闭旁路宏"/>
+   <translation tag="Bypass on macro" de="Bypass-ein-Makro" en="Bypass on macro" es="Macro de bypass activado" fr="Macro d&apos;activation du bypass" it="Macro di attivazione bypass" ja="バイパスオンのマクロ" pt="Macro de ligar bypass" ru="Макрос включения обхода" zh="开启旁路宏"/>
+@@ -2291,7 +2291,7 @@
+   <translation tag="Niimbot (Bluetooth)" de="Niimbot (Bluetooth)" en="Niimbot (Bluetooth)" es="Niimbot (Bluetooth)" fr="Niimbot (Bluetooth)" it="Niimbot (Bluetooth)" ja="Niimbot (Bluetooth)" pt="Niimbot (Bluetooth)" ru="Niimbot (Bluetooth)" zh="Niimbot（蓝牙）"/>
+   <translation tag="No" de="Nein" en="No" es="No" fr="Non" it="No" ja="いいえ" pt="Não" ru="Нет" zh="否"/>
+   <translation tag="No ACE unit was found." de="Keine ACE-Einheit gefunden." en="No ACE unit was found." es="No se encontró ninguna unidad ACE." fr="Aucune unité ACE trouvée." it="Nessuna unità ACE trovata." ja="ACEユニットが見つかりません。" pt="Nenhuma unidade ACE encontrada." ru="Блок ACE не найден." zh="未找到 ACE 单元。"/>
+-  <translation tag="No AMS Detected" de="Kein AMS erkannt" en="No AMS Detected" es="No se detectó AMS" fr="Aucun AMS détecté" it="Nessun AMS rilevato" ja="AMS が検出されません" pt="Nenhum AMS detectado" ru="AMS не обнаружен" zh="未检测到 AMS"/>
++  <translation tag="No AMS Detected" de="Kein IFS erkannt" en="No IFS Detected" es="No se detectó IFS" fr="Aucun IFS détecté" it="Nessun IFS rilevato" ja="IFS が検出されません" pt="Nenhum IFS detectado" ru="IFS не обнаружен" zh="未检测到 IFS"/>
+   <translation tag="No API connection" de="Keine API-Verbindung" en="No API connection" es="Sin conexión a la API" fr="Aucune connexion API" it="Nessuna connessione API" ja="API 接続なし" pt="Sem conexão com a API" ru="Нет соединения с API" zh="无 API 连接"/>
+   <translation tag="No Bluetooth printer selected — pick one in settings" de="Kein Bluetooth-Drucker ausgewählt — in den Einstellungen auswählen" en="No Bluetooth printer selected — pick one in settings" es="No hay impresora Bluetooth seleccionada — elige una en ajustes" fr="Aucune imprimante Bluetooth sélectionnée — choisissez-en une dans les paramètres" it="Nessuna stampante Bluetooth selezionata — sceglierne una nelle impostazioni" ja="Bluetooth プリンターが選択されていません — 設定で選択してください" pt="Nenhuma impressora Bluetooth selecionada — escolha uma nas configurações" ru="Bluetooth-принтер не выбран — выберите его в настройках" zh="未选择蓝牙打印机 — 请在设置中选择"/>
+   <translation tag="No Bluetooth printers found" de="Keine Bluetooth-Drucker gefunden" en="No Bluetooth printers found" es="No se encontraron impresoras Bluetooth" fr="Aucune imprimante Bluetooth trouvée" it="Nessuna stampante Bluetooth trovata" ja="Bluetooth プリンターが見つかりません" pt="Nenhuma impressora Bluetooth encontrada" ru="Bluetooth-принтеры не найдены" zh="未找到蓝牙打印机"/>
+@@ -3799,8 +3799,8 @@
+   <translation tag="The speed of one fan you choose" de="Drehzahl eines gewählten Lüfters" en="The speed of one fan you choose" es="La velocidad de un ventilador elegido" fr="La vitesse d&apos;un ventilateur choisi" it="La velocità di una ventola a scelta" ja="選んだファン1つの速度" pt="A velocidade de uma ventoinha escolhida" ru="Скорость выбранного вентилятора" zh="所选风扇的转速"/>
+   <translation tag="The time, date, and system uptime" de="Uhrzeit, Datum und Betriebszeit" en="The time, date, and system uptime" es="Hora, fecha y tiempo de actividad" fr="Heure, date et temps de fonctionnement" it="Ora, data e tempo di attività" ja="時間、日付、稼働時間" pt="Hora, data e tempo ativo" ru="Время, дата и время работы системы" zh="时间、日期和系统运行时长"/>
+   <translation tag="The timelapse or logs folder overlaps a protected folder, so cleanup is off." de="Der Zeitraffer- oder Protokoll-Ordner überlappt einen geschützten Ordner, daher ist die Bereinigung ausgeschaltet." en="The timelapse or logs folder overlaps a protected folder, so cleanup is off." es="La carpeta de timelapse o de registros se solapa con una carpeta protegida, por eso la limpieza está desactivada." fr="Le dossier timelapse ou de logs chevauche un dossier protégé, le nettoyage est donc désactivé." it="La cartella timelapse o di log sovrappone una cartella protetta, quindi la pulizia è disattivata." ja="タイムラプスまたはログのフォルダーが保護されたフォルダーと重なっているため、クリーンアップはオフになっています。" pt="A pasta de timelapse ou de logs sobrepõe-se a uma pasta protegida, por isso a limpeza está desligada." ru="Папка таймлапсов или журналов пересекается с защищённой папкой, поэтому очистка выключена." zh="延时摄影或日志文件夹与受保护的文件夹重叠，因此清理功能已关闭。"/>
+-  <translation tag="The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?" de="Im Werkzeugkopf befindet sich Filament, aber kein AMS-Slot meldet es als geladen. Ziehen Sie es vor dem Drucken manuell heraus. Trotzdem starten?" en="The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?" es="El cabezal tiene filamento, pero ninguna ranura del AMS informa que esté cargado. Retírelo manualmente antes de imprimir. ¿Iniciar de todos modos?" fr="La tête d&apos;outil contient du filament mais aucun slot de l&apos;AMS ne le signale comme chargé. Retirez-le manuellement avant d&apos;imprimer. Démarrer quand même ?" it="La testina contiene filamento ma nessuno slot AMS lo riporta come caricato. Estrailo manualmente prima di stampare. Avviare comunque?" ja="ツールヘッドにフィラメントがありますが、装填済みと報告しているAMSスロットはありません。印刷前に手動で引き抜いてください。それでも印刷を開始しますか？" pt="O cabeçote tem filamento, mas nenhum slot AMS o reporta como carregado. Retire-o manualmente antes de imprimir. Iniciar mesmo assim?" ru="В печатающей головке есть филамент, но ни один слот AMS не сообщает о его загрузке. Извлеките его вручную перед печатью. Всё равно начать?" zh="工具头内有耗材，但没有 AMS 槽位报告已装载。请在打印前手动取出耗材。仍要开始打印吗？"/>
+-  <translation tag="The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?" de="Im Werkzeugkopf befindet sich Filament, aber kein AMS-Slot meldet es als geladen. Der Drucker verweigert möglicherweise das Laden eines Slots, bis er geleert ist. Trotzdem starten?" en="The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?" es="El cabezal tiene filamento, pero ninguna ranura del AMS informa que esté cargado. La impresora puede negarse a cargar una ranura hasta que se vacíe. ¿Iniciar de todos modos?" fr="La tête d&apos;outil contient du filament mais aucun slot de l&apos;AMS ne le signale comme chargé. L&apos;imprimante peut refuser de charger un slot tant qu&apos;il n&apos;est pas vidé. Démarrer quand même ?" it="La testina contiene filamento ma nessuno slot AMS lo riporta come caricato. La stampante potrebbe rifiutare il caricamento di uno slot finché non viene svuotata. Avviare comunque?" ja="ツールヘッドにフィラメントがありますが、装填済みと報告しているAMSスロットはありません。取り除くまで、プリンターがスロットの装填を拒否する場合があります。それでも印刷を開始しますか？" pt="O cabeçote tem filamento, mas nenhum slot AMS o reporta como carregado. A impressora pode não conseguir carregar um slot até que ele seja esvaziado. Iniciar mesmo assim?" ru="В печатающей головке есть филамент, но ни один слот AMS не сообщает о его загрузке. Принтер может отказаться загружать слот, пока она не будет очищена. Всё равно начать?" zh="工具头内有耗材，但没有 AMS 槽位报告已装载。在清空之前，打印机可能拒绝装载槽位。仍要开始打印吗？"/>
++  <translation tag="The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?" de="Im Werkzeugkopf befindet sich Filament, aber kein IFS-Slot meldet es als geladen. Ziehen Sie es vor dem Drucken manuell heraus. Trotzdem starten?" en="The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?" es="El cabezal tiene filamento, pero ninguna ranura del IFS informa que esté cargado. Retírelo manualmente antes de imprimir. ¿Iniciar de todos modos?" fr="La tête d&apos;outil contient du filament mais aucun slot de l&apos;IFS ne le signale comme chargé. Retirez-le manuellement avant d&apos;imprimer. Démarrer quand même ?" it="La testina contiene filamento ma nessuno slot IFS lo riporta come caricato. Estrailo manualmente prima di stampare. Avviare comunque?" ja="ツールヘッドにフィラメントがありますが、装填済みと報告しているIFSスロットはありません。印刷前に手動で引き抜いてください。それでも印刷を開始しますか？" pt="O cabeçote tem filamento, mas nenhum slot IFS o reporta como carregado. Retire-o manualmente antes de imprimir. Iniciar mesmo assim?" ru="В печатающей головке есть филамент, но ни один слот IFS не сообщает о его загрузке. Извлеките его вручную перед печатью. Всё равно начать?" zh="工具头内有耗材，但没有 IFS 槽位报告已装载。请在打印前手动取出耗材。仍要开始打印吗？"/>
++  <translation tag="The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?" de="Im Werkzeugkopf befindet sich Filament, aber kein IFS-Slot meldet es als geladen. Der Drucker verweigert möglicherweise das Laden eines Slots, bis er geleert ist. Trotzdem starten?" en="The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?" es="El cabezal tiene filamento, pero ninguna ranura del IFS informa que esté cargado. La impresora puede negarse a cargar una ranura hasta que se vacíe. ¿Iniciar de todos modos?" fr="La tête d&apos;outil contient du filament mais aucun slot de l&apos;IFS ne le signale comme chargé. L&apos;imprimante peut refuser de charger un slot tant qu&apos;il n&apos;est pas vidé. Démarrer quand même ?" it="La testina contiene filamento ma nessuno slot IFS lo riporta come caricato. La stampante potrebbe rifiutare il caricamento di uno slot finché non viene svuotata. Avviare comunque?" ja="ツールヘッドにフィラメントがありますが、装填済みと報告しているIFSスロットはありません。取り除くまで、プリンターがスロットの装填を拒否する場合があります。それでも印刷を開始しますか？" pt="O cabeçote tem filamento, mas nenhum slot IFS o reporta como carregado. A impressora pode não conseguir carregar um slot até que ele seja esvaziado. Iniciar mesmo assim?" ru="В печатающей головке есть филамент, но ни один слот IFS не сообщает о его загрузке. Принтер может отказаться загружать слот, пока она не будет очищена. Всё равно начать?" zh="工具头内有耗材，但没有 IFS 槽位报告已装载。在清空之前，打印机可能拒绝装载槽位。仍要开始打印吗？"/>
+   <translation tag="The toolhead sensor indicates filament is already loaded. Proceed with load anyway?" de="Der Werkzeugkopfsensor zeigt an, dass Filament bereits geladen ist. Trotzdem mit dem Laden fortfahren?" en="The toolhead sensor indicates filament is already loaded. Proceed with load anyway?" es="El sensor del cabezal indica que ya hay filamento cargado. ¿Continuar con la carga de todos modos?" fr="Le capteur de la tête d&apos;outil indique que du filament est déjà chargé. Procéder au chargement quand même ?" it="Il sensore della testina indica che il filamento è già caricato. Procedere comunque con il caricamento?" ja="ツールヘッドセンサーがフィラメント装填済みを検出しました。それでも装填を続行しますか？" pt="O sensor do cabeçote indica que o filamento já está carregado. Prosseguir com o carregamento mesmo assim?" ru="Датчик печатающей головки показывает, что филамент уже загружен. Всё равно продолжить загрузку?" zh="工具头传感器显示耗材已装载。仍要继续装载吗？"/>
+   <translation tag="The toolhead sensor indicates no filament is present. Proceed with unload anyway?" de="Der Werkzeugkopfsensor zeigt an, dass kein Filament vorhanden ist. Trotzdem mit dem Entladen fortfahren?" en="The toolhead sensor indicates no filament is present. Proceed with unload anyway?" es="El sensor del cabezal indica que no hay filamento presente. ¿Continuar con la descarga de todos modos?" fr="Le capteur de la tête d&apos;outil indique qu&apos;aucun filament n&apos;est présent. Procéder au déchargement quand même ?" it="Il sensore della testina indica che nessun filamento è presente. Procedere comunque con lo scaricamento?" ja="ツールヘッドセンサーがフィラメント未検出を報告しました。それでもアンロードを続行しますか？" pt="O sensor do cabeçote indica que não há filamento presente. Prosseguir com o descarregamento mesmo assim?" ru="Датчик печатающей головки показывает, что филамент отсутствует. Всё равно продолжить выгрузку?" zh="工具头传感器显示无耗材。仍要继续卸载吗？"/>
+   <translation tag="The unit is already running another operation. Wait for it to finish, or reset the CFS if it stays stuck" de="Die Einheit führt bereits einen anderen Vorgang aus. Abwarten, bis er beendet ist, oder das CFS zurücksetzen, falls es hängen bleibt" en="The unit is already running another operation. Wait for it to finish, or reset the CFS if it stays stuck" es="La unidad ya está ejecutando otra operación. Espere a que termine, o reinicie el CFS si se queda bloqueado" fr="L&apos;unité exécute déjà une autre opération. Attendez la fin, ou réinitialisez le CFS s&apos;il reste bloqué" it="L&apos;unità sta già eseguendo un&apos;altra operazione. Attendere il completamento, oppure reimpostare il CFS se resta bloccato" ja="ユニットは既に別の処理を実行中です。完了を待つか、固まったままの場合は CFS をリセットしてください" pt="A unidade já está executando outra operação. Aguarde a conclusão, ou reinicie o CFS se ele continuar travado" ru="Блок уже выполняет другую операцию. Дождитесь её завершения или сбросьте CFS, если он завис" zh="该单元正在执行其他操作。请等待其完成；若持续卡住，请重置 CFS"/>
+diff --git a/ui_xml/translations/zh.xml b/ui_xml/translations/zh.xml
+index 12f9adb..d9f410a 100644
+--- a/ui_xml/translations/zh.xml
++++ b/ui_xml/translations/zh.xml
+@@ -193,10 +193,10 @@
+   <translation tag="AFC&apos;s remember_spool is retaining spool info in firmware; that takes precedence over this toggle" zh="AFC 的 remember_spool 会在固件中保留料盘信息；其优先级高于此开关"/>
+   <translation tag="AI detection" zh="AI 检测"/>
+   <translation tag="ALL DEVICES" zh="所有设备"/>
+-  <translation tag="AMS" zh="AMS"/>
+-  <translation tag="AMS Active: " zh="AMS 已激活: "/>
+-  <translation tag="AMS is busy" zh="AMS 正忙"/>
+-  <translation tag="AMS/MMU system not detected" zh="未检测到 AMS/MMU 系统"/>
++  <translation tag="AMS" zh="IFS"/>
++  <translation tag="AMS Active: " zh="IFS 已激活: "/>
++  <translation tag="AMS is busy" zh="IFS 正忙"/>
++  <translation tag="AMS/MMU system not detected" zh="未检测到 IFS/MMU 系统"/>
+   <translation tag="API not available" zh="API 不可用"/>
+   <translation tag="APPEARANCE" zh="外观"/>
+   <translation tag="AUTO FANS" zh="自动风扇"/>
+@@ -276,7 +276,7 @@
+   <translation tag="Always Show Bypass Spool" zh="始终显示旁路料盘"/>
+   <translation tag="Always show Android navigation bar instead of using gestures" zh="始终显示 Android 导航栏而不使用手势"/>
+   <translation tag="Ambient Transfer" zh="环境传热"/>
+-  <translation tag="AmsIdentify" zh="识别 AMS"/>
++  <translation tag="AmsIdentify" zh="识别 IFS"/>
+   <translation tag="An accelerometer was detected on your printer." zh="在您的打印机上检测到加速度计。"/>
+   <translation tag="An app on your network is asking to connect to this printer." zh="网络中的某个应用请求连接到此打印机。"/>
+   <translation tag="An error occurred during calibration." zh="校准过程中发生错误。"/>
+@@ -480,7 +480,7 @@
+   <translation tag="Bypass disabled" zh="旁通已禁用"/>
+   <translation tag="Bypass enabled" zh="旁通已启用"/>
+   <translation tag="Bypass failed" zh="旁通失败"/>
+-  <translation tag="Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?" zh="旁路已启用，但此打印使用 AMS 槽位。当旁路耗材仍在工具头中时，打印机可能拒绝装载槽位。请在打印前取出耗材并关闭旁路。仍要开始打印吗？"/>
++  <translation tag="Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?" zh="旁路已启用，但此打印使用 IFS 槽位。当旁路耗材仍在工具头中时，打印机可能拒绝装载槽位。请在打印前取出耗材并关闭旁路。仍要开始打印吗？"/>
+   <translation tag="Bypass mode is not currently active" zh="旁通模式当前未启用"/>
+   <translation tag="Bypass off macro" zh="关闭旁路宏"/>
+   <translation tag="Bypass on macro" zh="开启旁路宏"/>
+@@ -2246,7 +2246,7 @@
+   <translation tag="Niimbot (Bluetooth)" zh="Niimbot（蓝牙）"/>
+   <translation tag="No" zh="否"/>
+   <translation tag="No ACE unit was found." zh="未找到 ACE 单元。"/>
+-  <translation tag="No AMS Detected" zh="未检测到 AMS"/>
++  <translation tag="No AMS Detected" zh="未检测到 IFS"/>
+   <translation tag="No API connection" zh="无 API 连接"/>
+   <translation tag="No Bluetooth printer selected — pick one in settings" zh="未选择蓝牙打印机 — 请在设置中选择"/>
+   <translation tag="No Bluetooth printers found" zh="未找到蓝牙打印机"/>
+@@ -3739,8 +3739,8 @@
+   <translation tag="The speed of one fan you choose" zh="所选风扇的转速"/>
+   <translation tag="The time, date, and system uptime" zh="时间、日期和系统运行时长"/>
+   <translation tag="The timelapse or logs folder overlaps a protected folder, so cleanup is off." zh="延时摄影或日志文件夹与受保护的文件夹重叠，因此清理功能已关闭。"/>
+-  <translation tag="The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?" zh="工具头内有耗材，但没有 AMS 槽位报告已装载。请在打印前手动取出耗材。仍要开始打印吗？"/>
+-  <translation tag="The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?" zh="工具头内有耗材，但没有 AMS 槽位报告已装载。在清空之前，打印机可能拒绝装载槽位。仍要开始打印吗？"/>
++  <translation tag="The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?" zh="工具头内有耗材，但没有 IFS 槽位报告已装载。请在打印前手动取出耗材。仍要开始打印吗？"/>
++  <translation tag="The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?" zh="工具头内有耗材，但没有 IFS 槽位报告已装载。在清空之前，打印机可能拒绝装载槽位。仍要开始打印吗？"/>
+   <translation tag="The toolhead sensor indicates filament is already loaded. Proceed with load anyway?" zh="工具头传感器显示耗材已装载。仍要继续装载吗？"/>
+   <translation tag="The toolhead sensor indicates no filament is present. Proceed with unload anyway?" zh="工具头传感器显示无耗材。仍要继续卸载吗？"/>
+   <translation tag="The unit is already running another operation. Wait for it to finish, or reset the CFS if it stays stuck" zh="该单元正在执行其他操作。请等待其完成；若持续卡住，请重置 CFS"/>

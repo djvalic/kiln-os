@@ -233,7 +233,7 @@ macro name containing `_IFS_` (95), macro `SET_EXTRUDER_SLOT` (95),
 exclude hostname `ad5x` and macros `_IFS_` / `SET_EXTRUDER_SLOT`.
 
 **On our system as-is:** hostname `ad5x` (`buildroot/configs/ad5x_defconfig:22`)
--> model "FlashForge Adventurer 5X", preset `ad5x`. Object `ifs` -> AMS type
+-> model "FlashForge Adventurer 5X", preset `ad5x`. Object `ifs` -> IFS type (HelixScreen's code name for it is AMS)
 AD5X IFS. Our `_IFS_STATE` macro also matches `_IFS_` (+95). The module dialect does not latch (our `ifs` has
 `connected, version, busy, channel, state, selected, inserted, silk, stall,
 colors`, `klipper/extras/ifs.py:389-403`), so the backend runs the zMod
@@ -247,7 +247,7 @@ What follows on our stack today:
 | Lane presence, active lane | Unknown (no `Ports`/`Chan`/`loaded_channels`) |
 | Load, unload, select, tool change, eject, recover, cancel | "Unknown command" (`INSERT_PRUTOK_IFS`, `_IFS_REMOVE_CURRENT_PRUTOK`, `SET_EXTRUDER_SLOT`, `A_CHANGE_FILAMENT`, `IFS_F24/F11/F39`, `IFS_UNLOCK`) |
 | Edit slot | Fails: read-modify-write of a missing `Adventurer5M.json` |
-| Refresh | Every trigger (AMS screen open, sensor edges) sends `IFS_STATUS` (ours: serial F13 through `_run`, which calls `toolhead.wait_moves()`, `klipper/extras/ifs.py:591-596`) and `GET_ZCOLOR SILENT=1` (unknown command, `!!` in console; the error does not demote the query, `H :4817-4823`) |
+| Refresh | Every trigger (IFS screen open, sensor edges) sends `IFS_STATUS` (ours: serial F13 through `_run`, which calls `toolhead.wait_moves()`, `klipper/extras/ifs.py:591-596`) and `GET_ZCOLOR SILENT=1` (unknown command, `!!` in console; the error does not demote the query, `H :4817-4823`) |
 | Head sensor | Invisible: ours is `adc_filament_sensor head`; HelixScreen only picks up `filament_switch_sensor *` / `filament_motion_sensor *` (`H printer_discovery_parse.cpp:497-498`) |
 | Preset defaults | Fans `fan_generic fanM106` / `chamber_fan`, sensor `head_switch_sensor`, macros `LOAD_FILAMENT`, `UNLOAD_FILAMENT`, `CLEAR_NOZZLE`, `AUTO_FULL_BED_LEVEL` (`H assets/config/presets/ad5x.json`): `fan_generic fanM106` as stock; the four macros in the printer's `macros/quick_actions.cfg` (zMod names, `docs/config-layout.md`) |
 
