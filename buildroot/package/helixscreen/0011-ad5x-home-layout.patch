@@ -57,33 +57,6 @@ screen move to this layout on update; an edited layout is left alone.
 
 Upstream: not applicable (AD5X OS specific)
 ---
- assets/config/panel_widgets/ad5x/home.json    | 466 ++++++++++++++++++
- include/default_layout_resolver.h             |   4 +-
- include/favorite_macro_config.h               |   8 +
- include/favorite_macro_widget.h               |   5 +
- include/preheat_widget.h                      |  14 +
- src/api/moonraker_client_mock.cpp             |   3 +-
- src/system/default_layout_resolver.cpp        |  14 +-
- src/ui/modals/favorite_macro_config_modal.cpp |   8 +-
- src/ui/panel_widget_registry.cpp              |   2 +-
- src/ui/panel_widgets/preheat_widget.cpp       |  39 ++
- src/ui/panel_widgets/print_status_widget.cpp  |   9 +
- src/ui/panel_widgets/print_status_widget.h    |   4 +
- src/ui/widgets/favorite_macro_config.cpp      |   8 +
- src/ui/widgets/favorite_macro_widget.cpp      |  45 +-
- .../test_helpers/preheat_widget_test_access.h |   8 +
- tests/unit/test_default_layout.cpp            | 135 +++++
- tests/unit/test_default_layout_resolver.cpp   |   9 +
- tests/unit/test_favorite_macro_config.cpp     |  28 ++
- tests/unit/test_grid_edit_mode.cpp            |  32 +-
- tests/unit/test_grid_layout.cpp               |   2 +-
- tests/unit/test_material_preheat_actions.cpp  |  41 ++
- tests/unit/test_widget_catalog_fit.cpp        |   8 +-
- .../panel_widget_favorite_macro.xml           |   5 +-
- .../print_status_detailed_active.xml          |   5 +-
- 24 files changed, 868 insertions(+), 34 deletions(-)
- create mode 100644 assets/config/panel_widgets/ad5x/home.json
-
 diff --git a/assets/config/panel_widgets/ad5x/home.json b/assets/config/panel_widgets/ad5x/home.json
 new file mode 100644
 index 0000000..e7c2971
@@ -646,10 +619,10 @@ index 3b00755..2fa4b7f 100644
      // and temperature observers, so the tile's numbers and icons agree.
      helix::ui::HeaterIconBinder nozzle_icon_binder_;
 diff --git a/src/api/moonraker_client_mock.cpp b/src/api/moonraker_client_mock.cpp
-index 89e77ca..551c708 100644
+index 63a6a4d..274245b 100644
 --- a/src/api/moonraker_client_mock.cpp
 +++ b/src/api/moonraker_client_mock.cpp
-@@ -3179,7 +3179,8 @@ void MoonrakerClientMock::populate_hardware() {
+@@ -3514,7 +3514,8 @@ void MoonrakerClientMock::populate_hardware() {
                                  "temperature_sensor chamber"};
          discovery_.fans() = {"fan_generic fanM106", "heater_fan heat_fan",
                               "fan_generic chamber_fan", "fan_generic pcb_fan"};
@@ -694,10 +667,10 @@ index a067d54..fff21c0 100644
      spdlog::debug("[DefaultLayoutResolver] tier={} grid={}x{} table={} placed={} disabled={} "
                    "signature={}",
 diff --git a/src/ui/modals/favorite_macro_config_modal.cpp b/src/ui/modals/favorite_macro_config_modal.cpp
-index f60fdd9..116a3c0 100644
+index 12bff5d..adaca79 100644
 --- a/src/ui/modals/favorite_macro_config_modal.cpp
 +++ b/src/ui/modals/favorite_macro_config_modal.cpp
-@@ -138,7 +138,13 @@ void FavoriteMacroConfigModal::load_config() {
+@@ -100,7 +100,13 @@ void FavoriteMacroConfigModal::load_config() {
  
  void FavoriteMacroConfigModal::persist() {
      auto& wc = PanelWidgetManager::instance().get_widget_config(panel_id_);
@@ -713,7 +686,7 @@ index f60fdd9..116a3c0 100644
      if (on_change_)
          on_change_();
 diff --git a/src/ui/panel_widget_registry.cpp b/src/ui/panel_widget_registry.cpp
-index 6d57cde..def6609 100644
+index 1c7af7d..36c85b7 100644
 --- a/src/ui/panel_widget_registry.cpp
 +++ b/src/ui/panel_widget_registry.cpp
 @@ -121,7 +121,7 @@ static std::vector<PanelWidgetDef> s_widget_defs = {
@@ -726,7 +699,7 @@ index 6d57cde..def6609 100644
      {"bypass",           TR_NOOP("Bypass"),           "source_branch",    TR_NOOP("Toggle external spool bypass"), "ams_supports_bypass", "Requires a filament system with bypass", kCatFilament, false, 2, 2, 1, 1, kBandColspan, kBandColspan, false, true, true},
      {"active_spool",     TR_NOOP("Active Spool"),      "inventory",  TR_NOOP("The Spoolman spool currently loaded"),     nullptr,                  nullptr,                           kCatFilament, false, 2, 2, 1, 1, 8, 4, false, true, true},
 diff --git a/src/ui/panel_widgets/preheat_widget.cpp b/src/ui/panel_widgets/preheat_widget.cpp
-index e322e3c..1acc748 100644
+index fcb639d..e2d5893 100644
 --- a/src/ui/panel_widgets/preheat_widget.cpp
 +++ b/src/ui/panel_widgets/preheat_widget.cpp
 @@ -23,6 +23,7 @@
@@ -737,7 +710,7 @@ index e322e3c..1acc748 100644
  #include "tool_state.h"
  
  #include <spdlog/spdlog.h>
-@@ -71,6 +72,11 @@ void PreheatWidget::set_config(const nlohmann::json& config) {
+@@ -72,6 +73,11 @@ void PreheatWidget::set_config(const nlohmann::json& config) {
              selected_material_ = 0;
          }
      }
@@ -749,7 +722,7 @@ index e322e3c..1acc748 100644
  }
  
  void PreheatWidget::attach(lv_obj_t* widget_obj, lv_obj_t* parent_screen) {
-@@ -119,6 +125,14 @@ void PreheatWidget::attach(lv_obj_t* widget_obj, lv_obj_t* parent_screen) {
+@@ -120,6 +126,14 @@ void PreheatWidget::attach(lv_obj_t* widget_obj, lv_obj_t* parent_screen) {
          }
      }
  
@@ -764,7 +737,7 @@ index e322e3c..1acc748 100644
      // Set user_data on temp tap rows for callback recovery
      lv_obj_t* nozzle_row = lv_obj_find_by_name(widget_obj_, "preheat_nozzle_row");
      if (nozzle_row)
-@@ -150,6 +164,12 @@ void PreheatWidget::attach(lv_obj_t* widget_obj, lv_obj_t* parent_screen) {
+@@ -151,6 +165,12 @@ void PreheatWidget::attach(lv_obj_t* widget_obj, lv_obj_t* parent_screen) {
              self->update_heater_state();
          },
          bed_target_lifetime_);
@@ -777,7 +750,7 @@ index e322e3c..1acc748 100644
      language_obs_ = helix::ui::observe_language_change(this, [](PreheatWidget* self) {
          self->update_button_label();
          self->update_tool_target_label();
-@@ -159,6 +179,10 @@ void PreheatWidget::attach(lv_obj_t* widget_obj, lv_obj_t* parent_screen) {
+@@ -160,6 +180,10 @@ void PreheatWidget::attach(lv_obj_t* widget_obj, lv_obj_t* parent_screen) {
                    presets::name(selected_material_), tool_target_);
  }
  
@@ -788,7 +761,7 @@ index e322e3c..1acc748 100644
  void PreheatWidget::detach() {
      if (s_active_instance == this) {
          s_active_instance = nullptr;
-@@ -168,6 +192,8 @@ void PreheatWidget::detach() {
+@@ -169,6 +193,8 @@ void PreheatWidget::detach() {
      bed_icon_binder_.unbind();
  
      // Applying [L073]: subjects are alive during detach, use reset()
@@ -797,7 +770,7 @@ index e322e3c..1acc748 100644
      extruder_target_obs_.reset();
      bed_target_lifetime_.reset();
      bed_target_obs_.reset();
-@@ -301,7 +327,20 @@ void PreheatWidget::set_temperatures(int nozzle, int bed) {
+@@ -302,7 +328,20 @@ void PreheatWidget::set_temperatures(int nozzle, int bed) {
                     }});
  }
  
@@ -819,19 +792,19 @@ index e322e3c..1acc748 100644
          handle_cooldown();
          return;
 diff --git a/src/ui/panel_widgets/print_status_widget.cpp b/src/ui/panel_widgets/print_status_widget.cpp
-index 841c22a..a791432 100644
+index b31a425..60abab8 100644
 --- a/src/ui/panel_widgets/print_status_widget.cpp
 +++ b/src/ui/panel_widgets/print_status_widget.cpp
-@@ -134,6 +134,8 @@ void PrintStatusWidget::init_static_subjects() {
+@@ -138,6 +138,8 @@ void PrintStatusWidget::init_static_subjects() {
      s_static_subjects.publish("print_status_queue_hidden", &queue_hidden_subject_);
      lv_subject_init_int(&actions_hidden_subject_, 0);
      s_static_subjects.publish("print_status_actions_hidden", &actions_hidden_subject_);
 +    lv_subject_init_int(&temps_hidden_subject_, 0);
 +    s_static_subjects.publish("print_status_temps_hidden", &temps_hidden_subject_);
-     visibility_subjects_initialized_ = true;
- 
-     // Detailed-layout subjects
-@@ -1393,6 +1395,12 @@ void PrintStatusWidget::set_config(const nlohmann::json& config) {
+     lv_subject_init_int(&library_icon_only_subject_, 0);
+     s_static_subjects.publish("print_status_library_icon_only", &library_icon_only_subject_);
+     lv_subject_init_int(&library_grid_subject_, 0);
+@@ -1425,6 +1427,12 @@ void PrintStatusWidget::set_config(const nlohmann::json& config) {
      if (config.contains("show_job_queue") && config["show_job_queue"].is_boolean()) {
          show_job_queue_ = config["show_job_queue"].get<bool>();
      }
@@ -844,7 +817,7 @@ index 841c22a..a791432 100644
      if (s_formatter_ && !s_formatter_->set_nozzle_tool_override(nozzle_tool_override_)) {
          nozzle_tool_override_ = "auto";
          config_["nozzle_tool_override"] = "auto";
-@@ -1422,6 +1430,7 @@ void PrintStatusWidget::apply_visibility_config() {
+@@ -1454,6 +1462,7 @@ void PrintStatusWidget::apply_visibility_config() {
      lv_subject_set_int(&files_hidden_subject_, show_print_files_ ? 0 : 1);
      lv_subject_set_int(&last_hidden_subject_, show_reprint_last_ ? 0 : 1);
      lv_subject_set_int(&recent_hidden_subject_, show_recent_prints_ ? 0 : 1);
@@ -853,7 +826,7 @@ index 841c22a..a791432 100644
      // Queue row uses a live count — defer to the dedicated helper, which also
      // triggers recompute_actions_visibility() since queue state affects it.
 diff --git a/src/ui/panel_widgets/print_status_widget.h b/src/ui/panel_widgets/print_status_widget.h
-index f99d574..ad1c603 100644
+index ba11764..dfd780f 100644
 --- a/src/ui/panel_widgets/print_status_widget.h
 +++ b/src/ui/panel_widgets/print_status_widget.h
 @@ -359,6 +359,9 @@ class PrintStatusWidget : public PanelWidget {
@@ -865,8 +838,8 @@ index f99d574..ad1c603 100644
 +    static inline lv_subject_t temps_hidden_subject_;
      static inline bool visibility_subjects_initialized_ = false;
  
-     // Detailed-layout subjects (static inline — shared across all widget instances)
-@@ -667,6 +670,7 @@ class PrintStatusWidget : public PanelWidget {
+     // The library actions' measured fit (decide_library_actions_layout): 1 = every
+@@ -700,6 +703,7 @@ class PrintStatusWidget : public PanelWidget {
      bool show_reprint_last_ = true;
      bool show_recent_prints_ = true;
      bool show_job_queue_ = true;
@@ -875,10 +848,10 @@ index f99d574..ad1c603 100644
      void show_configure_picker();
      void apply_visibility_config();
 diff --git a/src/ui/widgets/favorite_macro_config.cpp b/src/ui/widgets/favorite_macro_config.cpp
-index f7a7182..b27f201 100644
+index 4f80c79..25cda68 100644
 --- a/src/ui/widgets/favorite_macro_config.cpp
 +++ b/src/ui/widgets/favorite_macro_config.cpp
-@@ -27,6 +27,10 @@ FavoriteMacroConfig favorite_macro_config_from_json(const nlohmann::json& j) {
+@@ -25,6 +25,10 @@ FavoriteMacroConfig favorite_macro_config_from_json(const nlohmann::json& j) {
      } else if (j.contains("skip_param_prompt") && j["skip_param_prompt"].is_boolean()) {
          c.require_confirmation = !j["skip_param_prompt"].get<bool>();
      }
@@ -889,7 +862,7 @@ index f7a7182..b27f201 100644
      return c;
  }
  
-@@ -41,6 +45,10 @@ nlohmann::json favorite_macro_config_to_json(const FavoriteMacroConfig& c) {
+@@ -39,6 +43,10 @@ nlohmann::json favorite_macro_config_to_json(const FavoriteMacroConfig& c) {
      // config that still carries it sheds it on the next save.
      if (!c.require_confirmation)
          j["require_confirmation"] = false;
@@ -901,7 +874,7 @@ index f7a7182..b27f201 100644
  }
  
 diff --git a/src/ui/widgets/favorite_macro_widget.cpp b/src/ui/widgets/favorite_macro_widget.cpp
-index 8b38415..7ffed3a 100644
+index b0454e7..41ab6cc 100644
 --- a/src/ui/widgets/favorite_macro_widget.cpp
 +++ b/src/ui/widgets/favorite_macro_widget.cpp
 @@ -3,6 +3,8 @@
@@ -921,7 +894,7 @@ index 8b38415..7ffed3a 100644
  #include "panel_widget_config.h"
  #include "panel_widget_manager.h"
  #include "panel_widget_registry.h"
-@@ -140,6 +143,18 @@ void FavoriteMacroWidget::set_config(const nlohmann::json& config) {
+@@ -141,6 +144,18 @@ void FavoriteMacroWidget::set_config(const nlohmann::json& config) {
      }
      icon_color_ = c.color;
      require_confirmation_ = c.require_confirmation;
@@ -940,7 +913,7 @@ index 8b38415..7ffed3a 100644
      spdlog::debug("[FavoriteMacroWidget] Config: {}={} icon={} color=0x{:06X} require_confirm={}",
                    widget_id_, macro_name_, icon_name_.empty() ? "default" : icon_name_, icon_color_,
                    require_confirmation_);
-@@ -167,11 +182,20 @@ void FavoriteMacroWidget::attach(lv_obj_t* widget_obj, lv_obj_t* parent_screen)
+@@ -168,11 +183,20 @@ void FavoriteMacroWidget::attach(lv_obj_t* widget_obj, lv_obj_t* parent_screen)
  
      update_display();
  
@@ -961,7 +934,7 @@ index 8b38415..7ffed3a 100644
      lifetime_.invalidate();
      config_modal_.reset();
  
-@@ -198,6 +222,12 @@ void FavoriteMacroWidget::handle_clicked() {
+@@ -199,6 +223,12 @@ void FavoriteMacroWidget::handle_clicked() {
                       widget_id_);
          open_config_modal();
      } else {
@@ -974,7 +947,7 @@ index 8b38415..7ffed3a 100644
          // Execute assigned macro
          spdlog::info("[FavoriteMacroWidget] {} clicked - executing {}", widget_id_, macro_name_);
          fetch_and_execute();
-@@ -225,7 +255,9 @@ void FavoriteMacroWidget::update_display() {
+@@ -230,7 +260,9 @@ void FavoriteMacroWidget::update_display() {
              // A tag, not lv_tr() text: the label then re-translates itself.
              lv_label_set_translation_tag(name_label_, "Configure");
          } else {
@@ -985,7 +958,7 @@ index 8b38415..7ffed3a 100644
              lv_label_set_text(name_label_, display.c_str());
          }
      }
-@@ -259,8 +291,19 @@ void FavoriteMacroWidget::update_display() {
+@@ -258,8 +290,19 @@ void FavoriteMacroWidget::update_display() {
      }
  }
  
@@ -1302,6 +1275,7 @@ index 112ddec..dac6561 100644
          {"thermistor", {true, true}},        // user sensor name, long_mode=dots
          {"bypass", {true, true}},            // material name, long_mode=dots
 diff --git a/tests/unit/test_material_preheat_actions.cpp b/tests/unit/test_material_preheat_actions.cpp
+index a458744..89bf198 100644
 --- a/tests/unit/test_material_preheat_actions.cpp
 +++ b/tests/unit/test_material_preheat_actions.cpp
 @@ -677,3 +677,44 @@ TEST_CASE_METHOD(LVGLUITestFixture,
@@ -1390,10 +1364,10 @@ index 51a4923..1d3212c 100644
      </text_tiny>
    </view>
 diff --git a/ui_xml/components/print_status_detailed_active.xml b/ui_xml/components/print_status_detailed_active.xml
-index d101ec8..ad27855 100644
+index f66445a..c676ef7 100644
 --- a/ui_xml/components/print_status_detailed_active.xml
 +++ b/ui_xml/components/print_status_detailed_active.xml
-@@ -68,11 +68,14 @@
+@@ -112,11 +112,14 @@
      <!-- Temps: always a full-width row at the bottom of the card. Uses the
           standard temp_display widget so heating-color logic (red=heating up,
           blue=cooling, etc.) matches the rest of the app — DRY with
@@ -1407,8 +1381,5 @@ index d101ec8..ad27855 100644
              event_bubble="true">
 +      <bind_flag_if_eq subject="print_status_temps_hidden" flag="hidden" ref_value="1"/>
        <!-- Nozzle group: split into two click targets.
-            Left = picker (T0 + nozzle_icon + chevron) → tool picker.
+            Left = picker (numbered nozzle_icon + chevron) → tool picker.
             Right = temp_display → temp graph overlay (Mode::Nozzle).
--- 
-2.56.0
-

@@ -1,7 +1,8 @@
 diff --git a/src/ui/keyboard_layout_provider.cpp b/src/ui/keyboard_layout_provider.cpp
+index f95308f..e40fb1b 100644
 --- a/src/ui/keyboard_layout_provider.cpp
 +++ b/src/ui/keyboard_layout_provider.cpp
-@@ -238,8 +238,9 @@
+@@ -241,8 +241,9 @@ static const char* const kb_map_numbers_symbols[] = {
      "-", "/", ":", ";", "(", ")", "$", "&", "@", "*", "\n",
      // Row 3: #+= + punctuation + Backspace (matches alpha row 3 structure)
      "#+=", ".", ",", "?", "!", "\"", ICON_BACKSPACE, "\n",
@@ -14,11 +15,12 @@ diff --git a/src/ui/keyboard_layout_provider.cpp b/src/ui/keyboard_layout_provid
  static const lv_buttonmatrix_ctrl_t kb_ctrl_numbers_symbols[] = {
      // Row 1: Numbers 1-0 (10 keys, equal width 4)
 diff --git a/tests/unit/test_keyboard_layout_provider.cpp b/tests/unit/test_keyboard_layout_provider.cpp
+index 9117297..8c1f169 100644
 --- a/tests/unit/test_keyboard_layout_provider.cpp
 +++ b/tests/unit/test_keyboard_layout_provider.cpp
-@@ -751,3 +751,23 @@
-         REQUIRE(all_found);
+@@ -799,3 +799,23 @@ TEST_CASE_METHOD(LVGLTestFixture, "Keyboard Layout: popovers on keeps the layout
      }
+     lv_obj_delete(kb);
  }
 +
 +TEST_CASE("Keyboard Layout: Numbers and symbols - one period and an underscore",

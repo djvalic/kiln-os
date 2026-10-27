@@ -1,0 +1,92 @@
+--- a/include/ams_backend_ad5x_ifs.h
++++ b/include/ams_backend_ad5x_ifs.h
+@@ -720,6 +720,14 @@
+     /// frame). Returns true when something we publish changed. Caller must
+     /// hold mutex_.
+     bool parse_ifs_tool_map_locked(const nlohmann::json& ifs_object);
++    /// Fold the kiln-spoolman plugin's `spoolman_slots` object into the slot
++    /// links. Returns true when a slot's stored link changed. Caller must hold
++    /// mutex_.
++    bool parse_spoolman_slots_locked(const nlohmann::json& object);
++    /// Last spool id the plugin sent per slot: -1 before the first frame, 0 for
++    /// none. Only a change from it links the slot, so a link the user set on
++    /// the screen survives until the plugin's value changes.
++    int plugin_spool_seen_[kNumPorts] = {-1, -1, -1, -1};
+     /// Re-derive each lane's SlotInfo::mapped_tool from tool_map_ — the one
+     /// place the reverse direction is projected onto the slot model the UI
+     /// reads. Shared by both adapters' edges and set_tool_mapping(). Caller
+--- a/src/printer/ams_backend_ad5x_ifs.cpp
++++ b/src/printer/ams_backend_ad5x_ifs.cpp
+@@ -240,7 +240,10 @@
+     // Klipper's objects/list only carries objects that implement get_status(),
+     // so listing them IS the capability check.
+     const auto& available = hw.printer_objects();
+-    for (const char* name : {"ifs", "ifs_materials", "zmod_ifs", "zmod_color", kZmodChangeMacro}) {
++    // `spoolman_slots` is the kiln-spoolman plugin's object (present only when
++    // the plugin is installed and enabled).
++    for (const char* name :
++         {"ifs", "ifs_materials", "zmod_ifs", "zmod_color", kZmodChangeMacro, "spoolman_slots"}) {
+         if (std::find(available.begin(), available.end(), name) != available.end()) {
+             objects.emplace_back(name);
+         }
+@@ -619,6 +622,46 @@
+ 
+ // --- Status parsing ---
+ 
++// The kiln-spoolman plugin publishes each IFS slot's Spoolman spool as the
++// printer object `spoolman_slots`: {"slots": {"1": id-or-null, ...}}. A new
++// non-null id links that slot to the spool through the same override save the
++// slot edit uses; SpoolmanManager then fetches its remaining weight. A null
++// id does not unlink, so a spool chosen on the screen is never cleared by the
++// plugin.
++bool AmsBackendAd5xIfs::parse_spoolman_slots_locked(const json& object) {
++    if (!object.is_object() || !object.contains("slots") || !object["slots"].is_object()) {
++        return false;
++    }
++    const auto& slots = object["slots"];
++    bool changed = false;
++    for (int slot = 0; slot < kNumPorts; ++slot) {
++        auto it = slots.find(std::to_string(slot + 1));
++        const int spool = (it != slots.end() && it->is_number_integer()) ? it->get<int>() : 0;
++        if (spool <= 0) {
++            plugin_spool_seen_[slot] = 0;
++            continue;
++        }
++        const int seen = plugin_spool_seen_[slot];
++        if (spool == seen) {
++            continue;
++        }
++        plugin_spool_seen_[slot] = spool;
++        auto found = overrides_.find(slot);
++        const int linked = found != overrides_.end() ? found->second.spoolman_id : 0;
++        if (linked == spool) {
++            continue;
++        }
++        // First frame after a restart: keep a link the screen saved earlier.
++        if (seen < 0 && linked > 0) {
++            continue;
++        }
++        overrides_[slot].spoolman_id = spool;
++        publish_override_locked(slot, "kiln-spoolman slot link");
++        changed = true;
++    }
++    return changed;
++}
++
+ void AmsBackendAd5xIfs::handle_status(const json& status_obj) {
+     const json* status = &status_obj;
+ 
+@@ -655,6 +698,13 @@
+             state_changed = true;
+         }
+     }
++
++    // kiln-spoolman's per-slot spool links (absent without the plugin).
++    if (status->contains("spoolman_slots")) {
++        if (parse_spoolman_slots_locked((*status)["spoolman_slots"])) {
++            state_changed = true;
++        }
++    }
+ 
+     // Parse per-port filament sensors
+     // Leading space in sensor name is intentional — Klipper object naming convention

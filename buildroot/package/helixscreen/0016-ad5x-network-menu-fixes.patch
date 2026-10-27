@@ -1,34 +1,8 @@
---- a/ui_xml/network_settings_overlay.xml
-+++ b/ui_xml/network_settings_overlay.xml
-@@ -26,6 +26,12 @@
-               flex_grow="4" style_pad_all="0" style_pad_gap="#space_sm" scrollable="false" flex_flow="column"
-               style_flex_main_place="start" style_flex_cross_place="start">
-         <!-- ============================================================== -->
-+        <!-- Status cards share the space above the Test Network button and scroll
-+             when both are full (WiFi and Ethernet connected), so the button stays on screen -->
-+        <lv_obj name="status_cards"
-+                width="100%" flex_grow="1" height="content" style_pad_all="0" style_pad_gap="#space_sm"
-+                style_bg_opa="0" style_border_width="0" scrollable="true" scroll_elastic="false"
-+                flex_flow="column" style_flex_main_place="start" style_flex_cross_place="start">
-         <!-- WiFi Status Card (Combined toggle + connection status) -->
-         <!-- ============================================================== -->
-         <lv_obj name="wifi_status_card"
-@@ -200,9 +206,10 @@
-             </lv_obj>
-           </lv_obj>
-         </lv_obj>
-+        </lv_obj>
- 
--        <!-- Spacer to push Test Network button to bottom -->
--        <lv_obj width="100%" flex_grow="1" scrollable="false"/>
-+        <!-- Test Network stays below the status cards, out of their scroll area -->
-+        <!-- ============================================================== -->
-         <!-- ============================================================== -->
-         <!-- Network Test Button (at bottom of left column) -->
-         <!-- ============================================================== -->
+diff --git a/src/api/wifi_backend_wpa_supplicant.cpp b/src/api/wifi_backend_wpa_supplicant.cpp
+index fa3d596..7c255bb 100644
 --- a/src/api/wifi_backend_wpa_supplicant.cpp
 +++ b/src/api/wifi_backend_wpa_supplicant.cpp
-@@ -97,6 +97,7 @@
+@@ -97,6 +97,7 @@ std::string validate_wpa_string(const std::string& input, const std::string& fie
  #include "wpa_ctrl.h"
  
  #include <algorithm>
@@ -36,16 +10,16 @@
  #include <cctype>
  #include <cerrno>
  #include <cstdlib>
-@@ -105,6 +106,8 @@
+@@ -105,6 +106,8 @@ std::string validate_wpa_string(const std::string& input, const std::string& fie
  #include <filesystem>
  #include <fstream>
  #include <future>
 +#include <ifaddrs.h>
 +#include <netinet/in.h>
+ #include <optional>
  #include <sstream>
  #include <sys/stat.h>
- #include <unistd.h>
-@@ -2001,6 +2004,28 @@
+@@ -2026,6 +2029,28 @@ bool WifiBackendWpaSupplicant::set_rfkill_soft_block(bool blocked) {
      return true;
  }
  
@@ -74,7 +48,7 @@
  WifiBackend::ConnectionStatus WifiBackendWpaSupplicant::get_status() {
      ConnectionStatus status = {};
      status.connected = false;
-@@ -2078,6 +2103,18 @@
+@@ -2103,6 +2128,18 @@ WifiBackend::ConnectionStatus WifiBackendWpaSupplicant::get_status() {
          }
      }
  
@@ -93,7 +67,7 @@
      // Only log when status actually changes (reduces log noise)
      bool status_changed =
          (status.connected != last_logged_status_.connected ||
-@@ -2179,6 +2216,17 @@
+@@ -2204,6 +2241,17 @@ void WifiBackendWpaSupplicant::resolve_5ghz_support() {
  // Helper Methods (encapsulate wpa_supplicant ugliness)
  // ============================================================================
  
@@ -111,7 +85,7 @@
  std::vector<WiFiNetwork> WifiBackendWpaSupplicant::parse_scan_results(const std::string& raw) {
      std::vector<WiFiNetwork> networks;
  
-@@ -2218,8 +2266,8 @@
+@@ -2243,8 +2291,8 @@ std::vector<WiFiNetwork> WifiBackendWpaSupplicant::parse_scan_results(const std:
          // SSID may be missing entirely for hidden networks
          std::string ssid = (fields.size() >= 5) ? fields[4] : "";
  
@@ -122,3 +96,33 @@
              spdlog::trace("[WifiBackend] Skipping hidden network: {}", helix::redact::mac(bssid));
              continue;
          }
+diff --git a/ui_xml/network_settings_overlay.xml b/ui_xml/network_settings_overlay.xml
+index 22c4e67..146afdf 100644
+--- a/ui_xml/network_settings_overlay.xml
++++ b/ui_xml/network_settings_overlay.xml
+@@ -26,6 +26,12 @@
+               flex_grow="4" style_pad_all="0" style_pad_gap="#space_sm" scrollable="false" flex_flow="column"
+               style_flex_main_place="start" style_flex_cross_place="start">
+         <!-- ============================================================== -->
++        <!-- Status cards share the space above the Test Network button and scroll
++             when both are full (WiFi and Ethernet connected), so the button stays on screen -->
++        <lv_obj name="status_cards"
++                width="100%" flex_grow="1" height="content" style_pad_all="0" style_pad_gap="#space_sm"
++                style_bg_opa="0" style_border_width="0" scrollable="true" scroll_elastic="false"
++                flex_flow="column" style_flex_main_place="start" style_flex_cross_place="start">
+         <!-- WiFi Status Card (Combined toggle + connection status) -->
+         <!-- ============================================================== -->
+         <lv_obj name="wifi_status_card"
+@@ -200,9 +206,10 @@
+             </lv_obj>
+           </lv_obj>
+         </lv_obj>
++        </lv_obj>
+ 
+-        <!-- Spacer to push Test Network button to bottom -->
+-        <lv_obj width="100%" flex_grow="1" scrollable="false"/>
++        <!-- Test Network stays below the status cards, out of their scroll area -->
++        <!-- ============================================================== -->
+         <!-- ============================================================== -->
+         <!-- Network Test Button (at bottom of left column) -->
+         <!-- ============================================================== -->

@@ -6,6 +6,9 @@ the release has no section of its own yet (rename it after the release).
 
 ## Unreleased
 
+### Added
+- **Spoolman spool per IFS slot on the screen** (with the `kiln-spoolman` plugin only): the spool a slot was given with `SPOOLMAN_SET_SLOT` is linked to that slot in HelixScreen, and its name and remaining grams show in the AMS slot view. Without the plugin, or without Spoolman, nothing changes (HelixScreen patch 0026, `ams_backend_ad5x_ifs.cpp`). A spool picked on the screen stays until the plugin's value changes; clearing a slot in the plugin does not unlink it on the screen.
+
 ### Changed
 - **First tool load of a print primes only when the slicer purges on the bed**: with `use_trash_on_print` 0 or 2, the first colour no longer purges at the purge box; the bed prime tower purges it. Trash mode still purges at the box (`klipper/extras/ifs.py`, `tools/test_ifs.py`). Needs a printer check: the first layer after the first colour, and that the prime fills the nozzle.
 
