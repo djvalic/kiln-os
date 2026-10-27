@@ -1,0 +1,43 @@
+diff --git a/src/printer/ams_state.cpp b/src/printer/ams_state.cpp
+index 0e72d12..d05d0f5 100644
+--- a/src/printer/ams_state.cpp
++++ b/src/printer/ams_state.cpp
+@@ -1482,9 +1482,11 @@ bool AmsState::write_slot_subjects(AmsBackend& backend, int slot_index, const Sl
+         changed = true;
+     }
+ 
+-    // Measured remaining length, "" when the backend publishes none. The slot
+-    // shows it under its material; weight has its own surfaces.
+-    std::string remaining = slot.remaining_length_display();
++    // What is left, under the material: grams for a slot linked to a Spoolman
++    // spool (its weight comes from the poll), else the measured length, "" when
++    // the backend publishes neither. Unlinked slots are unchanged.
++    std::string remaining = slot.spoolman_id > 0 ? slot.remaining_summary()
++                                                 : slot.remaining_length_display();
+     if (strcmp(lv_subject_get_string(&slot_remaining_[slot_index]), remaining.c_str()) != 0) {
+         lv_subject_copy_string(&slot_remaining_[slot_index], remaining.c_str());
+     }
+diff --git a/ui_xml/ams_slot_view.xml b/ui_xml/ams_slot_view.xml
+index f2b5a08..dea6c6c 100644
+--- a/ui_xml/ams_slot_view.xml
++++ b/ui_xml/ams_slot_view.xml
+@@ -15,7 +15,7 @@
+     - lane_humidity: per-lane climate under a per-lane lid: thermometer +
+       lane_temp_text when the lane reports a temperature, lane_humidity_icon (a
+       humidity_drop the C++ fills to the reading) + lane_humidity_text
+-    - lane_remaining: measured remaining length, under the spool
++    - lane_remaining: remaining grams (Spoolman-linked) or measured length, under the spool
+     - spool_container: holds the lane spool widget and the badges
+     - lane_spool: ams_lane_spool widget (spool graphic, empty placeholder,
+       error dot; renders itself from AmsState's per-slot subjects - C++ only
+@@ -139,8 +139,8 @@
+       </lv_obj>
+ 
+     </lv_obj>
+-    <!-- Measured remaining length (CFS measuring wheel), on the tray front under its
+-         spool; hidden while the lane has none -->
++    <!-- Remaining under the material: grams for a Spoolman-linked slot, else the measured
++         length (CFS measuring wheel), on the tray front under its spool; hidden while the lane has none -->
+     <text_small name="lane_remaining"
+                 text="" translation_tag="" style_text_color="#text_muted" hidden="true" clickable="false"
+                 event_bubble="true"/>

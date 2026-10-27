@@ -180,9 +180,11 @@ def parse_fields(reply):
             pass
     return fields
 
-def parse_counts(reply, key):
-    """Parse 'key: a b c d' (four per-channel numbers) from a reply."""
-    m = re.search(key + r":\s*(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)", reply)
+def parse_counts(reply, key, count=None):
+    """Parse 'key: a b ...' (one number per channel) from a reply."""
+    count = len(CHANNELS) if count is None else count
+    pat = key + r":\s*" + r"\s+".join([r"(-?\d+)"] * count)
+    m = re.search(pat, reply)
     return [int(v) for v in m.groups()] if m else None
 
 class IFS:
@@ -362,8 +364,8 @@ class IFS:
         self.tool_map = [c for c in CHANNELS]   # slicer tool n -> channel
         self.map_mode = "fixed"                 # see MAP_MODES
         self.last_status = {}
-        self.silk = [0, 0, 0, 0]
-        self.stall = [0, 0, 0, 0]
+        self.silk = [0] * len(CHANNELS)
+        self.stall = [0] * len(CHANNELS)
         self.busy = False
         self.error = None         # last failure, for printer.ifs.error
         self.stop_requested = False
@@ -477,7 +479,7 @@ class IFS:
                 t = m.get('temp')
                 slot['temp'] = float(t) if isinstance(t, (int, float)) \
                     and t > 0 else None
-        elif isinstance(colors, (list, tuple)) and len(colors) == 4:
+        elif isinstance(colors, (list, tuple)) and len(colors) == len(CHANNELS):
             for slot, c in zip(self.materials, colors):
                 slot['color'] = format_color(c)
         # Tuned swap values (IFS_TUNE); missing or unusable = not tuned
