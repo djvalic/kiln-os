@@ -62,6 +62,14 @@ released. To move on: build new firmware (`tools/build_mcu.sh`), add it to
 `klipper/mcu-firmware/`, its dictionaries to `klipper/mcu-dicts/`, and
 update `FLASHED`; the next release then updates every printer's boards.
 
+## Test builds (not releases)
+
+A quick or `--no-release` build is for testing only. It is versioned `vX.Y.Z-test.<run>` and
+sorts below the release, so a printer on it is still offered the release later. Its update zip
+is kept in the run's log folder (`update-<version>.zip`). It is never published, and
+`tools/release.sh` refuses it (a test version has a second hyphen). Install one by hand with
+`ad5x-update` from slot B (`docs/recovery-os.md`), passing the zip's sha256. See `docs/builder.md`.
+
 ## The printer
 
 - `/etc/kiln-version` (`post-build.sh`): `VERSION`, `COMMIT`, `DATE`. A

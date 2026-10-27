@@ -1,0 +1,19 @@
+From: AD5X Open OS
+Subject: [PATCH] net: ingenic mac: set_mac_address keeps dev_addr_shadow
+
+ifconfig eth0 hw ether calls ndo_set_mac_address, which copied the new address
+into dev_addr only. dev_addr_check() then warns "Incorrect netdev->dev_addr"
+at every ifconfig up, because dev_addr_shadow still holds the random probe
+address. dev_addr_set() writes both. Behaviour is otherwise unchanged.
+
+--- a/module_drivers/drivers/net/ethernet/ingenic/ingenic_mac.c
++++ b/module_drivers/drivers/net/ethernet/ingenic/ingenic_mac.c
+@@ -2439,7 +2439,7 @@
+ 	if (netif_running(dev)) {
+ 		return -EBUSY;
+ 	}
+-	memcpy((u8 *)dev->dev_addr, addr->sa_data, dev->addr_len);
++	dev_addr_set(dev, addr->sa_data);
+ 	setup_mac_addr(gmacdev, (u8 *)dev->dev_addr);
+ 	return 0;
+ }

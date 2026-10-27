@@ -45,6 +45,21 @@ for p in "$HERE"/patches/*.patch; do
 	fi
 done
 
+# DIAG=1: the test-only MIPS diagnostics (diag/), which need OUT set to a separate dir
+if [ -n "${DIAG:-}" ]; then
+	log "diagnostics: diag/ad5x-diag.c and its hooks"
+	install -m 0644 "$HERE/diag/ad5x-diag.c" "$KSRC/arch/mips/kernel/"
+	for p in "$HERE"/diag/*.patch; do
+		[ -e "$p" ] || continue
+		if patch -d "$KSRC" -p1 -R --dry-run -s -f <"$p" >/dev/null 2>&1; then
+			echo "already applied: $(basename "$p")"
+		else
+			patch -d "$KSRC" -p1 -N -s <"$p"
+			echo "applied: $(basename "$p")"
+		fi
+	done
+fi
+
 # Wi-Fi firmware for the built-in rtw88 (linux-firmware, redistributable)
 FW=$SDK/firmware
 FW_URL=https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain
@@ -54,13 +69,18 @@ if [ ! -s "$FW/rtw88/rtw8821c_fw.bin" ]; then
 	curl -fsSL -o "$FW/rtw88/rtw8821c_fw.bin" "$FW_URL/rtw88/rtw8821c_fw.bin"
 fi
 
+# regulatory.db for cfg80211 (built in: see ad5x.config). The buildroot package
+# passes the wireless-regdb source directory as REGDB_DIR.
+REGDB_DIR=${REGDB_DIR:?set REGDB_DIR to the wireless-regdb source dir}
+install -m 0644 "$REGDB_DIR/regulatory.db" "$REGDB_DIR/regulatory.db.p7s" "$FW/"
+
 mkdir -p "$OUT"
 if [ -z "${NO_CONFIG:-}" ]; then
 	log "config: x2600_halley7_linux_defconfig + ad5x.config"
 	"${MAKE[@]}" x2600_halley7_linux_defconfig
 	# merge_config.sh -m: merge only; then olddefconfig resolves deps
 	(cd "$OUT" && "$KSRC/scripts/kconfig/merge_config.sh" -m -O "$OUT" \
-		"$OUT/.config" "$HERE/ad5x.config")
+		"$OUT/.config" "$HERE/ad5x.config" ${DIAG:+"$HERE/diag/diag.config"})
 	"$KSRC/scripts/config" --file "$OUT/.config" --set-str EXTRA_FIRMWARE_DIR "$FW"
 	"${MAKE[@]}" olddefconfig
 	# Report fragment options that did not survive (missing/unmet deps)
@@ -90,6 +110,19 @@ rc=${PIPESTATUS[0]}
 
 log "DTC warnings for ad5x"
 grep -E "ad5x.*[Ww]arning" "$OUT/build-ad5x.log" || echo "  none"
+
+# The release string is what S00 records and compares (failed/last-ok), so a
+# quick and a full build must agree on it. It comes from the SDK tree's
+# localversion-rt plus CONFIG_LOCALVERSION; pin it here so a changed SDK checkout
+# fails the build instead of silently changing the string.
+EXPECT_RELEASE=${EXPECT_RELEASE:-6.6.18-rt23-ad5x}
+got_release=$(cat "$OUT/include/config/kernel.release")
+if [ "$got_release" != "$EXPECT_RELEASE" ]; then
+	echo "ERROR: kernel release is '$got_release', expected '$EXPECT_RELEASE'"
+	echo "  (set EXPECT_RELEASE if the SDK's localversion-rt changed on purpose)"
+	exit 1
+fi
+echo "kernel release: $got_release"
 
 ZIMAGE=$OUT/arch/mips/boot/compressed/zImage
 log "uImage"

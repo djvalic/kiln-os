@@ -7,7 +7,13 @@ the release has no section of its own yet (rename it after the release).
 ## Unreleased
 
 ### Fixed
-- **Motor currents set to the community values for X and Y** (`klipper/ad5x.cfg`): X and Y run 1.1 to 0.9 A RMS. The Z current stays at stock. The values come from the AD5M shipping settings, which the community reports working. Needs a printer check: a long X/Y print for step loss, and a homing repeat test.
+- **Kernel (test boot first): eMMC clock cap 50 MHz** (`kernel-ingenic66/ad5x.dts`): stock caps the eMMC at 25 MHz; HS200 was negotiated and reads ran at about 21 MiB/s. Needs a test boot: 10 cold boots, no mmc errors, a read/write loop.
+- **Kernel (test boot first): CMA reserve 32 MB to 16 MB** (`kernel-ingenic66/ad5x.config`): about 8 MB is in use. Needs a test boot: display and camera come up on a cold boot.
+- **Kernel (test boot first): DMA probe no longer logs "IRQ pdmam not found"** (`kernel-ingenic66/patches/0008`): the X2600 PDMA node has no pdmam interrupt; the lookup is now optional.
+- **Kernel (test boot first): `ifconfig eth0 hw ether` no longer warns "Incorrect netdev->dev_addr"** (`kernel-ingenic66/patches/0009`): the address setter updates both copies.
+- **Webcam name**: the first camera is named "Chamber/Bed" in Fluidd, HelixScreen and Moonraker (was "camera1"). Later cameras keep "Camera n". Set in `init.d/S64ad5x-camera`; takes effect on the next boot.
+- **Webcam: the dead USB device is no longer the main camera**: a UVC device with ID 0bda:d565 ("Snapshot Camera", on the board's OTG port) answered no probe, so the main webcam tile was dead while the bed camera on the hub worked. The camera script now skips that ID (`CAMERA_IGNORE` in `init.d/S64ad5x-camera`), so the bed camera is camera 1. Needs a printer test boot: `/webcam/?action=snapshot` returns a JPEG of the bed.
+- **Motor currents set to the community values** (`klipper/ad5x.cfg`): X and Y run 1.1 to 0.9 A RMS, Z 0.9 to 0.6 A RMS (hold the same). The values come from the AD5M shipping settings, which the community reports working. Needs a printer check: a long print for step loss on X, Y and Z (Z under bed load), and a homing repeat test.
 - **Homing: Y back-off no longer zeroes Z** (`klipper/ad5x.cfg`, `_HOME_ZXY`): `G28 Y` with Y already on its endstop set Z to 0 without homing Z. Z now keeps its current height. Needs a printer check: `G28 Y` with the carriage on the Y endstop, then `GET_POSITION`.
 - **Docs: MCU version, RAM and homing notes** now match the printer (MCU v0.13.0-803, N32G455 128 KB RAM patch, the back-off difference from stock).
 - **Runout sensor during swaps**: the toolhead sensor is now switched off during an IFS swap and put back to its previous state after it (`klipper/ifs.cfg`). The sensor was forced back on after a swap, even if it had been off before. It is now put back to the state it had. Needs a printer check: a multi-colour print with the sensor on.
@@ -17,19 +23,27 @@ the release has no section of its own yet (rename it after the release).
 - **Print without a saved centre Z**: the start stops with an error and runs `BED_MESH_CALIBRATE` first. Before, the print ran with no mesh loaded (`klipper/ad5x.cfg`, `_CHECK_Z_APPLY`).
 - **Quick actions and IFS_PURGE_TEST keep the extrusion mode**: LOAD_FILAMENT, UNLOAD_FILAMENT (without an IFS) and IFS_PURGE_TEST put back the M82/M83 mode they found (`macros/quick_actions.cfg`, `klipper/ifs.cfg`).
 - **IFS_PURGE_RESULT** without `DOT=` gives a clear error (`klipper/ifs.cfg`).
-- **Spoolman grams on the slot tile**: a slot linked to a Spoolman spool shows its remaining grams under the material (for example 750g), where it used to show nothing. Slots without a Spoolman link are unchanged (HelixScreen patch 0027, `ams_state.cpp`).
 - **UNLOAD_FILAMENT with a lane Kiln has no record of** (issue #13): when `ifs_loaded` is 0 but the IFS reports the selected lane as holding filament, UNLOAD_FILAMENT runs `IFS_UNLOAD` on that lane instead of a plain 50 mm retract. The plain retract is only used when no lane is loaded (`macros/quick_actions.cfg`). Needs a printer check: a lane loaded under zMod, then UNLOAD_FILAMENT.
 - **A failed IFS unload releases the lane** (issue #13): when an unload fails, the lane is released after the error, so the spool can be pulled by hand. Not after `IFS_STOP` (`klipper/extras/ifs.py`, `_unload_toolhead`). Needs a printer check: an unload that fails with the toolhead sensor still reading filament.
 
 - **Board fan during long macros** (issue #17): the board fan (`pcb_fan`, cools the TMC2209 drivers) is kept on by a reactor timer, `[pcb_fan_watch]` (`klipper/extras/pcb_fan_watch.py`), instead of a delayed_gcode that waited behind a long macro such as bed leveling. Same rule: on while a motor or heater is on or a print runs, off 30 s after. Needs a printer check: a bed level with the fan on, and the fan off 30 s after the level.
+- **Wi-Fi (USB rtw88) crash at boot fixed** (`kernel-ingenic66/patches/0010`): receive started before mac80211 had a channel, and the receive status read a NULL channel. Receive now starts after the hardware is registered, as upstream does. Needs a kernel test boot before release: no oops in `dmesg`, Wi-Fi associates.
+- **Wi-Fi regulatory database built into the kernel** (`kernel-ingenic66/ad5x.config`, `build.sh`, `ad5x-kernel66.mk`): cfg80211 asks for `regulatory.db` before the root filesystem is mounted, so the file on `/lib/firmware` was never found. It is now built in with its signature, from the wireless-regdb package. Needs a printer check after the next kernel build: no "failed to load regulatory.db" in `dmesg`, and `iw reg get` shows a country.
 
 ### Changed
 - **IFS swaps refuse an empty slot** before anything is cut: a tool change to a slot with no filament stops with an error (`klipper/extras/ifs.py`, same check as `IFS_MAP_TOOL`).
 - **Shared-slot warning**: at print start, a message when two tools map to one slot but the file names different filament for them. A message only; nothing else changes.
 - **CLEAR_NOZZLE** description now says it moves to the purge box and brushes, with no purge and no heating.
+
+## v0.0.29
+
 - **IFS wording on the screen**: the touch screen says IFS where it said AMS (Bambu's name for its system): the "AMS is busy" and "No AMS Detected" messages, the wizard and print-start text, and the telemetry labels. Patch 0028. Code names (AmsState, ams_*) are unchanged.
-- **IFS channel count in one place** (`klipper/extras/ifs.py`): the four channels come from one constant, and the reply parser and the status lists follow it. No change on the printer: still four channels. This is groundwork for other IFS hardware; it does not add support for any.
+
+## v0.0.28
+
+- **Spoolman grams on the slot tile**: a slot linked to a Spoolman spool shows its remaining grams under the material (for example 750g), where it used to show nothing. Slots without a Spoolman link are unchanged (HelixScreen patch 0027, `ams_state.cpp`).
 - **New logo and brand guide** (`docs/brand/`): a frost-blue ring with four gaps, one per IFS slot, and a solid K. One colour; the slot is read by position. App icon and lockup included.
+- **IFS channel count in one place** (`klipper/extras/ifs.py`): the four channels come from one constant, and the reply parser and the status lists follow it. No change on the printer: still four channels. This is groundwork for other IFS hardware; it does not add support for any.
 
 ## v0.0.27
 

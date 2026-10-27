@@ -208,7 +208,7 @@
 	pinctrl-1 = <&msc0_8bit_high>;
 	mmc-hs200-1_8v;
 	non-removable;
-	max-frequency = <25000000>;	/* stock value; raise only after testing */
+	max-frequency = <50000000>;	/* stock was 25000000; 50 MHz step under test (HS200 negotiated, measured ~21 MiB/s at 25 MHz) */
 	bus-width = <8>;
 	voltage-ranges = <1800 3300>;
 	ingenic,rst-gpios = <0>;

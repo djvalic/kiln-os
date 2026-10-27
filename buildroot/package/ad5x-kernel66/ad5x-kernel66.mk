@@ -8,7 +8,7 @@ AD5X_KERNEL66_VERSION = 1
 AD5X_KERNEL66_SITE = $(BR2_EXTERNAL_AD5X_PATH)/../kernel-ingenic66
 AD5X_KERNEL66_SITE_METHOD = local
 AD5X_KERNEL66_LICENSE = GPL-2.0
-AD5X_KERNEL66_DEPENDENCIES = host-python3
+AD5X_KERNEL66_DEPENDENCIES = host-python3 wireless-regdb
 
 AD5X_KERNEL66_SDK = $(call qstrip,$(BR2_PACKAGE_AD5X_KERNEL66_SDK))
 AD5X_KERNEL66_KDIR510 = $(call qstrip,$(BR2_PACKAGE_AD5X_KERNEL66_KDIR510))
@@ -23,6 +23,7 @@ define AD5X_KERNEL66_BUILD_CMDS
 		{ echo "ad5x-kernel66: no 5.10 tree, run kernel-ingenic66/chainload/setup.sh"; exit 1; }
 	cd $(@D) && SDK=$(AD5X_KERNEL66_SDK) OUT=$(AD5X_KERNEL66_OUT) \
 		TOOLBIN=$(HOST_DIR)/bin REPO=$(BR2_EXTERNAL_AD5X_PATH)/.. \
+		REGDB_DIR=$(BUILD_DIR)/wireless-regdb-$(WIRELESS_REGDB_VERSION) \
 		bash ./build.sh
 	$(MAKE) -C $(@D)/chainload KDIR=$(AD5X_KERNEL66_KDIR510) \
 		CROSS_COMPILE=$(HOST_DIR)/bin/mipsel-linux-

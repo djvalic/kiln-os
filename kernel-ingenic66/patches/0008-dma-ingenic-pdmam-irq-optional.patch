@@ -1,0 +1,20 @@
+From: AD5X Open OS
+Subject: [PATCH] dma: ingenic: pdmam IRQ is optional on X2600
+
+The X2600 PDMA node (13420000 and 13660000) has no "pdmam" interrupt; the
+MCU mailbox IRQ belongs to the mcu node. The driver already treats pdmam as
+optional (irq_pdmam < 0 is skipped), but platform_get_irq_byname() logs
+"IRQ pdmam not found" on every probe. Use the _optional variant so the boot
+log is clean. DMA behaviour is unchanged: pdma and pdmad are still requested.
+
+--- a/module_drivers/drivers/dma/ingenic/ingenic_dma.c
++++ b/module_drivers/drivers/dma/ingenic/ingenic_dma.c
+@@ -1170,7 +1170,7 @@
+ 	}
+ 
+ 	/* PDMA mcu interrupt*/
+-	dma->irq_pdmam = platform_get_irq_byname(pdev, "pdmam");
++	dma->irq_pdmam = platform_get_irq_byname_optional(pdev, "pdmam");
+ 	if (dma->irq_pdmam >= 0) {
+ 		ret = devm_request_irq(&pdev->dev, dma->irq_pdmam, pdmam_int_handler,
+ 		                       0, "pdmam", dma);

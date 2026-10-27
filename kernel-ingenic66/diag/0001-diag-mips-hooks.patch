@@ -1,0 +1,24 @@
+--- a/arch/mips/Kconfig	2026-10-27 13:37:34.576322408 -0400
++++ b/arch/mips/Kconfig	2026-10-27 13:37:34.578271149 -0400
+@@ -3210,3 +3210,12 @@
+ source "arch/mips/kvm/Kconfig"
+ 
+ source "arch/mips/vdso/Kconfig"
++
++config AD5X_DIAG
++	bool "AD5X MIPS diagnostics (test kernels only)"
++	depends on MIPS && SMP
++	default n
++	help
++	  Test-only checks for the Kiln OS kernel work: PRId and cache geometry,
++	  DMA cache maintenance against uncached memory, and an index cache-op
++	  probe between cores. Prints "ad5x-diag:" lines. Keep it off in releases.
+--- a/arch/mips/kernel/Makefile	2026-10-27 13:37:34.576909339 -0400
++++ b/arch/mips/kernel/Makefile	2026-10-27 13:37:34.587044038 -0400
+@@ -110,5 +110,6 @@
+ 
+ obj-$(CONFIG_CPU_PM)		+= pm.o
+ obj-$(CONFIG_MIPS_CPS_PM)	+= pm-cps.o
++obj-$(CONFIG_AD5X_DIAG)	+= ad5x-diag.o
+ 
+ CPPFLAGS_vmlinux.lds		:= $(KBUILD_CFLAGS)

@@ -1,0 +1,37 @@
+--- a/drivers/net/wireless/realtek/rtw88/usb.c
++++ b/drivers/net/wireless/realtek/rtw88/usb.c
+@@ -712,13 +712,23 @@
+ 
+ 	INIT_WORK(&rtwusb->rx_work, rtw_usb_rx_handler);
+ 
++	return 0;
++}
++
++/*
++ * Start receiving only once mac80211 is registered: a frame that arrives
++ * earlier reaches rtw_rx_fill_rx_status with no channel set.
++ */
++static void rtw_usb_setup_rx(struct rtw_dev *rtwdev)
++{
++	struct rtw_usb *rtwusb = rtw_get_usb_priv(rtwdev);
++	int i;
++
+ 	for (i = 0; i < RTW_USB_RXCB_NUM; i++) {
+ 		struct rx_usb_ctrl_block *rxcb = &rtwusb->rx_cb[i];
+ 
+ 		rtw_usb_rx_resubmit(rtwusb, rxcb);
+ 	}
+-
+-	return 0;
+ }
+ 
+ static void rtw_usb_deinit_rx(struct rtw_dev *rtwdev)
+@@ -855,6 +865,8 @@
+ 		goto err_destroy_rxwq;
+ 	}
+ 
++	rtw_usb_setup_rx(rtwdev);
++
+ 	return 0;
+ 
+ err_destroy_rxwq:

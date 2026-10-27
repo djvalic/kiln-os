@@ -11,6 +11,8 @@
 #   RESOLUTION_2=640x480  camera 2 only (same for FPS_2, ...)
 USTREAMER=/usr/bin/ustreamer
 CONF=/data/ad5x/camera.conf
+# UVC devices that are not printer cameras, as vendor:product (space separated)
+CAMERA_IGNORE="0bda:d565"
 RUN=/run/ad5x-camera
 BASE_PORT=8090
 
@@ -22,6 +24,12 @@ cameras() {
 		[ "$(cat $v/index 2>/dev/null)" = 0 ] || continue
 		drv=$(basename "$(readlink -f $v/device/driver)" 2>/dev/null)
 		[ "$drv" = uvcvideo ] || continue
+		# Skip known non-camera UVC devices (USB vendor:product, space
+		# separated). 0bda:d565 ("Snapshot Camera" on the OTG port) answers
+		# no probe and is not the printer camera (issue: dead webcam tile).
+		usb=$(dirname "$(readlink -f $v/device)")
+		ids="$(cat $usb/idVendor 2>/dev/null):$(cat $usb/idProduct 2>/dev/null)"
+		case " $CAMERA_IGNORE " in *" $ids "*) continue ;; esac
 		echo "$(readlink -f $v/device) /dev/$(basename $v)"
 	done | sort | cut -d' ' -f2
 }
@@ -54,7 +62,9 @@ sync_webcams() {
 			fi
 			sleep 2
 		done
-		wget -q -O /dev/null -T 5 --post-data "name=camera$i&enabled=$enabled&service=mjpegstreamer-adaptive&stream_url=/webcam$suffix/stream&snapshot_url=/webcam$suffix/snapshot&location=printer&icon=mdiWebcam&aspect_ratio=4:3&target_fps=15&target_fps_idle=5" \
+		name="Chamber/Bed"
+		[ $i -gt 1 ] && name="Camera $i"
+		wget -q -O /dev/null -T 5 --post-data "name=$name&enabled=$enabled&service=mjpegstreamer-adaptive&stream_url=/webcam$suffix/stream&snapshot_url=/webcam$suffix/snapshot&location=printer&icon=mdiWebcam&aspect_ratio=4:3&target_fps=15&target_fps_idle=5" \
 			"$WEBCAM_API" || echo "camera $i: could not register with Moonraker"
 		echo "camera $i: webcam enabled=$enabled"
 		i=$((i + 1))
