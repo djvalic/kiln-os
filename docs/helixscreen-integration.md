@@ -446,11 +446,11 @@ With (a2) these start working; the remap ones additionally need `T0`-`T3` and
 HelixScreen's `ad5x` preset (`assets/config/presets/ad5x.json`) names zMod's
 fans: part `fan_generic fanM106`, aux `fan_generic chamber_fan`, board
 `fan_generic pcb_fan`. Ours are `fan`, `heater_fan heat_fan` and
-`controller_fan pcb_fan`; there is no chamber fan. At every start the
+`fan_generic pcb_fan` (kept on by `[pcb_fan_watch]`); there is no chamber fan. At every start the
 preset seeded `fans/aux` with the missing chamber fan (config.cpp seeds
 empty role keys), the missing fan cleared it again, and a one-step "Printer
 Setup: Fans" wizard opened. The wizard has no field for aux. Fix: set
-`printers.<id>.fans.aux` to an existing fan (`controller_fan pcb_fan`) in
+`printers.<id>.fans.aux` to an existing fan (`fan_generic pcb_fan`) in
 `/data/ad5x/helixscreen/config/settings.json` with HelixScreen stopped;
 the preset then leaves it alone. A cleaner fix for new installs: a
 HelixScreen preset for this firmware, or seeding settings.json at first

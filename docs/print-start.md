@@ -149,7 +149,8 @@ probing: the calibrated time (the default) is the better choice.
   lines; here the slicer passes them.
 - Stock sets `SET_IDLE_TIMEOUT TIMEOUT=864000` during the start and
   switches the board fan on (`SET_FAN_SPEED FAN=pcb_fan SPEED=1`); here
-  `[controller_fan]` and the configured idle timeout handle both.
+  `[pcb_fan_watch]` (a reactor timer, so a long macro can't hold it off;
+  issue #17) and the configured idle timeout handle both.
 - Stock pre-feeds every newly inserted spool at power-on (`F24`, `F10 L600`
   stopped by `F112`, `F23`, `F39`; `F11 L100` back off when the strand
   reached the toolhead). Here the IFS module does it on its own

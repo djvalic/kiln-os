@@ -135,7 +135,7 @@ The steps:
     (the sensors lag).
 
   The step is `failed` if a required item fails. Heaters and fans are off
-  in every case. `_PCB_FAN_WATCH` keeps the board fan on while motors or
+  in every case. `[pcb_fan_watch]` keeps the board fan on while motors or
   heaters are on, so it may start again after its test.
 - **pid**: home and move the nozzle to the X/Y centre at Z10. With the
   part fan at `pid_fan_speed` (1.0, as when printing PLA), run

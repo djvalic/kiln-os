@@ -653,6 +653,7 @@ class IFS:
             self.refill_notice = ""
             if self.map_mode == "loaded":
                 self._map_loaded()
+            self._warn_shared_slots()
         self.print_state = state
         if ended and self.tool_map != list(CHANNELS):
             self.tool_map = list(CHANNELS)
@@ -1499,6 +1500,30 @@ class IFS:
                             path, e)
             return [], []
         return found.get('filament_type', []), found.get('filament_colour', [])
+    def _warn_shared_slots(self):
+        """Message only: two tools that map to one slot, but the file names
+        different filament for them (type or colour), print with that slot's
+        filament. Shown once, when a print starts."""
+        types, colours = self._file_filaments()
+        if not types and not colours:
+            return
+        def filament(t):
+            mtype = types[t].strip().upper() if t < len(types) else ''
+            col = colours[t].strip() if t < len(colours) else ''
+            return mtype, parse_color(col) or col.upper()
+        def label(t):
+            parts = [x for x in (types[t] if t < len(types) else '',
+                                 colours[t] if t < len(colours) else '') if x]
+            return " ".join(parts) or "no filament named"
+        for slot in CHANNELS:
+            tools = [t for t in TOOLS if self.tool_map[t] == slot]
+            for i, a in enumerate(tools):
+                for b in tools[i + 1:]:
+                    if filament(a) != filament(b):
+                        self.gcode.respond_info(
+                            "IFS: warning: T%d (%s) and T%d (%s) both use "
+                            "slot %d; the print uses that slot's filament "
+                            "for both" % (a, label(a), b, label(b), slot))
     def _match_slot(self, mtype, color, present):
         """The loaded slot for one tool's filament: a slot with the same
         material and the nearest colour; if no loaded slot has that material,
@@ -1689,17 +1714,29 @@ class IFS:
         return mode in (0, 2)
     def _unload_toolhead(self, chan):
         """Nozzle contents back into the lane: the first half of a swap
-        (cut, unload, pull back), then release the lane (as FX)."""
+        (cut, unload, pull back), then release the lane (as FX). A failed
+        unload releases the lane too, so the spool can be pulled by hand
+        (not after IFS_STOP: that already halted the lane)."""
         toolhead = self.printer.lookup_object('toolhead')
         self._run_template(self.before_template, OLD=chan, NEW=0)
-        if self._head_has_filament() is False:
-            logging.info("ifs: toolhead empty, skipping cut of channel %d",
-                         chan)
-        else:
-            self._ensure_hot()
-            self._run_template(self.cut_template, OLD=chan, NEW=0)
-            toolhead.wait_moves()
-            self._unload(chan)
+        try:
+            if self._head_has_filament() is False:
+                logging.info("ifs: toolhead empty, skipping cut of channel %d",
+                             chan)
+            else:
+                self._ensure_hot()
+                self._run_template(self.cut_template, OLD=chan, NEW=0)
+                toolhead.wait_moves()
+                self._unload(chan)
+        except IfsError:
+            if not self.stop_requested:
+                try:
+                    self._release(chan)
+                except IfsError as e:
+                    # The unload error is the one the user needs to see
+                    logging.warning("ifs: release channel %d after a failed "
+                                    "unload: %s", chan, e)
+            raise
         self._set_channel(0)
         self._release(chan)
         self._run_template(self.after_template, OLD=chan, NEW=0)
@@ -1718,6 +1755,12 @@ class IFS:
                 self.first_swap_pending = False
             gcmd.respond_info("IFS: channel %d already loaded" % (new,))
             return
+        # Refuse an empty slot before anything moves: the cut would leave the
+        # nozzle with nothing to load. Same check as IFS_MAP_TOOL.
+        if ('silk_state' in self.last_status and new not in
+                mask_channels(self.last_status['silk_state'])):
+            raise gcmd.error("IFS: slot %d has no filament, the swap is not "
+                             "done (nothing was cut)" % (new,))
         flush = gcmd.get_float('FLUSH', None, minval=0.)
         rounds = gcmd.get_int('ROUNDS', None, minval=1, maxval=5)
         purge = self._swap_purges(gcmd)
