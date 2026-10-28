@@ -14,6 +14,17 @@ start)
 		exit 0
 	fi
 	[ "$KROOT" = /usr/lib/klipper ] || echo "klipper: $(cat $KROOT/klippy/.version) from $KROOT"
+	# The IFS as a Klipper MCU (ifs.cfg includes /run/ad5x/ifs-mcu/*.cfg).
+	# Only with /data/ad5x/ifs-klipper.enable, and only when its firmware
+	# answers as Klipper; otherwise ifs.py talks to Flashforge's firmware.
+	# /run is cleared at boot: removing the enable file takes a reboot.
+	if [ -f /data/ad5x/ifs-klipper.enable ]; then
+		mkdir -p /run/ad5x/ifs-mcu && chmod 755 /run/ad5x/ifs-mcu	# read by Klipper's user
+		rm -f /run/ad5x/ifs-mcu/*.cfg
+		if ad5x-mcu-version --port /dev/ttyS4 --baud 115200 --timeout 2 >/dev/null 2>&1; then
+			ln -s /usr/share/ad5x/config/generic-flashforge-ifs.cfg /run/ad5x/ifs-mcu/
+		fi
+	fi
 	HOME=/home/klipper start-stop-daemon -S -b -m -p $PID -c klipper -N -10 \
 		-x /usr/bin/python3 -- $KROOT/klippy/klippy.py \
 		$PD/config/printer.cfg -l $PD/logs/klippy.log \

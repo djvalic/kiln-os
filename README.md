@@ -1,4 +1,8 @@
+![Kiln OS](docs/brand/logo/kiln-lockup-single-dark.svg)
+
 # Kiln OS
+
+*An open operating system for the Flashforge Adventurer 5X: mainline Klipper, Fluidd and a touch screen, with a recovery system.*
 
 An open operating system for the **Flashforge Adventurer 5X (AD5X)**. It
 replaces the stock firmware with a Buildroot Linux system running mainline
@@ -187,6 +191,9 @@ This builds on the work of many projects:
   the MCU bootloader patches in `klipper/mcu-patches/` (GPL-3.0)
 - [QuickSwap](https://github.com/ninjamida/quickswap-5x) and NoPoop by
   ninjamida, and Bambufy: ideas and G-code interfaces (no code copied)
+- Hunter Laux ([@jolting](https://github.com/jolting)): the native Klipper
+  firmware for the IFS board, proposed in GitHub pull request #16. Not yet
+  merged; credited here for the work and its ideas
 - Ingenic's Linux 6.6 SDK kernel for the X2000/X2600 (GPL-2.0)
 - [Buildroot](https://buildroot.org/), BusyBox, [SWUpdate](https://sbabic.github.io/swupdate/),
   [LVGL](https://lvgl.io/) (MIT), Noto fonts (OFL-1.1)

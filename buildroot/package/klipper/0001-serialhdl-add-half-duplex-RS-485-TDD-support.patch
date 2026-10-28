@@ -1,0 +1,99 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sat, 24 Oct 2026 12:00:00 -0700
+Subject: [PATCH] serialhdl: add support for half-duplex RS-485 TDD
+
+Add Time Division Duplexing (TDD) poll loop to host SerialReader for
+half-duplex RS-485 interfaces (such as the Flashforge Adventurer 5X IFS board).
+When SERIAL_RS485_TDD is advertised by the MCU, a periodic poll event
+sends debug_nop when idle to ensure half-duplex channel synchronization.
+
+
+Kiln OS: the keep-alive time is set on every real send (raw_send and
+raw_send_wait_ack), not only by the poll, so a keep-alive never follows
+a command on the half-duplex bus too soon.
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+--- a/klippy/serialhdl.py
++++ b/klippy/serialhdl.py
+@@ -39,6 +39,20 @@
+         self.last_notify_id = 0
+         self.pending_notifications = {}
+         self.can_wait_acks = True
++        self.tdd_timer = None
++        self.tdd_nop_cmd = None
++        self.last_tx_time = 0.
++        self.last_rx_time = 0.
++    def _tdd_poll_event(self, eventtime):
++        if self.serialqueue is None:
++            return self.reactor.NEVER
++        if (eventtime - self.last_rx_time >= 0.020
++            and eventtime - self.last_tx_time >= 0.020):
++            self.last_tx_time = eventtime
++            self.ffi_lib.serialqueue_send(
++                self.serialqueue, self.default_cmd_queue,
++                self.tdd_nop_cmd, len(self.tdd_nop_cmd), 0, 0, 0)
++        return eventtime + 0.020
+     def _bg_thread(self):
+         name_short = ("serialhdl %s" % (self.mcu_name))[:15]
+         self.ffi_lib.set_thread_name(name_short.encode('utf-8'))
+@@ -48,6 +62,7 @@
+             count = response.len
+             if count < 0:
+                 break
++            self.last_rx_time = response.receive_time
+             if response.notify_id:
+                 params = {'#sent_time': response.sent_time,
+                           '#receive_time': response.receive_time}
+@@ -116,6 +131,14 @@
+         if receive_window is not None:
+             self.ffi_lib.serialqueue_set_receive_window(
+                 self.serialqueue, receive_window)
++        if msgparser.get_constant_int('SERIAL_RS485_TDD', 0):
++            # Half duplex: the MCU answers each block it receives, so keep
++            # one block in flight (a second one would collide with the answer)
++            self.ffi_lib.serialqueue_set_receive_window(
++                self.serialqueue, msgproto.MESSAGE_MAX)
++            self.tdd_nop_cmd = msgparser.create_command('debug_nop')
++            self.tdd_timer = self.reactor.register_timer(
++                self._tdd_poll_event, self.reactor.NOW)
+         return True
+     def connect_canbus(self, canbus_uuid, canbus_nodeid, canbus_iface="can0"):
+         import can # XXX
+@@ -215,6 +238,9 @@
+     def set_clock_est(self, freq, conv_time, conv_clock):
+         self.ffi_lib.serialqueue_set_clock_est(
+             self.serialqueue, freq, conv_time, conv_clock)
++        if self.tdd_timer is not None:
++            self.reactor.update_timer(self.tdd_timer,
++                                      self.reactor.monotonic() + 0.020)
+     def abort_wait_acks(self):
+         self.can_wait_acks = False
+         # Background thread may be running, so work on copy
+@@ -222,6 +248,9 @@
+         for pn in pending_notifications.values():
+             pn.complete(None)
+     def disconnect(self):
++        if self.tdd_timer is not None:
++            self.reactor.unregister_timer(self.tdd_timer)
++            self.tdd_timer = None
+         if self.serialqueue is not None:
+             self.ffi_lib.serialqueue_exit(self.serialqueue)
+             if self.background_thread is not None:
+@@ -259,6 +288,8 @@
+     def raw_send(self, cmd, minclock, reqclock, cmd_queue):
+         self.ffi_lib.serialqueue_send(self.serialqueue, cmd_queue,
+                                       cmd, len(cmd), minclock, reqclock, 0)
++        # Every real send counts: a keep-alive must not follow it too soon
++        self.last_tx_time = self.reactor.monotonic()
+     def raw_send_wait_ack(self, cmd, minclock, reqclock, cmd_queue):
+         if not self.can_wait_acks:
+             self._error("No communication with MCU")
+@@ -268,6 +299,7 @@
+         self.pending_notifications[nid] = completion
+         self.ffi_lib.serialqueue_send(self.serialqueue, cmd_queue,
+                                       cmd, len(cmd), minclock, reqclock, nid)
++        self.last_tx_time = self.reactor.monotonic()
+         params = completion.wait()
+         if params is None:
+             self._error("No communication with MCU")

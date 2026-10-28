@@ -4,7 +4,25 @@ What changed for people using Kiln OS. Each release's notes (Gitea and
 GitHub) take its section from here: `## vX.Y.Z`, or `## Unreleased` when
 the release has no section of its own yet (rename it after the release).
 
+When an entry fixes a reported issue, add its number as `(issue #N)` in the
+entry, so the GitHub release links to the issue. A release does not close
+the issue: it is closed by hand after the release.
+
 ## Unreleased
+
+### Added
+- **IFS as a native Klipper MCU (opt-in, not shipped yet)**: with `/data/ad5x/ifs-klipper.enable`, the filament unit can run Klipper firmware; `ifs.py` then drives its feeder and selector through Klipper (`mode: auto` in `ifs.cfg`, `klipper/generic-flashforge-ifs.cfg`). From GitHub pull request #16 by Hunter Laux. Without the file nothing changes: the IFS keeps Flashforge's firmware and the serial link. It does nothing until the IFS firmware ships in a release (`docs/deviations-from-stock.md`).
+- **Half-duplex serial keep-alive** (GitHub pull request #16 by Hunter Laux, for the IFS on Klipper firmware): the keep-alive waits 20 ms after every command, not only after the last poll, so it cannot land on a command on the shared RS-485 line (`buildroot/package/klipper/0001-serialhdl-add-half-duplex-RS-485-TDD-support.patch`). Only active with the opt-in above.
+
+### Fixed
+- **Homing leaves the bed 5 mm off the Z stop**: after `G28 Z` the nozzle is lowered to Z 215, so the swap's +5 mm lift no longer runs the bed into the top of Z travel. Z zero and the mesh are unchanged.
+- **IFS flash stops when the bootloader erase fails** (`ad5x-mcu flash-ifs`, boot path): ifsF37's exit status is checked before IFSCommand writes anything; a failure is logged to `/data/ad5x/mcu/ifsF37.log` and the flash stops. Before, the write went ahead regardless. Opt-in with the enable file above.
+- **IFS as a Klipper MCU: IFS_STOP cuts a push** (opt-in, not shipped yet; `klipper/extras/ifs.py`): the push moves the feeder and extruder in short steps, so a stop switches the feeder off within one step. Before, the whole push ran on after IFS_STOP.
+- **IFS as a Klipper MCU: a load with no toolhead sensor stops at the length limit** (opt-in, not shipped yet): the feeder has no stall detection, so without `head_sensor` a load used to run its full length and report success. It now fails with an error at `load_length`, and a warning at start says so.
+- **IFS as a Klipper MCU: a selector that does not find its endstop fails the load** (opt-in, not shipped yet): the homing error names the endstop, and the selector motor is switched off. Before, the G-code error escaped without a reset.
+- **IFS as a Klipper MCU: a stop during the wait for queued moves is kept** (opt-in, not shipped yet; not yet covered by a test): IFS_STOP pressed while an earlier move still runs is no longer cleared before the next command starts. **IFS errors name a failed reset**, in both modes: after an error the reset runs (F15 on the serial link, the motors off in MCU mode); if it fails, the error says so instead of hiding it.
+
+## v0.0.31
 
 ### Fixed
 - **Kernel (test boot first): eMMC clock cap 50 MHz** (`kernel-ingenic66/ad5x.dts`): stock caps the eMMC at 25 MHz; HS200 was negotiated and reads ran at about 21 MiB/s. Needs a test boot: 10 cold boots, no mmc errors, a read/write loop.
@@ -37,7 +55,7 @@ the release has no section of its own yet (rename it after the release).
 
 ## v0.0.29
 
-- **IFS wording on the screen**: the touch screen says IFS where it said AMS (Bambu's name for its system): the "AMS is busy" and "No AMS Detected" messages, the wizard and print-start text, and the telemetry labels. Patch 0028. Code names (AmsState, ams_*) are unchanged.
+- **IFS wording on the screen**: the touch screen says IFS everywhere: the "IFS is busy" and "No IFS Detected" messages, the wizard and print-start text, and the telemetry labels. Patch 0028. Code names are unchanged.
 
 ## v0.0.28
 

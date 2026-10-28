@@ -50,6 +50,8 @@ define KLIPPER_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/usr/share/ad5x/config/ad5x.cfg
 	$(INSTALL) -D -m 0644 $(KLIPPER_AD5X)/ifs.cfg \
 		$(TARGET_DIR)/usr/share/ad5x/config/ifs.cfg
+	$(INSTALL) -D -m 0644 $(KLIPPER_AD5X)/generic-flashforge-ifs.cfg \
+		$(TARGET_DIR)/usr/share/ad5x/config/generic-flashforge-ifs.cfg
 	$(INSTALL) -D -m 0644 $(KLIPPER_AD5X)/setup.cfg \
 		$(TARGET_DIR)/usr/share/ad5x/config/setup.cfg
 	# Shipped plugins (docs/plugins.md), read-only; the printer's
