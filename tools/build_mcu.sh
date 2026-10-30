@@ -43,7 +43,10 @@ fi
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 VERSION=""
-for board in mainboard eboard; do
+BOARDS="mainboard eboard"
+# The IFS (filament unit) firmware is built for the mainline source only.
+[ "$SOURCE" = mainline ] && BOARDS="$BOARDS ifs"
+for board in $BOARDS; do
     cp "$REPO/klipper/mcu-configs/ad5x-$board$SUFFIX.config" "$WORK/$board.config"
     make -s -C "$KLIPPER" KCONFIG_CONFIG="$WORK/$board.config" OUT="$WORK/out-$board/" olddefconfig
     make -s -C "$KLIPPER" -j"$(nproc)" KCONFIG_CONFIG="$WORK/$board.config" OUT="$WORK/out-$board/"
@@ -65,5 +68,9 @@ cp "$WORK/out-mainboard/klipper.bin"  "$DEST/mainboard.bin"
 cp "$WORK/out-mainboard/klipper.dict" "$DEST/mainboard.dict"
 cp "$WORK/out-eboard/klipper.hex"     "$DEST/eboard.hex"
 cp "$WORK/out-eboard/klipper.dict"    "$DEST/eboard.dict"
-(cd "$DEST" && sha256sum mainboard.bin eboard.hex > SHA256SUMS)
+if [ -d "$WORK/out-ifs" ]; then
+    cp "$WORK/out-ifs/klipper.hex"  "$DEST/ifs.hex"
+    cp "$WORK/out-ifs/klipper.dict" "$DEST/ifs.dict"
+fi
+(cd "$DEST" && sha256sum mainboard.bin eboard.hex $([ -f ifs.hex ] && echo ifs.hex) > SHA256SUMS)
 echo "Built $VERSION in $DEST"

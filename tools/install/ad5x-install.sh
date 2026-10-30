@@ -166,8 +166,16 @@ machine=${MACHINE_ARG:-$(sed -n 's/^MACHINE=//p' "$AD5X_APP_STARTUP" 2>/dev/null
 for e in $SPL; do
 	n=${e%%:*} r=${e#*:}
 	s=$(part_sys "$n") || refuse "no eMMC partition '$n' (layout differs from the AD5X's)"
-	[ "$(cat "$s/start"):$(cat "$s/size")" = "$r" ] ||
-		refuse "partition $n at $(cat "$s/start"):$(cat "$s/size"), the boot loader expects $r (docs/boot-slots.md)"
+	# userdata is the last partition and is found through the GPT, not the
+	# boot loader: a different size (stock 3.1.6 printers) is only logged.
+	# Its start, and every other partition, must match exactly.
+	if [ "$(cat "$s/start"):$(cat "$s/size")" != "$r" ]; then
+		if [ "$n" = userdata ] && [ "$(cat "$s/start")" = "${r%%:*}" ]; then
+			log "note: userdata is $(cat "$s/start"):$(cat "$s/size") (expected $r); the boot loader does not read it, so continuing"
+		else
+			refuse "partition $n at $(cat "$s/start"):$(cat "$s/size"), the boot loader expects $r (docs/boot-slots.md)"
+		fi
+	fi
 done
 log "AD5X: device tree '$compat', eMMC layout matches the boot loader"
 

@@ -10,17 +10,30 @@ the issue: it is closed by hand after the release.
 
 ## Unreleased
 
+## v0.0.33
+
+### Fixed
+- **zMod start keeps an unexpanded tool out of tool 0** (issue #12): `START_PRINT TOOL=[initial_tool]` used to load tool 0 through the zMod-compat plugin. Now no tool is loaded and the console shows an error, as for PRINT_START.
+- **Public export keeps symlinks to printer paths** (issue #15): `tools/export_public.sh` dropped a link when its target exists only on the printer (`/data/...`). The link is now kept as a link.
+- **Installer accepts a smaller user-data partition** (issue #14): stock 3.1.6 printers have a user-data partition of 11935744 sectors instead of 12238848. The installer now logs the difference and continues; the other partitions still have to match exactly. Needs a printer check on a 3.1.6 printer.
+
 ### Added
-- **IFS as a native Klipper MCU (opt-in, not shipped yet)**: with `/data/ad5x/ifs-klipper.enable`, the filament unit can run Klipper firmware; `ifs.py` then drives its feeder and selector through Klipper (`mode: auto` in `ifs.cfg`, `klipper/generic-flashforge-ifs.cfg`). From GitHub pull request #16 by Hunter Laux. Without the file nothing changes: the IFS keeps Flashforge's firmware and the serial link. It does nothing until the IFS firmware ships in a release (`docs/deviations-from-stock.md`).
-- **Half-duplex serial keep-alive** (GitHub pull request #16 by Hunter Laux, for the IFS on Klipper firmware): the keep-alive waits 20 ms after every command, not only after the last poll, so it cannot land on a command on the shared RS-485 line (`buildroot/package/klipper/0001-serialhdl-add-half-duplex-RS-485-TDD-support.patch`). Only active with the opt-in above.
+- **IFS backup from the printer itself**: at boot and with `ad5x-mcu tools`, the IFS flashing tools and Flashforge's IFS firmware (`IFSCommand`, `ifsF37`, `ifs.hex`) are copied from stock's copy on the usershare partition into `/data/ad5x/vendor/mcu`, so a return to stock needs no outside files. Best effort: a missing copy doesn't stop boot.
+- **IFS Klipper firmware built** (`tools/build_mcu.sh`, `klipper/mcu-configs/ad5x-ifs.mainline.config`): `ifs.hex` is built from the eboard config with serial 115200 and PA11 driven high, and shipped in the image at `/usr/share/ad5x/mcu`. Not flashed by default.
+
+## v0.0.32
+
+### Added
+- **IFS Klipper mode (code only, not active in this release)**: `ifs.py` can drive the filament unit's feeder and selector through Klipper (`mode: auto` in `ifs.cfg`, `klipper/generic-flashforge-ifs.cfg`) instead of the serial link. It needs the IFS board running Klipper firmware, which this release does not include, and it is only tried if `/data/ad5x/ifs-klipper.enable` exists. No file is created by default, so the IFS keeps its Flashforge firmware and serial link as before. Code from GitHub pull request #16 by Hunter Laux (`docs/deviations-from-stock.md`).
+- **Half-duplex serial keep-alive** (GitHub pull request #16 by Hunter Laux, for the IFS on Klipper firmware): the keep-alive waits 20 ms after every command, not only after the last poll, so it cannot land on a command on the shared RS-485 line (`buildroot/package/klipper/0001-serialhdl-add-half-duplex-RS-485-TDD-support.patch`). Only used in the IFS Klipper mode, so not in this release.
 
 ### Fixed
 - **Homing leaves the bed 5 mm off the Z stop**: after `G28 Z` the nozzle is lowered to Z 215, so the swap's +5 mm lift no longer runs the bed into the top of Z travel. Z zero and the mesh are unchanged.
-- **IFS flash stops when the bootloader erase fails** (`ad5x-mcu flash-ifs`, boot path): ifsF37's exit status is checked before IFSCommand writes anything; a failure is logged to `/data/ad5x/mcu/ifsF37.log` and the flash stops. Before, the write went ahead regardless. Opt-in with the enable file above.
-- **IFS as a Klipper MCU: IFS_STOP cuts a push** (opt-in, not shipped yet; `klipper/extras/ifs.py`): the push moves the feeder and extruder in short steps, so a stop switches the feeder off within one step. Before, the whole push ran on after IFS_STOP.
-- **IFS as a Klipper MCU: a load with no toolhead sensor stops at the length limit** (opt-in, not shipped yet): the feeder has no stall detection, so without `head_sensor` a load used to run its full length and report success. It now fails with an error at `load_length`, and a warning at start says so.
-- **IFS as a Klipper MCU: a selector that does not find its endstop fails the load** (opt-in, not shipped yet): the homing error names the endstop, and the selector motor is switched off. Before, the G-code error escaped without a reset.
-- **IFS as a Klipper MCU: a stop during the wait for queued moves is kept** (opt-in, not shipped yet; not yet covered by a test): IFS_STOP pressed while an earlier move still runs is no longer cleared before the next command starts. **IFS errors name a failed reset**, in both modes: after an error the reset runs (F15 on the serial link, the motors off in MCU mode); if it fails, the error says so instead of hiding it.
+- **IFS flash stops when the bootloader erase fails** (`ad5x-mcu flash-ifs`, boot path): ifsF37's exit status is checked before IFSCommand writes anything; a failure is logged to `/data/ad5x/mcu/ifsF37.log` and the flash stops. Before, the write went ahead regardless. Only in the IFS Klipper mode, so not in this release.
+- **IFS as a Klipper MCU: IFS_STOP cuts a push** (IFS Klipper mode, not in this release; `klipper/extras/ifs.py`): the push moves the feeder and extruder in short steps, so a stop switches the feeder off within one step. Before, the whole push ran on after IFS_STOP.
+- **IFS as a Klipper MCU: a load with no toolhead sensor stops at the length limit** (IFS Klipper mode, not in this release): the feeder has no stall detection, so without `head_sensor` a load used to run its full length and report success. It now fails with an error at `load_length`, and a warning at start says so.
+- **IFS as a Klipper MCU: a selector that does not find its endstop fails the load** (IFS Klipper mode, not in this release): the homing error names the endstop, and the selector motor is switched off. Before, the G-code error escaped without a reset.
+- **IFS as a Klipper MCU: a stop during the wait for queued moves is kept** (IFS Klipper mode, not in this release; not yet covered by a test): IFS_STOP pressed while an earlier move still runs is no longer cleared before the next command starts. **IFS errors name a failed reset**, in both modes: after an error the reset runs (F15 on the serial link, the motors off in MCU mode); if it fails, the error says so instead of hiding it.
 
 ## v0.0.31
 

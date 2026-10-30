@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 140" width="480" height="140" role="img" aria-label="Kiln OS">
+  <title>Kiln OS</title>
+  <rect width="480" height="140" fill="#2E3440"/>
+  <g transform="translate(8 10) scale(0.9)">
+    <g fill="none" stroke="#88C0D0" stroke-width="8">
+      <path d="M62.4 14.06 A46 46 0 0 1 105.94 57.6"/>
+      <path d="M105.94 62.4 A46 46 0 0 1 62.4 105.94"/>
+      <path d="M57.6 105.94 A46 46 0 0 1 14.06 62.4"/>
+      <path d="M14.06 57.6 A46 46 0 0 1 57.6 14.06"/>
+    </g>
+    <path fill="#88C0D0" d="M53.40229885057471 88.0H37.47126436781609V32.0H53.40229885057471ZM69.41379310344827 56.94252873563218 82.5287356321839 88.0H65.39080459770115L53.80459770114942 58.14942528735632L65.95402298850574 32.0H81.32183908045977Z"/>
+  </g>
+  <text x="150" y="84" font-family="'Fira Sans Compressed', system-ui, sans-serif" font-size="64" font-weight="800" fill="#ECEFF4">KILN OS</text>
+  <text x="154" y="116" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="22" fill="#D8DEE9">for the Flashforge AD5X</text>
+</svg>

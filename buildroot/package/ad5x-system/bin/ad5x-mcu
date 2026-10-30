@@ -353,6 +353,9 @@ boot() {
 	fi
 	# a flashed mainboard: check what it runs now
 	[ -z "$mbflashed" ] || mv=$(ver "$MB" 1)
+	# Keep the IFS backup (Flashforge's tools and ifs.hex) on this printer, from
+	# stock's copy on usershare. Best effort: a missing copy doesn't stop boot.
+	ifs_tools >/dev/null 2>&1 || true
 	# IFS: only when asked for; a failure doesn't hold Klipper back
 	if [ -f "$AD5X_MCU_FW/ifs.hex" ] && [ -f "$AD5X_DATA/ad5x/ifs-klipper.enable" ]; then
 		iv=$(ifs_ver 1)
@@ -429,6 +432,6 @@ flash-ifs)
 	*) flash_ifs_klipper "$2" ;;
 	esac ;;
 arm-stock) mkdir -p "$ST"; arm_stock ;;
-tools) mkdir -p "$ST"; tools ;;
+tools) mkdir -p "$ST"; tools; ifs_tools || true ;;
 *) sed -n '2,49p' "$0"; exit 2 ;;
 esac
