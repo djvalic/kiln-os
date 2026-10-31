@@ -73,8 +73,10 @@ every release).
 3. Stock starts, finds `flashforge_init.sh` and runs it before its own app.
    The screen shows "Installing, step n of 6". It takes a few minutes (longer
    with the eMMC copy). Don't switch the printer off.
-4. "Done, restarting": the printer restarts by itself into the new system.
-   The first start takes a few minutes more (see "First start").
+4. "Done, restarting": remove the USB stick, then wait. The printer restarts
+   by itself into the new system. The first start takes a few minutes more
+   (see "First start"). If nothing happens after 3 minutes, power-cycle the
+   printer. The switch is already made, so this is safe.
 5. Leave the stick in or take it out: Kiln OS never runs
    `flashforge_init.sh`. The log is `ad5x-install.log` on the stick.
 

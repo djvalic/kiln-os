@@ -23,7 +23,7 @@ exists and does what is described below.
 | `START_PRINT EXTRUDER_TEMP= BED_TEMP=` | 140 | `PRINT_START EXTRUDER= BED=`, then `LINE_PURGE`; without `EXTRUDER_TEMP=`/`BED_TEMP=` the temperatures the file already set (its own `M104`/`M140`), else zMod's 245 / 80 | zmod-compat |
 | `START_PRINT` without `FORCE_*` | | `PRINT_START` decides: the printer's `macros/print_start.cfg` meshes the print area every print (zMod's `print_leveling: 1` + `use_kamp: 1`); the factory one does the stock Z check. The bed heat soak applies too; `SOAK=<s>` is passed on (ours, not zMod's) | zmod-compat |
 | `START_PRINT FORCE_LEVELING=1` / `FORCE_KAMP=1` | | `PRINT_START LEVEL=1 ADAPTIVE=0` / `ADAPTIVE=1` | zmod-compat |
-| `START_PRINT TOOL=n` (Bambufy) | | `PRINT_START TOOL=n` (loads it at the end of the start) | zmod-compat |
+| `START_PRINT TOOL=n` (Bambufy) | | `PRINT_START TOOL=n` (loads it at the end of the start). TOOL must be a whole number or -1 (see the rule below) | zmod-compat |
 | `START_PRINT SKIP_LEVELING= MESH= INTERNAL= EXTERNAL=` | | accepted, not needed | zmod-compat |
 | `START_PRINT Z_OFFSET=` | | ignored, saved Z offset used (zMod with `load_zoffset: 1`, the user's setting) | zmod-compat |
 | `END_PRINT` | 140 | `PRINT_END`; `unload_filament: 1` unloads the IFS lane first (zMod `remove_filament`) | zmod-compat |
@@ -48,6 +48,13 @@ exists and does what is described below.
 | `ENABLE_PLUGIN NAME=`, `DISABLE_PLUGIN NAME=` | | plugin manager (`docs/plugins.md`), plus `LIST_PLUGINS` | core |
 | `CLEAR_NOZZLE`, `LOAD_FILAMENT`, `UNLOAD_FILAMENT`, `AUTO_FULL_BED_LEVEL` | | the printer's `macros/quick_actions.cfg` (screen quick actions, `docs/config-layout.md`) | core |
 | `LOAD_CELL_TARE` | | `ad5x.cfg` (strain-gauge tare) | core |
+
+`TOOL=` rule (issue #12, same check as `PRINT_START`): a whole number
+loads that slicer tool; `-1` or no `TOOL=` loads none. Anything else loads
+no tool and the console shows an error. That covers an unexpanded
+placeholder such as `TOOL=[initial_tool]` (before this check it became tool
+0) and an empty `TOOL=`, which used to load tool 0 and now loads none. Use
+the slicer's expanded value.
 
 Not provided (no file calls them; zMod-only machinery): `SAVE_ZMOD_DATA`,
 `REBOOT` / `SHUTDOWN` (shell access from Klipper), `PID_TUNE_BED` /

@@ -1,0 +1,560 @@
+diff --git a/include/display_settings_manager.h b/include/display_settings_manager.h
+--- a/include/display_settings_manager.h
++++ b/include/display_settings_manager.h
+@@ -162,6 +162,14 @@
+         settings_.set(Key::SleepWhilePrinting, enabled);
+     }
+ 
++    /// Chamber light off while the screen sleeps (default off; see led_screen_light.h).
++    bool get_chamber_light_off_on_sleep() const {
++        return settings_.get_bool(Key::ChamberLightOffOnSleep);
++    }
++    void set_chamber_light_off_on_sleep(bool enabled) {
++        settings_.set(Key::ChamberLightOffOnSleep, enabled);
++    }
++
+     // =========================================================================
+     // UI PREFERENCES
+     // =========================================================================
+@@ -497,6 +505,11 @@
+         return settings_.subject(Key::SleepWhilePrinting);
+     }
+ 
++    /** @brief Chamber light off while the screen sleeps subject (integer: 0=off, 1=on) */
++    lv_subject_t* subject_chamber_light_off_on_sleep() {
++        return settings_.subject(Key::ChamberLightOffOnSleep);
++    }
++
+     /** @brief Animations enabled subject (integer: 0=off, 1=on) */
+     lv_subject_t* subject_animations_enabled() {
+         return &animations_enabled_subject_;
+@@ -638,6 +651,7 @@
+         GcodeRenderMode,
+         TimeFormat,
+         GlassEffects,
++        ChamberLightOffOnSleep,
+         COUNT
+     };
+     settings::PersistedSettings<Key, static_cast<size_t>(Key::COUNT)> settings_;
+diff --git a/include/led/led_screen_light.h b/include/led/led_screen_light.h
+new file mode 100644
+--- /dev/null
++++ b/include/led/led_screen_light.h
+@@ -0,0 +1,57 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++#pragma once
++
++#include "ui_observer_guard.h"
++
++#include "print_lifecycle_state.h"
++
++#include <string>
++
++namespace helix {
++class PrinterState;
++}
++
++namespace helix::led {
++
++/// Turns the chamber light off while the screen sleeps and back on at wake or when a
++/// print starts. Opt-in (Display settings, default off). The light is only turned off
++/// when no print is preparing, printing or paused, so it stays on during a print. It
++/// only turns back on a light it turned off, and it leaves the light alone while
++/// LedAutoState is enabled. Plain on and off: no brightness or dimming.
++class ScreenSleepLight {
++  public:
++    static ScreenSleepLight& instance();
++
++    /// Subscribes to the current printer's print lifecycle. Called per printer, like
++    /// LedAutoState::init().
++    void init(PrinterState& printer_state);
++    void deinit();
++
++    /// Display sleep transition: true when the screen sleeps, false on wake. Registered
++    /// once with DisplayManager::register_sleep_callback().
++    void on_screen_sleep_changed(bool sleeping);
++
++  private:
++    ScreenSleepLight() = default;
++    ~ScreenSleepLight() {
++        // As LedAutoState: no LVGL calls during static destruction.
++        print_state_observer_.release();
++    }
++    ScreenSleepLight(const ScreenSleepLight&) = delete;
++    ScreenSleepLight& operator=(const ScreenSleepLight&) = delete;
++
++    /// A job now holds the machine (preparing, printing or paused): light back on.
++    void on_print_lifecycle_changed(PrintState state);
++    /// True while a job holds the machine. Unknown printer state counts as true, so
++    /// the light stays on when the answer is not known.
++    [[nodiscard]] bool print_holds_machine() const;
++    /// Turns back on the light this turned off, if any. Keeps the record when the
++    /// LED controller cannot send yet, so a later wake or print start retries.
++    void restore_light();
++
++    PrinterState* printer_state_ = nullptr;
++    std::string light_id_; // the light turned off by a sleep; empty when none
++    ObserverGuard print_state_observer_;
++};
++
++} // namespace helix::led
+diff --git a/src/application/application.cpp b/src/application/application.cpp
+--- a/src/application/application.cpp
++++ b/src/application/application.cpp
+@@ -45,6 +45,7 @@
+ #include "layout_manager.h"
+ #include "led/led_auto_state.h"
+ #include "led/led_controller.h"
++#include "led/led_screen_light.h"
+ #include "light_button_config.h"
+ #include "moonraker_manager.h"
+ #include "page_scroll_auto_inject.h"
+@@ -1438,6 +1439,13 @@
+     });
+ #endif
+ 
++    // Chamber light off while the screen sleeps (Display settings, default off). The
++    // setting gates it, so this is registered once on every platform, like the sleep
++    // callbacks above; see led/led_screen_light.h.
++    m_display->register_sleep_callback([](bool sleeping) {
++        helix::led::ScreenSleepLight::instance().on_screen_sleep_changed(sleeping);
++    });
++
+     // Register LVGL log handler AFTER lv_init() (called inside display->init())
+     // Must be after lv_init() because it resets global state and clears callbacks
+     helix::logging::register_lvgl_log_handler();
+diff --git a/src/application/printer_session.cpp b/src/application/printer_session.cpp
+--- a/src/application/printer_session.cpp
++++ b/src/application/printer_session.cpp
+@@ -43,6 +43,7 @@
+ #include "json_utils.h"
+ #include "k2_stock_detection_source.h"
+ #include "led/led_auto_state.h"
++#include "led/led_screen_light.h"
+ #include "led/led_controller.h"
+ #include "light_button_config.h"
+ #include "memory_monitor.h"
+@@ -797,6 +798,7 @@
+         // PrinterState subjects about to be freed. LedAutoState drives LedController, so
+         // it goes first.
+         helix::led::LedAutoState::instance().deinit();
++        helix::led::ScreenSleepLight::instance().deinit();
+         helix::led::LedController::instance().deinit();
+     }
+ 
+diff --git a/src/led/led_screen_light.cpp b/src/led/led_screen_light.cpp
+new file mode 100644
+--- /dev/null
++++ b/src/led/led_screen_light.cpp
+@@ -0,0 +1,96 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++#include "led/led_screen_light.h"
++
++#include "display_settings_manager.h"
++#include "led/led_auto_state.h"
++#include "led/led_controller.h"
++#include "observer_factory.h"
++#include "printer_state.h"
++
++#include <spdlog/spdlog.h>
++
++namespace helix::led {
++
++ScreenSleepLight& ScreenSleepLight::instance() {
++    static ScreenSleepLight s_instance;
++    return s_instance;
++}
++
++void ScreenSleepLight::init(PrinterState& printer_state) {
++    using helix::ui::observe_print_lifecycle;
++    print_state_observer_.reset();
++    printer_state_ = &printer_state;
++    // The lifecycle subject, not the raw job-state int: the two enums do not share
++    // numbering (printer_print_state.h). Preparing is part of the lifecycle.
++    if (auto* subj = printer_state.print_state().get_print_lifecycle_subject()) {
++        print_state_observer_ = observe_print_lifecycle(
++            subj, this,
++            [](ScreenSleepLight* self, PrintState state) {
++                self->on_print_lifecycle_changed(state);
++            },
++            printer_state.get_subjects_lifetime());
++    }
++}
++
++void ScreenSleepLight::deinit() {
++    // light_id_ stays: a wake after a printer switch still turns the light back on.
++    print_state_observer_.reset();
++    printer_state_ = nullptr;
++}
++
++void ScreenSleepLight::on_screen_sleep_changed(bool sleeping) {
++    if (!sleeping) {
++        restore_light();
++        return;
++    }
++    if (!DisplaySettingsManager::instance().get_chamber_light_off_on_sleep()) {
++        return;
++    }
++    if (print_holds_machine()) {
++        return; // a print is preparing, printing or paused: the light stays on
++    }
++    if (LedAutoState::instance().is_enabled()) {
++        // LedAutoState owns the light's power and colour while it is enabled.
++        return;
++    }
++    auto& ctrl = LedController::instance();
++    if (!ctrl.is_initialized()) {
++        return;
++    }
++    const std::string light = ctrl.chamber_light();
++    if (light.empty() || ctrl.device_state(light).power != PowerState::On) {
++        return; // no chamber light, or it is already off: nothing to undo later
++    }
++    spdlog::info("[ScreenSleepLight] Screen asleep, turning off {}", light);
++    ctrl.set_power({light}, false, /*silent=*/true);
++    light_id_ = light;
++}
++
++void ScreenSleepLight::on_print_lifecycle_changed(PrintState state) {
++    if (::job_holds_machine(state)) {
++        restore_light();
++    }
++}
++
++bool ScreenSleepLight::print_holds_machine() const {
++    if (printer_state_ == nullptr || !printer_state_->are_subjects_initialized()) {
++        return true;
++    }
++    return ::job_holds_machine(printer_state_->print_state().get_print_lifecycle());
++}
++
++void ScreenSleepLight::restore_light() {
++    if (light_id_.empty()) {
++        return;
++    }
++    auto& ctrl = LedController::instance();
++    if (!ctrl.is_initialized()) {
++        return; // keep light_id_: a later wake or print start retries
++    }
++    const std::string light = light_id_;
++    spdlog::info("[ScreenSleepLight] Turning on {} (screen awake or print started)", light);
++    ctrl.set_power({light}, true, /*silent=*/true);
++    light_id_.clear();
++}
++
++} // namespace helix::led
+diff --git a/src/printer/printer_discovery.cpp b/src/printer/printer_discovery.cpp
+--- a/src/printer/printer_discovery.cpp
++++ b/src/printer/printer_discovery.cpp
+@@ -11,6 +11,7 @@
+ #include "i_moonraker_client.h"
+ #include "led/led_auto_state.h"
+ #include "led/led_controller.h"
++#include "led/led_screen_light.h"
+ #include "load_cell_manager.h"
+ #include "moonraker_api.h"
+ #include "printer_name_sync.h"
+@@ -140,6 +141,7 @@
+     // invoked inside a queue_update() drain), so the observe<int> subscriptions
+     // are main-thread-safe.
+     helix::led::LedAutoState::instance().init(printer_state);
++    helix::led::ScreenSleepLight::instance().init(printer_state);
+     led_ctrl.discover_wled_strips();
+ 
+     spdlog::info("[PrinterDiscovery] Subsystem initialization complete");
+diff --git a/src/system/display_settings_manager.cpp b/src/system/display_settings_manager.cpp
+--- a/src/system/display_settings_manager.cpp
++++ b/src/system/display_settings_manager.cpp
+@@ -236,6 +236,9 @@
+     // The saved choice; glass shows only where the glass gate also passes.
+     {"settings_glass_effects", "/display/glass_effects", Scope::Global, true, 0, 0, 1,
+      "glass_effects"},
++    // Opt-in: the chamber light goes off with the screen (led/led_screen_light.h).
++    {"settings_chamber_light_off_on_sleep", "/display/chamber_light_off_on_sleep", Scope::Global,
++     true, 0, 0, 1, "chamber_light_off_on_sleep"},
+ };
+ 
+ DisplaySettingsManager& DisplaySettingsManager::instance() {
+diff --git a/src/ui/ui_settings_display.cpp b/src/ui/ui_settings_display.cpp
+--- a/src/ui/ui_settings_display.cpp
++++ b/src/ui/ui_settings_display.cpp
+@@ -103,6 +103,10 @@
+          [](lv_event_t* e) {
+              DisplaySettingsManager::instance().set_sleep_while_printing(event_checked(e));
+          }},
++        {"on_chamber_light_off_on_sleep_changed",
++         [](lv_event_t* e) {
++             DisplaySettingsManager::instance().set_chamber_light_off_on_sleep(event_checked(e));
++         }},
+ #if HELIX_ENABLE_SCREENSAVER
+         {"on_screensaver_changed",
+          [](lv_event_t* e) {
+diff --git a/tests/unit/test_persisted_setting.cpp b/tests/unit/test_persisted_setting.cpp
+--- a/tests/unit/test_persisted_setting.cpp
++++ b/tests/unit/test_persisted_setting.cpp
+@@ -198,6 +198,10 @@
+         {"settings_glass_effects", Mgr::Display, false, "/display/glass_effects", true, 0, 0, 1,
+          "glass_effects", true, SETB(dm().set_glass_effects), GET(dm().get_glass_effects),
+          SUBJ(dm().subject_glass_effects)},
++        {"settings_chamber_light_off_on_sleep", Mgr::Display, false,
++         "/display/chamber_light_off_on_sleep", true, 0, 0, 1, "chamber_light_off_on_sleep", true,
++         SETB(dm().set_chamber_light_off_on_sleep), GET(dm().get_chamber_light_off_on_sleep),
++         SUBJ(dm().subject_chamber_light_off_on_sleep)},
+ 
+         // SystemSettingsManager
+         {"update_channel", Mgr::System, false, "/update/channel", false, 0, 0, 2, "update_channel",
+diff --git a/tests/unit/test_settings_page_rows.cpp b/tests/unit/test_settings_page_rows.cpp
+--- a/tests/unit/test_settings_page_rows.cpp
++++ b/tests/unit/test_settings_page_rows.cpp
+@@ -77,7 +77,7 @@
+         {"settings_display_overlay",
+          {"row_display_rotation", "row_ui_scale", "brightness_slider", "row_display_dim",
+           "row_display_sleep", "row_screensaver", "btn_test_screensaver",
+-          "row_sleep_while_printing"}},
++          "row_sleep_while_printing", "row_chamber_light_off_on_sleep"}},
+         {"settings_appearance_overlay",
+          {"row_dark_mode", "row_theme_settings", "row_animations", "row_widget_labels",
+           "row_bed_mesh_mode"}},
+diff --git a/translations/de.yml b/translations/de.yml
+--- a/translations/de.yml
++++ b/translations/de.yml
+@@ -47,6 +47,8 @@
+   '%u layers': '%u Schichten'
+   '%zu events queued': '%zu Ereignisse in Warteschlange'
+   '%zu plugins failed to load': '%zu Plugins konnten nicht geladen werden'
++  Chamber light off when the screen sleeps: "Kammerlicht aus, wenn der Bildschirm in den Ruhemodus geht"
++  Chamber light turns off when the screen sleeps, but stays on during a print: "Das Kammerlicht geht aus, wenn der Bildschirm in den Ruhemodus geht, bleibt beim Drucken aber an"
+   "'{}' already exists. Replace the stored mesh?": "'{}' existiert bereits. Gespeichertes Netz ersetzen?"
+   "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' und '{}' existieren bereits. Gespeicherte Netze ersetzen?"
+   (different grade): (andere Klasse)
+diff --git a/translations/en.yml b/translations/en.yml
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -47,6 +47,8 @@
+   '%u layers': '%u layers'
+   '%zu events queued': '%zu events queued'
+   '%zu plugins failed to load': '%zu plugins failed to load'
++  Chamber light off when the screen sleeps: "Chamber light off when the screen sleeps"
++  Chamber light turns off when the screen sleeps, but stays on during a print: "Chamber light turns off when the screen sleeps, but stays on during a print"
+   "'{}' already exists. Replace the stored mesh?": "'{}' already exists. Replace the stored mesh?"
+   "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' and '{}' already exist. Replace the stored meshes?"
+   (different grade): (different grade)
+diff --git a/translations/es.yml b/translations/es.yml
+--- a/translations/es.yml
++++ b/translations/es.yml
+@@ -47,6 +47,8 @@
+   '%u layers': '%u capas'
+   '%zu events queued': '%zu eventos en cola'
+   '%zu plugins failed to load': '%zu plugins no se cargaron'
++  Chamber light off when the screen sleeps: "Luz de cámara apagada cuando la pantalla se suspende"
++  Chamber light turns off when the screen sleeps, but stays on during a print: "La luz de cámara se apaga cuando la pantalla se suspende, pero permanece encendida durante la impresión"
+   "'{}' already exists. Replace the stored mesh?": "'{}' ya existe. ¿Reemplazar la malla guardada?"
+   "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' y '{}' ya existen. ¿Reemplazar las mallas guardadas?"
+   (different grade): (grado diferente)
+diff --git a/translations/fr.yml b/translations/fr.yml
+--- a/translations/fr.yml
++++ b/translations/fr.yml
+@@ -47,6 +47,8 @@
+   '%u layers': '%u couches'
+   '%zu events queued': '%zu événements en file'
+   '%zu plugins failed to load': '%zu plugins n''ont pas pu se charger'
++  Chamber light off when the screen sleeps: "Lumière de l'enceinte éteinte quand l'écran se met en veille"
++  Chamber light turns off when the screen sleeps, but stays on during a print: "La lumière de l'enceinte s'éteint quand l'écran se met en veille, mais reste allumée pendant l'impression"
+   "'{}' already exists. Replace the stored mesh?": "'{}' existe déjà. Remplacer le maillage enregistré ?"
+   "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' et '{}' existent déjà. Remplacer les maillages enregistrés ?"
+   (different grade): (grade différent)
+diff --git a/translations/it.yml b/translations/it.yml
+--- a/translations/it.yml
++++ b/translations/it.yml
+@@ -47,6 +47,8 @@
+   '%u layers': '%u strati'
+   '%zu events queued': '%zu eventi in coda'
+   '%zu plugins failed to load': Caricamento di %zu plugin non riuscito
++  Chamber light off when the screen sleeps: "Luce della camera spenta quando lo schermo va in standby"
++  Chamber light turns off when the screen sleeps, but stays on during a print: "La luce della camera si spegne quando lo schermo va in standby, ma resta accesa durante la stampa"
+   "'{}' already exists. Replace the stored mesh?": "'{}' esiste già. Sostituire la mesh salvata?"
+   "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' e '{}' esistono già. Sostituire le mesh salvate?"
+   (different grade): (grado diverso)
+diff --git a/translations/ja.yml b/translations/ja.yml
+--- a/translations/ja.yml
++++ b/translations/ja.yml
+@@ -47,6 +47,8 @@
+   '%u layers': '%uレイヤー'
+   '%zu events queued': '%zu 件のイベントを待機中'
+   '%zu plugins failed to load': '%zu 個のプラグインの読み込みに失敗しました'
++  Chamber light off when the screen sleeps: "Chamber light off when the screen sleeps"
++  Chamber light turns off when the screen sleeps, but stays on during a print: "Chamber light turns off when the screen sleeps, but stays on during a print"
+   "'{}' already exists. Replace the stored mesh?": "'{}' は既に存在します。保存されたメッシュを置き換えますか？"
+   "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' と '{}' は既に存在します。保存されたメッシュを置き換えますか？"
+   (different grade): (グレード違い)
+diff --git a/translations/pt.yml b/translations/pt.yml
+--- a/translations/pt.yml
++++ b/translations/pt.yml
+@@ -47,6 +47,8 @@
+   '%u layers': '%u camadas'
+   '%zu events queued': '%zu eventos na fila'
+   '%zu plugins failed to load': '%zu plugins falharam ao carregar'
++  Chamber light off when the screen sleeps: "Luz da câmara apagada quando a tela suspende"
++  Chamber light turns off when the screen sleeps, but stays on during a print: "A luz da câmara apaga quando a tela suspende, mas fica acesa durante a impressão"
+   "'{}' already exists. Replace the stored mesh?": "'{}' já existe. Substituir a malha salva?"
+   "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' e '{}' já existem. Substituir as malhas salvas?"
+   (different grade): (grau diferente)
+diff --git a/translations/ru.yml b/translations/ru.yml
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -91,6 +91,8 @@
+     many: '%zu событий в очереди'
+     other: '%zu события в очереди'
+   '%zu plugins failed to load': Не удалось загрузить %zu плагинов
++  Chamber light off when the screen sleeps: "Подсветка камеры выключается, когда экран засыпает"
++  Chamber light turns off when the screen sleeps, but stays on during a print: "Подсветка камеры выключается, когда экран засыпает, но остаётся включённой во время печати"
+   "'{}' already exists. Replace the stored mesh?": "'{}' уже существует. Заменить сохранённую сетку?"
+   "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' и '{}' уже существуют. Заменить сохранённые сетки?"
+   (different grade): (другая марка)
+diff --git a/translations/zh.yml b/translations/zh.yml
+--- a/translations/zh.yml
++++ b/translations/zh.yml
+@@ -47,6 +47,8 @@
+   '%u layers': '%u 层'
+   '%zu events queued': '%zu 个事件已排队'
+   '%zu plugins failed to load': '%zu 个插件加载失败'
++  Chamber light off when the screen sleeps: "Chamber light off when the screen sleeps"
++  Chamber light turns off when the screen sleeps, but stays on during a print: "Chamber light turns off when the screen sleeps, but stays on during a print"
+   "'{}' already exists. Replace the stored mesh?": "'{}' 已存在。替换已保存的网格？"
+   "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' 和 '{}' 已存在。替换已保存的网格？"
+   (different grade): （等级不同）
+diff --git a/ui_xml/settings_display_overlay.xml b/ui_xml/settings_display_overlay.xml
+--- a/ui_xml/settings_display_overlay.xml
++++ b/ui_xml/settings_display_overlay.xml
+@@ -123,6 +123,11 @@
+                             label="Sleep While Printing" icon="sleep"
+                             description="Allow display to sleep during active prints"
+                             subject="settings_sleep_while_printing" callback="on_sleep_while_printing_changed"/>
++        <!-- Chamber light off while the screen sleeps (default off) -->
++        <setting_toggle_row name="row_chamber_light_off_on_sleep"
++                            label="Chamber light off when the screen sleeps" icon="light"
++                            description="Chamber light turns off when the screen sleeps, but stays on during a print"
++                            subject="settings_chamber_light_off_on_sleep" callback="on_chamber_light_off_on_sleep_changed"/>
+         <!-- Info Note -->
+         <info_note icon="info"
+                    text="Touch screen to wake from sleep" style_pad_left="#space_lg" style_pad_right="#space_lg"/>
+diff --git a/ui_xml/translations/de.xml b/ui_xml/translations/de.xml
+--- a/ui_xml/translations/de.xml
++++ b/ui_xml/translations/de.xml
+@@ -616,6 +616,8 @@
+   <translation tag="Chamber heater didn&apos;t start" de="Kammerheizung ist nicht gestartet"/>
+   <translation tag="Chamber heater didn&apos;t start. {}" de="Kammerheizung ist nicht gestartet. {}"/>
+   <translation tag="Chamber heating to %d°C..." de="Kammer heizt auf %d°C auf..."/>
++  <translation tag="Chamber light off when the screen sleeps" de="Kammerlicht aus, wenn der Bildschirm in den Ruhemodus geht"/>
++  <translation tag="Chamber light turns off when the screen sleeps, but stays on during a print" de="Das Kammerlicht geht aus, wenn der Bildschirm in den Ruhemodus geht, bleibt beim Drucken aber an"/>
+   <translation tag="Chamber target set to {}°C" de="Kammer-Ziel auf {}°C gesetzt"/>
+   <translation tag="Chamber temp must be 0-%d°C" de="Kammertemperatur muss 0-%d°C betragen"/>
+   <translation tag="Change" de="Ändern"/>
+diff --git a/ui_xml/translations/en.xml b/ui_xml/translations/en.xml
+--- a/ui_xml/translations/en.xml
++++ b/ui_xml/translations/en.xml
+@@ -616,6 +616,8 @@
+   <translation tag="Chamber heater didn&apos;t start" en="Chamber heater didn&apos;t start"/>
+   <translation tag="Chamber heater didn&apos;t start. {}" en="Chamber heater didn&apos;t start. {}"/>
+   <translation tag="Chamber heating to %d°C..." en="Chamber heating to %d°C..."/>
++  <translation tag="Chamber light off when the screen sleeps" en="Chamber light off when the screen sleeps"/>
++  <translation tag="Chamber light turns off when the screen sleeps, but stays on during a print" en="Chamber light turns off when the screen sleeps, but stays on during a print"/>
+   <translation tag="Chamber target set to {}°C" en="Chamber target set to {}°C"/>
+   <translation tag="Chamber temp must be 0-%d°C" en="Chamber temp must be 0-%d°C"/>
+   <translation tag="Change" en="Change"/>
+diff --git a/ui_xml/translations/es.xml b/ui_xml/translations/es.xml
+--- a/ui_xml/translations/es.xml
++++ b/ui_xml/translations/es.xml
+@@ -616,6 +616,8 @@
+   <translation tag="Chamber heater didn&apos;t start" es="El calentador de la cámara no arrancó"/>
+   <translation tag="Chamber heater didn&apos;t start. {}" es="El calentador de la cámara no arrancó. {}"/>
+   <translation tag="Chamber heating to %d°C..." es="Calentando cámara a %d°C..."/>
++  <translation tag="Chamber light off when the screen sleeps" es="Luz de cámara apagada cuando la pantalla se suspende"/>
++  <translation tag="Chamber light turns off when the screen sleeps, but stays on during a print" es="La luz de cámara se apaga cuando la pantalla se suspende, pero permanece encendida durante la impresión"/>
+   <translation tag="Chamber target set to {}°C" es="Objetivo de cámara establecido en {}°C"/>
+   <translation tag="Chamber temp must be 0-%d°C" es="La temperatura de la cámara debe ser 0-%d°C"/>
+   <translation tag="Change" es="Cambiar"/>
+diff --git a/ui_xml/translations/fr.xml b/ui_xml/translations/fr.xml
+--- a/ui_xml/translations/fr.xml
++++ b/ui_xml/translations/fr.xml
+@@ -616,6 +616,8 @@
+   <translation tag="Chamber heater didn&apos;t start" fr="Le chauffage de la chambre n&apos;a pas démarré"/>
+   <translation tag="Chamber heater didn&apos;t start. {}" fr="Le chauffage de la chambre n&apos;a pas démarré. {}"/>
+   <translation tag="Chamber heating to %d°C..." fr="Chauffe de la chambre à %d°C..."/>
++  <translation tag="Chamber light off when the screen sleeps" fr="Lumière de l&apos;enceinte éteinte quand l&apos;écran se met en veille"/>
++  <translation tag="Chamber light turns off when the screen sleeps, but stays on during a print" fr="La lumière de l&apos;enceinte s&apos;éteint quand l&apos;écran se met en veille, mais reste allumée pendant l&apos;impression"/>
+   <translation tag="Chamber target set to {}°C" fr="Cible de chambre définie à {}°C"/>
+   <translation tag="Chamber temp must be 0-%d°C" fr="La température de l&apos;enceinte doit être entre 0 et %d°C"/>
+   <translation tag="Change" fr="Modifier"/>
+diff --git a/ui_xml/translations/it.xml b/ui_xml/translations/it.xml
+--- a/ui_xml/translations/it.xml
++++ b/ui_xml/translations/it.xml
+@@ -616,6 +616,8 @@
+   <translation tag="Chamber heater didn&apos;t start" it="Il riscaldatore della camera non si è avviato"/>
+   <translation tag="Chamber heater didn&apos;t start. {}" it="Il riscaldatore della camera non si è avviato. {}"/>
+   <translation tag="Chamber heating to %d°C..." it="Riscaldamento camera a %d°C..."/>
++  <translation tag="Chamber light off when the screen sleeps" it="Luce della camera spenta quando lo schermo va in standby"/>
++  <translation tag="Chamber light turns off when the screen sleeps, but stays on during a print" it="La luce della camera si spegne quando lo schermo va in standby, ma resta accesa durante la stampa"/>
+   <translation tag="Chamber target set to {}°C" it="Target camera impostato a {}°C"/>
+   <translation tag="Chamber temp must be 0-%d°C" it="La temperatura della camera deve essere 0-%d°C"/>
+   <translation tag="Change" it="Cambia"/>
+diff --git a/ui_xml/translations/ja.xml b/ui_xml/translations/ja.xml
+--- a/ui_xml/translations/ja.xml
++++ b/ui_xml/translations/ja.xml
+@@ -616,6 +616,8 @@
+   <translation tag="Chamber heater didn&apos;t start" ja="チャンバーヒーターが起動しませんでした"/>
+   <translation tag="Chamber heater didn&apos;t start. {}" ja="チャンバーヒーターが起動しませんでした。{}"/>
+   <translation tag="Chamber heating to %d°C..." ja="チャンバーを%d°Cに加熱中..."/>
++  <translation tag="Chamber light off when the screen sleeps" ja="Chamber light off when the screen sleeps"/>
++  <translation tag="Chamber light turns off when the screen sleeps, but stays on during a print" ja="Chamber light turns off when the screen sleeps, but stays on during a print"/>
+   <translation tag="Chamber target set to {}°C" ja="チャンバー目標温度を{}°C に設定"/>
+   <translation tag="Chamber temp must be 0-%d°C" ja="チャンバー温度は 0〜%d°C にしてください"/>
+   <translation tag="Change" ja="変更"/>
+diff --git a/ui_xml/translations/pt.xml b/ui_xml/translations/pt.xml
+--- a/ui_xml/translations/pt.xml
++++ b/ui_xml/translations/pt.xml
+@@ -616,6 +616,8 @@
+   <translation tag="Chamber heater didn&apos;t start" pt="O aquecedor da câmara não ligou"/>
+   <translation tag="Chamber heater didn&apos;t start. {}" pt="O aquecedor da câmara não ligou. {}"/>
+   <translation tag="Chamber heating to %d°C..." pt="Aquecendo câmara a %d°C..."/>
++  <translation tag="Chamber light off when the screen sleeps" pt="Luz da câmara apagada quando a tela suspende"/>
++  <translation tag="Chamber light turns off when the screen sleeps, but stays on during a print" pt="A luz da câmara apaga quando a tela suspende, mas fica acesa durante a impressão"/>
+   <translation tag="Chamber target set to {}°C" pt="Alvo da câmara definido para {}°C"/>
+   <translation tag="Chamber temp must be 0-%d°C" pt="A temperatura da câmara deve ser 0-%d°C"/>
+   <translation tag="Change" pt="Alterar"/>
+diff --git a/ui_xml/translations/ru.xml b/ui_xml/translations/ru.xml
+--- a/ui_xml/translations/ru.xml
++++ b/ui_xml/translations/ru.xml
+@@ -655,6 +655,8 @@
+   <translation tag="Chamber heater didn&apos;t start" ru="Нагреватель камеры не запустился"/>
+   <translation tag="Chamber heater didn&apos;t start. {}" ru="Нагреватель камеры не запустился. {}"/>
+   <translation tag="Chamber heating to %d°C..." ru="Нагрев камеры до %d°C..."/>
++  <translation tag="Chamber light off when the screen sleeps" ru="Подсветка камеры выключается, когда экран засыпает"/>
++  <translation tag="Chamber light turns off when the screen sleeps, but stays on during a print" ru="Подсветка камеры выключается, когда экран засыпает, но остаётся включённой во время печати"/>
+   <translation tag="Chamber target set to {}°C" ru="Целевая температура камеры установлена на {}°C"/>
+   <translation tag="Chamber temp must be 0-%d°C" ru="Температура камеры должна быть 0-%d°C"/>
+   <translation tag="Change" ru="Изменить"/>
+diff --git a/ui_xml/translations/translations.xml b/ui_xml/translations/translations.xml
+--- a/ui_xml/translations/translations.xml
++++ b/ui_xml/translations/translations.xml
+@@ -655,6 +655,8 @@
+   <translation tag="Chamber heater didn&apos;t start" de="Kammerheizung ist nicht gestartet" en="Chamber heater didn&apos;t start" es="El calentador de la cámara no arrancó" fr="Le chauffage de la chambre n&apos;a pas démarré" it="Il riscaldatore della camera non si è avviato" ja="チャンバーヒーターが起動しませんでした" pt="O aquecedor da câmara não ligou" ru="Нагреватель камеры не запустился" zh="腔体加热器未启动"/>
+   <translation tag="Chamber heater didn&apos;t start. {}" de="Kammerheizung ist nicht gestartet. {}" en="Chamber heater didn&apos;t start. {}" es="El calentador de la cámara no arrancó. {}" fr="Le chauffage de la chambre n&apos;a pas démarré. {}" it="Il riscaldatore della camera non si è avviato. {}" ja="チャンバーヒーターが起動しませんでした。{}" pt="O aquecedor da câmara não ligou. {}" ru="Нагреватель камеры не запустился. {}" zh="腔体加热器未启动。{}"/>
+   <translation tag="Chamber heating to %d°C..." de="Kammer heizt auf %d°C auf..." en="Chamber heating to %d°C..." es="Calentando cámara a %d°C..." fr="Chauffe de la chambre à %d°C..." it="Riscaldamento camera a %d°C..." ja="チャンバーを%d°Cに加熱中..." pt="Aquecendo câmara a %d°C..." ru="Нагрев камеры до %d°C..." zh="腔体加热至 %d°C..."/>
++  <translation tag="Chamber light off when the screen sleeps" de="Kammerlicht aus, wenn der Bildschirm in den Ruhemodus geht" en="Chamber light off when the screen sleeps" es="Luz de cámara apagada cuando la pantalla se suspende" fr="Lumière de l&apos;enceinte éteinte quand l&apos;écran se met en veille" it="Luce della camera spenta quando lo schermo va in standby" ja="Chamber light off when the screen sleeps" pt="Luz da câmara apagada quando a tela suspende" ru="Подсветка камеры выключается, когда экран засыпает" zh="Chamber light off when the screen sleeps"/>
++  <translation tag="Chamber light turns off when the screen sleeps, but stays on during a print" de="Das Kammerlicht geht aus, wenn der Bildschirm in den Ruhemodus geht, bleibt beim Drucken aber an" en="Chamber light turns off when the screen sleeps, but stays on during a print" es="La luz de cámara se apaga cuando la pantalla se suspende, pero permanece encendida durante la impresión" fr="La lumière de l&apos;enceinte s&apos;éteint quand l&apos;écran se met en veille, mais reste allumée pendant l&apos;impression" it="La luce della camera si spegne quando lo schermo va in standby, ma resta accesa durante la stampa" ja="Chamber light turns off when the screen sleeps, but stays on during a print" pt="A luz da câmara apaga quando a tela suspende, mas fica acesa durante a impressão" ru="Подсветка камеры выключается, когда экран засыпает, но остаётся включённой во время печати" zh="Chamber light turns off when the screen sleeps, but stays on during a print"/>
+   <translation tag="Chamber target set to {}°C" de="Kammer-Ziel auf {}°C gesetzt" en="Chamber target set to {}°C" es="Objetivo de cámara establecido en {}°C" fr="Cible de chambre définie à {}°C" it="Target camera impostato a {}°C" ja="チャンバー目標温度を{}°C に設定" pt="Alvo da câmara definido para {}°C" ru="Целевая температура камеры установлена на {}°C" zh="腔体目标温度设置为 {}°C"/>
+   <translation tag="Chamber temp must be 0-%d°C" de="Kammertemperatur muss 0-%d°C betragen" en="Chamber temp must be 0-%d°C" es="La temperatura de la cámara debe ser 0-%d°C" fr="La température de l&apos;enceinte doit être entre 0 et %d°C" it="La temperatura della camera deve essere 0-%d°C" ja="チャンバー温度は 0〜%d°C にしてください" pt="A temperatura da câmara deve ser 0-%d°C" ru="Температура камеры должна быть 0-%d°C" zh="腔体温度必须为 0-%d°C"/>
+   <translation tag="Change" de="Ändern" en="Change" es="Cambiar" fr="Modifier" it="Cambia" ja="変更" pt="Alterar" ru="Изменить" zh="更改"/>
+diff --git a/ui_xml/translations/zh.xml b/ui_xml/translations/zh.xml
+--- a/ui_xml/translations/zh.xml
++++ b/ui_xml/translations/zh.xml
+@@ -616,6 +616,8 @@
+   <translation tag="Chamber heater didn&apos;t start" zh="腔体加热器未启动"/>
+   <translation tag="Chamber heater didn&apos;t start. {}" zh="腔体加热器未启动。{}"/>
+   <translation tag="Chamber heating to %d°C..." zh="腔体加热至 %d°C..."/>
++  <translation tag="Chamber light off when the screen sleeps" zh="Chamber light off when the screen sleeps"/>
++  <translation tag="Chamber light turns off when the screen sleeps, but stays on during a print" zh="Chamber light turns off when the screen sleeps, but stays on during a print"/>
+   <translation tag="Chamber target set to {}°C" zh="腔体目标温度设置为 {}°C"/>
+   <translation tag="Chamber temp must be 0-%d°C" zh="腔体温度必须为 0-%d°C"/>
+   <translation tag="Change" zh="更改"/>

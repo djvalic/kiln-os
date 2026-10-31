@@ -10,6 +10,26 @@ the issue: it is closed by hand after the release.
 
 ## Unreleased
 
+### Fixed
+- **Print start no longer reads the whole job file on the main thread** (issue #22): the IFS filament scan read every line of the job, which took about 3 s on a large file and could stall the MCU into "Timer too close". It now reads only the start and the end of the file, where the slicers write the filament lines.
+- **IFS slot changes from the console or a plugin show on the screen** (issue #13): the lane records Kiln writes for OrcaSlicer no longer carry the `vendor` key, which HelixScreen treated as its own, so a slot change (for example from `IFS_SET_MATERIAL`) was ignored on the screen. Each changed slot now gets the time of the change. Needs a printer check with HelixScreen.
+- **A lane loaded under zMod is recorded at startup** (issue #13): when the IFS has a lane selected with a spool in it and the toolhead sensor sees filament, Kiln takes that lane as loaded. A load error that finds filament at the toolhead now names the fix (`IFS_UNLOAD SLOT=n`, or `IFS_SET_CHANNEL CHANNEL=n`).
+- **A failed unload releases the lane on any error** (issue #13): not only IFS errors. If the release fails too, the error says `IFS_RELEASE CHANNEL=n` frees the lane.
+- **Tool map reset after a paused print is cancelled** (issue #13): the map resets when a paused print ends, and `CANCEL_PRINT` resets it at once.
+- **Idle timeout leaves heaters on during a print or pause**: the stock idle timer turned the heaters off and disabled the steppers after 30 minutes with no movement, even while a print was paused. It now does so only when no print is printing or paused, no IFS swap is running, and no heater target changed in the last minute; the console says when it turns them off or leaves them on.
+### Changed
+- **Install screen says what to do at the end** (issue #21): "Done, restarting" tells the user to remove the USB stick, and to power-cycle the printer if nothing happens after 3 minutes. Needs a new install stick to show.
+- **Side-scroll buttons on by default on the AD5X** (issue #21): HelixScreen's page-scroll buttons are on for new installs and for units that have no saved choice yet. A choice made in the settings is kept.
+- **Russian screen names**: "Z Offset" reads "Z-смещение" on the Russian screen, and the "Wifi" item reads "WiFi" as in the rest of the Russian text. Patch 0030 (translation YAML).
+- **IFS wording kept in the translation source**: the non-English screens' IFS wording (patch 0028) now also lives in the translation YAML (patch 0030), so a rebuild keeps it. No change on the screen.
+
+### Added
+- **Chamber light off when the screen sleeps** (Settings > Display, off by default): with the option on, the chamber light turns off when the screen goes to sleep, but not while a print is preparing, running or paused. It comes back on when the screen wakes or a print starts. If LED auto state is on, the light is left to it.
+- **Set the heater idle timeout**: `HEATER_IDLE_TIMEOUT MINUTES=n` sets how long the printer may sit with no print and no heater change before the nozzle and bed heaters go off (the stock idle timer, now settable). The value is saved and comes back after a restart. Default 30 minutes, the same as before; at least 5. Without MINUTES it shows the current value.
+- **Developer root actions, Klipper side** (off by default; needs the owner's grant): a plugin lists the named root actions it needs in `plugin.json` (`root_actions`). `DEV_ROOT_REQUEST PLUGIN=<name> ACTION=<action> [ARGS="a b"]` asks root to run one, and `DEV_ROOT_STATUS` shows the declared actions, which are granted, and pending requests. Installing or enabling a plugin lists its root actions in the console; nothing is granted until the owner turns them on at the printer (`ad5x-dev-root enable`). Needs the root side and a printer check.
+- **PAUSE and RESUME macros** (issue #13): `ad5x.cfg` has pass-through `PAUSE` and `RESUME` macros over `pause_resume`, so Mainsail stops warning "gcode_macro PAUSE/RESUME not defined". The print pauses and resumes as before, with no parking.
+- **Extra nginx servers** (issue #13): nginx includes `/data/ad5x/nginx/*.conf` in its `http` block, for a second web UI or port (e.g. Mainsail on 81). Nothing is there by default. A file that does not parse stops nginx and the web UI.
+
 ## v0.0.33
 
 ### Fixed

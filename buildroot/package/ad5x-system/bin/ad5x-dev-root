@@ -1,0 +1,130 @@
+#!/bin/sh
+# Owner's tool for named root actions (docs/plugin-root-actions.md). Run as
+# root over SSH. Only this tool writes grants; the watcher (S69ad5x-dev-root)
+# runs an action only while its grant file lists it.
+#   ad5x-dev-root list
+#   ad5x-dev-root enable PLUGIN ACTION... --i-understand-root-risk
+#   ad5x-dev-root disable PLUGIN [ACTION]
+#   ad5x-dev-root status
+set -f
+. "${AD5X_DEV_ROOT_LIB:-/usr/lib/ad5x/dev-root.sh}"
+
+die() { echo "ad5x-dev-root: $*" >&2; exit 1; }
+
+# AD5X_DEV_ROOT_TEST lets the laptop test run this as a normal user
+if [ "$(id -u)" != 0 ] && [ -z "$AD5X_DEV_ROOT_TEST" ]; then
+	die "must run as root"
+fi
+
+plugin_exists() {
+	for d in $DR_PLUGINS; do
+		[ -f "$d/$1/plugin.json" ] && return 0
+	done
+	return 1
+}
+
+usage() {
+	echo "usage: ad5x-dev-root list | status | enable PLUGIN ACTION... --i-understand-root-risk | disable PLUGIN [ACTION]"
+	exit 2
+}
+
+case "$1" in
+list)
+	echo "Root actions in the image's list ($DR_CONF):"
+	names=$(grep -E '^action ' "$DR_CONF" 2>/dev/null | cut -d' ' -f2)
+	[ -n "$names" ] || { echo "  none"; exit 0; }
+	printf '  %-24s %-5s %-9s %-26s %s\n' ACTION ARGS PRINT_SAFE WRITES SCRIPT
+	for a in $names; do
+		if dr_load_action "$a"; then
+			printf '  %-24s %-5s %-9s %-26s %s\n' "$a" "$A_ARGC" "$A_PRINT" "${A_WRITES:--}" "$A_SCRIPT"
+			i=1
+			while [ $i -le "$A_ARGC" ]; do
+				eval "echo \"      argument $i matches: \$A_RE_$i\""
+				i=$((i + 1))
+			done
+		else
+			printf '  %-24s not valid: %s\n' "$a" "$DR_WHY"
+		fi
+	done
+	;;
+status)
+	pid=$(cat "$DR_PID" 2>/dev/null)
+	if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+		echo "watcher: running (pid $pid)"
+	else
+		echo "watcher: not running"
+	fi
+	any=0
+	echo "grants (cleared at every boot):"
+	for g in "$DR_GRANTS"/*.grant; do
+		[ -f "$g" ] || continue
+		any=1
+		p=${g##*/}
+		echo "  ${p%.grant}: $(grep '^action ' "$g" | cut -d' ' -f2 | tr '\n' ' ')"
+	done
+	[ $any = 1 ] || echo "  none"
+	echo "pending requests: $(ls "$DR_REQUESTS" 2>/dev/null | grep -c '\.req$')"
+	;;
+enable)
+	shift
+	confirm=no
+	plugin=
+	acts=
+	for a in "$@"; do
+		case $a in
+		--i-understand-root-risk) confirm=yes ;;
+		*) if [ -z "$plugin" ]; then plugin=$a; else acts="$acts $a"; fi ;;
+		esac
+	done
+	if [ "$confirm" != yes ]; then
+		echo "$DR_WARNING" >&2
+		die "refused: add --i-understand-root-risk to grant it"
+	fi
+	dr_plain_name "$plugin" || die "not a plugin name: '$plugin'"
+	plugin_exists "$plugin" || die "no plugin named $plugin (no plugin.json under: $DR_PLUGINS)"
+	[ -n "$acts" ] || die "name at least one action"
+	for a in $acts; do
+		dr_plain_name "$a" || die "not an action name: '$a'"
+		dr_load_action "$a" || die "unknown action '$a': $DR_WHY"
+	done
+	dr_setup
+	g=$DR_GRANTS/$plugin.grant
+	tmp=$DR_GRANTS/.$plugin.grant.$$
+	{
+		[ -f "$g" ] && grep -E '^action [A-Za-z0-9_-]+$' "$g"
+		for a in $acts; do echo "action $a"; done
+	} | sort -u > "$tmp" || die "could not write the grant"
+	chmod 600 "$tmp"
+	mv -f "$tmp" "$g"
+	dr_log "owner granted $plugin:$acts"
+	echo "granted to $plugin:$acts"
+	echo "$DR_WARNING"
+	;;
+disable)
+	[ -n "$2" ] || usage
+	plugin=$2
+	action=$3
+	dr_plain_name "$plugin" || die "not a plugin name: '$plugin'"
+	g=$DR_GRANTS/$plugin.grant
+	[ -f "$g" ] || { echo "nothing granted to $plugin"; exit 0; }
+	if [ -z "$action" ]; then
+		rm -f "$g"
+	else
+		dr_plain_name "$action" || die "not an action name: '$action'"
+		tmp=$DR_GRANTS/.$plugin.grant.$$
+		grep -vxF -- "action $action" "$g" > "$tmp"
+		if grep -q '^action ' "$tmp"; then
+			chmod 600 "$tmp"
+			mv -f "$tmp" "$g"
+		else
+			rm -f "$tmp" "$g"
+		fi
+	fi
+	dr_log "owner disabled $plugin${action:+ $action}"
+	echo "disabled $plugin${action:+ $action}"
+	;;
+*)
+	usage
+	;;
+esac
+exit 0

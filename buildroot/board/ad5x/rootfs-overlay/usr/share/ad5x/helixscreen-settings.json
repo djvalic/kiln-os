@@ -13,6 +13,7 @@
     "gpu_3d_blocked": false,
     "gpu_blur_blocked": false,
     "hardware_blank": 1,
+    "page_scroll_buttons": true,
     "rotate": 0,
     "rotation_probed": true,
     "screensaver_levels": {

@@ -1,0 +1,16 @@
+diff --git a/src/system/display_settings_manager.cpp b/src/system/display_settings_manager.cpp
+--- a/src/system/display_settings_manager.cpp
++++ b/src/system/display_settings_manager.cpp
+@@ -196,8 +196,10 @@
+ }
+ 
+ // Page-scroll buttons: opt-in on desktop/embedded Linux; on by default on ESP32,
+-// where finger-drag scrolling is too slow on that panel.
+-#if defined(ESP_PLATFORM)
++// where finger-drag scrolling is too slow on that panel, and on the Kiln OS
++// AD5X build (HELIX_KILN_AD5X, set in buildroot/package/helixscreen/helixscreen.mk).
++// Not HELIX_PLATFORM_MIPS alone: upstream's K1 target uses that too.
++#if defined(ESP_PLATFORM) || defined(HELIX_KILN_AD5X)
+ static constexpr int kPageScrollDefault = 1;
+ #else
+ static constexpr int kPageScrollDefault = 0;

@@ -227,6 +227,11 @@ UPDATE_PLUGIN NAME=notify             (git pull; restarts what it needs if on)
 REMOVE_PLUGIN NAME=notify             (switch it off and delete it)
 ```
 
+Spoolman is installed the same way, with `INSTALL_PLUGIN NAME=spoolman ENABLE=1`.
+Use `INSTALL_PLUGIN`, not `ENABLE_PLUGIN`: the image has no spoolman copy of
+its own (older images had an unusable one in `/usr/share/ad5x/plugins/spoolman`,
+which is removed at each build).
+
 `git` runs in the background (`printer.ad5x_plugins.job`, the result also
 in the console); not during a print. When a switch changes what Moonraker
 loads (a plugin's `moonraker.conf`, `python/` or components), Moonraker is

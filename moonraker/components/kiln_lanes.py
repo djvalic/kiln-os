@@ -8,10 +8,13 @@
 #                                     IFS_MAP_TOOL's default map)
 #                  "material": "PLA" ("" = no filament or no type set)
 #                  "color": "#RRGGBB", "nozzle_temp": 220, "bed_temp": 0,
-#                  "name", "vendor", "spool_id", "scan_time" (AFC's
-#                  remaining fields, empty)}
+#                  "spool_id", "scan_time" (UTC, "%Y-%m-%dT%H:%M:%SZ", set
+#                  when the slot's content changes after the first write)}
 # Kept up to date from Klipper's ifs_materials (IFS_SET_MATERIAL, the touch
 # screen) and ifs.loaded_channels (a slot without filament is empty).
+# No "vendor" or "name" key: HelixScreen reads "vendor" and "spool_name" as
+# its own spellings and would not take an outside edit, and Kiln has no
+# vendor or spool name to write under "vendor_name" or "name".
 #
 # [kiln_lanes]
 #
@@ -19,6 +22,7 @@
 
 from __future__ import annotations
 import logging
+import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
@@ -28,9 +32,14 @@ NAMESPACE = "lane_data"
 SLOTS = (1, 2, 3, 4)
 
 
-def build_lanes(materials: Dict[str, Any],
-                ifs: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    """lane_data records from printer.ifs_materials and printer.ifs."""
+def build_lanes(materials: Dict[str, Any], ifs: Dict[str, Any],
+                prev: Optional[Dict[str, Dict[str, Any]]] = None,
+                now: str = "") -> Dict[str, Dict[str, Any]]:
+    """lane_data records from printer.ifs_materials and printer.ifs.
+
+    prev is the last lanes written (None before the first write). A lane
+    whose content is unchanged keeps its scan_time; a changed lane gets now.
+    """
     slots = materials.get("slots") or {}
     present: Optional[List[int]] = None
     if ifs.get("connected") and ifs.get("loaded_channels") is not None:
@@ -42,17 +51,21 @@ def build_lanes(materials: Dict[str, Any],
         if present is not None and s not in present:
             mtype = ""
         temp = m.get("temp") if mtype else None
-        lanes[f"lane{s}"] = {
+        lane = {
             "lane": str(s - 1),
             "material": mtype,
             "color": (m.get("color") or "") if mtype else "",
             "nozzle_temp": int(round(temp)) if temp else 0,
             "bed_temp": 0,
-            "name": "",
-            "vendor": "",
             "spool_id": None,
-            "scan_time": "",
         }
+        old = (prev or {}).get(f"lane{s}")
+        if old is not None and {k: v for k, v in old.items()
+                                if k != "scan_time"} == lane:
+            lane["scan_time"] = old.get("scan_time", "")
+        else:
+            lane["scan_time"] = now if prev is not None else ""
+        lanes[f"lane{s}"] = lane
     return lanes
 
 
@@ -95,7 +108,8 @@ class KilnLanes:
             await self._write()
 
     async def _write(self) -> None:
-        lanes = build_lanes(self.materials, self.ifs)
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        lanes = build_lanes(self.materials, self.ifs, self.written, now)
         if lanes == self.written:
             return
         await self.db.insert_batch(NAMESPACE, lanes)

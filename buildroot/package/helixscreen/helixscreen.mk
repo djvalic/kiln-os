@@ -38,6 +38,8 @@ HELIXSCREEN_POST_EXTRACT_HOOKS += HELIXSCREEN_GIT_INIT
 # control server. Crash/debug uploads to helixscreen.org off by default.
 # Bluetooth and systemd stay off (not in the sysroot); no SDL/DRM/EGL.
 # The vendored spdlog, not one the build host may have in /usr/include.
+# HELIX_KILN_AD5X: this build is the Kiln OS AD5X image only (upstream's
+# unified MIPS target also serves the K1); patch 0029 keys the AD5X default on it.
 # CROSS_COMPILE is a bare prefix (host/bin is on PATH): libnl's configure
 # derives --host from it.
 HELIXSCREEN_CFLAGS = -march=mips32r5 -mnan=2008 -mfp64 \
@@ -45,7 +47,7 @@ HELIXSCREEN_CFLAGS = -march=mips32r5 -mnan=2008 -mfp64 \
 	-Os -flto=auto -ffunction-sections -fdata-sections \
 	-fno-omit-frame-pointer -funwind-tables -fmerge-all-constants -fno-ident \
 	-Wno-error=conversion -Wno-error=sign-conversion \
-	-DHELIX_RELEASE_BUILD -DHELIX_PLATFORM_MIPS
+	-DHELIX_RELEASE_BUILD -DHELIX_PLATFORM_MIPS -DHELIX_KILN_AD5X
 
 HELIXSCREEN_MAKE_OPTS = \
 	PLATFORM_TARGET=mips \

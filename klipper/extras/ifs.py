@@ -385,6 +385,8 @@ class IFS:
         self.error = None         # last failure, for printer.ifs.error
         self.stop_requested = False
         self.print_state = None
+        # Startup check for a lane loaded before Kiln (see _adopt_loaded)
+        self.adopt_pending = False
         # Swap heating: the target set by _heat, waited for (M109) just
         # before the first extruder move of the operation (_ensure_hot)
         self.heat_wait = None
@@ -699,6 +701,8 @@ class IFS:
                         reply = self._request("F21")
                         self.silk = parse_counts(reply, "silk") or self.silk
                         self.stall = parse_counts(reply, "stall") or self.stall
+                    if self.adopt_pending:
+                        self._adopt_loaded()
                 except IfsError as e:
                     logging.info("ifs: status poll failed: %s", e)
             self._prefeed_inserted(eventtime)
@@ -710,6 +714,7 @@ class IFS:
         # Sensors settle before ready: what they saw until now doesn't count
         self.mcu_present = None
         self.mcu_inserted = 0
+        self.adopt_pending = True
         # MCU mode does not pre-feed yet
         if self.prefeed and self.fd is not None:
             self.reactor.register_callback(self._ready_prefeed)
@@ -721,7 +726,8 @@ class IFS:
         return eventtime + 1.
     def _note_print_state(self, state):
         # The tool map belongs to one print (as FX): reset when it ends.
-        ended = self.print_state == "printing" and state in PRINT_END_STATES
+        ended = (self.print_state in ("printing", "paused") and
+                 state in PRINT_END_STATES)
         if state == "printing" and self.print_state not in ("printing",
                                                             "paused"):
             # A new print (not a resume): its first tool load purges
@@ -925,6 +931,30 @@ class IFS:
                 self.head_sensor,))
         value = adc.get_last_value()[1]
         return value <= self.head_below or value >= self.head_above
+    def _adopt_loaded(self):
+        """First status after startup, with no ifs_loaded saved (a lane
+        loaded under zMod leaves it unset, issue #13): when the IFS has a
+        lane selected with a spool in it and the head sensor sees filament,
+        that lane is in the nozzle. Record it as Kiln's loaded channel."""
+        self.adopt_pending = False
+        chan = self.last_status.get('chan', 0)
+        if self.channel or not chan:
+            return
+        if chan not in mask_channels(self.last_status.get('silk_state')):
+            return
+        try:
+            head = self._head_has_filament()
+        except IfsError as e:
+            logging.info("ifs: no lane adopted at startup: %s", e)
+            return
+        if head:
+            logging.info("ifs: adopted channel %d (filament at the toolhead "
+                         "at startup)", chan)
+            self._set_channel(chan)
+            self.gcode.respond_info("IFS: slot %d is in the nozzle (loaded "
+                                    "before startup), recorded as loaded"
+                                    % (chan,))
+
     def _wait_loaded(self, chan):
         """Wait for a load to reach the toolhead, then send F112 to stop
         the feed and return the IFS to ready."""
@@ -958,7 +988,9 @@ class IFS:
             # Not stock: loading into a toolhead that still holds filament
             # would end at once (the sensor already reads present) or jam.
             raise IfsError("load channel %d: the toolhead still has "
-                           "filament in it" % (chan,))
+                           "filament in it (IFS_UNLOAD SLOT=n, or "
+                           "IFS_SET_CHANNEL CHANNEL=n if slot n is in the "
+                           "nozzle)" % (chan,))
         if self.is_mcu_mode:
             for attempt in range(self.load_retries + 1):
                 try:
@@ -1837,17 +1869,36 @@ class IFS:
         path = vsd.file_path() if vsd is not None else None
         if not path:
             return [], []
+        # Only the start and the end of the file are read: the lines sit in
+        # the header or the footer, and a whole-file read on the reactor
+        # thread stalled the MCU at print start (issue #22).
+        scan = 512 * 1024
         found = {}
+
+        def take(text):
+            for line in text.splitlines():
+                if not line.startswith(';'):
+                    continue
+                key, sep, value = line[1:].partition('=')
+                key = key.strip()
+                if sep and key in ('filament_type', 'filament_colour'):
+                    found[key] = [v.strip().strip('"')
+                                  for v in value.split(';')]
         try:
-            with open(path, 'r', errors='replace') as f:
-                for line in f:
-                    if not line.startswith(';'):
-                        continue
-                    key, sep, value = line[1:].partition('=')
-                    key = key.strip()
-                    if sep and key in ('filament_type', 'filament_colour'):
-                        found[key] = [v.strip().strip('"')
-                                      for v in value.split(';')]
+            with open(path, 'rb') as f:
+                size = os.fstat(f.fileno()).st_size
+                head = f.read(scan)
+                if size > scan:
+                    head = head[:head.rfind(b'\n') + 1]  # drop a cut line
+                take(head.decode('utf-8', 'replace'))
+                if (size > scan and
+                        not ('filament_type' in found and
+                             'filament_colour' in found)):
+                    f.seek(size - scan)
+                    tail = f.read()
+                    if b'\n' in tail:
+                        tail = tail[tail.index(b'\n') + 1:]  # drop a cut line
+                    take(tail.decode('utf-8', 'replace'))
         except OSError as e:
             logging.warning("ifs: cannot read %s for filament colours: %s",
                             path, e)
@@ -2081,14 +2132,18 @@ class IFS:
                 self._run_template(self.cut_template, OLD=chan, NEW=0)
                 toolhead.wait_moves()
                 self._unload(chan)
-        except IfsError:
+        except Exception as err:
             if not self.stop_requested:
                 try:
                     self._release(chan)
-                except IfsError as e:
+                except Exception as e:
                     # The unload error is the one the user needs to see
                     logging.warning("ifs: release channel %d after a failed "
                                     "unload: %s", chan, e)
+                    if isinstance(err, IfsError):
+                        raise IfsError("%s; the lane may still be clamped, "
+                                       "IFS_RELEASE CHANNEL=%d frees it"
+                                       % (err, chan))
             raise
         self._set_channel(0)
         self._release(chan)

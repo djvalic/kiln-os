@@ -1,0 +1,38 @@
+#!/bin/sh
+# Root watcher for named root actions (docs/plugin-root-actions.md). Plugins
+# ask for an action by writing a request in /data/ad5x/dev-root/requests;
+# this loop runs it only if the owner granted it (ad5x-dev-root enable). The
+# checks and the rules are in /usr/lib/ad5x/dev-root.sh. Own process: the
+# update agent (S68) is not touched by this.
+#
+# Grants and pending requests are cleared here at boot, before the watcher
+# starts, so nothing granted before a reboot can run after it.
+. ${AD5X_DEV_ROOT_LIB:-/usr/lib/ad5x/dev-root.sh}
+
+case "$1" in
+start)
+	dr_setup
+	dr_boot_clear
+	start-stop-daemon -S -b -m -p $DR_PID -x /bin/sh -- $0 run
+	;;
+boot)
+	# clear only (what start does first); for the laptop test
+	dr_boot_clear
+	;;
+run)
+	n=0
+	while :; do
+		dr_scan
+		# Klipper can't delete results (root-owned folder): root removes
+		# the ones older than 10 minutes, once a minute
+		n=$((n + 1))
+		[ $((n % 60)) = 0 ] && find "$DR_RESULTS" -name '*.res' -mmin +10 -exec rm -f {} \; 2>/dev/null
+		sleep 1
+	done
+	;;
+stop)
+	start-stop-daemon -K -p $DR_PID
+	rm -f $DR_PID
+	;;
+esac
+exit 0

@@ -6,6 +6,11 @@ Add the printer in OrcaSlicer as a physical printer with host type
 **Octo/Klipper** and the printer's address (e.g. `192.168.1.56`). Moonraker
 answers on port 80 through nginx (and on 7125).
 
+Send G-code, not 3MF: turn **off** "Use 3MF instead of G-code" for this
+printer in OrcaSlicer. Kiln OS does not unpack a `.gcode.3mf` upload: Moonraker
+accepts it (the upload answers 201) and stores it as a plain file, which the
+printer does not print. Delete any such file in Fluidd's Files page.
+
 ## Recommended machine G-code
 
 What works best with Kiln OS: the printer does the heating, nozzle
@@ -96,7 +101,7 @@ in the format the AFC filament changer uses (Moonraker component
 
 | Record | Fields |
 |---|---|
-| `lane1` .. `lane4` (IFS slot 1-4) | `lane`: slicer tool `"0"`..`"3"` (slot 1 = T0); `material` (`""` when the slot has no filament or no type); `color` (`#RRGGBB`); `nozzle_temp`; `bed_temp` (0); `name`, `vendor`, `spool_id`, `scan_time` (empty) |
+| `lane1` .. `lane4` (IFS slot 1-4) | `lane`: slicer tool `"0"`..`"3"` (slot 1 = T0); `material` (`""` when the slot has no filament or no type); `color` (`#RRGGBB`); `nozzle_temp`; `bed_temp` (0); `spool_id` (null); `scan_time` (UTC, set when the slot changes; empty until the first change after start). No `vendor` or `name` key: HelixScreen treats `vendor` as its own and would not adopt a later edit |
 
 It's updated whenever a slot's material, colour or temperature changes
 (touch screen, `IFS_SET_MATERIAL`) or a spool goes in or out.

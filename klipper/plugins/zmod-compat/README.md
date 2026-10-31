@@ -14,6 +14,12 @@ macro names and parameters, mapped onto this system's own macros:
 | `SET_PAUSE_NEXT_LAYER`, `SET_PAUSE_AT_LAYER`, `M600` | pause at a layer, filament change |
 | `LINE_PURGE`, `LED_ON`, `LED_OFF`, `LED`, `M300` | prime line, chamber light, beep (none) |
 
+`TOOL=` (Bambufy's start G-code) must be a whole number or -1, as in
+`PRINT_START`. Anything else loads no tool and the console shows an error:
+an unexpanded `TOOL=[initial_tool]` (it used to load tool 0, issue #12), and
+an empty `TOOL=`, which used to load tool 0 and now loads none. No `TOOL=`
+loads none.
+
 Enabled by default. Full table and settings: `docs/zmod-compat.md`.
 Pair with the `nopoop` plugin for zMod's prime-tower and slicer-purge
 modes. Command names follow zMod (ghzserg/zmod); the macros are written

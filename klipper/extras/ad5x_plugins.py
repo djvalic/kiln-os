@@ -29,6 +29,13 @@
 # Moonraker: run as a script (S62moonraker does, before Moonraker starts)
 # it writes moonraker-plugins.conf, the [include] list of the enabled
 # plugins' moonraker.conf files; Klipper rewrites it when plugins change.
+# Developer root actions (docs/plugin-root-actions.md): a plugin lists the
+# named actions it needs in plugin.json "root_actions". DEV_ROOT_REQUEST
+# PLUGIN= ACTION= [ARGS=] writes one request file for root (in
+# /data/ad5x/dev-root/requests); root writes the result (results/) and
+# klipper reports it. Nothing is granted here: the owner turns actions on at
+# the printer (ad5x-dev-root enable), and grants/ is read-only for klipper.
+# DEV_ROOT_STATUS shows them. Off by default.
 # Moonraker reads it at its next start. A plugin's python/ (libraries) and
 # moonraker/components/ (Moonraker components) directories (plugin API
 # 1.3): Klipper gets python/ on sys.path before the extras load;
@@ -55,6 +62,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 # The plugin API this system offers (docs/plugin-api.md): major.minor.
 # Minor: additions only. Major: something plugins may use changed or went.
@@ -77,6 +85,20 @@ INCLUDE_RE = re.compile(
     r"plugi(?:n|\[n\])\.cfg)\s*\]\s*$")
 # print_stats states during which plugins can't be switched (it restarts)
 BUSY_STATES = ("printing", "paused")
+
+# Developer root actions (docs/plugin-root-actions.md)
+DEV_ROOT_DIR = "/data/ad5x/dev-root"
+ROOT_ACTIONS_FILE = "/usr/share/ad5x/root-actions.conf"
+ROOT_ACTION_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+PLUGIN_NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,47}")
+# One request argument: plain characters only, no shell or path characters
+ROOT_TOKEN_RE = re.compile(r"[A-Za-z0-9._+=,:@%-]{1,128}")
+ROOT_MAX_ACTIONS = 16
+ROOT_MAX_ARGS = 16
+ROOT_RATE_SECONDS = 10.
+ROOT_RESULT_WAIT = 600.
+# <plugin>.<n>.req / .res (n: a number, unique per request)
+ROOT_FILE_RE = re.compile(r"([a-z0-9][a-z0-9_-]{0,47})\.([0-9]{1,20})\.(req|res)")
 
 PLUGINS_HEADER = """\
 # Plugins enabled on this printer (docs/plugins.md). Written by
@@ -110,7 +132,7 @@ def read_metadata(plugin_dir, name):
     the file is unusable (the plugin can't be enabled then)."""
     meta = {'name': name, 'description': "", 'version': "", 'author': "",
             'url': "", 'requires_os': "", 'requires': [], 'conflicts': [],
-            'error': None}
+            'root_actions': [], 'error': None}
     path = os.path.join(plugin_dir, 'plugin.json')
     try:
         with open(path) as f:
@@ -131,6 +153,7 @@ def read_metadata(plugin_dir, name):
         if isinstance(val, str):
             val = [v.strip() for v in val.split(",")]
         meta[key] = [str(v).strip().lower() for v in val if str(v).strip()]
+    meta['root_actions'] = read_root_actions(data, name)
     if data.get('name') not in (None, name):
         meta['error'] = "plugin.json name '%s' differs from the directory" % (
             data.get('name'),)
@@ -138,6 +161,98 @@ def read_metadata(plugin_dir, name):
         meta['error'] = "requires_os '%s' is not major.minor" % (
             meta['requires_os'],)
     return meta
+
+def read_root_actions(data, name):
+    """plugin.json root_actions as a list of plain names. A bad list (not a
+    list, too long, or an entry that isn't a plain name) is logged and
+    ignored as a whole; the plugin still installs. Duplicates are dropped."""
+    raw = data.get('root_actions')
+    if raw is None:
+        return []
+    bad = None
+    if not isinstance(raw, list):
+        bad = "root_actions is not a list"
+    elif len(raw) > ROOT_MAX_ACTIONS:
+        bad = "more than %d root_actions" % (ROOT_MAX_ACTIONS,)
+    else:
+        for entry in raw:
+            if not isinstance(entry, str) or \
+                    not ROOT_ACTION_RE.fullmatch(entry):
+                bad = "root_actions entry %s is not a plain name" % (
+                    repr(entry)[:40],)
+                break
+    if bad is not None:
+        logging.warning("ad5x_plugins: plugin %s: %s; its root actions are "
+                        "ignored", name, bad)
+        return []
+    out = []
+    for entry in raw:
+        if entry not in out:
+            out.append(entry)
+    return out
+
+def request_args(raw):
+    """ARGS= text -> the request's argument tokens (single spaces between
+    them). ValueError for anything that isn't a plain token."""
+    raw = (raw or "").strip(" ")
+    if raw == "":
+        return []
+    tokens = raw.split(" ")
+    if len(tokens) > ROOT_MAX_ARGS:
+        raise ValueError("too many arguments (at most %d)" % (ROOT_MAX_ARGS,))
+    for tok in tokens:
+        if not ROOT_TOKEN_RE.fullmatch(tok):
+            raise ValueError("argument %s is not a plain value (letters, "
+                             "digits and . _ + = , : @ %% -)"
+                             % (repr(tok)[:40],))
+    return tokens
+
+def read_grants(path):
+    """Actions the owner granted, from the lines "action NAME" (root's
+    grant format). A missing file grants nothing: set(). None when the
+    file is there but klipper can't read it (root keeps grants private);
+    the caller then lets root decide."""
+    try:
+        with open(path) as f:
+            lines = f.read().splitlines()
+    except FileNotFoundError:
+        return set()
+    except OSError:
+        return None
+    out = set()
+    for line in lines:
+        m = re.fullmatch(r"action ([A-Za-z0-9_-]{1,64})", line)
+        if m is not None:
+            out.add(m.group(1))
+    return out
+
+def read_action_list(path):
+    """(names, print_safe) from the image's root action list (root's
+    block format: "action NAME", then its lines, "print_safe yes|no"
+    default no). names is None when the list can't be read; then no
+    action is print_safe."""
+    try:
+        with open(path) as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return None, set()
+    names, safe, current = set(), set(), None
+    for line in lines:
+        words = line.split()
+        if not words or words[0].startswith('#'):
+            continue
+        if words[0] == 'action' and len(words) >= 2:
+            current = words[1]
+            names.add(current)
+        elif words[0] == 'print_safe' and current is not None and \
+                len(words) >= 2 and words[1] == 'yes':
+            safe.add(current)
+    return names, safe
+
+def root_actions_note(name, actions):
+    return ("Plugin %s asks for root actions: %s. They are off until the "
+            "owner turns them on at the printer (ad5x-dev-root enable); "
+            "Kiln OS does not grant them." % (name, ", ".join(actions)))
 
 def scan(shipped_dir=SHIPPED_DIR, user_dir=USER_DIR):
     """name -> info for every directory holding a plugin.cfg; user plugins
@@ -269,6 +384,204 @@ def write_if_changed(path, text):
     os.replace(tmp, path)
     return True
 
+class DevRoot:
+    """DEV_ROOT_REQUEST / DEV_ROOT_STATUS: a plugin's request for a named
+    root action (docs/plugin-root-actions.md). Klipper checks what it can,
+    writes one request file and reports root's result. Granting is root's
+    job (the owner's ad5x-dev-root enable); Klipper only reads the grants,
+    and where root keeps a grant unreadable it lets root decide."""
+    def __init__(self, owner, config):
+        self.owner = owner
+        self.printer = owner.printer
+        self.gcode = owner.gcode
+        base = config.get('dev_root_dir', DEV_ROOT_DIR)
+        self.requests_dir = os.path.join(base, 'requests')
+        self.results_dir = os.path.join(base, 'results')
+        self.grants_dir = os.path.join(base, 'grants')
+        self.actions_file = config.get('root_actions_file', ROOT_ACTIONS_FILE)
+        self.last_sent = {}   # plugin -> time of its last request written
+        self.pending = {}     # request id -> (request line, time sent)
+        self.recent = []      # last results reported (DEV_ROOT_STATUS)
+        self.kept = set()     # result files that could not be removed
+        self.last_n = 0
+        self.polling = False
+
+    def _now(self):
+        return self.printer.get_reactor().monotonic()
+
+    def _printing(self):
+        ps = self.printer.lookup_object('print_stats', None)
+        return ps is not None and ps.get_status(self._now()).get(
+            'state') in BUSY_STATES
+
+    def _grants(self, plugin):
+        return read_grants(os.path.join(self.grants_dir, plugin + '.grant'))
+
+    def _write(self, gcmd, plugin, line):
+        """One request file: written under a dot-name (root does not read
+        those) and renamed, so root never reads half a line. Returns the
+        request id."""
+        n = max(int(time.time() * 1000), self.last_n + 1)
+        while os.path.exists(os.path.join(self.requests_dir,
+                                          "%s.%d.req" % (plugin, n))):
+            n += 1
+        self.last_n = n
+        base = "%s.%d.req" % (plugin, n)
+        path = os.path.join(self.requests_dir, base)
+        tmp = os.path.join(self.requests_dir, "." + base + ".tmp")
+        try:
+            with open(tmp, "w") as f:
+                f.write(line + "\n")
+            os.rename(tmp, path)
+        except OSError as e:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise gcmd.error("Can't write the root request in %s: %s"
+                             % (self.requests_dir, e))
+        return "%s.%d" % (plugin, n)
+
+    def request(self, gcmd):
+        plugin = gcmd.get('PLUGIN').strip().lower()
+        action = gcmd.get('ACTION').strip()
+        if not PLUGIN_NAME_RE.fullmatch(plugin):
+            raise gcmd.error("PLUGIN must be a plugin name (a-z, 0-9, - _)")
+        if not ROOT_ACTION_RE.fullmatch(action):
+            raise gcmd.error("ACTION must be a plain name (letters, digits, "
+                             "- _)")
+        try:
+            args = request_args(gcmd.get('ARGS', ''))
+        except ValueError as e:
+            raise gcmd.error("Refused: %s" % (e,))
+        self.owner.found = scan(self.owner.shipped_dir, self.owner.user_dir)
+        info = self.owner.found.get(plugin)
+        if info is None or info['error']:
+            raise gcmd.error("Plugin %s is not installed, or its plugin.json "
+                             "is bad" % (plugin,))
+        if action not in info['root_actions']:
+            raise gcmd.error("Plugin %s did not declare root action %s "
+                             "(root_actions: %s)" % (
+                                 plugin, action,
+                                 ", ".join(info['root_actions']) or "none"))
+        names, safe = read_action_list(self.actions_file)
+        if names is not None and action not in names:
+            raise gcmd.error("Root action %s is not in this image's list"
+                             % (action,))
+        if self._printing() and action not in safe:
+            raise gcmd.error("Root action %s can't run during a print"
+                             % (action,))
+        granted = self._grants(plugin)
+        if granted is not None and action not in granted:
+            raise gcmd.error("Root action %s is not granted to %s. The owner "
+                             "turns it on at the printer: ad5x-dev-root "
+                             "enable" % (action, plugin))
+        now = self._now()
+        last = self.last_sent.get(plugin)
+        if last is not None and now - last < ROOT_RATE_SECONDS:
+            raise gcmd.error("Plugin %s sent a root request %.0f s ago; one "
+                             "per %.0f s" % (plugin, now - last,
+                                             ROOT_RATE_SECONDS))
+        line = " ".join([plugin, action] + args)
+        rid = self._write(gcmd, plugin, line)
+        self.last_sent[plugin] = now
+        self.pending[rid] = (line, now)
+        note = "" if granted is not None else (
+            " (the grant is not readable from Klipper; root checks it)")
+        gcmd.respond_info("Root request %s sent: %s%s (the result follows)"
+                          % (rid, line, note))
+        self.start_poll()
+
+    def start_poll(self):
+        if not self.polling:
+            self.polling = True
+            reactor = self.printer.get_reactor()
+            reactor.register_timer(self._poll, reactor.monotonic() + .5)
+
+    def _poll(self, eventtime):
+        try:
+            names = sorted(os.listdir(self.results_dir))
+        except OSError:
+            names = []
+        for fn in names:
+            m = ROOT_FILE_RE.fullmatch(fn)
+            if m is None or m.group(3) != 'res' or fn in self.kept:
+                continue
+            self._report("%s.%s" % (m.group(1), m.group(2)),
+                         os.path.join(self.results_dir, fn))
+        for rid, (line, sent) in list(self.pending.items()):
+            if eventtime - sent > ROOT_RESULT_WAIT:
+                del self.pending[rid]
+                self._say("Root request %s (%s): no result after %.0f s; is "
+                          "the root agent running?"
+                          % (rid, line, ROOT_RESULT_WAIT))
+        if self.pending:
+            return eventtime + .5
+        self.polling = False
+        return self.printer.get_reactor().NEVER
+
+    def _report(self, rid, path):
+        """Root writes "<ok or refused: reason> at <time>" on one line."""
+        try:
+            with open(path) as f:
+                first = f.readline(512).strip()
+        except OSError as e:
+            first = "refused: result unreadable (%s)" % (e,)
+        text = re.sub(r" at \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$", "", first)
+        if text != "ok" and not text.startswith("refused: "):
+            text = "unexpected result %s" % (repr(text)[:80],)
+        line = self.pending.pop(rid, ("unknown request",))[0]
+        self._say("Root request %s (%s): %s" % (rid, line, text))
+        self.recent = (self.recent + ["%s: %s" % (rid, text)])[-5:]
+        try:
+            os.remove(path)
+        except OSError as e:
+            # root's results dir is not writable by klipper: keep it in
+            # memory so it is not reported again this start
+            self.kept.add(os.path.basename(path))
+            logging.info("ad5x_plugins: can't remove %s: %s", path, e)
+
+    def _say(self, msg):
+        logging.info("ad5x_plugins: %s", msg)
+        self.gcode.respond_info(msg)
+
+    def status(self, gcmd):
+        self.owner.found = scan(self.owner.shipped_dir, self.owner.user_dir)
+        lines = ["Developer root actions (off until the owner grants them: "
+                 "ad5x-dev-root enable)"]
+        declared = [(n, i) for n, i in sorted(self.owner.found.items())
+                    if i['root_actions']]
+        if not declared:
+            lines.append("No plugin declares root actions.")
+        names, safe = read_action_list(self.actions_file)
+        for name, info in declared:
+            granted = self._grants(name)
+            for action in info['root_actions']:
+                if granted is None:
+                    state = "grant not readable here"
+                else:
+                    state = "granted" if action in granted else "not granted"
+                notes = []
+                if names is not None and action not in names:
+                    notes.append("not in this image's list")
+                if action in safe:
+                    notes.append("print_safe")
+                lines.append("%s: %s %s%s" % (
+                    name, action, state,
+                    "".join(", " + n for n in notes)))
+        try:
+            waiting = sorted(f for f in os.listdir(self.requests_dir)
+                             if ROOT_FILE_RE.fullmatch(f))
+        except OSError:
+            waiting = []
+        lines.append("Requests waiting for root: %s"
+                     % (", ".join(waiting) or "none"))
+        lines.append("Sent here, no result yet: %s"
+                     % (", ".join(sorted(self.pending)) or "none"))
+        lines.append("Recent results: %s"
+                     % ("; ".join(self.recent) or "none"))
+        gcmd.respond_info("\n".join(lines))
+
 class AD5XPlugins:
     def __init__(self, config):
         self.printer = config.get_printer()
@@ -305,6 +618,7 @@ class AD5XPlugins:
         self.warnings = []
         self.modules = {}
         self._load_extras(config)
+        self.dev_root = DevRoot(self, config)
         self.printer.register_event_handler("klippy:ready",
                                             self._handle_ready)
         # Also while Klipper isn't ready: a plugin whose config stops
@@ -315,6 +629,9 @@ class AD5XPlugins:
                                         when_not_ready=True,
                                         desc=getattr(self, "cmd_%s_help" % cmd))
         for cmd in ("INSTALL_PLUGIN", "UPDATE_PLUGIN", "REMOVE_PLUGIN"):
+            self.gcode.register_command(cmd, getattr(self, "cmd_" + cmd),
+                                        desc=getattr(self, "cmd_%s_help" % cmd))
+        for cmd in ("DEV_ROOT_REQUEST", "DEV_ROOT_STATUS"):
             self.gcode.register_command(cmd, getattr(self, "cmd_" + cmd),
                                         desc=getattr(self, "cmd_%s_help" % cmd))
     # Startup
@@ -402,6 +719,8 @@ class AD5XPlugins:
         # or dropped a plugin's moonraker.conf). Moonraker reads it at its
         # next start.
         self._write_moonraker(self.loaded)
+        # Results of root requests left from before this start
+        self.dev_root.start_poll()
     def _write_moonraker(self, names):
         try:
             return write_if_changed(self.moonraker_file,
@@ -566,7 +885,12 @@ class AD5XPlugins:
                 self._save_job()
                 self.gcode.run_script("ENABLE_PLUGIN NAME=%s" % (name,))
                 return "installed and enabled"
-            return "installed (ENABLE_PLUGIN NAME=%s)" % (name,)
+            msg = "installed (ENABLE_PLUGIN NAME=%s)" % (name,)
+            actions = self.found[name]['root_actions'] if name in \
+                self.found else []
+            if actions:
+                msg += ". " + root_actions_note(name, actions)
+            return msg
         try:
             os.makedirs(self.user_dir, exist_ok=True)
         except OSError as e:
@@ -668,6 +992,8 @@ class AD5XPlugins:
         self._check_idle(gcmd)
         gcmd.respond_info("Plugin %s %s enabled (%s)" % (
             name, info['version'], info['source']))
+        if info['root_actions']:
+            gcmd.respond_info(root_actions_note(name, info['root_actions']))
         self._apply(gcmd, enable=[name])
     cmd_DISABLE_PLUGIN_help = ("Disable a plugin and restart Klipper: NAME= "
                                "[RESTART=0]")
@@ -688,6 +1014,14 @@ class AD5XPlugins:
         self._check_idle(gcmd)
         gcmd.respond_info("Plugin %s disabled" % (name,))
         self._apply(gcmd, disable=[name])
+    cmd_DEV_ROOT_REQUEST_help = ("Ask root for a named action a plugin "
+                                 "declares: PLUGIN= ACTION= [ARGS=\"a b\"]")
+    def cmd_DEV_ROOT_REQUEST(self, gcmd):
+        self.dev_root.request(gcmd)
+    cmd_DEV_ROOT_STATUS_help = ("Show the plugins' root actions, which are "
+                                "granted, and pending requests")
+    def cmd_DEV_ROOT_STATUS(self, gcmd):
+        self.dev_root.status(gcmd)
     cmd_LIST_PLUGINS_help = "List the plugins (shipped and own) and which are on"
     def cmd_LIST_PLUGINS(self, gcmd):
         self.found = scan(self.shipped_dir, self.user_dir)

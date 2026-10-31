@@ -98,8 +98,10 @@ def main():
                "This takes a few minutes" if i in (2, 4) else "",
                progress=(i, len(STEPS)))
     screen(os.path.join(out, "done.jpg"), "Done, restarting",
-           "Kiln OS starts next.",
-           "The first start takes a few minutes.", accent=GREEN, foot="")
+           "Remove the USB stick now.",
+           "Kiln OS starts next. The first start takes a few minutes.",
+           accent=GREEN,
+           foot="Nothing after 3 minutes? Power-cycle the printer.")
     screen(os.path.join(out, "failed.jpg"), "Installation failed",
            "Nothing was switched: the printer keeps its firmware.",
            "See ad5x-install.log on the stick. Remove the stick, power-cycle.",
