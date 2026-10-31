@@ -545,10 +545,10 @@ index 8439954..1296621 100644
  };
  
 diff --git a/include/favorite_macro_config.h b/include/favorite_macro_config.h
-index 6f47a8e..367f06f 100644
+index 9050c82..f51b9b5 100644
 --- a/include/favorite_macro_config.h
 +++ b/include/favorite_macro_config.h
-@@ -23,6 +23,14 @@ struct FavoriteMacroConfig {
+@@ -25,6 +25,14 @@ struct FavoriteMacroConfig {
      /// carry the inverse "skip_param_prompt", which favorite_macro_config_from_json()
      /// still reads; see also migrate_v22_to_v23() in src/system/config.cpp.
      bool require_confirmation = true;
@@ -619,10 +619,10 @@ index 3b00755..2fa4b7f 100644
      // and temperature observers, so the tile's numbers and icons agree.
      helix::ui::HeaterIconBinder nozzle_icon_binder_;
 diff --git a/src/api/moonraker_client_mock.cpp b/src/api/moonraker_client_mock.cpp
-index 63a6a4d..274245b 100644
+index d4bd91e..3252c0e 100644
 --- a/src/api/moonraker_client_mock.cpp
 +++ b/src/api/moonraker_client_mock.cpp
-@@ -3514,7 +3514,8 @@ void MoonrakerClientMock::populate_hardware() {
+@@ -3662,7 +3662,8 @@ void MoonrakerClientMock::populate_hardware() {
                                  "temperature_sensor chamber"};
          discovery_.fans() = {"fan_generic fanM106", "heater_fan heat_fan",
                               "fan_generic chamber_fan", "fan_generic pcb_fan"};
@@ -667,7 +667,7 @@ index a067d54..fff21c0 100644
      spdlog::debug("[DefaultLayoutResolver] tier={} grid={}x{} table={} placed={} disabled={} "
                    "signature={}",
 diff --git a/src/ui/modals/favorite_macro_config_modal.cpp b/src/ui/modals/favorite_macro_config_modal.cpp
-index 12bff5d..adaca79 100644
+index b523074..f9ee93c 100644
 --- a/src/ui/modals/favorite_macro_config_modal.cpp
 +++ b/src/ui/modals/favorite_macro_config_modal.cpp
 @@ -100,7 +100,13 @@ void FavoriteMacroConfigModal::load_config() {
@@ -686,10 +686,10 @@ index 12bff5d..adaca79 100644
      if (on_change_)
          on_change_();
 diff --git a/src/ui/panel_widget_registry.cpp b/src/ui/panel_widget_registry.cpp
-index 1c7af7d..36c85b7 100644
+index 29fac7d..df2353b 100644
 --- a/src/ui/panel_widget_registry.cpp
 +++ b/src/ui/panel_widget_registry.cpp
-@@ -121,7 +121,7 @@ static std::vector<PanelWidgetDef> s_widget_defs = {
+@@ -123,7 +123,7 @@ static std::vector<PanelWidgetDef> s_widget_defs = {
      {"temp_stack",       TR_NOOP("Temperatures"),      "thermometer",      TR_NOOP("Nozzle, bed, and chamber in one widget"),     nullptr,              nullptr,                               kCatTemp,     false, 2, 2, 2, 2, 6, 4, false, true, true},
      {"thermistor",       TR_NOOP("Temperature Sensors"), "thermometer",    TR_NOOP("Readings from extra temperature sensors"), "temp_sensor_count", "No temperature sensors detected", kCatTemp,     false, 2, 2, 1, 1, kBandColspan, kBandColspan, true, true, true},
      {"temp_graph",       TR_NOOP("Temperature Graph"), "chart_line",       TR_NOOP("Temperatures plotted over time"), nullptr,         nullptr,                               kCatTemp,     false, 4, 4, 2, 2, kBandColspan, 8, true, true, true, false},
@@ -792,7 +792,7 @@ index fcb639d..e2d5893 100644
          handle_cooldown();
          return;
 diff --git a/src/ui/panel_widgets/print_status_widget.cpp b/src/ui/panel_widgets/print_status_widget.cpp
-index b31a425..60abab8 100644
+index 28e3392..524caeb 100644
 --- a/src/ui/panel_widgets/print_status_widget.cpp
 +++ b/src/ui/panel_widgets/print_status_widget.cpp
 @@ -138,6 +138,8 @@ void PrintStatusWidget::init_static_subjects() {
@@ -848,10 +848,10 @@ index ba11764..dfd780f 100644
      void show_configure_picker();
      void apply_visibility_config();
 diff --git a/src/ui/widgets/favorite_macro_config.cpp b/src/ui/widgets/favorite_macro_config.cpp
-index 4f80c79..25cda68 100644
+index b1a1348..f599ccf 100644
 --- a/src/ui/widgets/favorite_macro_config.cpp
 +++ b/src/ui/widgets/favorite_macro_config.cpp
-@@ -25,6 +25,10 @@ FavoriteMacroConfig favorite_macro_config_from_json(const nlohmann::json& j) {
+@@ -26,6 +26,10 @@ FavoriteMacroConfig favorite_macro_config_from_json(const nlohmann::json& j) {
      } else if (j.contains("skip_param_prompt") && j["skip_param_prompt"].is_boolean()) {
          c.require_confirmation = !j["skip_param_prompt"].get<bool>();
      }
@@ -862,7 +862,7 @@ index 4f80c79..25cda68 100644
      return c;
  }
  
-@@ -39,6 +43,10 @@ nlohmann::json favorite_macro_config_to_json(const FavoriteMacroConfig& c) {
+@@ -40,6 +44,10 @@ nlohmann::json favorite_macro_config_to_json(const FavoriteMacroConfig& c) {
      // config that still carries it sheds it on the next save.
      if (!c.require_confirmation)
          j["require_confirmation"] = false;
@@ -874,7 +874,7 @@ index 4f80c79..25cda68 100644
  }
  
 diff --git a/src/ui/widgets/favorite_macro_widget.cpp b/src/ui/widgets/favorite_macro_widget.cpp
-index b0454e7..41ab6cc 100644
+index b9dfce5..cad2324 100644
 --- a/src/ui/widgets/favorite_macro_widget.cpp
 +++ b/src/ui/widgets/favorite_macro_widget.cpp
 @@ -3,6 +3,8 @@
@@ -886,15 +886,15 @@ index b0454e7..41ab6cc 100644
  #include "ui_event_safety.h"
  #include "ui_icon.h"
  #include "ui_icon_codepoints.h"
-@@ -18,6 +20,7 @@
- #include "macro_executor.h"
- #include "macro_param_cache.h"
- #include "macro_param_defaults.h"
+@@ -16,6 +18,7 @@
+ #include "home_macro_run.h"
+ #include "i_moonraker_api.h"
+ #include "lvgl/src/others/translation/lv_translation.h"
 +#include "observer_factory.h"
  #include "panel_widget_config.h"
  #include "panel_widget_manager.h"
  #include "panel_widget_registry.h"
-@@ -141,6 +144,18 @@ void FavoriteMacroWidget::set_config(const nlohmann::json& config) {
+@@ -75,6 +78,18 @@ void FavoriteMacroWidget::set_config(const nlohmann::json& config) {
      }
      icon_color_ = c.color;
      require_confirmation_ = c.require_confirmation;
@@ -913,7 +913,7 @@ index b0454e7..41ab6cc 100644
      spdlog::debug("[FavoriteMacroWidget] Config: {}={} icon={} color=0x{:06X} require_confirm={}",
                    widget_id_, macro_name_, icon_name_.empty() ? "default" : icon_name_, icon_color_,
                    require_confirmation_);
-@@ -168,11 +183,20 @@ void FavoriteMacroWidget::attach(lv_obj_t* widget_obj, lv_obj_t* parent_screen)
+@@ -102,11 +117,20 @@ void FavoriteMacroWidget::attach(lv_obj_t* widget_obj, lv_obj_t* parent_screen)
  
      update_display();
  
@@ -934,7 +934,7 @@ index b0454e7..41ab6cc 100644
      lifetime_.invalidate();
      config_modal_.reset();
  
-@@ -199,6 +223,12 @@ void FavoriteMacroWidget::handle_clicked() {
+@@ -133,6 +157,12 @@ void FavoriteMacroWidget::handle_clicked() {
                       widget_id_);
          open_config_modal();
      } else {
@@ -947,7 +947,7 @@ index b0454e7..41ab6cc 100644
          // Execute assigned macro
          spdlog::info("[FavoriteMacroWidget] {} clicked - executing {}", widget_id_, macro_name_);
          fetch_and_execute();
-@@ -230,7 +260,9 @@ void FavoriteMacroWidget::update_display() {
+@@ -164,7 +194,9 @@ void FavoriteMacroWidget::update_display() {
              // A tag, not lv_tr() text: the label then re-translates itself.
              lv_label_set_translation_tag(name_label_, "Configure");
          } else {
@@ -958,7 +958,7 @@ index b0454e7..41ab6cc 100644
              lv_label_set_text(name_label_, display.c_str());
          }
      }
-@@ -258,8 +290,19 @@ void FavoriteMacroWidget::update_display() {
+@@ -192,8 +224,19 @@ void FavoriteMacroWidget::update_display() {
      }
  }
  

@@ -247,6 +247,52 @@ Going back to stock in slot A: from the main OS, write
 `/data/ad5x/stock/rootfs.squashfs` to p2 and `kernel.img` to p1 (or use the
 laptop backup).
 
+## Main OS in slot A
+
+Some printers run the main OS from slot A (`root=/dev/mmcblk0p2`, boot flag
+`ota:kernel`) instead of slot B. Updates don't support this layout yet.
+`ad5x-update` refuses with "slot A doesn't hold the recovery OS" or "slot A
+holds a main OS, not stock or recovery: refusing", and says where this
+section is.
+
+Nothing is written blind. The steps below read first, make a backup, and
+only then (if at all) write. Nothing here is tested on hardware.
+
+**1. Triage (read only).** Run these on the printer and note the output:
+
+```
+cat /proc/cmdline                          # root=/dev/mmcblk0p2: main OS in slot A
+head -c 11 /dev/mmcblk0p5 | tr -d '\0\n'  # boot flag: ota:kernel = A, ota:kernel2 = B
+cat /etc/ad5x-release                      # which Kiln OS release is running
+ls -l /data/ad5x/stock                     # saved stock system (rootfs.squashfs, kernel.img, SHA256SUMS)?
+```
+
+**2. Back up the eMMC first.** Copy the whole eMMC to a stick or the laptop
+as described in `docs/emmc-backup.md`. Check the copy before going on. The
+installer's stick backup covers only the first MiB and partitions p1 to p6,
+so take the full image when you can.
+
+**3a. If `/data/ad5x/stock` exists:** check the saved stock system:
+
+```
+ad5x-restore-stock --dry-run
+```
+
+It checks `rootfs.squashfs` and `kernel.img` against `SHA256SUMS` and writes
+nothing. A run without `--dry-run` writes slot B and sets the boot flag to
+B, so the printer boots stock. Do that only after reading the dry-run output
+and deciding to. It is not part of this safe path.
+
+**3b. If `/data/ad5x/stock` does not exist:** there is no saved stock to put
+back. Use the USB-stick rescue in the "USB rescue" section above. The
+`ad5x-rescue-boot` marker only chroots into the stick's root for
+inspection. `ad5x-rescue-flash` writes slot B and sets the flag, so it is
+not a dry run: use it only with an image you have checked and with the
+backup from step 2 in hand.
+
+Don't run `ad5x-update --install-recovery` or `--replace-stock` from slot A.
+The script refuses there.
+
 ## Updates of the recovery OS itself
 
 The recovery OS travels with the main OS (since v0.0.5). Each main image

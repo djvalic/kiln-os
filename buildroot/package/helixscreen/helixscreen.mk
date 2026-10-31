@@ -7,8 +7,8 @@
 # HELIXSCREEN_COMMIT: the tag's commit (tools/bump_upstream.py keeps both
 # current). Git with submodules: LVGL, libhv, spdlog/fmt, libnl,
 # wpa_supplicant's client, Lua, helix-xml etc. are vendored there.
-HELIXSCREEN_VERSION = v1.1.0-beta.13
-HELIXSCREEN_COMMIT = 1649a473a76cdc37447f40b53351d6dbeceb7fab
+HELIXSCREEN_VERSION = v1.1.0-beta.14
+HELIXSCREEN_COMMIT = 6900767123dbd2136588fe4a8fbf282dbab921a9
 HELIXSCREEN_SITE = https://github.com/prestonbrown/helixscreen.git
 HELIXSCREEN_SITE_METHOD = git
 HELIXSCREEN_GIT_SUBMODULES = YES

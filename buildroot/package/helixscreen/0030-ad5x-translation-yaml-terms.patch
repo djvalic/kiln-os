@@ -1,8 +1,8 @@
 diff --git a/translations/de.yml b/translations/de.yml
-index 3141199..15507b6 100644
+index 7cc292f..5dc37ef 100644
 --- a/translations/de.yml
 +++ b/translations/de.yml
-@@ -204,10 +204,10 @@ translations:
+@@ -206,10 +206,10 @@ translations:
    AFC retracts filament from the toolhead at end of print: AFC zieht das Filament
      am Druckende aus dem Werkzeugkopf zurück
    ALL DEVICES: ALLE GERÄTE
@@ -17,7 +17,7 @@ index 3141199..15507b6 100644
    API not available: API nicht verfügbar
    APPEARANCE: ERSCHEINUNGSBILD
    AUTO FANS: AUTO-LÜFTER
-@@ -294,7 +294,7 @@ translations:
+@@ -298,7 +298,7 @@ translations:
    Always show Android navigation bar instead of using gestures: Android-Navigationsleiste
      immer anzeigen statt Gesten zu nutzen
    Ambient Transfer: Umgebungswärmeübertragung
@@ -26,7 +26,7 @@ index 3141199..15507b6 100644
    An accelerometer was detected on your printer.: Ein Beschleunigungssensor wurde
      an Ihrem Drucker erkannt.
    An app on your network is asking to connect to this printer.: 'Eine App in Ihrem Netzwerk möchte sich mit diesem Drucker verbinden.'
-@@ -521,7 +521,7 @@ translations:
+@@ -526,7 +526,7 @@ translations:
    Bypass enabled: Bypass aktiviert
    Bypass failed: Bypass fehlgeschlagen
    ? Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?
@@ -35,7 +35,7 @@ index 3141199..15507b6 100644
    Bypass mode is not currently active: 'Der Bypass-Modus ist derzeit nicht aktiv'
    Bypass off macro: 'Bypass-aus-Makro'
    Bypass on macro: 'Bypass-ein-Makro'
-@@ -2471,7 +2471,7 @@ translations:
+@@ -2500,7 +2500,7 @@ translations:
    Niimbot (Bluetooth): Niimbot (Bluetooth)
    'No': Nein
    No ACE unit was found.: "Keine ACE-Einheit gefunden."
@@ -44,10 +44,10 @@ index 3141199..15507b6 100644
    No API connection: Keine API-Verbindung
    No Bluetooth printer selected — pick one in settings: Kein Bluetooth-Drucker ausgewählt
      — in den Einstellungen auswählen
-@@ -4121,9 +4121,9 @@ translations:
-   The speed of one fan you choose: Drehzahl eines gewählten Lüfters
-   The time, date, and system uptime: Uhrzeit, Datum und Betriebszeit
+@@ -4173,9 +4173,9 @@ translations:
    The timelapse or logs folder overlaps a protected folder, so cleanup is off.: "Der Zeitraffer- oder Protokoll-Ordner überlappt einen geschützten Ordner, daher ist die Bereinigung ausgeschaltet."
+   The tool change under way finished, and the tool was not parked: 'Der laufende Werkzeugwechsel wurde abgeschlossen, und das Werkzeug wurde nicht geparkt'
+   The tool change under way finished, and {} was not put back on the carriage: 'Der laufende Werkzeugwechsel wurde abgeschlossen, und {} wurde nicht wieder auf den Wagen gesetzt'
 -  The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?: Im Werkzeugkopf befindet sich Filament, aber kein AMS-Slot meldet es als geladen. Ziehen Sie es vor dem Drucken manuell heraus. Trotzdem starten?
 +  The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?: Im Werkzeugkopf befindet sich Filament, aber kein IFS-Slot meldet es als geladen. Ziehen Sie es vor dem Drucken manuell heraus. Trotzdem starten?
    ? The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?
@@ -57,10 +57,10 @@ index 3141199..15507b6 100644
      Werkzeugkopfsensor zeigt an, dass Filament bereits geladen ist. Trotzdem mit dem
      Laden fortfahren?
 diff --git a/translations/es.yml b/translations/es.yml
-index 51583dc..fdacef5 100644
+index c437e60..35f171a 100644
 --- a/translations/es.yml
 +++ b/translations/es.yml
-@@ -202,10 +202,10 @@ translations:
+@@ -204,10 +204,10 @@ translations:
    AFC retracts filament from the toolhead at end of print: AFC retrae el filamento
      del cabezal al finalizar la impresión
    ALL DEVICES: TODOS LOS DISPOSITIVOS
@@ -75,7 +75,7 @@ index 51583dc..fdacef5 100644
    API not available: API no disponible
    APPEARANCE: APARIENCIA
    AUTO FANS: VENTILADORES AUTO
-@@ -292,7 +292,7 @@ translations:
+@@ -296,7 +296,7 @@ translations:
    Always show Android navigation bar instead of using gestures: Mostrar siempre la
      barra de navegación de Android en lugar de usar gestos
    Ambient Transfer: Transferencia ambiente
@@ -84,7 +84,7 @@ index 51583dc..fdacef5 100644
    An accelerometer was detected on your printer.: Se detectó un acelerómetro en su
      impresora.
    An app on your network is asking to connect to this printer.: 'Una aplicación de su red quiere conectarse a esta impresora.'
-@@ -515,7 +515,7 @@ translations:
+@@ -520,7 +520,7 @@ translations:
    Bypass enabled: Bypass activado
    Bypass failed: Error en bypass
    ? Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?
@@ -93,7 +93,7 @@ index 51583dc..fdacef5 100644
    Bypass mode is not currently active: 'El modo bypass no está activo actualmente'
    Bypass off macro: 'Macro de bypass desactivado'
    Bypass on macro: 'Macro de bypass activado'
-@@ -2462,7 +2462,7 @@ translations:
+@@ -2491,7 +2491,7 @@ translations:
    Niimbot (Bluetooth): Niimbot (Bluetooth)
    'No': 'No'
    No ACE unit was found.: "No se encontró ninguna unidad ACE."
@@ -102,10 +102,10 @@ index 51583dc..fdacef5 100644
    No API connection: Sin conexión a la API
    No Bluetooth printer selected — pick one in settings: No hay impresora Bluetooth
      seleccionada — elige una en ajustes
-@@ -4113,9 +4113,9 @@ translations:
-   The speed of one fan you choose: La velocidad de un ventilador elegido
-   The time, date, and system uptime: Hora, fecha y tiempo de actividad
+@@ -4165,9 +4165,9 @@ translations:
    The timelapse or logs folder overlaps a protected folder, so cleanup is off.: "La carpeta de timelapse o de registros se solapa con una carpeta protegida, por eso la limpieza está desactivada."
+   The tool change under way finished, and the tool was not parked: 'El cambio de herramienta en curso terminó y la herramienta no se aparcó'
+   The tool change under way finished, and {} was not put back on the carriage: 'El cambio de herramienta en curso terminó y {} no se volvió a poner en el carro'
 -  The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?: El cabezal tiene filamento, pero ninguna ranura del AMS informa que esté cargado. Retírelo manualmente antes de imprimir. ¿Iniciar de todos modos?
 +  The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?: El cabezal tiene filamento, pero ninguna ranura del IFS informa que esté cargado. Retírelo manualmente antes de imprimir. ¿Iniciar de todos modos?
    ? The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?
@@ -115,10 +115,10 @@ index 51583dc..fdacef5 100644
      sensor del cabezal indica que ya hay filamento cargado. ¿Continuar con la carga
      de todos modos?
 diff --git a/translations/fr.yml b/translations/fr.yml
-index 0beeb3f..8fbecd8 100644
+index d7dacaf..b7f9b95 100644
 --- a/translations/fr.yml
 +++ b/translations/fr.yml
-@@ -204,10 +204,10 @@ translations:
+@@ -206,10 +206,10 @@ translations:
    AFC retracts filament from the toolhead at end of print: AFC rétracte le filament
      de la tête d'outil à la fin de l'impression
    ALL DEVICES: TOUS LES APPAREILS
@@ -133,7 +133,7 @@ index 0beeb3f..8fbecd8 100644
    API not available: API non disponible
    APPEARANCE: APPARENCE
    AUTO FANS: VENTILATEURS AUTO
-@@ -294,7 +294,7 @@ translations:
+@@ -298,7 +298,7 @@ translations:
    Always show Android navigation bar instead of using gestures: Toujours afficher
      la barre de navigation Android au lieu des gestes
    Ambient Transfer: Transfert ambiant
@@ -142,7 +142,7 @@ index 0beeb3f..8fbecd8 100644
    An accelerometer was detected on your printer.: Un accéléromètre a été détecté sur
      votre imprimante.
    An app on your network is asking to connect to this printer.: 'Une application de votre réseau demande à se connecter à cette imprimante.'
-@@ -520,7 +520,7 @@ translations:
+@@ -525,7 +525,7 @@ translations:
    Bypass enabled: Bypass activé
    Bypass failed: Échec du bypass
    ? Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?
@@ -151,7 +151,7 @@ index 0beeb3f..8fbecd8 100644
    Bypass mode is not currently active: 'Le mode bypass n''est pas actif actuellement'
    Bypass off macro: 'Macro de désactivation du bypass'
    Bypass on macro: 'Macro d''activation du bypass'
-@@ -2477,7 +2477,7 @@ translations:
+@@ -2506,7 +2506,7 @@ translations:
    Niimbot (Bluetooth): Niimbot (Bluetooth)
    'No': Non
    No ACE unit was found.: "Aucune unité ACE trouvée."
@@ -160,10 +160,10 @@ index 0beeb3f..8fbecd8 100644
    No API connection: Aucune connexion API
    No Bluetooth printer selected — pick one in settings: Aucune imprimante Bluetooth
      sélectionnée — choisissez-en une dans les paramètres
-@@ -4140,9 +4140,9 @@ translations:
-   The speed of one fan you choose: La vitesse d'un ventilateur choisi
-   The time, date, and system uptime: Heure, date et temps de fonctionnement
+@@ -4192,9 +4192,9 @@ translations:
    The timelapse or logs folder overlaps a protected folder, so cleanup is off.: "Le dossier timelapse ou de logs chevauche un dossier protégé, le nettoyage est donc désactivé."
+   The tool change under way finished, and the tool was not parked: 'Le changement d''outil en cours s''est terminé et l''outil n''a pas été rangé'
+   The tool change under way finished, and {} was not put back on the carriage: 'Le changement d''outil en cours s''est terminé et {} n''a pas été remis sur le chariot'
 -  The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?: La tête d'outil contient du filament mais aucun slot de l'AMS ne le signale comme chargé. Retirez-le manuellement avant d'imprimer. Démarrer quand même ?
 +  The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?: La tête d'outil contient du filament mais aucun slot de l'IFS ne le signale comme chargé. Retirez-le manuellement avant d'imprimer. Démarrer quand même ?
    ? The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?
@@ -173,10 +173,10 @@ index 0beeb3f..8fbecd8 100644
      capteur de la tête d'outil indique que du filament est déjà chargé. Procéder au
      chargement quand même ?
 diff --git a/translations/it.yml b/translations/it.yml
-index 47dae85..3a16448 100644
+index a096945..b00c26e 100644
 --- a/translations/it.yml
 +++ b/translations/it.yml
-@@ -202,10 +202,10 @@ translations:
+@@ -204,10 +204,10 @@ translations:
    AFC retracts filament from the toolhead at end of print: AFC ritrae il filamento
      dalla testina al termine della stampa
    ALL DEVICES: TUTTI I DISPOSITIVI
@@ -191,7 +191,7 @@ index 47dae85..3a16448 100644
    API not available: API non disponibile
    APPEARANCE: ASPETTO
    AUTO FANS: VENTOLE AUTO
-@@ -292,7 +292,7 @@ translations:
+@@ -296,7 +296,7 @@ translations:
    Always show Android navigation bar instead of using gestures: Mostra sempre la barra
      di navigazione Android invece dei gesti
    Ambient Transfer: Trasferimento ambiente
@@ -200,7 +200,7 @@ index 47dae85..3a16448 100644
    An accelerometer was detected on your printer.: È stato rilevato un accelerometro
      sulla stampante.
    An app on your network is asking to connect to this printer.: 'Un''app sulla tua rete chiede di connettersi a questa stampante.'
-@@ -516,7 +516,7 @@ translations:
+@@ -521,7 +521,7 @@ translations:
    Bypass enabled: Bypass abilitato
    Bypass failed: Bypass fallito
    ? Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?
@@ -209,7 +209,7 @@ index 47dae85..3a16448 100644
    Bypass mode is not currently active: 'La modalità bypass non è attiva'
    Bypass off macro: 'Macro di disattivazione bypass'
    Bypass on macro: 'Macro di attivazione bypass'
-@@ -2462,7 +2462,7 @@ translations:
+@@ -2491,7 +2491,7 @@ translations:
    Niimbot (Bluetooth): Niimbot (Bluetooth)
    'No': 'No'
    No ACE unit was found.: "Nessuna unità ACE trovata."
@@ -218,10 +218,10 @@ index 47dae85..3a16448 100644
    No API connection: Nessuna connessione API
    No Bluetooth printer selected — pick one in settings: Nessuna stampante Bluetooth
      selezionata — sceglierne una nelle impostazioni
-@@ -4112,9 +4112,9 @@ translations:
-   The speed of one fan you choose: La velocità di una ventola a scelta
-   The time, date, and system uptime: Ora, data e tempo di attività
+@@ -4164,9 +4164,9 @@ translations:
    The timelapse or logs folder overlaps a protected folder, so cleanup is off.: "La cartella timelapse o di log sovrappone una cartella protetta, quindi la pulizia è disattivata."
+   The tool change under way finished, and the tool was not parked: 'Il cambio utensile in corso è terminato e l''utensile non è stato parcheggiato'
+   The tool change under way finished, and {} was not put back on the carriage: 'Il cambio utensile in corso è terminato e {} non è stato rimesso sul carrello'
 -  The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?: La testina contiene filamento ma nessuno slot AMS lo riporta come caricato. Estrailo manualmente prima di stampare. Avviare comunque?
 +  The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?: La testina contiene filamento ma nessuno slot IFS lo riporta come caricato. Estrailo manualmente prima di stampare. Avviare comunque?
    ? The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?
@@ -231,10 +231,10 @@ index 47dae85..3a16448 100644
      sensore della testina indica che il filamento è già caricato. Procedere comunque
      con il caricamento?
 diff --git a/translations/ja.yml b/translations/ja.yml
-index d107a8b..1d1908c 100644
+index 0cc7ed8..b065ff9 100644
 --- a/translations/ja.yml
 +++ b/translations/ja.yml
-@@ -196,10 +196,10 @@ translations:
+@@ -198,10 +198,10 @@ translations:
    AFC reset failed: AFCリセット失敗
    AFC retracts filament from the toolhead at end of print: AFCは印刷終了時にツールヘッドからフィラメントを引き戻します
    ALL DEVICES: すべてのデバイス
@@ -249,7 +249,7 @@ index d107a8b..1d1908c 100644
    API not available: APIが利用できません
    APPEARANCE: 外観
    AUTO FANS: 自動ファン
-@@ -278,7 +278,7 @@ translations:
+@@ -282,7 +282,7 @@ translations:
    Always Show Bypass Spool: バイパススプールを常に表示
    Always show Android navigation bar instead of using gestures: ジェスチャーの代わりにAndroidナビゲーションバーを常に表示
    Ambient Transfer: 環境熱伝達
@@ -258,7 +258,7 @@ index d107a8b..1d1908c 100644
    An accelerometer was detected on your printer.: プリンターで加速度センサーが検出されました。
    An app on your network is asking to connect to this printer.: 'ネットワーク上のアプリがこのプリンターへの接続を求めています。'
    An error occurred during calibration.: キャリブレーション中にエラーが発生しました。
-@@ -487,7 +487,7 @@ translations:
+@@ -492,7 +492,7 @@ translations:
    Bypass enabled: バイパス有効
    Bypass failed: バイパスに失敗しました
    ? Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?
@@ -267,7 +267,7 @@ index d107a8b..1d1908c 100644
    Bypass mode is not currently active: 'バイパスモードは現在アクティブではありません'
    Bypass off macro: 'バイパスオフのマクロ'
    Bypass on macro: 'バイパスオンのマクロ'
-@@ -2334,7 +2334,7 @@ translations:
+@@ -2363,7 +2363,7 @@ translations:
    Niimbot (Bluetooth): Niimbot (Bluetooth)
    'No': いいえ
    No ACE unit was found.: "ACEユニットが見つかりません。"
@@ -276,10 +276,10 @@ index d107a8b..1d1908c 100644
    No API connection: API 接続なし
    No Bluetooth printer selected — pick one in settings: Bluetooth プリンターが選択されていません
      — 設定で選択してください
-@@ -3897,9 +3897,9 @@ translations:
-   The speed of one fan you choose: 選んだファン1つの速度
-   The time, date, and system uptime: 時間、日付、稼働時間
+@@ -3949,9 +3949,9 @@ translations:
    The timelapse or logs folder overlaps a protected folder, so cleanup is off.: "タイムラプスまたはログのフォルダーが保護されたフォルダーと重なっているため、クリーンアップはオフになっています。"
+   The tool change under way finished, and the tool was not parked: '実行中のツール変更は完了し、ツールは格納されていません'
+   The tool change under way finished, and {} was not put back on the carriage: '実行中のツール変更は完了し、{}はキャリッジに戻されていません'
 -  The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?: ツールヘッドにフィラメントがありますが、装填済みと報告しているAMSスロットはありません。印刷前に手動で引き抜いてください。それでも印刷を開始しますか？
 +  The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?: ツールヘッドにフィラメントがありますが、装填済みと報告しているIFSスロットはありません。印刷前に手動で引き抜いてください。それでも印刷を開始しますか？
    ? The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?
@@ -289,10 +289,10 @@ index d107a8b..1d1908c 100644
    The toolhead sensor indicates no filament is present. Proceed with unload anyway?: ツールヘッドセンサーがフィラメント未検出を報告しました。それでもアンロードを続行しますか？
    The unit is already running another operation. Wait for it to finish, or reset the CFS if it stays stuck: ユニットは既に別の処理を実行中です。完了を待つか、固まったままの場合は CFS をリセットしてください
 diff --git a/translations/pt.yml b/translations/pt.yml
-index 0f9aff4..ba74ea2 100644
+index 4fdc32f..edba43d 100644
 --- a/translations/pt.yml
 +++ b/translations/pt.yml
-@@ -202,10 +202,10 @@ translations:
+@@ -204,10 +204,10 @@ translations:
    AFC retracts filament from the toolhead at end of print: AFC retrai o filamento
      do cabeçote ao final da impressão
    ALL DEVICES: TODOS OS DISPOSITIVOS
@@ -307,7 +307,7 @@ index 0f9aff4..ba74ea2 100644
    API not available: API não disponível
    APPEARANCE: APARÊNCIA
    AUTO FANS: VENTOINHAS AUTO
-@@ -292,7 +292,7 @@ translations:
+@@ -296,7 +296,7 @@ translations:
    Always show Android navigation bar instead of using gestures: Mostrar sempre a barra
      de navegação Android em vez de usar gestos
    Ambient Transfer: Transferência Ambiente
@@ -316,7 +316,7 @@ index 0f9aff4..ba74ea2 100644
    An accelerometer was detected on your printer.: Um acelerômetro foi detectado na
      sua impressora.
    An app on your network is asking to connect to this printer.: 'Um aplicativo na sua rede quer conectar-se a esta impressora.'
-@@ -514,7 +514,7 @@ translations:
+@@ -519,7 +519,7 @@ translations:
    Bypass enabled: Bypass ativado
    Bypass failed: Falha no bypass
    ? Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?
@@ -325,7 +325,7 @@ index 0f9aff4..ba74ea2 100644
    Bypass mode is not currently active: 'O modo bypass não está ativo no momento'
    Bypass off macro: 'Macro de desligar bypass'
    Bypass on macro: 'Macro de ligar bypass'
-@@ -2464,7 +2464,7 @@ translations:
+@@ -2493,7 +2493,7 @@ translations:
    Niimbot (Bluetooth): Niimbot (Bluetooth)
    'No': Não
    No ACE unit was found.: "Nenhuma unidade ACE encontrada."
@@ -334,10 +334,10 @@ index 0f9aff4..ba74ea2 100644
    No API connection: Sem conexão com a API
    No Bluetooth printer selected — pick one in settings: Nenhuma impressora Bluetooth
      selecionada — escolha uma nas configurações
-@@ -4118,9 +4118,9 @@ translations:
-   The speed of one fan you choose: A velocidade de uma ventoinha escolhida
-   The time, date, and system uptime: Hora, data e tempo ativo
+@@ -4170,9 +4170,9 @@ translations:
    The timelapse or logs folder overlaps a protected folder, so cleanup is off.: "A pasta de timelapse ou de logs sobrepõe-se a uma pasta protegida, por isso a limpeza está desligada."
+   The tool change under way finished, and the tool was not parked: 'A troca de ferramenta em andamento terminou e a ferramenta não foi estacionada'
+   The tool change under way finished, and {} was not put back on the carriage: 'A troca de ferramenta em andamento terminou e {} não foi devolvida ao carro'
 -  The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?: O cabeçote tem filamento, mas nenhum slot AMS o reporta como carregado. Retire-o manualmente antes de imprimir. Iniciar mesmo assim?
 +  The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?: O cabeçote tem filamento, mas nenhum slot IFS o reporta como carregado. Retire-o manualmente antes de imprimir. Iniciar mesmo assim?
    ? The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?
@@ -347,10 +347,10 @@ index 0f9aff4..ba74ea2 100644
      sensor do cabeçote indica que o filamento já está carregado. Prosseguir com o
      carregamento mesmo assim?
 diff --git a/translations/ru.yml b/translations/ru.yml
-index 88bd985..fa65112 100644
+index e20218c..ff885d9 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -217,7 +217,7 @@ translations:
+@@ -219,7 +219,7 @@ translations:
    A restart is already in progress: Перезапуск уже выполняется
    A right, B left: "A справа, B слева"
    ? A sensor that measures the distance to the bed. HelixScreen uses it for Z offset calibration and probe tests on the Probe screen.
@@ -359,7 +359,7 @@ index 88bd985..fa65112 100644
    A sensor that reads the air temperature inside the enclosure. Watch it on the chamber temperature screen.: 'Датчик, измеряющий температуру воздуха внутри камеры. Следите за ней на экране температуры камеры.'
    A spool may be tangled or the drive gear is jammed: Катушка может быть запутана или заклинило приводную шестерню
    ? A system that feeds several filaments to the toolhead, shown with its slot count. Manage the slots on the filament system screen.
-@@ -244,10 +244,10 @@ translations:
+@@ -246,10 +246,10 @@ translations:
    AFC retracts filament from the toolhead at end of print: AFC выгружает филамент
      из печатающей головки по завершении печати
    ALL DEVICES: ВСЕ УСТРОЙСТВА
@@ -374,7 +374,7 @@ index 88bd985..fa65112 100644
    API not available: API недоступен
    APPEARANCE: ВНЕШНИЙ ВИД
    AUTO FANS: АВТО ВЕНТИЛЯТОРЫ
-@@ -333,7 +333,7 @@ translations:
+@@ -337,7 +337,7 @@ translations:
    Always show Android navigation bar instead of using gestures: Всегда показывать
      панель навигации Android вместо жестов
    Ambient Transfer: Теплообмен с окружающей средой
@@ -383,7 +383,7 @@ index 88bd985..fa65112 100644
    An accelerometer was detected on your printer.: На вашем принтере обнаружен акселерометр.
    An app on your network is asking to connect to this printer.: 'Приложение в вашей сети запрашивает подключение к этому принтеру.'
    An error occurred during calibration.: Во время калибровки произошла ошибка.
-@@ -561,7 +561,7 @@ translations:
+@@ -566,7 +566,7 @@ translations:
    Bypass enabled: Байпас включён
    Bypass failed: Ошибка байпаса
    ? Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?
@@ -392,7 +392,7 @@ index 88bd985..fa65112 100644
    Bypass mode is not currently active: 'Режим обхода сейчас не активен'
    Bypass off macro: 'Макрос выключения обхода'
    Bypass on macro: 'Макрос включения обхода'
-@@ -693,8 +693,7 @@ translations:
+@@ -700,8 +700,7 @@ translations:
    'Capabilities: ': 'Возможности: '
    Carriage empty: Каретка пуста
    Carriage empty · tap a head: 'Каретка пуста · выберите головку'
@@ -402,7 +402,7 @@ index 88bd985..fa65112 100644
    Cartographer touch calibrate sent: Cartographer тактильная калибровка отправлена
    Category: Категория
    Center: 'Центр'
-@@ -1729,7 +1728,7 @@ translations:
+@@ -1748,7 +1747,7 @@ translations:
    Get help and share feedback: Получить помощь и поделиться отзывом
    Glass Effects: Эффекты стекла
    Global: Общий
@@ -411,7 +411,7 @@ index 88bd985..fa65112 100644
    Good: Хорошо
    Good Accuracy: Хорошая точность
    Good Enough: "Достаточно"
-@@ -2275,7 +2274,7 @@ translations:
+@@ -2301,7 +2300,7 @@ translations:
    MCU, host, and auxiliary temperature monitoring: Мониторинг температуры MCU, хоста
      и вспомогательных датчиков
    'MCU: ': 'MCU: '
@@ -420,7 +420,7 @@ index 88bd985..fa65112 100644
    MDI Icons: Иконки MDI
    MISSING CONFIGURED: ОТСУТСТВУЕТ НАСТРОЕННОЕ
    MMU command failed: Ошибка команды MMU
-@@ -2502,7 +2501,7 @@ translations:
+@@ -2531,7 +2530,7 @@ translations:
    Niimbot (Bluetooth): Niimbot (Bluetooth)
    'No': Нет
    No ACE unit was found.: "Блок ACE не найден."
@@ -429,7 +429,7 @@ index 88bd985..fa65112 100644
    No API connection: Нет соединения с API
    No Bluetooth printer selected — pick one in settings: Bluetooth-принтер не выбран
      — выберите его в настройках
-@@ -2711,7 +2710,7 @@ translations:
+@@ -2743,7 +2742,7 @@ translations:
    'Off': Выкл
    'Off:': 'Выкл:'
    'Off: runs with these values without asking': 'Выкл.: запуск с этими значениями без запроса'
@@ -438,7 +438,7 @@ index 88bd985..fa65112 100644
    Offset: Смещение
    Offsets Saved: Смещения сохранены
    Offsets saved: Смещения сохранены
-@@ -3462,9 +3461,9 @@ translations:
+@@ -3501,9 +3500,9 @@ translations:
    Save Hardware: Сохранить оборудование
    Save Printer Configuration: Сохранить конфигурацию принтера
    Save Theme As: Сохранить тему как
@@ -451,7 +451,7 @@ index 88bd985..fa65112 100644
    Save calibration: Сохранить калибровку
    Save changes to persist them across restarts?: Сохранить изменения, чтобы они сохранились
      после перезапуска?
-@@ -3474,7 +3473,7 @@ translations:
+@@ -3513,7 +3512,7 @@ translations:
    Save the new heater values to printer.cfg? Klipper restarts.: Сохранить новые значения нагревателя в printer.cfg? Klipper перезапустится.
    Save to Spool: Сохранить на катушку
    Save to Spoolman: Сохранить в Spoolman
@@ -460,7 +460,7 @@ index 88bd985..fa65112 100644
    Saved to Spoolman, but the spool's price, location, lot and notes didn't save.: 'Сохранено в Spoolman, но цена, расположение, партия и заметки катушки не сохранились.'
    Saved to crash_report.txt (QR not available): Сохранено в crash_report.txt (QR недоступен)
    Saved to printer configuration.: Сохранено в конфигурацию принтера.
-@@ -3486,7 +3485,7 @@ translations:
+@@ -3525,7 +3524,7 @@ translations:
    Saves to Klipper config and restarts firmware.: Сохраняет в конфигурацию Klipper
      и перезапускает прошивку.
    Saving Configuration...: Сохранение конфигурации...
@@ -469,10 +469,10 @@ index 88bd985..fa65112 100644
    Saving and finishing...: Сохранение и завершение...
    Saving calibration: Сохранение калибровки
    Saving calibration...: Сохранение калибровки...
-@@ -4158,9 +4157,9 @@ translations:
-   The speed of one fan you choose: Скорость выбранного вентилятора
-   The time, date, and system uptime: Время, дата и время работы системы
+@@ -4210,9 +4209,9 @@ translations:
    The timelapse or logs folder overlaps a protected folder, so cleanup is off.: "Папка таймлапсов или журналов пересекается с защищённой папкой, поэтому очистка выключена."
+   The tool change under way finished, and the tool was not parked: 'Текущая смена инструмента завершена, инструмент не припаркован'
+   The tool change under way finished, and {} was not put back on the carriage: 'Текущая смена инструмента завершена, {} не возвращён на каретку'
 -  The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?: В печатающей головке есть филамент, но ни один слот AMS не сообщает о его загрузке. Извлеките его вручную перед печатью. Всё равно начать?
 +  The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?: В печатающей головке есть филамент, но ни один слот IFS не сообщает о его загрузке. Извлеките его вручную перед печатью. Всё равно начать?
    ? The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?
@@ -481,7 +481,7 @@ index 88bd985..fa65112 100644
    The toolhead sensor indicates filament is already loaded. Proceed with load anyway?: Датчик
      печатающей головки показывает, что филамент уже загружен. Всё равно продолжить
      загрузку?
-@@ -4263,12 +4262,10 @@ translations:
+@@ -4317,12 +4316,10 @@ translations:
    'This wait ends only at its temperature: canceling takes an emergency stop and a firmware restart.': 'Это ожидание заканчивается только по достижении температуры: для отмены нужны аварийная остановка и перезапуск прошивки.'
    ? This will apply the Z-offset to your endstop and restart Klipper to save the configuration.
      The printer will briefly disconnect.
@@ -496,7 +496,7 @@ index 88bd985..fa65112 100644
    ? This will collect system info, logs, settings, and printer data to help diagnose
      issues. No passwords or sensitive data will be included.
    : Будут собраны системная информация, логи, настройки и данные принтера для диагностики.
-@@ -4286,7 +4283,7 @@ translations:
+@@ -4340,7 +4337,7 @@ translations:
      Klipper будет перезапущена. Активные операции будут прерваны.
    This will restart Klipper.: Это перезапустит Klipper.
    This will restore the default jog step distances for all three modes.: Это восстановит шаги перемещения по умолчанию для всех трёх режимов.
@@ -505,7 +505,7 @@ index 88bd985..fa65112 100644
    ? This writes the tool offsets to the printer's config and restarts Klipper, which takes a few seconds. Until then they apply only to this session.
    : Смещения инструментов будут записаны в конфигурацию принтера, и Klipper перезапустится, это займёт несколько секунд. До этого они действуют только в текущем сеансе.
    ? This {0} is set up for {1}, but it looks stock ({2}% confidence). A wrong profile applies incorrect pre-print options and presets.
-@@ -4648,7 +4645,7 @@ translations:
+@@ -4708,7 +4705,7 @@ translations:
    Width: Ширина
    Width Sensor: 'Датчик диаметра'
    Width Sensors: Датчики ширины
@@ -514,7 +514,7 @@ index 88bd985..fa65112 100644
    Will not switch spools on runout: При обрыве катушка не переключится
    Wipe nozzle on silicone cleaning strip: 'Очистить сопло о силиконовую полоску'
    Within {0:.1f} Hz of each other at {1:.0f} Hz: "В пределах {0:.1f} Гц друг от друга на {1:.0f} Гц"
-@@ -4697,7 +4694,7 @@ translations:
+@@ -4758,7 +4755,7 @@ translations:
    Z: Z
    Z Calibration: Калибровка Z
    Z Movement: Движение Z
@@ -523,9 +523,9 @@ index 88bd985..fa65112 100644
    Z Range: Диапазон Z
    Z Tilt Adjust...: Регулировка наклона Z...
    Z is at its limit ({}mm): Z на пределе ({}mm)
-@@ -4709,9 +4706,9 @@ translations:
-   Z {:.2f} mm: Z {:.2f} мм
+@@ -4771,9 +4768,9 @@ translations:
    Z {}, will lift to {}mm: 'Z {}, подъём до {}мм'
+   'Z {}, will lift to {}mm: last print is {}mm tall': 'Z {}, подъём до {}мм: высота последней печати {}мм'
    'Z-Off:': 'Z-Off:'
 -  Z-Offset: Z-Offset
 +  Z-Offset: Z-смещение
@@ -535,7 +535,7 @@ index 88bd985..fa65112 100644
    Z-Tilt: Z-наклон
    Z-Tilt Adjust: Регулировка Z-наклона
    Z-Tilt Adjust complete: Z-Tilt завершён
-@@ -4721,14 +4718,13 @@ translations:
+@@ -4783,14 +4780,13 @@ translations:
    Z-Tilt may still be running — response timed out: Z-Tilt может ещё выполняться —
      время ожидания истекло
    Z-Tilt timed out: Z-Tilt — время ожидания истекло
@@ -556,10 +556,10 @@ index 88bd985..fa65112 100644
    'Z: 0.000': 'Z: 0.000'
    Zone {:.0f}-{:.0f} Hz: "Зона {:.0f}-{:.0f} Гц"
 diff --git a/translations/zh.yml b/translations/zh.yml
-index 076dcec..84ac638 100644
+index 266b534..45a3136 100644
 --- a/translations/zh.yml
 +++ b/translations/zh.yml
-@@ -195,10 +195,10 @@ translations:
+@@ -197,10 +197,10 @@ translations:
    AFC reset failed: AFC重置失败
    AFC retracts filament from the toolhead at end of print: AFC 在打印结束时将耗材从工具头退出
    ALL DEVICES: 所有设备
@@ -574,7 +574,7 @@ index 076dcec..84ac638 100644
    API not available: API 不可用
    APPEARANCE: 外观
    AUTO FANS: 自动风扇
-@@ -277,7 +277,7 @@ translations:
+@@ -281,7 +281,7 @@ translations:
    Always Show Bypass Spool: 始终显示旁路料盘
    Always show Android navigation bar instead of using gestures: 始终显示 Android 导航栏而不使用手势
    Ambient Transfer: 环境传热
@@ -583,7 +583,7 @@ index 076dcec..84ac638 100644
    An accelerometer was detected on your printer.: 在您的打印机上检测到加速度计。
    An app on your network is asking to connect to this printer.: '网络中的某个应用请求连接到此打印机。'
    An error occurred during calibration.: 校准过程中发生错误。
-@@ -486,7 +486,7 @@ translations:
+@@ -491,7 +491,7 @@ translations:
    Bypass enabled: 旁通已启用
    Bypass failed: 旁通失败
    ? Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?
@@ -592,7 +592,7 @@ index 076dcec..84ac638 100644
    Bypass mode is not currently active: '旁通模式当前未启用'
    Bypass off macro: '关闭旁路宏'
    Bypass on macro: '开启旁路宏'
-@@ -2328,7 +2328,7 @@ translations:
+@@ -2357,7 +2357,7 @@ translations:
    Niimbot (Bluetooth): Niimbot（蓝牙）
    'No': 否
    No ACE unit was found.: "未找到 ACE 单元。"
@@ -601,10 +601,10 @@ index 076dcec..84ac638 100644
    No API connection: 无 API 连接
    No Bluetooth printer selected — pick one in settings: 未选择蓝牙打印机 — 请在设置中选择
    No Bluetooth printers found: 未找到蓝牙打印机
-@@ -3888,9 +3888,9 @@ translations:
-   The speed of one fan you choose: 所选风扇的转速
-   The time, date, and system uptime: 时间、日期和系统运行时长
+@@ -3940,9 +3940,9 @@ translations:
    The timelapse or logs folder overlaps a protected folder, so cleanup is off.: "延时摄影或日志文件夹与受保护的文件夹重叠，因此清理功能已关闭。"
+   The tool change under way finished, and the tool was not parked: '正在进行的换工具已完成，工具未停放'
+   The tool change under way finished, and {} was not put back on the carriage: '正在进行的换工具已完成，{}未放回打印头'
 -  The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?: 工具头内有耗材，但没有 AMS 槽位报告已装载。请在打印前手动取出耗材。仍要开始打印吗？
 +  The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?: 工具头内有耗材，但没有 IFS 槽位报告已装载。请在打印前手动取出耗材。仍要开始打印吗？
    ? The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?

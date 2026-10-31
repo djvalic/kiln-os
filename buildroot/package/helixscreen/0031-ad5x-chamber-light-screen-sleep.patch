@@ -1,7 +1,8 @@
 diff --git a/include/display_settings_manager.h b/include/display_settings_manager.h
+index 7fe3713..ba5a83c 100644
 --- a/include/display_settings_manager.h
 +++ b/include/display_settings_manager.h
-@@ -162,6 +162,14 @@
+@@ -162,6 +162,14 @@ class DisplaySettingsManager {
          settings_.set(Key::SleepWhilePrinting, enabled);
      }
  
@@ -16,7 +17,7 @@ diff --git a/include/display_settings_manager.h b/include/display_settings_manag
      // =========================================================================
      // UI PREFERENCES
      // =========================================================================
-@@ -497,6 +505,11 @@
+@@ -497,6 +505,11 @@ class DisplaySettingsManager {
          return settings_.subject(Key::SleepWhilePrinting);
      }
  
@@ -28,7 +29,7 @@ diff --git a/include/display_settings_manager.h b/include/display_settings_manag
      /** @brief Animations enabled subject (integer: 0=off, 1=on) */
      lv_subject_t* subject_animations_enabled() {
          return &animations_enabled_subject_;
-@@ -638,6 +651,7 @@
+@@ -638,6 +651,7 @@ class DisplaySettingsManager {
          GcodeRenderMode,
          TimeFormat,
          GlassEffects,
@@ -38,9 +39,10 @@ diff --git a/include/display_settings_manager.h b/include/display_settings_manag
      settings::PersistedSettings<Key, static_cast<size_t>(Key::COUNT)> settings_;
 diff --git a/include/led/led_screen_light.h b/include/led/led_screen_light.h
 new file mode 100644
+index 0000000..0f5b1d6
 --- /dev/null
 +++ b/include/led/led_screen_light.h
-@@ -0,0 +1,57 @@
+@@ -0,0 +1,59 @@
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +#pragma once
 +
@@ -59,8 +61,9 @@ new file mode 100644
 +/// Turns the chamber light off while the screen sleeps and back on at wake or when a
 +/// print starts. Opt-in (Display settings, default off). The light is only turned off
 +/// when no print is preparing, printing or paused, so it stays on during a print. It
-+/// only turns back on a light it turned off, and it leaves the light alone while
-+/// LedAutoState is enabled. Plain on and off: no brightness or dimming.
++/// only turns back on a light it turned off. With LedAutoState enabled the light still
++/// goes off at idle; on wake LedAutoState re-applies its own colour. Plain on and off:
++/// no brightness or dimming.
 +class ScreenSleepLight {
 +  public:
 +    static ScreenSleepLight& instance();
@@ -88,8 +91,9 @@ new file mode 100644
 +    /// True while a job holds the machine. Unknown printer state counts as true, so
 +    /// the light stays on when the answer is not known.
 +    [[nodiscard]] bool print_holds_machine() const;
-+    /// Turns back on the light this turned off, if any. Keeps the record when the
-+    /// LED controller cannot send yet, so a later wake or print start retries.
++    /// Turns back on the light this turned off, if any, then re-applies LedAutoState's
++    /// action when auto-state is enabled. Keeps the record when the LED controller
++    /// cannot send yet, so a later wake or print start retries.
 +    void restore_light();
 +
 +    PrinterState* printer_state_ = nullptr;
@@ -99,6 +103,7 @@ new file mode 100644
 +
 +} // namespace helix::led
 diff --git a/src/application/application.cpp b/src/application/application.cpp
+index beec722..ba9874f 100644
 --- a/src/application/application.cpp
 +++ b/src/application/application.cpp
 @@ -45,6 +45,7 @@
@@ -109,7 +114,7 @@ diff --git a/src/application/application.cpp b/src/application/application.cpp
  #include "light_button_config.h"
  #include "moonraker_manager.h"
  #include "page_scroll_auto_inject.h"
-@@ -1438,6 +1439,13 @@
+@@ -1436,6 +1437,13 @@ bool Application::init_display() {
      });
  #endif
  
@@ -124,17 +129,18 @@ diff --git a/src/application/application.cpp b/src/application/application.cpp
      // Must be after lv_init() because it resets global state and clears callbacks
      helix::logging::register_lvgl_log_handler();
 diff --git a/src/application/printer_session.cpp b/src/application/printer_session.cpp
+index 664991c..210128d 100644
 --- a/src/application/printer_session.cpp
 +++ b/src/application/printer_session.cpp
-@@ -43,6 +43,7 @@
+@@ -44,6 +44,7 @@
+ #include "job_queue_state.h"
  #include "json_utils.h"
- #include "k2_stock_detection_source.h"
  #include "led/led_auto_state.h"
 +#include "led/led_screen_light.h"
  #include "led/led_controller.h"
  #include "light_button_config.h"
  #include "memory_monitor.h"
-@@ -797,6 +798,7 @@
+@@ -796,6 +797,7 @@ void PrinterSession::teardown_printer_scope(TeardownScope scope, DisplayManager*
          // PrinterState subjects about to be freed. LedAutoState drives LedController, so
          // it goes first.
          helix::led::LedAutoState::instance().deinit();
@@ -144,9 +150,10 @@ diff --git a/src/application/printer_session.cpp b/src/application/printer_sessi
  
 diff --git a/src/led/led_screen_light.cpp b/src/led/led_screen_light.cpp
 new file mode 100644
+index 0000000..8837118
 --- /dev/null
 +++ b/src/led/led_screen_light.cpp
-@@ -0,0 +1,96 @@
+@@ -0,0 +1,101 @@
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +#include "led/led_screen_light.h"
 +
@@ -198,10 +205,9 @@ new file mode 100644
 +    if (print_holds_machine()) {
 +        return; // a print is preparing, printing or paused: the light stays on
 +    }
-+    if (LedAutoState::instance().is_enabled()) {
-+        // LedAutoState owns the light's power and colour while it is enabled.
-+        return;
-+    }
++    // Also with LedAutoState enabled: auto-state's idle action does not keep the light on.
++    // It only acts on a state change, so nothing re-lights the light while the screen
++    // sleeps and the state stays idle; wake re-applies its colour (restore_light).
 +    auto& ctrl = LedController::instance();
 +    if (!ctrl.is_initialized()) {
 +        return;
@@ -240,21 +246,28 @@ new file mode 100644
 +    spdlog::info("[ScreenSleepLight] Turning on {} (screen awake or print started)", light);
 +    ctrl.set_power({light}, true, /*silent=*/true);
 +    light_id_.clear();
++    // set_power(on) sends the controller's last colour, which may not be auto-state's
++    // colour any more. With auto-state on, re-apply its action for the current state
++    // (evaluate() clears its dedup), so the light gets auto-state's own colour back.
++    if (LedAutoState::instance().is_enabled()) {
++        LedAutoState::instance().evaluate();
++    }
 +}
 +
 +} // namespace helix::led
 diff --git a/src/printer/printer_discovery.cpp b/src/printer/printer_discovery.cpp
+index 598380f..2e29012 100644
 --- a/src/printer/printer_discovery.cpp
 +++ b/src/printer/printer_discovery.cpp
-@@ -11,6 +11,7 @@
+@@ -9,6 +9,7 @@
  #include "i_moonraker_client.h"
  #include "led/led_auto_state.h"
  #include "led/led_controller.h"
 +#include "led/led_screen_light.h"
- #include "load_cell_manager.h"
  #include "moonraker_api.h"
  #include "printer_name_sync.h"
-@@ -140,6 +141,7 @@
+ #include "runtime_config.h"
+@@ -109,6 +110,7 @@ void init_subsystems_from_hardware(const PrinterDiscovery& hardware, IMoonrakerA
      // invoked inside a queue_update() drain), so the observe<int> subscriptions
      // are main-thread-safe.
      helix::led::LedAutoState::instance().init(printer_state);
@@ -263,9 +276,10 @@ diff --git a/src/printer/printer_discovery.cpp b/src/printer/printer_discovery.c
  
      spdlog::info("[PrinterDiscovery] Subsystem initialization complete");
 diff --git a/src/system/display_settings_manager.cpp b/src/system/display_settings_manager.cpp
+index 20383f5..a475e51 100644
 --- a/src/system/display_settings_manager.cpp
 +++ b/src/system/display_settings_manager.cpp
-@@ -236,6 +236,9 @@
+@@ -238,6 +238,9 @@ static constexpr settings::PersistedSetting kDisplaySettings[] = {
      // The saved choice; glass shows only where the glass gate also passes.
      {"settings_glass_effects", "/display/glass_effects", Scope::Global, true, 0, 0, 1,
       "glass_effects"},
@@ -276,9 +290,10 @@ diff --git a/src/system/display_settings_manager.cpp b/src/system/display_settin
  
  DisplaySettingsManager& DisplaySettingsManager::instance() {
 diff --git a/src/ui/ui_settings_display.cpp b/src/ui/ui_settings_display.cpp
+index b7a56f7..d74e51b 100644
 --- a/src/ui/ui_settings_display.cpp
 +++ b/src/ui/ui_settings_display.cpp
-@@ -103,6 +103,10 @@
+@@ -103,6 +103,10 @@ void DisplaySettingsOverlay::register_callbacks() {
           [](lv_event_t* e) {
               DisplaySettingsManager::instance().set_sleep_while_printing(event_checked(e));
           }},
@@ -290,9 +305,10 @@ diff --git a/src/ui/ui_settings_display.cpp b/src/ui/ui_settings_display.cpp
          {"on_screensaver_changed",
           [](lv_event_t* e) {
 diff --git a/tests/unit/test_persisted_setting.cpp b/tests/unit/test_persisted_setting.cpp
+index 70b2572..5adfd8f 100644
 --- a/tests/unit/test_persisted_setting.cpp
 +++ b/tests/unit/test_persisted_setting.cpp
-@@ -198,6 +198,10 @@
+@@ -201,6 +201,10 @@ const std::vector<Row>& rows() {
          {"settings_glass_effects", Mgr::Display, false, "/display/glass_effects", true, 0, 0, 1,
           "glass_effects", true, SETB(dm().set_glass_effects), GET(dm().get_glass_effects),
           SUBJ(dm().subject_glass_effects)},
@@ -304,9 +320,10 @@ diff --git a/tests/unit/test_persisted_setting.cpp b/tests/unit/test_persisted_s
          // SystemSettingsManager
          {"update_channel", Mgr::System, false, "/update/channel", false, 0, 0, 2, "update_channel",
 diff --git a/tests/unit/test_settings_page_rows.cpp b/tests/unit/test_settings_page_rows.cpp
+index 83309d0..4a2128b 100644
 --- a/tests/unit/test_settings_page_rows.cpp
 +++ b/tests/unit/test_settings_page_rows.cpp
-@@ -77,7 +77,7 @@
+@@ -77,7 +77,7 @@ TEST_CASE_METHOD(PageRowsFixture, "settings pages: every row lives on its page",
          {"settings_display_overlay",
           {"row_display_rotation", "row_ui_scale", "brightness_slider", "row_display_dim",
            "row_display_sleep", "row_screensaver", "btn_test_screensaver",
@@ -316,9 +333,10 @@ diff --git a/tests/unit/test_settings_page_rows.cpp b/tests/unit/test_settings_p
           {"row_dark_mode", "row_theme_settings", "row_animations", "row_widget_labels",
            "row_bed_mesh_mode"}},
 diff --git a/translations/de.yml b/translations/de.yml
+index 5dc37ef..aedb706 100644
 --- a/translations/de.yml
 +++ b/translations/de.yml
-@@ -47,6 +47,8 @@
+@@ -47,6 +47,8 @@ translations:
    '%u layers': '%u Schichten'
    '%zu events queued': '%zu Ereignisse in Warteschlange'
    '%zu plugins failed to load': '%zu Plugins konnten nicht geladen werden'
@@ -328,9 +346,10 @@ diff --git a/translations/de.yml b/translations/de.yml
    "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' und '{}' existieren bereits. Gespeicherte Netze ersetzen?"
    (different grade): (andere Klasse)
 diff --git a/translations/en.yml b/translations/en.yml
+index 3f7e871..6689bf8 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -47,6 +47,8 @@
+@@ -47,6 +47,8 @@ translations:
    '%u layers': '%u layers'
    '%zu events queued': '%zu events queued'
    '%zu plugins failed to load': '%zu plugins failed to load'
@@ -340,9 +359,10 @@ diff --git a/translations/en.yml b/translations/en.yml
    "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' and '{}' already exist. Replace the stored meshes?"
    (different grade): (different grade)
 diff --git a/translations/es.yml b/translations/es.yml
+index 35f171a..0d8cc54 100644
 --- a/translations/es.yml
 +++ b/translations/es.yml
-@@ -47,6 +47,8 @@
+@@ -47,6 +47,8 @@ translations:
    '%u layers': '%u capas'
    '%zu events queued': '%zu eventos en cola'
    '%zu plugins failed to load': '%zu plugins no se cargaron'
@@ -352,9 +372,10 @@ diff --git a/translations/es.yml b/translations/es.yml
    "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' y '{}' ya existen. ¿Reemplazar las mallas guardadas?"
    (different grade): (grado diferente)
 diff --git a/translations/fr.yml b/translations/fr.yml
+index b7f9b95..224f251 100644
 --- a/translations/fr.yml
 +++ b/translations/fr.yml
-@@ -47,6 +47,8 @@
+@@ -47,6 +47,8 @@ translations:
    '%u layers': '%u couches'
    '%zu events queued': '%zu événements en file'
    '%zu plugins failed to load': '%zu plugins n''ont pas pu se charger'
@@ -364,9 +385,10 @@ diff --git a/translations/fr.yml b/translations/fr.yml
    "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' et '{}' existent déjà. Remplacer les maillages enregistrés ?"
    (different grade): (grade différent)
 diff --git a/translations/it.yml b/translations/it.yml
+index b00c26e..0e57e0f 100644
 --- a/translations/it.yml
 +++ b/translations/it.yml
-@@ -47,6 +47,8 @@
+@@ -47,6 +47,8 @@ translations:
    '%u layers': '%u strati'
    '%zu events queued': '%zu eventi in coda'
    '%zu plugins failed to load': Caricamento di %zu plugin non riuscito
@@ -376,9 +398,10 @@ diff --git a/translations/it.yml b/translations/it.yml
    "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' e '{}' esistono già. Sostituire le mesh salvate?"
    (different grade): (grado diverso)
 diff --git a/translations/ja.yml b/translations/ja.yml
+index b065ff9..e9977a6 100644
 --- a/translations/ja.yml
 +++ b/translations/ja.yml
-@@ -47,6 +47,8 @@
+@@ -47,6 +47,8 @@ translations:
    '%u layers': '%uレイヤー'
    '%zu events queued': '%zu 件のイベントを待機中'
    '%zu plugins failed to load': '%zu 個のプラグインの読み込みに失敗しました'
@@ -388,9 +411,10 @@ diff --git a/translations/ja.yml b/translations/ja.yml
    "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' と '{}' は既に存在します。保存されたメッシュを置き換えますか？"
    (different grade): (グレード違い)
 diff --git a/translations/pt.yml b/translations/pt.yml
+index edba43d..d799abc 100644
 --- a/translations/pt.yml
 +++ b/translations/pt.yml
-@@ -47,6 +47,8 @@
+@@ -47,6 +47,8 @@ translations:
    '%u layers': '%u camadas'
    '%zu events queued': '%zu eventos na fila'
    '%zu plugins failed to load': '%zu plugins falharam ao carregar'
@@ -400,9 +424,10 @@ diff --git a/translations/pt.yml b/translations/pt.yml
    "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' e '{}' já existem. Substituir as malhas salvas?"
    (different grade): (grau diferente)
 diff --git a/translations/ru.yml b/translations/ru.yml
+index ff885d9..2764a6b 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -91,6 +91,8 @@
+@@ -91,6 +91,8 @@ translations:
      many: '%zu событий в очереди'
      other: '%zu события в очереди'
    '%zu plugins failed to load': Не удалось загрузить %zu плагинов
@@ -412,9 +437,10 @@ diff --git a/translations/ru.yml b/translations/ru.yml
    "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' и '{}' уже существуют. Заменить сохранённые сетки?"
    (different grade): (другая марка)
 diff --git a/translations/zh.yml b/translations/zh.yml
+index 45a3136..db6fa64 100644
 --- a/translations/zh.yml
 +++ b/translations/zh.yml
-@@ -47,6 +47,8 @@
+@@ -47,6 +47,8 @@ translations:
    '%u layers': '%u 层'
    '%zu events queued': '%zu 个事件已排队'
    '%zu plugins failed to load': '%zu 个插件加载失败'
@@ -424,6 +450,7 @@ diff --git a/translations/zh.yml b/translations/zh.yml
    "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' 和 '{}' 已存在。替换已保存的网格？"
    (different grade): （等级不同）
 diff --git a/ui_xml/settings_display_overlay.xml b/ui_xml/settings_display_overlay.xml
+index 08d7b0d..662699c 100644
 --- a/ui_xml/settings_display_overlay.xml
 +++ b/ui_xml/settings_display_overlay.xml
 @@ -123,6 +123,11 @@
@@ -439,9 +466,10 @@ diff --git a/ui_xml/settings_display_overlay.xml b/ui_xml/settings_display_overl
          <info_note icon="info"
                     text="Touch screen to wake from sleep" style_pad_left="#space_lg" style_pad_right="#space_lg"/>
 diff --git a/ui_xml/translations/de.xml b/ui_xml/translations/de.xml
+index f35957d..9c9b9d7 100644
 --- a/ui_xml/translations/de.xml
 +++ b/ui_xml/translations/de.xml
-@@ -616,6 +616,8 @@
+@@ -624,6 +624,8 @@
    <translation tag="Chamber heater didn&apos;t start" de="Kammerheizung ist nicht gestartet"/>
    <translation tag="Chamber heater didn&apos;t start. {}" de="Kammerheizung ist nicht gestartet. {}"/>
    <translation tag="Chamber heating to %d°C..." de="Kammer heizt auf %d°C auf..."/>
@@ -451,9 +479,10 @@ diff --git a/ui_xml/translations/de.xml b/ui_xml/translations/de.xml
    <translation tag="Chamber temp must be 0-%d°C" de="Kammertemperatur muss 0-%d°C betragen"/>
    <translation tag="Change" de="Ändern"/>
 diff --git a/ui_xml/translations/en.xml b/ui_xml/translations/en.xml
+index 405014d..c59701b 100644
 --- a/ui_xml/translations/en.xml
 +++ b/ui_xml/translations/en.xml
-@@ -616,6 +616,8 @@
+@@ -624,6 +624,8 @@
    <translation tag="Chamber heater didn&apos;t start" en="Chamber heater didn&apos;t start"/>
    <translation tag="Chamber heater didn&apos;t start. {}" en="Chamber heater didn&apos;t start. {}"/>
    <translation tag="Chamber heating to %d°C..." en="Chamber heating to %d°C..."/>
@@ -463,9 +492,10 @@ diff --git a/ui_xml/translations/en.xml b/ui_xml/translations/en.xml
    <translation tag="Chamber temp must be 0-%d°C" en="Chamber temp must be 0-%d°C"/>
    <translation tag="Change" en="Change"/>
 diff --git a/ui_xml/translations/es.xml b/ui_xml/translations/es.xml
+index 8d120ab..ec01d83 100644
 --- a/ui_xml/translations/es.xml
 +++ b/ui_xml/translations/es.xml
-@@ -616,6 +616,8 @@
+@@ -624,6 +624,8 @@
    <translation tag="Chamber heater didn&apos;t start" es="El calentador de la cámara no arrancó"/>
    <translation tag="Chamber heater didn&apos;t start. {}" es="El calentador de la cámara no arrancó. {}"/>
    <translation tag="Chamber heating to %d°C..." es="Calentando cámara a %d°C..."/>
@@ -475,9 +505,10 @@ diff --git a/ui_xml/translations/es.xml b/ui_xml/translations/es.xml
    <translation tag="Chamber temp must be 0-%d°C" es="La temperatura de la cámara debe ser 0-%d°C"/>
    <translation tag="Change" es="Cambiar"/>
 diff --git a/ui_xml/translations/fr.xml b/ui_xml/translations/fr.xml
+index 55c44f4..80f0d25 100644
 --- a/ui_xml/translations/fr.xml
 +++ b/ui_xml/translations/fr.xml
-@@ -616,6 +616,8 @@
+@@ -624,6 +624,8 @@
    <translation tag="Chamber heater didn&apos;t start" fr="Le chauffage de la chambre n&apos;a pas démarré"/>
    <translation tag="Chamber heater didn&apos;t start. {}" fr="Le chauffage de la chambre n&apos;a pas démarré. {}"/>
    <translation tag="Chamber heating to %d°C..." fr="Chauffe de la chambre à %d°C..."/>
@@ -487,9 +518,10 @@ diff --git a/ui_xml/translations/fr.xml b/ui_xml/translations/fr.xml
    <translation tag="Chamber temp must be 0-%d°C" fr="La température de l&apos;enceinte doit être entre 0 et %d°C"/>
    <translation tag="Change" fr="Modifier"/>
 diff --git a/ui_xml/translations/it.xml b/ui_xml/translations/it.xml
+index 8bf1fff..5edd622 100644
 --- a/ui_xml/translations/it.xml
 +++ b/ui_xml/translations/it.xml
-@@ -616,6 +616,8 @@
+@@ -624,6 +624,8 @@
    <translation tag="Chamber heater didn&apos;t start" it="Il riscaldatore della camera non si è avviato"/>
    <translation tag="Chamber heater didn&apos;t start. {}" it="Il riscaldatore della camera non si è avviato. {}"/>
    <translation tag="Chamber heating to %d°C..." it="Riscaldamento camera a %d°C..."/>
@@ -499,9 +531,10 @@ diff --git a/ui_xml/translations/it.xml b/ui_xml/translations/it.xml
    <translation tag="Chamber temp must be 0-%d°C" it="La temperatura della camera deve essere 0-%d°C"/>
    <translation tag="Change" it="Cambia"/>
 diff --git a/ui_xml/translations/ja.xml b/ui_xml/translations/ja.xml
+index 737caba..9450005 100644
 --- a/ui_xml/translations/ja.xml
 +++ b/ui_xml/translations/ja.xml
-@@ -616,6 +616,8 @@
+@@ -624,6 +624,8 @@
    <translation tag="Chamber heater didn&apos;t start" ja="チャンバーヒーターが起動しませんでした"/>
    <translation tag="Chamber heater didn&apos;t start. {}" ja="チャンバーヒーターが起動しませんでした。{}"/>
    <translation tag="Chamber heating to %d°C..." ja="チャンバーを%d°Cに加熱中..."/>
@@ -511,9 +544,10 @@ diff --git a/ui_xml/translations/ja.xml b/ui_xml/translations/ja.xml
    <translation tag="Chamber temp must be 0-%d°C" ja="チャンバー温度は 0〜%d°C にしてください"/>
    <translation tag="Change" ja="変更"/>
 diff --git a/ui_xml/translations/pt.xml b/ui_xml/translations/pt.xml
+index ad70d99..553b6e6 100644
 --- a/ui_xml/translations/pt.xml
 +++ b/ui_xml/translations/pt.xml
-@@ -616,6 +616,8 @@
+@@ -624,6 +624,8 @@
    <translation tag="Chamber heater didn&apos;t start" pt="O aquecedor da câmara não ligou"/>
    <translation tag="Chamber heater didn&apos;t start. {}" pt="O aquecedor da câmara não ligou. {}"/>
    <translation tag="Chamber heating to %d°C..." pt="Aquecendo câmara a %d°C..."/>
@@ -523,9 +557,10 @@ diff --git a/ui_xml/translations/pt.xml b/ui_xml/translations/pt.xml
    <translation tag="Chamber temp must be 0-%d°C" pt="A temperatura da câmara deve ser 0-%d°C"/>
    <translation tag="Change" pt="Alterar"/>
 diff --git a/ui_xml/translations/ru.xml b/ui_xml/translations/ru.xml
+index b19af6d..0637dd5 100644
 --- a/ui_xml/translations/ru.xml
 +++ b/ui_xml/translations/ru.xml
-@@ -655,6 +655,8 @@
+@@ -663,6 +663,8 @@
    <translation tag="Chamber heater didn&apos;t start" ru="Нагреватель камеры не запустился"/>
    <translation tag="Chamber heater didn&apos;t start. {}" ru="Нагреватель камеры не запустился. {}"/>
    <translation tag="Chamber heating to %d°C..." ru="Нагрев камеры до %d°C..."/>
@@ -535,9 +570,10 @@ diff --git a/ui_xml/translations/ru.xml b/ui_xml/translations/ru.xml
    <translation tag="Chamber temp must be 0-%d°C" ru="Температура камеры должна быть 0-%d°C"/>
    <translation tag="Change" ru="Изменить"/>
 diff --git a/ui_xml/translations/translations.xml b/ui_xml/translations/translations.xml
+index 406c0bc..1709ba1 100644
 --- a/ui_xml/translations/translations.xml
 +++ b/ui_xml/translations/translations.xml
-@@ -655,6 +655,8 @@
+@@ -663,6 +663,8 @@
    <translation tag="Chamber heater didn&apos;t start" de="Kammerheizung ist nicht gestartet" en="Chamber heater didn&apos;t start" es="El calentador de la cámara no arrancó" fr="Le chauffage de la chambre n&apos;a pas démarré" it="Il riscaldatore della camera non si è avviato" ja="チャンバーヒーターが起動しませんでした" pt="O aquecedor da câmara não ligou" ru="Нагреватель камеры не запустился" zh="腔体加热器未启动"/>
    <translation tag="Chamber heater didn&apos;t start. {}" de="Kammerheizung ist nicht gestartet. {}" en="Chamber heater didn&apos;t start. {}" es="El calentador de la cámara no arrancó. {}" fr="Le chauffage de la chambre n&apos;a pas démarré. {}" it="Il riscaldatore della camera non si è avviato. {}" ja="チャンバーヒーターが起動しませんでした。{}" pt="O aquecedor da câmara não ligou. {}" ru="Нагреватель камеры не запустился. {}" zh="腔体加热器未启动。{}"/>
    <translation tag="Chamber heating to %d°C..." de="Kammer heizt auf %d°C auf..." en="Chamber heating to %d°C..." es="Calentando cámara a %d°C..." fr="Chauffe de la chambre à %d°C..." it="Riscaldamento camera a %d°C..." ja="チャンバーを%d°Cに加熱中..." pt="Aquecendo câmara a %d°C..." ru="Нагрев камеры до %d°C..." zh="腔体加热至 %d°C..."/>
@@ -547,9 +583,10 @@ diff --git a/ui_xml/translations/translations.xml b/ui_xml/translations/translat
    <translation tag="Chamber temp must be 0-%d°C" de="Kammertemperatur muss 0-%d°C betragen" en="Chamber temp must be 0-%d°C" es="La temperatura de la cámara debe ser 0-%d°C" fr="La température de l&apos;enceinte doit être entre 0 et %d°C" it="La temperatura della camera deve essere 0-%d°C" ja="チャンバー温度は 0〜%d°C にしてください" pt="A temperatura da câmara deve ser 0-%d°C" ru="Температура камеры должна быть 0-%d°C" zh="腔体温度必须为 0-%d°C"/>
    <translation tag="Change" de="Ändern" en="Change" es="Cambiar" fr="Modifier" it="Cambia" ja="変更" pt="Alterar" ru="Изменить" zh="更改"/>
 diff --git a/ui_xml/translations/zh.xml b/ui_xml/translations/zh.xml
+index 4a4792f..4d4a844 100644
 --- a/ui_xml/translations/zh.xml
 +++ b/ui_xml/translations/zh.xml
-@@ -616,6 +616,8 @@
+@@ -624,6 +624,8 @@
    <translation tag="Chamber heater didn&apos;t start" zh="腔体加热器未启动"/>
    <translation tag="Chamber heater didn&apos;t start. {}" zh="腔体加热器未启动。{}"/>
    <translation tag="Chamber heating to %d°C..." zh="腔体加热至 %d°C..."/>

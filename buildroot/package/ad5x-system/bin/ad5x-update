@@ -21,6 +21,7 @@ set -e
 
 die() { echo "ad5x-update: $*" >&2; exit 1; }
 usage() { sed -n '2,19p' "$0"; exit ${1:-2}; }
+SLOTA_MSG="this printer runs the main OS from slot A (root=/dev/mmcblk0p2). Updates don't support that layout: see docs/recovery-os.md, section 'Main OS in slot A'."
 
 mode=swu reboot_after= replace_stock=
 while [ $# -gt 0 ]; do
@@ -37,6 +38,7 @@ done
 [ $# -ge 1 ] || usage
 FILE=$1 WANT=$2
 
+if [ "$SLOT" = A ]; then die "$SLOTA_MSG"; fi
 [ "$SLOT" = B ] || die "run from the main OS in slot B (this is slot '${SLOT:-?}')"
 AROOT=$(rootfs_of A) AKERN=$(kernel_of A) BKERN=$(kernel_of B)
 MNT=/run/ad5x-target
@@ -114,7 +116,7 @@ holds=$(slot_a_holds)
 echo "slot A holds: $holds; recovery image $SIZE bytes, sha256 $HAVE"
 case $holds in
 recovery|unknown) ;;
-main) die "slot A holds a main OS, not stock or recovery: refusing" ;;
+main) die "slot A holds a main OS, not stock or recovery: refusing. $SLOTA_MSG" ;;
 stock)
 	[ -n "$replace_stock" ] || die "slot A holds stock; add --replace-stock (saves it to /data/ad5x/stock first)"
 	B=/data/ad5x/stock

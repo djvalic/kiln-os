@@ -9,9 +9,11 @@ after zMod).
 (installer v0.0.3; stock firmware with zMod, stock running from slot B):
 all six steps, the first start of the main OS and its writing of the
 recovery OS, and the updates since (v0.0.4 to v0.0.8, from Fluidd). The
-USB-stick route (stock's USB hook, the install screens) and the other slot
-layout (stock in slot A) have run under qemu only (`tools/test_install.sh`,
-every release).
+USB-stick route (stock's USB hook, the install screens) has run under qemu
+only (`tools/test_install.sh`, every release). The other slot layout (stock
+in slot A) is **not yet tested on hardware**: it has run under qemu only.
+For a printer that already runs the main OS from slot A, see
+`docs/recovery-os.md`, "Main OS in slot A".
 
 > **⚠ Your settings and configs do not come with you.** Kiln OS starts
 > with its own Klipper configuration. It does **not** use the `printer.cfg`,
