@@ -31,6 +31,14 @@ define HELIXSCREEN_GIT_INIT
 endef
 HELIXSCREEN_POST_EXTRACT_HOOKS += HELIXSCREEN_GIT_INIT
 
+# Binary flag images that a text patch cannot carry (the Turkish flag, used by
+# the language picker, patch 0034). Copied into the source after the patches.
+define HELIXSCREEN_KILN_FLAGS
+	cp $(HELIXSCREEN_PKGDIR)/flags/flag_tr.bin $(HELIXSCREEN_PKGDIR)/flags/flag_tr.png \
+		$(@D)/assets/images/flags/
+endef
+HELIXSCREEN_POST_PATCH_HOOKS += HELIXSCREEN_KILN_FLAGS
+
 # Upstream's unified MIPS target (PLATFORM_TARGET=mips, also called ad5x/k1:
 # fbdev, evdev, RGB565, IFS + CFS) with Buildroot's glibc toolchain instead
 # of its static musl one: dynamic link, our r5 ISA (nan2008/fp64 kept), no

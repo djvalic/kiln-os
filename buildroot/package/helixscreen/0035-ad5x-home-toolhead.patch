@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Sat, 31 Oct 2026 12:42:44 -0400
+Subject: [PATCH] home: Toolhead tile in the Motion slot (revision kiln-2)
+
+The 800x480 home seed (0011) loses its Motion tile, the 2x2 half-cell
+slot at col 8, row 6, to the Toolhead tile: live X, Y and Z with the
+homed state, and a tap opens Motion, where homing and jog are. The tile
+keeps the same footprint, so the spools, Preheat, the LED light, the Z
+offset and the Unload button stay where they were. Motion is listed in
+the medium@12x8 disabled tier so the resolver does not place it again.
+The seed's Motion anchor is renamed to toolhead; other grids keep the
+shipped Motion placement.
+
+The Toolhead tile at 2x2 half-cells has room for the axis letters and
+values, not the plate; the plate and Home All need a 4x2 tile or more,
+which this grid does not have beside the spools without dropping Unload.
+
+The seed's revision goes from kiln-1 to kiln-2, so a home layout that is
+still the unedited default re-resolves to this one on update; an edited
+layout is left alone.
+
+Upstream: not applicable (AD5X OS specific)
+---
+diff --git a/assets/config/panel_widgets/ad5x/home.json b/assets/config/panel_widgets/ad5x/home.json
+index e7c2971..2b5f2e3 100644
+--- a/assets/config/panel_widgets/ad5x/home.json
++++ b/assets/config/panel_widgets/ad5x/home.json
+@@ -1,6 +1,6 @@
+ {
+-  "_comment": "Kiln OS (AD5X) home seed, applied over default_layout.json for the 'ad5x' preset (PanelWidgetConfig::load_preset_overlay). Only the 800x480 panel's grid ('medium@12x8', 12x8 half-cell tracks) changes; every other grid keeps the shipped defaults. Top strip: nozzle, bed, fans, notifications. Left: print_status (detailed) without its temperature row, since the strip shows them; tapping a temperature opens the graph. Right: the IFS spools (spool_env_rl slot), Preheat/Cool Down one track tall without its temperature column; under it the LED light (the kiln_light slot, only with a controllable light) and the live Z offset (tap: Tune, baby steps); Motion (homing, jog) and an Unload button; Preheat/Cool Down and Unload are greyed and do nothing while a print is printing or paused (lock_while_printing). No printer image, temperature graph or tips. 'revision' joins the signature, so changing it re-resolves every still-unedited default; a layout the user edited stays as it is.",
+-  "revision": "kiln-1",
++  "_comment": "Kiln OS (AD5X) home seed, applied over default_layout.json for the 'ad5x' preset (PanelWidgetConfig::load_preset_overlay). Only the 800x480 panel's grid ('medium@12x8', 12x8 half-cell tracks) changes; every other grid keeps the shipped defaults. Top strip: nozzle, bed, fans, notifications. Left: print_status (detailed) without its temperature row, since the strip shows them; tapping a temperature opens the graph. Right: the IFS spools (spool_env_rl slot), Preheat/Cool Down one track tall without its temperature column; under it the LED light (the kiln_light slot, only with a controllable light) and the live Z offset (tap: Tune, baby steps); the Toolhead tile in the Motion slot (live X, Y and Z with homed state; a tap opens Motion, where homing and jog are; Motion itself is off this grid) and an Unload button; Preheat/Cool Down and Unload are greyed and do nothing while a print is printing or paused (lock_while_printing). No printer image, temperature graph or tips. 'revision' joins the signature, so changing it re-resolves every still-unedited default; a layout the user edited stays as it is.",
++  "revision": "kiln-2",
+   "anchors": [
+     {
+       "id": "temperature",
+@@ -400,7 +400,7 @@
+       }
+     },
+     {
+-      "id": "motion",
++      "id": "toolhead",
+       "placements": {
+         "medium@12x8": {
+           "col": 8,
+@@ -460,7 +460,8 @@
+     "medium@12x8": [
+       "tips",
+       "printer_image",
+-      "temp_graph"
++      "temp_graph",
++      "motion"
+     ]
+   }
+ }

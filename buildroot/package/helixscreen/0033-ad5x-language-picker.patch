@@ -1,0 +1,159 @@
+diff --git a/src/system/system_settings_manager.cpp b/src/system/system_settings_manager.cpp
+index 3f09350..d1d31d4 100644
+--- a/src/system/system_settings_manager.cpp
++++ b/src/system/system_settings_manager.cpp
+@@ -50,16 +50,20 @@ static int spdlog_level_to_index(spdlog::level::level_enum level) {
+ #endif
+ 
+ // Language options - codes and display names
+-// Order: en, de, fr, es, ru, pt, it, zh, ja (indices 0-8). The CJK pair comes
+-// last so a build without CJK fonts (HELIX_HAS_CJK=0, the ESP32 firmware) drops
+-// it by shortening the list, and every other index keeps its meaning. A saved
+-// zh/ja there reads as English.
+-static const char* kLanguageCodes[] = {"en", "de", "fr", "es", "ru", "pt", "it", "zh", "ja"};
+-static const int kLanguageCount = HELIX_HAS_CJK ? 9 : 7;
++// Order: en, zh, ja, de, es, it, ru, pt, tr. The CJK pair (zh, ja) sits at
++// indices 1-2, so a build without CJK fonts (HELIX_HAS_CJK=0, the ESP32
++// firmware) gets its own list without them. A saved zh/ja there reads as English.
++#if HELIX_HAS_CJK
++static const char* kLanguageCodes[] = {"en", "zh", "ja", "de", "es", "it", "ru", "pt", "tr"};
++static const int kLanguageCount = 9;
+ static const char* kLanguageOptionsText =
+-    HELIX_HAS_CJK
+-        ? "English\nDeutsch\nFrançais\nEspañol\nРусский\nPortuguês\nItaliano\n中文\n日本語"
+-        : "English\nDeutsch\nFrançais\nEspañol\nРусский\nPortuguês\nItaliano";
++    "English\n中文\n日本語\nDeutsch\nEspañol\nItaliano\nРусский\nPortuguês\nTürkçe";
++#else
++static const char* kLanguageCodes[] = {"en", "de", "es", "it", "ru", "pt", "tr"};
++static const int kLanguageCount = 7;
++static const char* kLanguageOptionsText =
++    "English\nDeutsch\nEspañol\nItaliano\nРусский\nPortuguês\nTürkçe";
++#endif
+ 
+ using settings::Scope;
+ // Row order is SystemSettingsManager::Key.
+diff --git a/src/ui/ui_wizard_language_chooser.cpp b/src/ui/ui_wizard_language_chooser.cpp
+index dad2639..914f33b 100644
+--- a/src/ui/ui_wizard_language_chooser.cpp
++++ b/src/ui/ui_wizard_language_chooser.cpp
+@@ -37,19 +37,19 @@ extern lv_subject_t connection_test_passed;
+ // Welcome text in each supported language (cycles during animation)
+ static const char* kWelcomeTranslations[] = {
+     "Welcome!",          // en
++    "欢迎！",            // zh
++    "ようこそ！",        // ja
+     "Willkommen!",       // de
+-    "Bienvenue!",        // fr
+     "¡Bienvenido!",      // es
++    "Benvenuto!",        // it
+     "Добро пожаловать!", // ru
+     "Bem-vindo!",        // pt
+-    "Benvenuto!",        // it
+-    "欢迎！",            // zh
+-    "ようこそ！",        // ja
++    "Hoş geldiniz!",     // tr
+ };
+ static constexpr int kWelcomeCount = 9;
+ 
+ // Language codes for saving to config (matches button order in XML)
+-static const char* kLanguageCodes[] = {"en", "de", "fr", "es", "ru", "pt", "it", "zh", "ja"};
++static const char* kLanguageCodes[] = {"en", "zh", "ja", "de", "es", "it", "ru", "pt", "tr"};
+ 
+ // Timer period for cycling welcome text
+ static constexpr uint32_t kWelcomeCycleMs = 2500;
+diff --git a/ui_xml/wizard_language_chooser.xml b/ui_xml/wizard_language_chooser.xml
+index 0b5ef19..caff598 100644
+--- a/ui_xml/wizard_language_chooser.xml
++++ b/ui_xml/wizard_language_chooser.xml
+@@ -36,67 +36,67 @@
+           <event_cb trigger="clicked" callback="on_language_selected" user_data="0"/>
+         </lv_button>
+ 
+-        <lv_button name="lang_item_de"
++        <lv_button name="lang_item_zh"
+                    width="100%" style_bg_opa="0" style_shadow_width="0" style_border_width="0" style_pad_ver="#space_sm"
+                    style_pad_hor="#space_md" flex_flow="row" style_flex_cross_place="center" style_pad_gap="#space_lg">
+-          <lv_image src="flag_de"/>
+-          <text_body text="Deutsch" flex_grow="1"/>
++          <lv_image src="flag_zh"/>
++          <text_body text="中文" flex_grow="1"/>
+           <event_cb trigger="clicked" callback="on_language_selected" user_data="1"/>
+         </lv_button>
+ 
+-        <lv_button name="lang_item_fr"
++        <lv_button name="lang_item_ja"
+                    width="100%" style_bg_opa="0" style_shadow_width="0" style_border_width="0" style_pad_ver="#space_sm"
+                    style_pad_hor="#space_md" flex_flow="row" style_flex_cross_place="center" style_pad_gap="#space_lg">
+-          <lv_image src="flag_fr"/>
+-          <text_body text="Français" flex_grow="1"/>
++          <lv_image src="flag_ja"/>
++          <text_body text="日本語" flex_grow="1"/>
+           <event_cb trigger="clicked" callback="on_language_selected" user_data="2"/>
+         </lv_button>
+ 
+-        <lv_button name="lang_item_es"
++        <lv_button name="lang_item_de"
+                    width="100%" style_bg_opa="0" style_shadow_width="0" style_border_width="0" style_pad_ver="#space_sm"
+                    style_pad_hor="#space_md" flex_flow="row" style_flex_cross_place="center" style_pad_gap="#space_lg">
+-          <lv_image src="flag_es"/>
+-          <text_body text="Español" flex_grow="1"/>
++          <lv_image src="flag_de"/>
++          <text_body text="Deutsch" flex_grow="1"/>
+           <event_cb trigger="clicked" callback="on_language_selected" user_data="3"/>
+         </lv_button>
+ 
+-        <lv_button name="lang_item_ru"
++        <lv_button name="lang_item_es"
+                    width="100%" style_bg_opa="0" style_shadow_width="0" style_border_width="0" style_pad_ver="#space_sm"
+                    style_pad_hor="#space_md" flex_flow="row" style_flex_cross_place="center" style_pad_gap="#space_lg">
+-          <lv_image src="flag_ru"/>
+-          <text_body text="Русский" flex_grow="1"/>
++          <lv_image src="flag_es"/>
++          <text_body text="Español" flex_grow="1"/>
+           <event_cb trigger="clicked" callback="on_language_selected" user_data="4"/>
+         </lv_button>
+ 
+-        <lv_button name="lang_item_pt"
++        <lv_button name="lang_item_it"
+                    width="100%" style_bg_opa="0" style_shadow_width="0" style_border_width="0" style_pad_ver="#space_sm"
+                    style_pad_hor="#space_md" flex_flow="row" style_flex_cross_place="center" style_pad_gap="#space_lg">
+-          <lv_image src="flag_pt"/>
+-          <text_body text="Português" flex_grow="1"/>
++          <lv_image src="flag_it"/>
++          <text_body text="Italiano" flex_grow="1"/>
+           <event_cb trigger="clicked" callback="on_language_selected" user_data="5"/>
+         </lv_button>
+ 
+-        <lv_button name="lang_item_it"
++        <lv_button name="lang_item_ru"
+                    width="100%" style_bg_opa="0" style_shadow_width="0" style_border_width="0" style_pad_ver="#space_sm"
+                    style_pad_hor="#space_md" flex_flow="row" style_flex_cross_place="center" style_pad_gap="#space_lg">
+-          <lv_image src="flag_it"/>
+-          <text_body text="Italiano" flex_grow="1"/>
++          <lv_image src="flag_ru"/>
++          <text_body text="Русский" flex_grow="1"/>
+           <event_cb trigger="clicked" callback="on_language_selected" user_data="6"/>
+         </lv_button>
+ 
+-        <lv_button name="lang_item_zh"
++        <lv_button name="lang_item_pt"
+                    width="100%" style_bg_opa="0" style_shadow_width="0" style_border_width="0" style_pad_ver="#space_sm"
+                    style_pad_hor="#space_md" flex_flow="row" style_flex_cross_place="center" style_pad_gap="#space_lg">
+-          <lv_image src="flag_zh"/>
+-          <text_body text="中文" flex_grow="1"/>
++          <lv_image src="flag_pt"/>
++          <text_body text="Português" flex_grow="1"/>
+           <event_cb trigger="clicked" callback="on_language_selected" user_data="7"/>
+         </lv_button>
+ 
+-        <lv_button name="lang_item_ja"
++        <lv_button name="lang_item_tr"
+                    width="100%" style_bg_opa="0" style_shadow_width="0" style_border_width="0" style_pad_ver="#space_sm"
+                    style_pad_hor="#space_md" flex_flow="row" style_flex_cross_place="center" style_pad_gap="#space_lg">
+-          <lv_image src="flag_ja"/>
+-          <text_body text="日本語" flex_grow="1"/>
++          <lv_image src="flag_tr"/>
++          <text_body text="Türkçe" flex_grow="1"/>
+           <event_cb trigger="clicked" callback="on_language_selected" user_data="8"/>
+         </lv_button>
+ 

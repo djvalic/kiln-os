@@ -7,6 +7,9 @@
 #include "job.h"
 #include "swu.h"
 #include "sys.h"
+#include "i18n.h"
+#include "lang.h"
+#include <stdarg.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -74,6 +77,60 @@ static lv_obj_t *wrap_label(lv_obj_t *parent, const char *text, const lv_font_t 
 	lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_WRAP);
 	lv_obj_set_width(l, lv_pct(100));
 	return l;
+}
+
+/* Text with an icon in front: icon, sep, then fmt (a translated text, with
+ * its arguments) formatted into t. The icon is never translated. */
+static char *iconed_v(char *t, size_t cap, const char *icon, const char *sep,
+	const char *fmt, va_list ap)
+{
+	size_t k = (size_t)snprintf(t, cap, "%s%s", icon ? icon : "", icon ? sep : "");
+	if (k < cap)
+		vsnprintf(t + k, cap - k, fmt, ap);
+	return t;
+}
+
+static char *iconed(char *t, size_t cap, const char *icon, const char *sep, const char *fmt, ...)
+{
+	va_list ap;
+	va_start(ap, fmt);
+	iconed_v(t, cap, icon, sep, fmt, ap);
+	va_end(ap);
+	return t;
+}
+
+static void set_iconed(lv_obj_t *l, const char *icon, const char *sep, const char *fmt, ...)
+{
+	char t[480];
+	va_list ap;
+	va_start(ap, fmt);
+	iconed_v(t, sizeof(t), icon, sep, fmt, ap);
+	va_end(ap);
+	lv_label_set_text(l, t);
+}
+
+/* ad5x-status words for slot B, translated; other values as they are */
+static const char *slot_word(const char *s)
+{
+	if (!strcmp(s, "installed"))
+		return tr(RS_SLOT_INSTALLED);
+	if (!strcmp(s, "not found"))
+		return tr(RS_SLOT_NOT_FOUND);
+	if (!strcmp(s, "empty"))
+		return tr(RS_SLOT_EMPTY);
+	if (!strcmp(s, "unknown"))
+		return tr(RS_SLOT_UNKNOWN);
+	return s;
+}
+
+/* SWUpdate's status, translated (the order is swu_status's) */
+static const char *swu_status_tr(swu_status s)
+{
+	static const enum rui_str ids[] = {
+		RS_SWU_IDLE, RS_SWU_STARTING, RS_SWU_INSTALLING, RS_SWU_SUCCESS, RS_SWU_FAILED,
+		RS_SWU_RECEIVING, RS_SWU_DONE, RS_SWU_SUBPROCESS, RS_SWU_PROGRESS,
+	};
+	return (unsigned)s < sizeof(ids) / sizeof(ids[0]) ? tr(ids[s]) : swu_status_name(s);
 }
 
 static void plain(lv_obj_t *o)
@@ -218,7 +275,7 @@ static lv_obj_t *page_frame(const char *title, bool back)
 	lv_obj_set_flex_align(hdr, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 	back_btn = NULL;
 	if (back) {
-		back_btn = button(hdr, LV_SYMBOL_LEFT, "Back", 0, on_home, NULL);
+		back_btn = button(hdr, LV_SYMBOL_LEFT, tr(RS_BACK), 0, on_home, NULL);
 		lv_obj_set_size(back_btn, 130, 50);
 	}
 	label(hdr, title, F28B, C_TEXT);
@@ -241,7 +298,7 @@ static lv_obj_t *page_frame(const char *title, bool back)
 typedef void (*action_fn)(void);
 
 static struct {
-	char title[96], text[512], text2[512], ok[48];
+	char title[96], text[512], text2[512], ok[96];
 	bool danger, twice;
 	action_fn fn;
 	lv_obj_t *ok_btn;
@@ -288,7 +345,7 @@ static void arm_tick(lv_timer_t *t)
 		return;
 	lv_obj_t *l = lv_obj_get_child(dlg.ok_btn, 0);
 	if (--dlg.arm_left > 0) {
-		lv_label_set_text_fmt(l, "Wait %d s", dlg.arm_left);
+		lv_label_set_text_fmt(l, tr(RS_WAIT_N_S), dlg.arm_left);
 		return;
 	}
 	lv_label_set_text(l, dlg.ok);
@@ -323,13 +380,13 @@ static void dlg_show(int stage)
 
 	char t[160];
 	if (stage == 2)
-		snprintf(t, sizeof(t), LV_SYMBOL_WARNING "  Are you sure?");
+		snprintf(t, sizeof(t), "%s", tr_sym(LV_SYMBOL_WARNING, RS_ARE_YOU_SURE));
 	else
 		snprintf(t, sizeof(t), "%s%s", dlg.danger ? LV_SYMBOL_WARNING "  " : "", dlg.title);
 	label(c, t, F28B, dlg.danger ? C_DANGER : C_TEXT);
 	wrap_label(c, stage == 2 ? dlg.text2 : dlg.text, F20, C_TEXT);
 	if (dlg.twice)
-		label(c, stage == 1 ? "Step 1 of 2" : "Step 2 of 2: last chance to cancel",
+		label(c, tr(stage == 1 ? RS_STEP_1_OF_2 : RS_STEP_2_OF_2),
 		      F16, C_MUTED);
 
 	lv_obj_t *row = box(c, LV_FLEX_FLOW_ROW);
@@ -340,10 +397,10 @@ static void dlg_show(int stage)
 	lv_obj_t *cancel = NULL, *ok = NULL;
 	if (stage == 2) {
 		ok = button(row, NULL, dlg.ok, dlg.danger ? 2 : 1, on_dlg_ok, (void *)(intptr_t)2);
-		cancel = button(row, LV_SYMBOL_CLOSE, "Cancel", 0, on_dlg_cancel, NULL);
+		cancel = button(row, LV_SYMBOL_CLOSE, tr(RS_CANCEL), 0, on_dlg_cancel, NULL);
 	} else {
-		cancel = button(row, LV_SYMBOL_CLOSE, "Cancel", 0, on_dlg_cancel, NULL);
-		ok = button(row, NULL, dlg.twice ? "Continue" : dlg.ok, dlg.danger ? 2 : 1,
+		cancel = button(row, LV_SYMBOL_CLOSE, tr(RS_CANCEL), 0, on_dlg_cancel, NULL);
+		ok = button(row, NULL, dlg.twice ? tr(RS_CONTINUE) : dlg.ok, dlg.danger ? 2 : 1,
 			    on_dlg_ok, (void *)(intptr_t)1);
 	}
 	lv_obj_set_size(cancel, 240, 64);
@@ -352,7 +409,7 @@ static void dlg_show(int stage)
 	if (stage == 2) {
 		enable(ok, false);
 		dlg.arm_left = 3;
-		lv_label_set_text_fmt(lv_obj_get_child(ok, 0), "Wait %d s", dlg.arm_left);
+		lv_label_set_text_fmt(lv_obj_get_child(ok, 0), tr(RS_WAIT_N_S), dlg.arm_left);
 		dlg.arm = lv_timer_create(arm_tick, 700, NULL);
 	}
 }
@@ -524,7 +581,7 @@ static struct {
 static void boot_main_now(void)
 {
 	char *c = cmd_expand(CMD_BOOT_MAIN, NULL);
-	start_job(JK_CMD, "Boot main OS", "Checking slot B, setting the boot flag, restarting",
+	start_job(JK_CMD, tr(RS_BOOT_MAIN_OS), tr(RS_BOOT_MAIN_WHAT),
 		  c, false, true);
 	free(c);
 }
@@ -544,15 +601,12 @@ static void on_boot_main(lv_event_t *e)
 	char what[96];
 	main_os_text(what, sizeof(what));
 	if (strcmp(what, "empty") && strcmp(what, "not found") && strcmp(what, "unknown"))
-		confirm("Boot the main OS?",
-			"The printer restarts into the main OS (slot B). If it doesn't "
-			"finish starting, the next start comes back here.",
-			LV_SYMBOL_PLAY "  Boot main OS", false, NULL, boot_main_now);
+		confirm(tr(RS_BOOT_MAIN_Q),
+			tr(RS_BOOT_MAIN_TEXT), tr_sym(LV_SYMBOL_PLAY, RS_BOOT_MAIN_OS), false, NULL,
+			boot_main_now);
 	else
-		confirm("No main OS found?",
-			"Slot B doesn't look like it holds a system. ad5x-boot-main checks "
-			"it again and refuses if it is empty. Try anyway?",
-			LV_SYMBOL_PLAY "  Try", true, NULL, boot_main_now);
+		confirm(tr(RS_NO_MAIN_Q),
+			tr(RS_NO_MAIN_TEXT), tr_sym(LV_SYMBOL_PLAY, RS_TRY), true, NULL, boot_main_now);
 }
 
 static void home_refresh(void)
@@ -565,37 +619,35 @@ static void home_refresh(void)
 	if (cur_ip(ip, sizeof(ip), ifc, sizeof(ifc))) {
 		bool have_mode = kv("net_mode", mode, sizeof(mode));
 		bool ssh_up = !kv("ssh", ssh, sizeof(ssh)) || !strcmp(ssh, "running");
-		lv_label_set_text_fmt(hm.ip, LV_SYMBOL_WIFI "   %s  (%s%s%s)    %s%s", ip, ifc,
-				      have_mode ? ", " : "", have_mode ? mode : "",
-				      ssh_up ? "ssh root@" : "SSH not running",
-				      ssh_up ? ip : "");
+		const char *ssh_txt = ssh_up ? "ssh root@" : tr(RS_SSH_NOT_RUNNING);
+		set_iconed(hm.ip, LV_SYMBOL_WIFI, "   ", "%s  (%s%s%s)    %s%s", ip, ifc,
+			have_mode ? ", " : "", have_mode ? mode : "", ssh_txt, ssh_up ? ip : "");
 	} else {
-		lv_label_set_text(hm.ip, LV_SYMBOL_WIFI "   No network (Ethernet or Wi-Fi)");
+		set_iconed(hm.ip, LV_SYMBOL_WIFI, "   ", "%s", tr(RS_NO_NETWORK_HOME));
 	}
 
 	bool have_flag = kv("flag", flag, sizeof(flag)) || sys_ota_flag(flag, sizeof(flag));
-	const char *boots = !have_flag ? "boot flag unreadable"
-			    : !strcmp(flag, "ota:kernel2") ? "next start: main OS"
-			    : "next start: recovery";
-	lv_label_set_text_fmt(hm.slot, LV_SYMBOL_DRIVE "   Main OS (slot B): %s   \xc2\xb7   %s",
-			      main_os_text(slotb, sizeof(slotb)), boots);
+	const char *boots = !have_flag ? tr(RS_BOOT_FLAG_UNREADABLE)
+		: !strcmp(flag, "ota:kernel2") ? tr(RS_NEXT_MAIN)
+		: tr(RS_NEXT_RECOVERY);
+	set_iconed(hm.slot, LV_SYMBOL_DRIVE, "   ", tr(RS_HOME_SLOT),
+		slot_word(main_os_text(slotb, sizeof(slotb))), boots);
 
 	if (kv("main_trace", buf, sizeof(buf)))
-		lv_label_set_text_fmt(hm.trace, LV_SYMBOL_EYE_OPEN "   Main OS last start got to: %s",
-				      buf);
+		set_iconed(hm.trace, LV_SYMBOL_EYE_OPEN, "   ", tr(RS_HOME_TRACE), buf);
 	else
-		lv_label_set_text(hm.trace, LV_SYMBOL_EYE_OPEN "   Main OS last start: no trace");
+		set_iconed(hm.trace, LV_SYMBOL_EYE_OPEN, "   ", "%s", tr(RS_HOME_NO_TRACE));
 
 	if (kv("update_last", buf, sizeof(buf)) || sys_last_update(buf, sizeof(buf)))
-		lv_label_set_text_fmt(hm.last, LV_SYMBOL_DOWNLOAD "   Last update: %s", buf);
+		set_iconed(hm.last, LV_SYMBOL_DOWNLOAD, "   ", tr(RS_HOME_LAST_UPDATE), buf);
 	else
-		lv_label_set_text(hm.last, LV_SYMBOL_DOWNLOAD "   Last update: none recorded");
+		set_iconed(hm.last, LV_SYMBOL_DOWNLOAD, "   ", "%s", tr(RS_HOME_NO_UPDATE));
 
 	swu_state s;
 	swu_get(&s);
 	bool swu_up = s.connected || (kv("swupdate", v, sizeof(v)) && !strcmp(v, "running"));
-	lv_label_set_text(hm.chip, job_running() ? "busy" : swu_up ? "SWUpdate ready"
-					       : "SWUpdate not running");
+	lv_label_set_text(hm.chip, job_running() ? tr(RS_BUSY) : swu_up ? tr(RS_SWU_READY)
+					       : tr(RS_SWU_NOT_RUNNING));
 	lv_obj_set_style_bg_color(hm.chip, swu_up ? lv_color_make(30, 70, 45)
 						  : lv_color_make(80, 50, 30), 0);
 }
@@ -634,7 +686,7 @@ static void page_home(void)
 	lv_obj_set_flex_align(hdr, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 	lv_obj_set_style_pad_column(hdr, 10, 0);
 	label(hdr, "Kiln OS", F28B, C_TEXT);
-	label(hdr, "\xe2\x80\x94  Recovery", F28B, C_ACCENT);
+	label(hdr, tr(RS_RECOVERY_TITLE), F28B, C_ACCENT);
 	lv_obj_t *sp = box(hdr, LV_FLEX_FLOW_ROW);
 	lv_obj_set_flex_grow(sp, 1);
 	lv_obj_set_height(sp, 1);
@@ -668,14 +720,14 @@ static void page_home(void)
 	lv_obj_set_size(grid, W - 2 * PAD, H - gy - 8);
 	lv_obj_set_style_pad_column(grid, 12, 0);
 	lv_obj_set_style_pad_row(grid, 10, 0);
-	tile(grid, LV_SYMBOL_PLAY, "Boot main OS", C_TEXT, true, on_boot_main, NULL);
-	tile(grid, LV_SYMBOL_DOWNLOAD, "Install update", C_ACCENT, false, on_go, page_update);
-	tile(grid, LV_SYMBOL_SAVE, "Back up", C_ACCENT, false, on_go, page_backup);
-	tile(grid, LV_SYMBOL_REFRESH, "Restore", C_WARN, false, on_go, page_restore);
-	tile(grid, LV_SYMBOL_WARNING, "Restore stock", C_DANGER, false, on_go, page_stock);
-	tile(grid, LV_SYMBOL_WIFI, "Network / SSH", C_ACCENT, false, on_go, page_network);
-	tile(grid, LV_SYMBOL_LIST, "Logs", C_MUTED, false, on_go, page_logs);
-	tile(grid, LV_SYMBOL_POWER, "Reboot / Power", C_MUTED, false, on_go, page_power);
+	tile(grid, LV_SYMBOL_PLAY, tr(RS_BOOT_MAIN_OS), C_TEXT, true, on_boot_main, NULL);
+	tile(grid, LV_SYMBOL_DOWNLOAD, tr(RS_INSTALL_UPDATE), C_ACCENT, false, on_go, page_update);
+	tile(grid, LV_SYMBOL_SAVE, tr(RS_BACK_UP), C_ACCENT, false, on_go, page_backup);
+	tile(grid, LV_SYMBOL_REFRESH, tr(RS_RESTORE), C_WARN, false, on_go, page_restore);
+	tile(grid, LV_SYMBOL_WARNING, tr(RS_RESTORE_STOCK), C_DANGER, false, on_go, page_stock);
+	tile(grid, LV_SYMBOL_WIFI, tr(RS_NETWORK_SSH), C_ACCENT, false, on_go, page_network);
+	tile(grid, LV_SYMBOL_LIST, tr(RS_LOGS), C_MUTED, false, on_go, page_logs);
+	tile(grid, LV_SYMBOL_POWER, tr(RS_REBOOT_POWER), C_MUTED, false, on_go, page_power);
 	cur_refresh = home_refresh;
 }
 
@@ -771,13 +823,13 @@ static void usb_run(rui_entry e, const char *doing)
 static void on_usb_mount(lv_event_t *e)
 {
 	(void)e;
-	usb_run(CMD_USB_MOUNT, "Mounting");
+	usb_run(CMD_USB_MOUNT, tr(RS_MOUNTING));
 }
 
 static void on_usb_umount(lv_event_t *e)
 {
 	(void)e;
-	usb_run(CMD_USB_UMOUNT, "Ejecting");
+	usb_run(CMD_USB_UMOUNT, tr(RS_EJECTING));
 }
 
 static void usb_card_free(lv_event_t *e)
@@ -799,8 +851,8 @@ static void usb_card(lv_obj_t *body)
 	ub.text = label(c, "", F20, C_TEXT);
 	lv_label_set_long_mode(ub.text, LV_LABEL_LONG_MODE_WRAP);
 	lv_obj_set_flex_grow(ub.text, 1);
-	ub.mount = button(c, NULL, "Mount", 1, on_usb_mount, NULL);
-	ub.umount = button(c, LV_SYMBOL_EJECT, "Eject", 0, on_usb_umount, NULL);
+	ub.mount = button(c, NULL, tr(RS_MOUNT), 1, on_usb_mount, NULL);
+	ub.umount = button(c, LV_SYMBOL_EJECT, tr(RS_EJECT), 0, on_usb_umount, NULL);
 	lv_obj_add_event_cb(c, usb_card_free, LV_EVENT_DELETE, NULL);
 }
 
@@ -828,21 +880,24 @@ static bool usb_card_refresh(void)
 		changed = true;
 	if (!ub.tried && !ub.cap && nusb > 0 && m < 0) {
 		ub.tried = true;
-		usb_run(CMD_USB_MOUNT, "Mounting");
+		usb_run(CMD_USB_MOUNT, tr(RS_MOUNTING));
 	}
 	char t[300];
 	if (ub.doing) {
-		snprintf(t, sizeof(t), LV_SYMBOL_USB "  %s the USB stick\xe2\x80\xa6", ub.doing);
+		iconed(t, sizeof(t), LV_SYMBOL_USB, "  ", tr(RS_USB_BUSY), ub.doing);
 	} else if (m >= 0) {
 		char fr[32];
 		human_size(usb[m].free_mb << 20, fr, sizeof(fr));
-		snprintf(t, sizeof(t), LV_SYMBOL_USB "  %s (%s), %s free\n%s", usb[m].dev,
-			 usb[m].fs, fr, usb[m].dir);
+		char head[160];
+		snprintf(head, sizeof(head), tr(RS_USB_MOUNTED), usb[m].dev, usb[m].fs, fr);
+		iconed(t, sizeof(t), LV_SYMBOL_USB, "  ", "%s\n%s", head, usb[m].dir);
 	} else if (nusb > 0) {
-		snprintf(t, sizeof(t), LV_SYMBOL_USB "  USB stick %s not mounted%s%s", usb[0].dev,
-			 ub.result[0] ? "\n" : "", ub.result);
+		char head[160];
+		snprintf(head, sizeof(head), tr(RS_USB_NOT_MOUNTED), usb[0].dev);
+		iconed(t, sizeof(t), LV_SYMBOL_USB, "  ", "%s%s%s", head,
+			ub.result[0] ? "\n" : "", ub.result);
 	} else {
-		snprintf(t, sizeof(t), LV_SYMBOL_USB "  No USB stick: insert one (FAT32, exFAT or ext4)");
+		iconed(t, sizeof(t), LV_SYMBOL_USB, "  ", "%s", tr(RS_USB_NONE));
 	}
 	lv_label_set_text(ub.text, t);
 	show(ub.mount, !ub.doing && nusb > 0 && m < 0);
@@ -880,7 +935,7 @@ static void install_now(void)
 		return;
 	const char *v[] = { "FILE", up.f[up.sel].path, NULL };
 	char *c = cmd_expand(CMD_INSTALL, v);
-	start_job_x(JK_INSTALL, "Installing update", up.f[up.sel].path, c, false, false, true,
+	start_job_x(JK_INSTALL, tr(RS_INSTALLING_UPDATE), up.f[up.sel].path, c, false, false, true,
 		    AFTER_BOOT_MAIN);
 	free(c);
 }
@@ -891,11 +946,10 @@ static void on_install(lv_event_t *e)
 	if (up.sel < 0 || up.sel >= up.n)
 		return;
 	static char t1[400], t2[400];
-	snprintf(t1, sizeof(t1), "Install %s into the main OS slot (B)? The system there now "
-		 "is replaced.", up.f[up.sel].name);
-	snprintf(t2, sizeof(t2), "SWUpdate checks the signature, then writes slot B. Don't "
-		 "switch the printer off until it says done.");
-	confirm("Install update?", t1, LV_SYMBOL_DOWNLOAD "  Install now", true, t2, install_now);
+	snprintf(t1, sizeof(t1), tr(RS_INSTALL_Q_TEXT), up.f[up.sel].name);
+	snprintf(t2, sizeof(t2), "%s", tr(RS_INSTALL_Q_TEXT2));
+	confirm(tr(RS_INSTALL_Q), t1, tr_sym(LV_SYMBOL_DOWNLOAD, RS_INSTALL_NOW), true, t2,
+		install_now);
 }
 
 static void on_up_check(lv_event_t *e)
@@ -905,7 +959,7 @@ static void on_up_check(lv_event_t *e)
 		return;
 	const char *v[] = { "FILE", up.f[up.sel].path, NULL };
 	char *c = cmd_expand(CMD_INSTALL_CHECK, v);
-	start_job(JK_CMD, "Checking update", up.f[up.sel].path, c, true, false);
+	start_job(JK_CMD, tr(RS_CHECKING_UPDATE), up.f[up.sel].path, c, true, false);
 	free(c);
 }
 
@@ -937,9 +991,7 @@ static void up_fill(void)
 		up.sel = 0;
 	if (!up.n) {
 		char t[300];
-		snprintf(t, sizeof(t), "No .swu or .zip update found.\nCopy one to %s or to the top "
-			 "folder of a USB stick, or upload it from a browser.",
-			 rui_get(PATH_UPDATE_DIR));
+		snprintf(t, sizeof(t), tr(RS_NO_UPDATE_FMT), rui_get(PATH_UPDATE_DIR));
 		wrap_label(up.list, t, F20, C_MUTED);
 	}
 	select_row(up.list, up.sel);
@@ -954,9 +1006,9 @@ static void up_refresh(void)
 		return;
 	char ip[64], ifc[16];
 	if (cur_ip(ip, sizeof(ip), ifc, sizeof(ifc)))
-		lv_label_set_text_fmt(up.hint, "Or upload from a browser:  http://%s:8080", ip);
+		lv_label_set_text_fmt(up.hint, tr(RS_UPLOAD_HINT), ip);
 	else
-		lv_label_set_text(up.hint, "Or upload from a browser on port 8080 (no network yet)");
+		lv_label_set_text(up.hint, tr(RS_UPLOAD_HINT_NONET));
 	file_ent f[24];
 	int n = sys_list_swu(f, 24);
 	bool same = n == up.n;
@@ -970,7 +1022,7 @@ static void page_update(void)
 {
 	memset(&up, 0, sizeof(up));
 	up.sel = -1;
-	lv_obj_t *body = page_frame("Install update", true);
+	lv_obj_t *body = page_frame(tr(RS_INSTALL_UPDATE), true);
 	usb_card(body);
 	up.hint = label(body, "", F16, C_MUTED);
 	up.list = scroll_list(body);
@@ -979,11 +1031,11 @@ static void page_update(void)
 	lv_obj_t *row = box(body, LV_FLEX_FLOW_ROW);
 	lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
 	lv_obj_set_style_pad_column(row, 12, 0);
-	lv_obj_t *r = button(row, LV_SYMBOL_REFRESH, "Rescan", 0, on_up_refresh, NULL);
+	lv_obj_t *r = button(row, LV_SYMBOL_REFRESH, tr(RS_RESCAN), 0, on_up_refresh, NULL);
 	lv_obj_set_width(r, 180);
-	up.check = button(row, LV_SYMBOL_EYE_OPEN, "Check", 0, on_up_check, NULL);
+	up.check = button(row, LV_SYMBOL_EYE_OPEN, tr(RS_CHECK), 0, on_up_check, NULL);
 	lv_obj_set_width(up.check, 180);
-	up.install = button(row, LV_SYMBOL_DOWNLOAD, "Install", 1, on_install, NULL);
+	up.install = button(row, LV_SYMBOL_DOWNLOAD, tr(RS_INSTALL), 1, on_install, NULL);
 	lv_obj_set_flex_grow(up.install, 1);
 	up_fill();
 	cur_refresh = up_refresh;
@@ -1002,12 +1054,12 @@ static void bk_dest(void)
 	int m = usb_mounted_idx();
 	if (m < 0) {
 		bk.destdir[0] = 0;
-		lv_label_set_text(bk.dest, "Destination: a USB stick (none mounted)");
+		lv_label_set_text(bk.dest, tr(RS_BK_DEST_NONE));
 		return;
 	}
 	/* ad5x-backup makes <DEST>/ad5x-backup-<date>-<n>/ */
 	snprintf(bk.destdir, sizeof(bk.destdir), "%s", usb[m].dir);
-	lv_label_set_text_fmt(bk.dest, "Destination:  %s/%s<date>-<n>/", usb[m].dir,
+	lv_label_set_text_fmt(bk.dest, tr(RS_BK_DEST), usb[m].dir,
 			      rui_get(PATH_BACKUP_PREFIX));
 }
 
@@ -1031,7 +1083,7 @@ static void bk_run(bool dry)
 	const char *v[] = { "DRY", dry ? "--dry-run" : "", "ALL", all ? "--all" : "",
 			    "DEST", bk.destdir, NULL };
 	char *c = cmd_expand(CMD_BACKUP, v);
-	start_job(JK_CMD, dry ? "Backup (dry run)" : "Backing up", bk.destdir, c, true, false);
+	start_job(JK_CMD, dry ? tr(RS_BACKUP_DRY_RUN) : tr(RS_BACKING_UP), bk.destdir, c, true, false);
 	free(c);
 }
 
@@ -1050,23 +1102,21 @@ static void on_bk_dry(lv_event_t *e)
 static void page_backup(void)
 {
 	memset(&bk, 0, sizeof(bk));
-	lv_obj_t *body = page_frame("Back up to USB", true);
+	lv_obj_t *body = page_frame(tr(RS_BACK_UP_TITLE), true);
 	usb_card(body);
 
 	lv_obj_t *c = card(body);
 	lv_obj_set_size(c, lv_pct(100), LV_SIZE_CONTENT);
 	lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
 	lv_obj_set_style_pad_row(c, 10, 0);
-	wrap_label(c, "Copies the eMMC to the stick: boot area, both slots, boot flag and "
-		   "usershare, each read back and checked. Nothing on the printer is "
-		   "changed.", F20, C_TEXT);
+	wrap_label(c, tr(RS_BACKUP_TEXT), F20, C_TEXT);
 	lv_obj_t *r = box(c, LV_FLEX_FLOW_ROW);
 	lv_obj_set_size(r, lv_pct(100), LV_SIZE_CONTENT);
 	lv_obj_set_flex_align(r, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 	lv_obj_set_style_pad_column(r, 14, 0);
 	bk.all = lv_switch_create(r);
 	lv_obj_set_size(bk.all, 76, 40);
-	label(r, "Also userdata (5.8 GB, slow)", F20, C_TEXT);
+	label(r, tr(RS_ALSO_USERDATA), F20, C_TEXT);
 	bk.dest = label(c, "", F16, C_MUTED);
 	lv_label_set_long_mode(bk.dest, LV_LABEL_LONG_MODE_DOTS);
 	lv_obj_set_width(bk.dest, lv_pct(100));
@@ -1076,9 +1126,9 @@ static void page_backup(void)
 	lv_obj_t *row = box(body, LV_FLEX_FLOW_ROW);
 	lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
 	lv_obj_set_style_pad_column(row, 12, 0);
-	bk.dry = button(row, LV_SYMBOL_EYE_OPEN, "Dry run", 0, on_bk_dry, NULL);
+	bk.dry = button(row, LV_SYMBOL_EYE_OPEN, tr(RS_DRY_RUN), 0, on_bk_dry, NULL);
 	lv_obj_set_width(bk.dry, 220);
-	bk.start = button(row, LV_SYMBOL_SAVE, "Start backup", 1, on_bk_start, NULL);
+	bk.start = button(row, LV_SYMBOL_SAVE, tr(RS_START_BACKUP), 1, on_bk_start, NULL);
 	lv_obj_set_flex_grow(bk.start, 1);
 	cur_refresh = bk_refresh;
 }
@@ -1123,11 +1173,11 @@ static void rs_fill_parts(void)
 	lv_obj_clean(rs.parts);
 	memset(rs.part_on, 0, sizeof(rs.part_on));
 	if (rs.sel < 0) {
-		wrap_label(rs.parts, "Pick a backup on the left.", F20, C_MUTED);
+		wrap_label(rs.parts, tr(RS_PICK_BACKUP), F20, C_MUTED);
 		rs_update_buttons();
 		return;
 	}
-	lv_obj_t *h = label(rs.parts, "Partitions to write back:", F20B, C_TEXT);
+	lv_obj_t *h = label(rs.parts, tr(RS_PARTITIONS_TO_WRITE), F20B, C_TEXT);
 	lv_obj_set_width(h, lv_pct(100));
 	backup_set *b = &rs.sets[rs.sel];
 	bool locked_any = false;
@@ -1149,8 +1199,7 @@ static void rs_fill_parts(void)
 		lv_obj_add_event_cb(cb, on_rs_part, LV_EVENT_VALUE_CHANGED, (void *)(intptr_t)i);
 	}
 	if (locked_any) {
-		lv_obj_t *n = wrap_label(rs.parts, "Greyed out: recovery's own slot and the boot "
-					 "area (command line only).", F16, C_MUTED);
+		lv_obj_t *n = wrap_label(rs.parts, tr(RS_GREYED_OUT), F16, C_MUTED);
 		lv_obj_set_style_pad_top(n, 4, 0);
 	}
 	rs_update_buttons();
@@ -1185,7 +1234,7 @@ static void rs_run(bool dry)
 	char *c = cmd_expand(CMD_RESTORE, v);
 	/* After restoring slot B, offer to boot it */
 	bool main_slot = strstr(parts, "kernel2") || strstr(parts, "rootfs2");
-	start_job_x(JK_CMD, dry ? "Restore (dry run)" : "Restoring", rs.sets[rs.sel].path, c,
+	start_job_x(JK_CMD, dry ? tr(RS_RESTORE_DRY_RUN) : tr(RS_RESTORING), rs.sets[rs.sel].path, c,
 		    dry, false, !dry, !dry && main_slot ? AFTER_BOOT_MAIN : AFTER_NONE);
 	free(c);
 }
@@ -1209,11 +1258,10 @@ static void on_rs_go(lv_event_t *e)
 	char parts[400];
 	static char t1[600], t2[600];
 	rs_parts_str(parts, sizeof(parts));
-	snprintf(t1, sizeof(t1), "Write backup %s over these partitions of the printer:\n%s",
-		 rs.sets[rs.sel].label, parts);
-	snprintf(t2, sizeof(t2), "%s will be overwritten. This can't be undone. "
-		 "Keep the printer powered until it is done.", parts);
-	confirm("Restore backup?", t1, LV_SYMBOL_REFRESH "  Restore now", true, t2, rs_go_now);
+	snprintf(t1, sizeof(t1), tr(RS_RESTORE_Q), rs.sets[rs.sel].label, parts);
+	snprintf(t2, sizeof(t2), tr(RS_RESTORE_Q2), parts);
+	confirm(tr(RS_RESTORE_BACKUP_Q), t1, tr_sym(LV_SYMBOL_REFRESH, RS_RESTORE_NOW), true, t2,
+		rs_go_now);
 }
 
 static void rs_fill(void)
@@ -1229,9 +1277,8 @@ static void rs_fill(void)
 	}
 	if (!rs.n) {
 		char t[200];
-		snprintf(t, sizeof(t), usb_mounted_idx() >= 0
-			 ? "No backups on this stick (folders %s...)."
-			 : "Insert the USB stick with the backup.", rui_get(PATH_BACKUP_PREFIX));
+		snprintf(t, sizeof(t), tr(usb_mounted_idx() >= 0 ? RS_NO_BACKUPS : RS_INSERT_BACKUP_USB),
+			rui_get(PATH_BACKUP_PREFIX));
 		wrap_label(rs.list, t, F20, C_MUTED);
 	}
 	select_row(rs.list, rs.sel);
@@ -1251,7 +1298,7 @@ static void page_restore(void)
 	memset(&rs, 0, sizeof(rs));
 	rs.sets = sets;
 	rs.sel = -1;
-	lv_obj_t *body = page_frame("Restore from USB", true);
+	lv_obj_t *body = page_frame(tr(RS_RESTORE_TITLE), true);
 	usb_card(body);
 	lv_obj_t *cols = box(body, LV_FLEX_FLOW_ROW);
 	lv_obj_set_width(cols, lv_pct(100));
@@ -1272,9 +1319,9 @@ static void page_restore(void)
 	lv_obj_t *row = box(right, LV_FLEX_FLOW_ROW);
 	lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
 	lv_obj_set_style_pad_column(row, 10, 0);
-	rs.dry = button(row, LV_SYMBOL_EYE_OPEN, "Check", 0, on_rs_dry, NULL);
+	rs.dry = button(row, LV_SYMBOL_EYE_OPEN, tr(RS_CHECK), 0, on_rs_dry, NULL);
 	lv_obj_set_flex_grow(rs.dry, 1);
-	rs.go = button(row, LV_SYMBOL_REFRESH, "Restore", 2, on_rs_go, NULL);
+	rs.go = button(row, LV_SYMBOL_REFRESH, tr(RS_RESTORE), 2, on_rs_go, NULL);
 	lv_obj_set_flex_grow(rs.go, 1);
 	rs_fill();
 	cur_refresh = rs_refresh;
@@ -1292,7 +1339,7 @@ static void stock_run(bool dry)
 	const char *v[] = { "DRY", dry ? "--dry-run" : "", NULL };
 	char *c = cmd_expand(CMD_RESTORE_STOCK, v);
 	/* ad5x-restore-stock points the flag at slot B itself: offer a reboot */
-	start_job_x(JK_CMD, dry ? "Stock restore (dry run)" : "Restoring stock firmware",
+	start_job_x(JK_CMD, dry ? tr(RS_STOCK_DRY_RUN) : tr(RS_RESTORING_STOCK),
 		    "/data/ad5x/stock -> slot B", c, dry, false, !dry,
 		    dry ? AFTER_NONE : AFTER_REBOOT);
 	free(c);
@@ -1312,12 +1359,9 @@ static void on_stock_dry(lv_event_t *e)
 static void on_stock(lv_event_t *e)
 {
 	(void)e;
-	confirm("Restore stock firmware?",
-		"Writes the saved stock Flashforge system into the main slot (B) and "
-		"makes it the one that starts. Kiln OS in slot B is replaced.",
-		LV_SYMBOL_WARNING "  Restore stock", true,
-		"Slot B will be overwritten with the stock firmware. Keep the printer "
-		"powered until it is done.", stock_now);
+	confirm(tr(RS_RESTORE_STOCK_Q),
+		tr(RS_STOCK_Q_TEXT), tr_sym(LV_SYMBOL_WARNING, RS_RESTORE_STOCK), true,
+		tr(RS_STOCK_Q_TEXT2), stock_now);
 }
 
 static void stock_refresh(void)
@@ -1331,35 +1375,31 @@ static void stock_refresh(void)
 	enable(sk.go, saved);
 	enable(sk.dry, saved);
 	lv_label_set_text(sk.note, !known ? "" : saved
-			  ? LV_SYMBOL_OK "  A saved stock system was found in /data/ad5x/stock."
-			  : LV_SYMBOL_CLOSE "  No saved stock system in /data/ad5x/stock: it is "
-			    "made by ad5x-update --replace-stock when Kiln OS is installed.");
+			  ? tr_sym(LV_SYMBOL_OK, RS_STOCK_SAVED_NOTE)
+			  : tr_sym(LV_SYMBOL_CLOSE, RS_STOCK_NONE_NOTE));
 	lv_obj_set_style_text_color(sk.note, saved ? C_OK : C_WARN, 0);
 }
 
 static void page_stock(void)
 {
 	memset(&sk, 0, sizeof(sk));
-	lv_obj_t *body = page_frame("Restore stock firmware", true);
+	lv_obj_t *body = page_frame(tr(RS_RESTORE_STOCK_FIRMWARE), true);
 	lv_obj_t *c = card(body);
 	lv_obj_set_width(c, lv_pct(100));
 	lv_obj_set_flex_grow(c, 1);
 	lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
 	lv_obj_set_style_pad_all(c, 18, 0);
 	lv_obj_set_style_pad_row(c, 12, 0);
-	label(c, LV_SYMBOL_WARNING "  Back to Flashforge's firmware", F24B, C_WARN);
-	wrap_label(c, "Writes the stock system saved on the printer when Kiln OS was "
-		   "installed back into the main slot (B), checks it, and points the boot "
-		   "flag at it. This recovery stays as it is.", F20, C_TEXT);
+	label(c, tr_sym(LV_SYMBOL_WARNING, RS_STOCK_BACK_TITLE), F24B, C_WARN);
+	wrap_label(c, tr(RS_STOCK_TEXT), F20, C_TEXT);
 	sk.note = wrap_label(c, "", F20, C_MUTED);
-	wrap_label(c, "Back up first to keep this system. You'll be asked twice before "
-		   "anything is written.", F16, C_MUTED);
+	wrap_label(c, tr(RS_STOCK_BACKUP_FIRST), F16, C_MUTED);
 	lv_obj_t *row = box(body, LV_FLEX_FLOW_ROW);
 	lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
 	lv_obj_set_style_pad_column(row, 12, 0);
-	sk.dry = button(row, LV_SYMBOL_EYE_OPEN, "Check", 0, on_stock_dry, NULL);
+	sk.dry = button(row, LV_SYMBOL_EYE_OPEN, tr(RS_CHECK), 0, on_stock_dry, NULL);
 	lv_obj_set_width(sk.dry, 200);
-	sk.go = button(row, LV_SYMBOL_WARNING, "Restore stock firmware\xe2\x80\xa6", 2, on_stock,
+	sk.go = button(row, LV_SYMBOL_WARNING, tr(RS_RESTORE_STOCK_FW_BTN), 2, on_stock,
 		       NULL);
 	lv_obj_set_flex_grow(sk.go, 1);
 	cur_refresh = stock_refresh;
@@ -1394,33 +1434,32 @@ static void nw_fill(void)
 	if (have) {
 		bool m = kv("net_mode", mode, sizeof(mode));
 		snprintf(t, sizeof(t), "%s  (%s%s%s)", ip, ifc, m ? ", " : "", m ? mode : "");
-		nw_row("Address", t, C_TEXT);
+		nw_row(tr(RS_ADDRESS), t, C_TEXT);
 	} else {
-		nw_row("Address", "no network", C_MUTED);
+		nw_row(tr(RS_ADDRESS), tr(RS_NO_NETWORK), C_MUTED);
 	}
-	nw_row("Name", host, C_TEXT);
+	nw_row(tr(RS_NAME), host, C_TEXT);
 	bool ssh_up = !kv("ssh", v, sizeof(v)) || !strcmp(v, "running");
 	if (have && ssh_up)
 		snprintf(t, sizeof(t), "ssh root@%s", ip);
 	else
-		snprintf(t, sizeof(t), "%s", ssh_up ? "no network" : "not running");
+		snprintf(t, sizeof(t), "%s", ssh_up ? tr(RS_NO_NETWORK) : tr(RS_NOT_RUNNING));
 	nw_row("SSH", t, have && ssh_up ? C_ACCENT : C_MUTED);
 	char port[16] = "8080";
 	kv("web_port", port, sizeof(port));
 	if (have) {
 		snprintf(nw.url, sizeof(nw.url), "http://%s:%s", ip, port);
-		nw_row("Upload", nw.url, C_ACCENT);
+		nw_row(tr(RS_UPLOAD), nw.url, C_ACCENT);
 		lv_qrcode_update(nw.qr, nw.url, strlen(nw.url));
 		show(nw.qr, true);
-		lv_label_set_text(nw.qrl, "Update upload page");
+		lv_label_set_text(nw.qrl, tr(RS_UPDATE_UPLOAD_PAGE));
 	} else {
-		nw_row("Upload", "no network", C_MUTED);
+		nw_row(tr(RS_UPLOAD), tr(RS_NO_NETWORK), C_MUTED);
 		show(nw.qr, false);
-		lv_label_set_text(nw.qrl, "Plug in Ethernet, or set up Wi-Fi in "
-				  "/data/ad5x/wpa_supplicant.conf");
+		lv_label_set_text(nw.qrl, tr(RS_PLUG_IN));
 	}
 	if (kv("release", v, sizeof(v)))
-		nw_row("Recovery", v, C_TEXT);
+		nw_row(tr(RS_RECOVERY_ROW), v, C_TEXT);
 }
 
 /* `ad5x-usb list` lines -> a short USB / rescue summary */
@@ -1447,12 +1486,22 @@ static void nw_usb(const char *list)
 			nswu += *p == ',';
 		nswu += swu[0] != 0;
 		size_t n = strlen(out);
-		snprintf(out + n, sizeof(out) - n, "%sUSB %s (%s): %d update%s%s%s%s%s", n ? "\n" : "",
-			 dev, fs, nswu, nswu == 1 ? "" : "s",
-			 rr ? ", rescue system" : "", rb ? ", rescue-boot marker" : "",
-			 rf ? ", rescue-flash marker" : "", au ? ", autoupdate marker" : "");
+		snprintf(out + n, sizeof(out) - n, tr(RS_USB_SUMMARY), n ? "\n" : "", dev, fs, nswu,
+			nswu == 1 ? tr(RS_UPDATE_ONE) : tr(RS_UPDATE_MANY));
+		n = strlen(out);
+		if (rr)
+			snprintf(out + n, sizeof(out) - n, "%s", tr(RS_FLAG_RESCUE_SYSTEM));
+		n = strlen(out);
+		if (rb)
+			snprintf(out + n, sizeof(out) - n, "%s", tr(RS_FLAG_RESCUE_BOOT));
+		n = strlen(out);
+		if (rf)
+			snprintf(out + n, sizeof(out) - n, "%s", tr(RS_FLAG_RESCUE_FLASH));
+		n = strlen(out);
+		if (au)
+			snprintf(out + n, sizeof(out) - n, "%s", tr(RS_FLAG_AUTOUPDATE));
 	}
-	lv_label_set_text(nw.info, out[0] ? out : "USB: no stick mounted");
+	lv_label_set_text(nw.info, out[0] ? out : tr(RS_USB_NO_STICK));
 }
 
 static void nw_refresh(void)
@@ -1478,7 +1527,7 @@ static void nw_free(lv_event_t *e)
 static void page_network(void)
 {
 	memset(&nw, 0, sizeof(nw));
-	lv_obj_t *body = page_frame("Network / SSH", true);
+	lv_obj_t *body = page_frame(tr(RS_NETWORK_SSH), true);
 	lv_obj_add_event_cb(scr, nw_free, LV_EVENT_DELETE, NULL);
 	lv_obj_t *cols = box(body, LV_FLEX_FLOW_ROW);
 	lv_obj_set_width(cols, lv_pct(100));
@@ -1494,9 +1543,7 @@ static void page_network(void)
 	lv_obj_set_size(nw.rows, lv_pct(100), LV_SIZE_CONTENT);
 	lv_obj_set_style_pad_row(nw.rows, 8, 0);
 	nw.info = wrap_label(left, "", F16, C_MUTED);
-	wrap_label(left, "Log in as root with the printer's root password or a key in "
-		   "/data/ad5x/ssh/authorized_keys. Network: /data/ad5x/network.conf.",
-		   F16, C_MUTED);
+	wrap_label(left, tr(RS_SSH_LOGIN_TEXT), F16, C_MUTED);
 
 	lv_obj_t *right = card(cols);
 	lv_obj_set_size(right, 236, lv_pct(100));
@@ -1534,7 +1581,7 @@ static struct {
 
 static void lg_set(const char *t)
 {
-	lv_label_set_text(lg.text, t && *t ? t : "(empty)");
+	lv_label_set_text(lg.text, t && *t ? t : tr(RS_EMPTY_LOG));
 	lv_obj_update_layout(lg.view);
 	lv_obj_scroll_to_y(lg.view, LV_COORD_MAX, LV_ANIM_OFF);
 }
@@ -1558,7 +1605,7 @@ static void lg_load(void)
 		char *c = cmd_expand(CMD_SYSLOG, NULL);
 		lg.cap = capture_start(c, LOG_CAP);
 		free(c);
-		lv_label_set_text(lg.text, "reading\xe2\x80\xa6");
+		lv_label_set_text(lg.text, tr(RS_READING));
 		break;
 	}
 	case LOG_UPDATE:
@@ -1568,7 +1615,7 @@ static void lg_load(void)
 		snprintf(cmd, sizeof(cmd), "tail -n 300 %s 2>&1", q);
 		free(q);
 		lg.cap = capture_start(cmd, LOG_CAP);
-		lv_label_set_text(lg.text, "reading\xe2\x80\xa6");
+		lv_label_set_text(lg.text, tr(RS_READING));
 		break;
 	}
 	}
@@ -1603,14 +1650,14 @@ static void page_logs(void)
 	if (!lg.buf)
 		lg.buf = malloc(LOG_CAP);
 	lg.cap = NULL;
-	lv_obj_t *body = page_frame("Logs", true);
+	lv_obj_t *body = page_frame(tr(RS_LOGS), true);
 	lv_obj_add_event_cb(scr, lg_free, LV_EVENT_DELETE, NULL);
 	lv_obj_t *row = box(body, LV_FLEX_FLOW_ROW);
 	lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
 	lv_obj_set_style_pad_column(row, 10, 0);
-	static const char *names[LOG_N] = { "This session", "Updates", "SWUpdate", "System" };
+	static const enum rui_str names[LOG_N] = { RS_LOGS_TAB_SESSION, RS_LOGS_TAB_UPDATES, RS_LOGS_TAB_SWUPDATE, RS_LOGS_TAB_SYSTEM };
 	for (int i = 0; i < LOG_N; i++) {
-		lg.tabs[i] = button(row, NULL, names[i], 0, on_lg_tab, (void *)(intptr_t)i);
+		lg.tabs[i] = button(row, NULL, tr(names[i]), 0, on_lg_tab, (void *)(intptr_t)i);
 		lv_obj_set_flex_grow(lg.tabs[i], 1);
 		lv_obj_set_height(lg.tabs[i], 52);
 		lv_obj_set_style_bg_color(lg.tabs[i], C_ACCENT, LV_STATE_CHECKED);
@@ -1631,14 +1678,14 @@ static void page_logs(void)
 static void reboot_now(void)
 {
 	char *c = cmd_expand(CMD_REBOOT, NULL);
-	start_job(JK_CMD, "Rebooting", "", c, false, true);
+	start_job(JK_CMD, tr(RS_REBOOTING), "", c, false, true);
 	free(c);
 }
 
 static void poweroff_now(void)
 {
 	char *c = cmd_expand(CMD_POWEROFF, NULL);
-	start_job(JK_CMD, "Shutting down", "", c, false, true);
+	start_job(JK_CMD, tr(RS_SHUTTING_DOWN), "", c, false, true);
 	free(c);
 }
 
@@ -1648,43 +1695,38 @@ static void on_reboot(lv_event_t *e)
 	char flag[32];
 	const char *where = (kv("flag", flag, sizeof(flag)) || sys_ota_flag(flag, sizeof(flag))) &&
 			    !strcmp(flag, "ota:kernel2")
-			    ? "the main OS (the boot flag says slot B)"
-			    : "recovery again (the boot flag says recovery)";
+			    ? tr(RS_REBOOT_MAIN)
+			    : tr(RS_REBOOT_RECOVERY);
 	static char t[200];
-	snprintf(t, sizeof(t), "The printer restarts into %s.", where);
-	confirm("Reboot?", t, LV_SYMBOL_REFRESH "  Reboot", false, NULL, reboot_now);
+	snprintf(t, sizeof(t), tr(RS_REBOOT_TEXT), where);
+	confirm(tr(RS_REBOOT_Q), t, tr_sym(LV_SYMBOL_REFRESH, RS_REBOOT), false, NULL, reboot_now);
 }
 
 static void on_poweroff(lv_event_t *e)
 {
 	(void)e;
-	confirm("Shut down?", "Stops the system so the printer can be switched off "
-		"safely with its power switch.", LV_SYMBOL_POWER "  Shut down", false, NULL,
-		poweroff_now);
+	confirm(tr(RS_SHUTDOWN_Q), tr(RS_SHUTDOWN_TEXT), tr_sym(LV_SYMBOL_POWER, RS_SHUT_DOWN),
+		false, NULL, poweroff_now);
 }
 
 static void page_power(void)
 {
-	lv_obj_t *body = page_frame("Reboot / Power", true);
+	lv_obj_t *body = page_frame(tr(RS_REBOOT_POWER), true);
 	lv_obj_t *c = card(body);
 	lv_obj_set_width(c, lv_pct(100));
 	lv_obj_set_flex_grow(c, 1);
 	lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
 	lv_obj_set_style_pad_all(c, 18, 0);
 	lv_obj_set_style_pad_row(c, 10, 0);
-	label(c, LV_SYMBOL_POWER "  Power", F24B, C_TEXT);
-	wrap_label(c, "\"Shut down\" stops the system so the printer can then be switched "
-		   "off with its power switch. Don't switch off during an install or "
-		   "restore: the partition being written would be left unusable.",
-		   F20, C_TEXT);
-	wrap_label(c, "\"Boot main OS\" sets the boot flag to the main OS (slot B) and "
-		   "restarts; \"Reboot\" keeps the flag as it is.", F20, C_MUTED);
+	label(c, tr_sym(LV_SYMBOL_POWER, RS_POWER), F24B, C_TEXT);
+	wrap_label(c, tr(RS_POWER_TEXT), F20, C_TEXT);
+	wrap_label(c, tr(RS_POWER_TEXT2), F20, C_MUTED);
 	lv_obj_t *row = box(body, LV_FLEX_FLOW_ROW);
 	lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
 	lv_obj_set_style_pad_column(row, 12, 0);
-	lv_obj_t *b1 = button(row, LV_SYMBOL_PLAY, "Boot main OS", 1, on_boot_main, NULL);
-	lv_obj_t *b2 = button(row, LV_SYMBOL_REFRESH, "Reboot", 0, on_reboot, NULL);
-	lv_obj_t *b3 = button(row, LV_SYMBOL_POWER, "Shut down", 0, on_poweroff, NULL);
+	lv_obj_t *b1 = button(row, LV_SYMBOL_PLAY, tr(RS_BOOT_MAIN_OS), 1, on_boot_main, NULL);
+	lv_obj_t *b2 = button(row, LV_SYMBOL_REFRESH, tr(RS_REBOOT), 0, on_reboot, NULL);
+	lv_obj_t *b3 = button(row, LV_SYMBOL_POWER, tr(RS_SHUT_DOWN), 0, on_poweroff, NULL);
 	lv_obj_set_flex_grow(b1, 1);
 	lv_obj_set_flex_grow(b2, 1);
 	lv_obj_set_flex_grow(b3, 1);
@@ -1707,8 +1749,8 @@ static void reboot_now(void);
 static void on_after(lv_event_t *e)
 {
 	if (jp.after_reboot)
-		confirm("Reboot?", "The printer restarts into the system the boot flag "
-			"points at.", LV_SYMBOL_REFRESH "  Reboot", false, NULL, reboot_now);
+		confirm(tr(RS_REBOOT_Q), tr(RS_REBOOT_INTO_FLAG), tr_sym(LV_SYMBOL_REFRESH, RS_REBOOT),
+			false, NULL, reboot_now);
 	else
 		on_boot_main(e);
 }
@@ -1735,7 +1777,7 @@ static void job_refresh(void)
 	swu_state ss;
 	if (jb.pending) {
 		if (status_busy()) {
-			lv_label_set_text(jp.step, "Waiting for a status query to finish\xe2\x80\xa6");
+			lv_label_set_text(jp.step, tr(RS_WAITING_STATUS));
 			return;
 		}
 		jb.started = job_start(jb.title, jb.pending);
@@ -1768,13 +1810,13 @@ static void job_refresh(void)
 	if (swu_mode && swu_fresh) {
 		pct = ss.overall;
 		if (ss.status == SWU_DOWNLOAD)
-			snprintf(step, sizeof(step), "Receiving the update: %u%%", ss.dwl_percent);
+			snprintf(step, sizeof(step), tr(RS_RECEIVING), ss.dwl_percent);
 		else if (ss.nsteps)
-			snprintf(step, sizeof(step), "Step %u of %u: %s%s%s%s", ss.cur_step,
-				 ss.nsteps, ss.image[0] ? ss.image : "preparing",
+			snprintf(step, sizeof(step), tr(RS_STEP_FMT), ss.cur_step,
+				 ss.nsteps, ss.image[0] ? ss.image : tr(RS_PREPARING),
 				 ss.handler[0] ? " (" : "", ss.handler, ss.handler[0] ? ")" : "");
 		else
-			snprintf(step, sizeof(step), "SWUpdate: %s", swu_status_name(ss.status));
+			snprintf(step, sizeof(step), tr(RS_SWU_STATUS), swu_status_tr(ss.status));
 	} else if (js.step[0]) {
 		snprintf(step, sizeof(step), "%s", js.step);
 	} else if (jb.what[0]) {
@@ -1803,10 +1845,10 @@ static void job_refresh(void)
 
 	if (running) {
 		if (!jp.ended)
-			lv_label_set_text(jp.status, jb.reboots ? "Restarting\xe2\x80\xa6"
+			lv_label_set_text(jp.status, jb.reboots ? tr(RS_RESTARTING)
 					  : jb.critical || jb.kind == JK_WEB
-					  ? "Working\xe2\x80\xa6 don't switch off"
-					  : "Working\xe2\x80\xa6");
+					  ? tr(RS_WORKING_DONT_OFF)
+					  : tr(RS_WORKING));
 		show(jp.cancel, jb.cancelable);
 		show(jp.done, false);
 		show(jp.boot, false);
@@ -1825,16 +1867,16 @@ static void job_refresh(void)
 		ok = js.exit_code == 0;
 	char msg[200];
 	if (jb.failed_start)
-		snprintf(msg, sizeof(msg), LV_SYMBOL_CLOSE "  Could not start the command");
+		iconed(msg, sizeof(msg), LV_SYMBOL_CLOSE, "  ", "%s", tr(RS_COULD_NOT_START));
 	else if (ok)
-		snprintf(msg, sizeof(msg), LV_SYMBOL_OK "  %s: done", jb.title);
+		iconed(msg, sizeof(msg), LV_SYMBOL_OK, "  ", tr(RS_JOB_DONE), jb.title);
 	else if (js.exit_code < 0 && jb.kind != JK_WEB)
-		snprintf(msg, sizeof(msg), LV_SYMBOL_CLOSE "  %s: stopped", jb.title);
+		iconed(msg, sizeof(msg), LV_SYMBOL_CLOSE, "  ", tr(RS_JOB_STOPPED), jb.title);
 	else if (jb.kind == JK_WEB)
-		snprintf(msg, sizeof(msg), LV_SYMBOL_CLOSE "  Update failed (see log)");
+		iconed(msg, sizeof(msg), LV_SYMBOL_CLOSE, "  ", "%s", tr(RS_UPDATE_FAILED));
 	else
-		snprintf(msg, sizeof(msg), LV_SYMBOL_CLOSE "  %s: failed (exit %d)", jb.title,
-			 js.exit_code);
+		iconed(msg, sizeof(msg), LV_SYMBOL_CLOSE, "  ", tr(RS_JOB_FAILED), jb.title,
+			js.exit_code);
 	job_banner(ok, msg);
 	if (ok) {
 		show(jp.bar, true);
@@ -1856,11 +1898,11 @@ static void job_refresh(void)
 	show(jp.cancel, false);
 	show(jp.done, true);
 	if (ok && (jb.after == AFTER_BOOT_MAIN || (jb.kind == JK_WEB))) {
-		lv_label_set_text(lv_obj_get_child(jp.boot, 0), LV_SYMBOL_PLAY "  Boot main OS");
+		lv_label_set_text(lv_obj_get_child(jp.boot, 0), tr_sym(LV_SYMBOL_PLAY, RS_BOOT_MAIN_OS));
 		jp.after_reboot = false;
 		show(jp.boot, true);
 	} else if (ok && jb.after == AFTER_REBOOT) {
-		lv_label_set_text(lv_obj_get_child(jp.boot, 0), LV_SYMBOL_REFRESH "  Reboot");
+		lv_label_set_text(lv_obj_get_child(jp.boot, 0), tr_sym(LV_SYMBOL_REFRESH, RS_REBOOT));
 		jp.after_reboot = true;
 		show(jp.boot, true);
 	}
@@ -1874,7 +1916,7 @@ static void page_job(void)
 	static char buf[JOB_VIEW_CAP];
 	jp.buf = buf;
 	buf[0] = 0;
-	lv_obj_t *body = page_frame(jb.kind == JK_WEB ? "Update from browser" : jb.title, true);
+	lv_obj_t *body = page_frame(jb.kind == JK_WEB ? tr(RS_UPDATE_FROM_BROWSER) : jb.title, true);
 
 	jp.banner = card(body);
 	lv_obj_set_size(jp.banner, lv_pct(100), LV_SIZE_CONTENT);
@@ -1890,7 +1932,7 @@ static void page_job(void)
 	lv_obj_set_style_arc_width(jp.spin, 4, LV_PART_MAIN);
 	lv_obj_set_style_arc_width(jp.spin, 4, LV_PART_INDICATOR);
 	lv_obj_set_style_arc_color(jp.spin, C_ACCENT, LV_PART_INDICATOR);
-	jp.status = label(r, "Working\xe2\x80\xa6", F24B, C_TEXT);
+	jp.status = label(r, tr(RS_WORKING), F24B, C_TEXT);
 	lv_obj_set_flex_grow(jp.status, 1);
 	jp.pct = label(r, "", F24B, C_TEXT);
 	jp.step = label(jp.banner, "", F20, C_MUTED);
@@ -1916,11 +1958,11 @@ static void page_job(void)
 	lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
 	lv_obj_set_style_pad_column(row, 12, 0);
 	lv_obj_set_flex_align(row, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-	jp.cancel = button(row, LV_SYMBOL_STOP, "Stop", 2, on_cancel, NULL);
+	jp.cancel = button(row, LV_SYMBOL_STOP, tr(RS_STOP), 2, on_cancel, NULL);
 	lv_obj_set_width(jp.cancel, 200);
-	jp.boot = button(row, LV_SYMBOL_PLAY, "Boot main OS", 1, on_after, NULL);
+	jp.boot = button(row, LV_SYMBOL_PLAY, tr(RS_BOOT_MAIN_OS), 1, on_after, NULL);
 	lv_obj_set_width(jp.boot, 260);
-	jp.done = button(row, LV_SYMBOL_OK, "Done", 0, on_home, NULL);
+	jp.done = button(row, LV_SYMBOL_OK, tr(RS_DONE), 0, on_home, NULL);
 	lv_obj_set_width(jp.done, 200);
 	show(jp.cancel, false);
 	show(jp.boot, false);
@@ -1943,7 +1985,7 @@ static void tick(lv_timer_t *t)
 		if (s.active && cur_page != page_job && !job_running()) {
 			memset(&jb, 0, sizeof(jb));
 			jb.kind = JK_WEB;
-			snprintf(jb.title, sizeof(jb.title), "Update");
+			snprintf(jb.title, sizeof(jb.title), "%s", tr(RS_UPDATE));
 			jb.swu_seq_at_start = s.seq - 1;
 			jb.swu_result_at_start = s.result_seq;
 			go(page_job);
@@ -1956,6 +1998,7 @@ static void tick(lv_timer_t *t)
 
 void ui_init(lv_display_t *disp)
 {
+	i18n_set_lang(lang_from_settings_file(rui_get(PATH_SETTINGS)));
 	fonts_init();
 	lv_theme_t *th = lv_theme_default_init(disp, C_ACCENT, C_DANGER, true, F20);
 	lv_display_set_theme(disp, th);
@@ -2010,7 +2053,7 @@ void ui_run_shots(void (*shot)(const char *name))
 	dlg_close();
 
 	/* Install as it looks mid-way (SWUpdate progress injected) */
-	start_job_x(JK_INSTALL, "Installing update", "/data/ad5x/update/kiln-os.swu",
+	start_job_x(JK_INSTALL, tr(RS_INSTALLING_UPDATE), "/data/ad5x/update/kiln-os.swu",
 		    "echo 'swu-apply: /data/ad5x/update/kiln-os.swu via the daemon'; sleep 30",
 		    false, false, true, AFTER_BOOT_MAIN);
 	swu_inject(SWU_START, SWU_SRC_LOCAL, 0, 0, 0, "", NULL);
@@ -2022,7 +2065,7 @@ void ui_run_shots(void (*shot)(const char *name))
 	swu_inject(SWU_SUCCESS, SWU_SRC_LOCAL, 3, 3, 100, "kernel.uimage", NULL);
 	swu_inject(SWU_IDLE, SWU_SRC_LOCAL, 0, 0, 0, "", NULL);
 
-	start_job_x(JK_INSTALL, "Installing update", "/data/ad5x/update/kiln-os.swu",
+	start_job_x(JK_INSTALL, tr(RS_INSTALLING_UPDATE), "/data/ad5x/update/kiln-os.swu",
 		    "echo 'swu-apply: /data/ad5x/update/kiln-os.swu via the daemon'; "
 		    "echo 'swu-apply: OK'", false, false, true, AFTER_BOOT_MAIN);
 	swu_inject(SWU_START, SWU_SRC_LOCAL, 0, 0, 0, "", NULL);

@@ -1,0 +1,161 @@
+# Kiln OS recovery screen: every string the recovery UI shows. This file is the key list.
+# One line per string: id, TAB, text. Keep the id as it is; translate the text.
+# Placeholders: %s %d %u keep their order and count (%% is a percent sign).
+# \n is a line break. Leave out the icons and "Kiln OS"; keep file paths and command names.
+# Translation files: <code>.txt next to this file, same ids. An empty text shows English.
+# Build: python3 recovery-ui/i18n/gen_i18n.py (writes src/i18n_ids.h and src/i18n_tab.c).
+back	Back
+cancel	Cancel
+continue	Continue
+try	Try
+done	Done
+stop	Stop
+check	Check
+rescan	Rescan
+install	Install
+restore	Restore
+eject	Eject
+mount	Mount
+reboot	Reboot
+shut_down	Shut down
+power	Power
+boot_main_os	Boot main OS
+install_now	Install now
+restore_now	Restore now
+restore_stock	Restore stock
+restore_stock_fw_btn	Restore stock firmware…
+start_backup	Start backup
+dry_run	Dry run
+are_you_sure	Are you sure?
+step_1_of_2	Step 1 of 2
+step_2_of_2	Step 2 of 2: last chance to cancel
+wait_n_s	Wait %d s
+no_network	no network
+not_running	not running
+no_network_home	No network (Ethernet or Wi-Fi)
+ssh_not_running	SSH not running
+recovery_title	—  Recovery
+busy	busy
+swu_ready	SWUpdate ready
+swu_not_running	SWUpdate not running
+boot_flag_unreadable	boot flag unreadable
+next_main	next start: main OS
+next_recovery	next start: recovery
+home_slot	Main OS (slot B): %s   ·   %s
+slot_installed	installed
+slot_not_found	not found
+slot_empty	empty
+slot_unknown	unknown
+home_trace	Main OS last start got to: %s
+home_no_trace	Main OS last start: no trace
+home_last_update	Last update: %s
+home_no_update	Last update: none recorded
+back_up	Back up
+install_update	Install update
+network_ssh	Network / SSH
+logs	Logs
+reboot_power	Reboot / Power
+update	Update
+update_from_browser	Update from browser
+boot_main_what	Checking slot B, setting the boot flag, restarting
+boot_main_q	Boot the main OS?
+boot_main_text	The printer restarts into the main OS (slot B). If it doesn't finish starting, the next start comes back here.
+no_main_q	No main OS found?
+no_main_text	Slot B doesn't look like it holds a system. ad5x-boot-main checks it again and refuses if it is empty. Try anyway?
+installing_update	Installing update
+install_q	Install update?
+install_q_text	Install %s into the main OS slot (B)? The system there now is replaced.
+install_q_text2	SWUpdate checks the signature, then writes slot B. Don't switch the printer off until it says done.
+checking_update	Checking update
+no_update_fmt	No .swu or .zip update found.\nCopy one to %s or to the top folder of a USB stick, or upload it from a browser.
+upload_hint	Or upload from a browser:  http://%s:8080
+upload_hint_nonet	Or upload from a browser on port 8080 (no network yet)
+mounting	Mounting
+ejecting	Ejecting
+usb_busy	%s the USB stick…
+usb_mounted	%s (%s), %s free
+usb_not_mounted	USB stick %s not mounted
+usb_none	No USB stick: insert one (FAT32, exFAT or ext4)
+usb_no_stick	USB: no stick mounted
+bk_dest_none	Destination: a USB stick (none mounted)
+bk_dest	Destination:  %s/%s<date>-<n>/
+backup_dry_run	Backup (dry run)
+backing_up	Backing up
+back_up_title	Back up to USB
+backup_text	Copies the eMMC to the stick: boot area, both slots, boot flag and usershare, each read back and checked. Nothing on the printer is changed.
+also_userdata	Also userdata (5.8 GB, slow)
+restore_title	Restore from USB
+pick_backup	Pick a backup on the left.
+partitions_to_write	Partitions to write back:
+greyed_out	Greyed out: recovery's own slot and the boot area (command line only).
+restore_dry_run	Restore (dry run)
+restoring	Restoring
+restore_backup_q	Restore backup?
+restore_q	Write backup %s over these partitions of the printer:\n%s
+restore_q2	%s will be overwritten. This can't be undone. Keep the printer powered until it is done.
+no_backups	No backups on this stick (folders %s...).
+insert_backup_usb	Insert the USB stick with the backup.
+stock_dry_run	Stock restore (dry run)
+restoring_stock	Restoring stock firmware
+restore_stock_q	Restore stock firmware?
+stock_q_text	Writes the saved stock Flashforge system into the main slot (B) and makes it the one that starts. Kiln OS in slot B is replaced.
+stock_q_text2	Slot B will be overwritten with the stock firmware. Keep the printer powered until it is done.
+stock_saved_note	A saved stock system was found in /data/ad5x/stock.
+stock_none_note	No saved stock system in /data/ad5x/stock: it is made by ad5x-update --replace-stock when Kiln OS is installed.
+restore_stock_firmware	Restore stock firmware
+stock_back_title	Back to Flashforge's firmware
+stock_text	Writes the stock system saved on the printer when Kiln OS was installed back into the main slot (B), checks it, and points the boot flag at it. This recovery stays as it is.
+stock_backup_first	Back up first to keep this system. You'll be asked twice before anything is written.
+address	Address
+name	Name
+upload	Upload
+recovery_row	Recovery
+update_upload_page	Update upload page
+plug_in	Plug in Ethernet, or set up Wi-Fi in /data/ad5x/wpa_supplicant.conf
+ssh_login_text	Log in as root with the printer's root password or a key in /data/ad5x/ssh/authorized_keys. Network: /data/ad5x/network.conf.
+usb_summary	%sUSB %s (%s): %d %s
+update_one	update
+update_many	updates
+flag_rescue_system	, rescue system
+flag_rescue_boot	, rescue-boot marker
+flag_rescue_flash	, rescue-flash marker
+flag_autoupdate	, autoupdate marker
+empty_log	(empty)
+reading	reading…
+logs_tab_session	This session
+logs_tab_updates	Updates
+logs_tab_swupdate	SWUpdate
+logs_tab_system	System
+rebooting	Rebooting
+shutting_down	Shutting down
+reboot_main	the main OS (the boot flag says slot B)
+reboot_recovery	recovery again (the boot flag says recovery)
+reboot_text	The printer restarts into %s.
+reboot_q	Reboot?
+shutdown_q	Shut down?
+shutdown_text	Stops the system so the printer can be switched off safely with its power switch.
+power_text	"Shut down" stops the system so the printer can then be switched off with its power switch. Don't switch off during an install or restore: the partition being written would be left unusable.
+power_text2	"Boot main OS" sets the boot flag to the main OS (slot B) and restarts; "Reboot" keeps the flag as it is.
+reboot_into_flag	The printer restarts into the system the boot flag points at.
+waiting_status	Waiting for a status query to finish…
+receiving	Receiving the update: %u%%
+step_fmt	Step %u of %u: %s%s%s%s
+preparing	preparing
+swu_status	SWUpdate: %s
+swu_idle	idle
+swu_starting	starting
+swu_installing	installing
+swu_success	success
+swu_failed	failed
+swu_receiving	receiving
+swu_done	done
+swu_subprocess	subprocess
+swu_progress	progress
+restarting	Restarting…
+working	Working…
+working_dont_off	Working… don't switch off
+could_not_start	Could not start the command
+job_done	%s: done
+job_stopped	%s: stopped
+update_failed	Update failed (see log)
+job_failed	%s: failed (exit %d)

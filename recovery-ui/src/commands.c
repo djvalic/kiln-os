@@ -50,6 +50,7 @@ static const struct {
 	[PATH_BACKUP_PREFIX] = { "PATH_BACKUP_PREFIX", "ad5x-backup-" },
 	[PATH_TOUCH_NAME]   = { "PATH_TOUCH_NAME",   "TSC2007 Touchscreen" },
 	[PATH_FBDEV]        = { "PATH_FBDEV",        "/dev/fb0" },
+	[PATH_SETTINGS]     = { "PATH_SETTINGS",     "/data/ad5x/helixscreen/config/settings.json" },
 };
 
 const char *rui_name(rui_entry e)

@@ -1,0 +1,12 @@
+diff --git a/src/application/asset_manager.cpp b/src/application/asset_manager.cpp
+index 5c69a19..4f6a863 100644
+--- a/src/application/asset_manager.cpp
++++ b/src/application/asset_manager.cpp
+@@ -314,6 +314,7 @@ void AssetManager::register_images() {
+     reg_img("flag_it", "assets/images/flags/flag_it.bin");
+     reg_img("flag_zh", "assets/images/flags/flag_zh.bin");
+     reg_img("flag_ja", "assets/images/flags/flag_ja.bin");
++    reg_img("flag_tr", "assets/images/flags/flag_tr.bin");
+ 
+     s_images_registered = true;
+     spdlog::trace("[AssetManager] Images registered successfully");

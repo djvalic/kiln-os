@@ -36,6 +36,7 @@ typedef enum {
 	PATH_BACKUP_PREFIX,	/* backup sets: <stick>/<prefix>* directories */
 	PATH_TOUCH_NAME,	/* evdev device name of the touch screen */
 	PATH_FBDEV,		/* framebuffer */
+	PATH_SETTINGS,		/* main OS settings.json: its "language" key */
 
 	RUI_N_ENTRIES
 } rui_entry;
