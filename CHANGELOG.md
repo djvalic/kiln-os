@@ -10,6 +10,8 @@ the issue: it is closed by hand after the release.
 
 ## Unreleased
 
+- **Owner switch for root's SSH umask** (issue #31): `ad5x-umask on` makes files that root creates over SSH readable by the web server and plugins (umask 022); `off` (the default, 077) keeps them private. Run it over SSH as root; it applies after `/etc/init.d/S50dropbear restart` or a reboot. Interactive root logins already get 022.
+
 ## v0.0.39
 
 ### Fixed

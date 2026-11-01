@@ -187,3 +187,11 @@ Last updated: 2026-10-31 (chamber light off at idle sleep also with LED auto sta
 | Med | Swap into an empty slot | Cuts first, then finds the lane empty | Refused before the cut (`IFS: slot N has no filament`) | A tool change to an empty slot stops the print with an error | Remove the check in `ifs.py` `_tool_change` |
 | Low | Shared-slot warning | None | At print start, a message when two tools share a slot with different file filament | Message only | None needed |
 | Low | Quick-action extrusion mode | None: LOAD and UNLOAD set M83, then M82 | LOAD_FILAMENT, UNLOAD_FILAMENT (no IFS) and IFS_PURGE_TEST put back the mode they found | None known | Remove the `SAVE_GCODE_STATE`/`RESTORE_GCODE_STATE` lines in `quick_actions.cfg` and `ifs.cfg` |
+
+## Root SSH sessions (`ad5x-umask`, `S50dropbear`)
+
+| Risk | Change | Stock | Ours | If it bites | Revert |
+|---|---|---|---|---|---|
+| Med | Umask of non-interactive root SSH sessions | 077 (`S50dropbear` sets it before the daemon starts) | 077 by default, read from `/data/ad5x/umask-root`; `ad5x-umask on` writes 022 | Files a root command or script creates over SSH are unreadable to `klipper` (plugins) and `www-data`; with 022 they are readable by plugins and the web server | `ad5x-umask off`, then `/etc/init.d/S50dropbear restart` or reboot |
+
+Interactive root logins already get 022 from the stock `/etc/profile.d/umask.sh`. Our `S50dropbear` is an override of the Buildroot script (`board/ad5x/rootfs-overlay/etc/init.d/S50dropbear`); the only change is the umask lines.

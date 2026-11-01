@@ -52,6 +52,8 @@ define AD5X_SYSTEM_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/usr/bin/ad5x-update
 	$(INSTALL) -D -m 0755 $(@D)/ad5x-fbstream \
 		$(TARGET_DIR)/usr/bin/ad5x-fbstream
+	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-umask \
+		$(TARGET_DIR)/usr/bin/ad5x-umask
 	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-bootlog \
 		$(TARGET_DIR)/usr/bin/ad5x-bootlog
 	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-config-templates \

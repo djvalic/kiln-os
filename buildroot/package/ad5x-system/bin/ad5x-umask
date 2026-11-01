@@ -1,0 +1,53 @@
+#!/bin/sh
+# Owner's switch for root's SSH sessions (docs/deviations-from-stock.md).
+# Run as root over SSH:
+#   ad5x-umask on      files root creates are readable by plugins and the web server
+#   ad5x-umask off     back to private files (077, the default)
+#   ad5x-umask status
+# The SSH service reads the setting when it starts: restart it with
+#   /etc/init.d/S50dropbear restart
+# or reboot. Restarting closes SSH sessions.
+set -f
+
+FILE=${AD5X_UMASK_FILE:-/data/ad5x/umask-root}
+LOG=${AD5X_UMASK_LOG:-/data/ad5x/umask.log}
+
+die() { echo "ad5x-umask: $*" >&2; exit 1; }
+
+# AD5X_UMASK_TEST lets the laptop test run this as a normal user
+if [ "$(id -u)" != 0 ] && [ -z "$AD5X_UMASK_TEST" ]; then
+	die "must run as root"
+fi
+
+current() {
+	if [ "$(cat "$FILE" 2>/dev/null)" = 022 ]; then
+		echo on
+	else
+		echo off
+	fi
+}
+
+set_value() {	# 022 or 077
+	mkdir -p "$(dirname "$FILE")"
+	echo "$1" > "$FILE.tmp" && sync && mv "$FILE.tmp" "$FILE" || die "cannot write $FILE"
+	echo "$(date '+%Y-%m-%d %H:%M:%S') root SSH umask $1 ($([ "$1" = 022 ] && echo on || echo off))" >> "$LOG"
+}
+
+case "$1" in
+on)
+	set_value 022
+	echo "Root SSH files will be readable by plugins and the web server."
+	echo "Run 'ad5x-umask off' when done. Applies after: /etc/init.d/S50dropbear restart (closes SSH) or reboot."
+	;;
+off)
+	set_value 077
+	echo "Root SSH umask back to 077 (private). Applies after: /etc/init.d/S50dropbear restart or reboot."
+	;;
+status)
+	echo "root SSH umask: $(current) ($([ "$(current)" = on ] && echo 022 || echo 077))"
+	;;
+*)
+	echo "usage: ad5x-umask on | off | status" >&2
+	exit 2
+	;;
+esac
