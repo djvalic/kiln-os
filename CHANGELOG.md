@@ -10,6 +10,11 @@ the issue: it is closed by hand after the release.
 
 ## Unreleased
 
+## v0.0.39
+
+### Fixed
+- **zMod-compat print keeps the loaded-slot map for the whole print** (issue #12): the map went back to fixed on the first status poll, because the file's first line runs after the print has started. The zMod start now takes the print start itself, so the mapping holds for the print and is restored when it ends.
+
 ## v0.0.38
 
 ### Fixed

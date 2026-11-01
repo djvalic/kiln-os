@@ -2006,8 +2006,13 @@ class IFS:
                 raise gcmd.error("IFS_MAP_MODE: MODE is one of %s"
                                  % (", ".join(MAP_MODES),))
             if gcmd.get_int('ZMOD', 0, minval=0, maxval=1):
-                # The first zMod start of a print keeps the mode before it
+                # The first zMod start of a print keeps the mode before it.
+                # The file's first line runs after print_stats is "printing"
+                # and before the 1 s poll: take that print start here, or the
+                # poll reads it as a new print and restores the mode at once.
                 if self.zmod_prev is None:
+                    if self._in_print():
+                        self._note_print_state("printing")
                     self.zmod_prev = self.map_mode
                     self._save_variable('ifs_zmod_prev', self.zmod_prev)
             elif self.zmod_prev is not None:
