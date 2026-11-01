@@ -10,6 +10,11 @@ the issue: it is closed by hand after the release.
 
 ## Unreleased
 
+## v0.0.38
+
+### Fixed
+- **zMod start with an unexpanded TOOL reports the error** (issue #12): a start that sent TOOL=[initial_tool] showed "Malformed command" and stopped before homing. The error text had a '#' in it, which the config loader cuts. The text now reads "issue 12" and the start continues with no tool loaded, as before.
+
 ## v0.0.37
 
 ### Fixed
