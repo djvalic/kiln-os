@@ -378,6 +378,9 @@ class IFS:
                           for c in CHANNELS]
         self.tool_map = [c for c in CHANNELS]   # slicer tool n -> channel
         self.map_mode = "fixed"                 # see MAP_MODES
+        # Set by a zMod-compat START_PRINT (IFS_MAP_MODE ZMOD=1): the map mode
+        # from before its print, put back when the print ends (_zmod_restore)
+        self.zmod_prev = None
         self.last_status = {}
         self.silk = [0] * len(CHANNELS)
         self.stall = [0] * len(CHANNELS)
@@ -528,6 +531,8 @@ class IFS:
         mm = v.get('ifs_map_mode')
         if mm in MAP_MODES:
             self.map_mode = mm
+        zp = v.get('ifs_zmod_prev')
+        self.zmod_prev = zp if zp in MAP_MODES else None
         self.tuned = {
             'speed': num('ifs_speed'),
             'unload_dist': num('ifs_unload_dist'),
@@ -715,6 +720,10 @@ class IFS:
         self.mcu_present = None
         self.mcu_inserted = 0
         self.adopt_pending = True
+        # A zMod-compat print that did not end in a state we saw (power loss,
+        # shutdown, restart): no print runs now, so its map mode goes back
+        if self.zmod_prev is not None and not self._in_print():
+            self._zmod_restore()
         # MCU mode does not pre-feed yet
         if self.prefeed and self.fd is not None:
             self.reactor.register_callback(self._ready_prefeed)
@@ -724,7 +733,27 @@ class IFS:
         if ps is not None:
             self._note_print_state(ps.get_status(eventtime).get('state'))
         return eventtime + 1.
+    def _zmod_restore(self):
+        """Put back the map mode from before a zMod-compat print (its
+        START_PRINT set loaded). Not saved while shut down: the saved flag
+        stays, and the next start restores it (_handle_ready)."""
+        prev, self.zmod_prev = self.zmod_prev, None
+        self.map_mode = prev
+        if prev == "fixed":
+            self.tool_map = list(CHANNELS)
+        if self.printer.is_shutdown():
+            return
+        self._save_variable('ifs_zmod_prev', None)
+        self._save_variable('ifs_map_mode', prev)
     def _note_print_state(self, state):
+        # A zMod-compat print's map mode ends with the print, in any state:
+        # its end (a print end state after a non-end one), or a new print
+        # while the flag of an earlier one is still set
+        if self.zmod_prev is not None and (
+                (state == "printing" and self.print_state not in ("printing",
+                                                                  "paused"))
+                or (state in PRINT_END_STATES and state != self.print_state)):
+            self._zmod_restore()
         # The tool map belongs to one print (as FX): reset when it ends.
         ended = (self.print_state in ("printing", "paused") and
                  state in PRINT_END_STATES)
@@ -1966,7 +1995,9 @@ class IFS:
         self.tool_map = new
         return loaded
     cmd_IFS_MAP_MODE_help = ("Tool map mode: fixed (T0-T3 -> slots 1-4) or "
-                             "loaded (tools use the slots with filament)")
+                             "loaded (tools use the slots with filament). "
+                             "ZMOD=1 (zMod-compat START_PRINT): put back at "
+                             "the print's end")
     def cmd_IFS_MAP_MODE(self, gcmd):
         mode = gcmd.get('MODE', None)
         if mode is not None:
@@ -1974,6 +2005,15 @@ class IFS:
             if mode not in MAP_MODES:
                 raise gcmd.error("IFS_MAP_MODE: MODE is one of %s"
                                  % (", ".join(MAP_MODES),))
+            if gcmd.get_int('ZMOD', 0, minval=0, maxval=1):
+                # The first zMod start of a print keeps the mode before it
+                if self.zmod_prev is None:
+                    self.zmod_prev = self.map_mode
+                    self._save_variable('ifs_zmod_prev', self.zmod_prev)
+            elif self.zmod_prev is not None:
+                # A manual choice stands: the print's end does not undo it
+                self.zmod_prev = None
+                self._save_variable('ifs_zmod_prev', None)
             self.map_mode = mode
             self._save_variable('ifs_map_mode', mode)
             if mode == "fixed":

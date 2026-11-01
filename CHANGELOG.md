@@ -10,6 +10,8 @@ the issue: it is closed by hand after the release.
 
 ## Unreleased
 
+## v0.0.37
+
 ### Fixed
 - **ad5x-update explains a printer that runs the main OS from slot A, and points to the recovery steps** (issue #26): updates refused such a printer with messages that did not say why. The refusals now say the printer runs the main OS from slot A, that updates don't support that layout, and where `docs/recovery-os.md` ("Main OS in slot A") gives the read-only triage and the safe path.
 - **Print start no longer reads the whole job file on the main thread** (issue #22): the IFS filament scan read every line of the job, which took about 3 s on a large file and could stall the MCU into "Timer too close". It now reads only the start and the end of the file, where the slicers write the filament lines.
@@ -20,6 +22,7 @@ the issue: it is closed by hand after the release.
 - **Idle timeout leaves heaters on during a print or pause**: the stock idle timer turned the heaters off and disabled the steppers after 30 minutes with no movement, even while a print was paused. It now does so only when no print is printing or paused, no IFS swap is running, and no heater target changed in the last minute; the console says when it turns them off or leaves them on.
 - **Chamber light off at idle sleep with LED auto state on**: with "Chamber light off when the screen sleeps" on, the light now turns off when the screen sleeps while the printer is idle, even with LED auto state on. It still stays on while a print is preparing, running or paused, and on wake the light comes back with LED auto state's own colour.
 ### Changed
+- **zMod-compat print start maps tools to loaded slots, as zMod does** (issue #12): a `START_PRINT` from a zMod file sets the IFS map to the loaded slots for that print (the first loaded slot for the first tool, matched by material and colour). The map goes back to what it was when the print ends, whether it completes, is cancelled, errors, or the printer restarts after a shutdown or power loss. Non-zMod files keep the fixed map. Needs a printer check on the latest build.
 - **HelixScreen pinned to v1.1.0-beta.14** (was beta.13): the patch stack 0001-0035 applies to the beta.14 tag. New upstream features come with it: FILAMENTS chips on the print-file screen, OrcaSlicer exact filament preset ids, a move-clearance lift after a print, a CPU budget for the 3D preview, and the mixed-temperature material warning. The door-open warning stays off, because the AD5X has no door sensor. The stop-during-preparing and IFS unload paths need a supervised printer test.
 - **Language picker** offers English, Chinese, Japanese, German, Spanish, Italian, Russian, Portuguese and Turkish (the stock 3.1.3 set without Korean, which waits for the Hangul font). French is removed from the picker; its translation stays in the source.
 - **Home screen Toolhead tile** replaces the Motion tile on the AD5X layout (layout revision kiln-2, so existing layouts pick it up). It shows the toolhead position and plate, and a tap opens the Motion panel for homing and jog.

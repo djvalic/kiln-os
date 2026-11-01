@@ -250,13 +250,19 @@ laptop backup).
 ## Main OS in slot A
 
 Some printers run the main OS from slot A (`root=/dev/mmcblk0p2`, boot flag
-`ota:kernel`) instead of slot B. Updates don't support this layout yet.
-`ad5x-update` refuses with "slot A doesn't hold the recovery OS" or "slot A
-holds a main OS, not stock or recovery: refusing", and says where this
-section is.
+`ota:kernel`) instead of slot B. Updates don't support this layout yet, and
+no tool in this release can move the main OS to slot B. `ad5x-update`
+refuses every mode there with: "this printer runs the main OS from slot A
+(root=/dev/mmcblk0p2). Updates don't support that layout: see docs/recovery-os.md,
+section 'Main OS in slot A'." It writes nothing.
+
+A code step to move the main OS to slot B is planned, not released. Until it
+ships, a printer in this layout can't take a Fluidd update. Recovering it
+means a manual write, so do that only with the backup from step 2 in hand.
 
 Nothing is written blind. The steps below read first, make a backup, and
-only then (if at all) write. Nothing here is tested on hardware.
+only then (if at all) write. Nothing here is tested on hardware, and the
+restore from a backup in `docs/emmc-backup.md` is untested too.
 
 **1. Triage (read only).** Run these on the printer and note the output:
 
@@ -272,23 +278,22 @@ as described in `docs/emmc-backup.md`. Check the copy before going on. The
 installer's stick backup covers only the first MiB and partitions p1 to p6,
 so take the full image when you can.
 
-**3a. If `/data/ad5x/stock` exists:** check the saved stock system:
+**3. Stock rollback is not available from this layout.** `ad5x-restore-stock`
+ships only in the recovery image, and this layout can't boot recovery. The
+USB rescue route also needs the recovery OS in slot A, so it can't be reached
+either. Do not try a manual `dd` into slot B from memory. If you need stock
+back, the only recovery is the eMMC backup from step 2, written by hand and
+untested.
+
+Check first whether the saved stock system exists. It is read-only:
 
 ```
-ad5x-restore-stock --dry-run
+ls -l /data/ad5x/stock
 ```
 
-It checks `rootfs.squashfs` and `kernel.img` against `SHA256SUMS` and writes
-nothing. A run without `--dry-run` writes slot B and sets the boot flag to
-B, so the printer boots stock. Do that only after reading the dry-run output
-and deciding to. It is not part of this safe path.
-
-**3b. If `/data/ad5x/stock` does not exist:** there is no saved stock to put
-back. Use the USB-stick rescue in the "USB rescue" section above. The
-`ad5x-rescue-boot` marker only chroots into the stick's root for
-inspection. `ad5x-rescue-flash` writes slot B and sets the flag, so it is
-not a dry run: use it only with an image you have checked and with the
-backup from step 2 in hand.
+If it exists, `ad5x-restore-stock` would write slot B and arm stock's board
+update, which needs a power-off and power-on after it runs. Don't run it from
+the main OS: it is not installed there, and this section does not cover it.
 
 Don't run `ad5x-update --install-recovery` or `--replace-stock` from slot A.
 The script refuses there.
