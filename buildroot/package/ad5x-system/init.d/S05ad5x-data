@@ -25,6 +25,10 @@ start)
 	fi
 	# No battery clock: the last known time instead of 1970 (ad5x-clock)
 	ad5x-clock restore
+	# Crash log of our kernel (ramoops, ad5x.dts): read it from /sys/fs/pstore
+	if [ -d /sys/fs/pstore ] && ! grep -q ' /sys/fs/pstore ' /proc/mounts; then
+		mount -t pstore pstore /sys/fs/pstore 2>/dev/null
+	fi
 	pd=/data/ad5x/printer_data
 	mkdir -p $pd/config $pd/logs $pd/gcodes $pd/comms /data/ad5x/ssh
 	# Stock's settings partition (usershare, stock /usr/prog), read-only:

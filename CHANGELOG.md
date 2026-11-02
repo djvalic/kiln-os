@@ -10,6 +10,10 @@ the issue: it is closed by hand after the release.
 
 ## Unreleased
 
+- **Crash log of our kernel** (issue #29): a kernel panic is kept in a reserved 1 MiB of RAM and shows up in `/sys/fs/pstore` after the next boot (`dmesg-ramoops-0`, `console-ramoops-0`). Kept out of Linux' RAM: the last 1 MiB.
+
+## v0.0.40
+
 - **Owner switch for root's SSH umask** (issue #31): `ad5x-umask on` makes files that root creates over SSH readable by the web server and plugins (umask 022); `off` (the default, 077) keeps them private. Run it over SSH as root; it applies after `/etc/init.d/S50dropbear restart` or a reboot. Interactive root logins already get 022.
 
 ## v0.0.39
