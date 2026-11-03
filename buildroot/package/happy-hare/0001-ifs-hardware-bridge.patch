@@ -70,7 +70,7 @@ index ab21d6c..2c45e43 100644
  # Compound endstop wrapper. Allows homing against multiple virtual endstops and an optional
  # MCU endstop, triggering on the first to activate while recording the source of the trigger.
 diff --git a/extras/mmu/unit/mmu_buffer.py b/extras/mmu/unit/mmu_buffer.py
-index c49df7b..0a7dc77 100644
+index c49df7b..ae67319 100644
 --- a/extras/mmu/unit/mmu_buffer.py
 +++ b/extras/mmu/unit/mmu_buffer.py
 @@ -84,10 +84,11 @@ class MmuBuffer:
@@ -105,7 +105,7 @@ index c49df7b..0a7dc77 100644
          max_tension     = config.getfloat('analog_max_tension', 1)
          max_compression = config.getfloat('analog_max_compression', 0)
  
-@@ -233,15 +243,27 @@ class MmuProportionalSensor:
+@@ -233,15 +243,15 @@ class MmuProportionalSensor:
  
          # Setup ADC
          ppins = self.printer.lookup_object('pins')
@@ -127,7 +127,19 @@ index c49df7b..0a7dc77 100644
 +                self._sample_count,
 +                lambda *args, g=idx: self._multi_adc_callback(g, *args)
 +            )
+ 
+         self.runout_helper = MmuRunoutHelper(
+             self.printer,
+@@ -260,11 +270,23 @@ class MmuProportionalSensor:
+         # Create virtual tension sensor?
+         if virtual_tension_sensor:
+             self.tension_vsensor = MmuVirtualEndstopSensor(config, virtual_tension_sensor, None, register=register)
+-       
 +
+         # Expose status
+         self.printer.add_object(self.name, self)
+         logging.info("MMU: Created Proportional sync-feedback sensor %s]" % self.name)
+ 
 +    def _handle_gate_selected(self, gate, prev_gate):
 +        if gate is not None and 0 <= gate < len(self._pins):
 +            self.active_gate = gate
@@ -139,6 +151,7 @@ index c49df7b..0a7dc77 100644
 +    def _multi_adc_callback(self, gate_idx, *args):
 +        if gate_idx == self.active_gate:
 +            self._adc_callback(*args)
++
  
-         self.runout_helper = MmuRunoutHelper(
-             self.printer,
+     def _map_reading(self, v_raw):
+         n = self._neutral_point

@@ -8,3 +8,4 @@ config BR2_PACKAGE_HAPPY_HARE
 	  and native integration with HelixScreen and web UIs.
 
 	  https://github.com/moggieuk/Happy-Hare
+
