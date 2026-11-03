@@ -26,6 +26,11 @@ start)
 				ln -s /usr/share/ad5x/config/generic-flashforge-ifs.cfg /run/ad5x/ifs-mcu/
 			fi
 		fi
+	else
+		if [ -f $PD/config/plugins.cfg ] && grep -q "happy-hare" $PD/config/plugins.cfg 2>/dev/null; then
+			logger -t klipper "happy-hare plugin requires /data/ad5x/ifs-klipper.enable; disabling"
+			sed -i '/happy-hare/d' $PD/config/plugins.cfg
+		fi
 	fi
 	HOME=/home/klipper start-stop-daemon -S -b -m -p $PID -c klipper -N -10 \
 		-x /usr/bin/python3 -- $KROOT/klippy/klippy.py \

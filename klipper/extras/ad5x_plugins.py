@@ -73,6 +73,16 @@ CONFIG_DIR = "/home/klipper/printer_data/config"
 SHIPPED_DIR = "/usr/share/ad5x/plugins"
 USER_DIR = "/data/ad5x/plugins"
 CATALOG_FILE = "/usr/share/ad5x/plugin-catalog.json"
+IFS_KLIPPER_FILE = "/data/ad5x/ifs-klipper.enable"
+
+def is_ifs_klipper(printer=None):
+    if not os.path.isfile(IFS_KLIPPER_FILE):
+        return False
+    if printer is not None:
+        ifs = printer.lookup_object('ifs', None)
+        if ifs is not None and getattr(ifs, 'connected', False) and not getattr(ifs, 'is_mcu_mode', False):
+            return False
+    return True
 # Picked up by S68ad5x-update-agent (root), which restarts Moonraker
 MOONRAKER_RESTART_FILE = "/data/ad5x/kiln-update/restart-moonraker"
 GIT_TIMEOUT = 600.
@@ -132,7 +142,7 @@ def read_metadata(plugin_dir, name):
     the file is unusable (the plugin can't be enabled then)."""
     meta = {'name': name, 'description': "", 'version': "", 'author': "",
             'url': "", 'requires_os': "", 'requires': [], 'conflicts': [],
-            'root_actions': [], 'error': None}
+            'root_actions': [], 'error': None, 'requires_ifs_klipper': False}
     path = os.path.join(plugin_dir, 'plugin.json')
     try:
         with open(path) as f:
@@ -153,6 +163,8 @@ def read_metadata(plugin_dir, name):
         if isinstance(val, str):
             val = [v.strip() for v in val.split(",")]
         meta[key] = [str(v).strip().lower() for v in val if str(v).strip()]
+    if data.get('requires_ifs_klipper') or data.get('requires_klipper_firmware'):
+        meta['requires_ifs_klipper'] = True
     meta['root_actions'] = read_root_actions(data, name)
     if data.get('name') not in (None, name):
         meta['error'] = "plugin.json name '%s' differs from the directory" % (
@@ -254,7 +266,7 @@ def root_actions_note(name, actions):
             "owner turns them on at the printer (ad5x-dev-root enable); "
             "Kiln OS does not grant them." % (name, ", ".join(actions)))
 
-def scan(shipped_dir=SHIPPED_DIR, user_dir=USER_DIR):
+def scan(shipped_dir=SHIPPED_DIR, user_dir=USER_DIR, printer=None):
     """name -> info for every directory holding a plugin.cfg; user plugins
     replace shipped ones of the same name."""
     found = {}
@@ -269,9 +281,14 @@ def scan(shipped_dir=SHIPPED_DIR, user_dir=USER_DIR):
                     os.path.join(d, 'plugin.cfg')):
                 continue
             info = read_metadata(d, name)
+            compatible = api_compatible(info['requires_os'])
+            if info.get('requires_ifs_klipper') and not is_ifs_klipper(printer):
+                compatible = False
+                if not info['error']:
+                    info['error'] = "requires IFS Klipper firmware (/data/ad5x/ifs-klipper.enable)"
             info.update({
                 'dir': d, 'source': source,
-                'compatible': api_compatible(info['requires_os']),
+                'compatible': compatible,
                 'extras': os.path.isdir(os.path.join(d, 'extras')),
                 'moonraker': os.path.isfile(os.path.join(d,
                                                          'moonraker.conf')),
@@ -454,7 +471,7 @@ class DevRoot:
             args = request_args(gcmd.get('ARGS', ''))
         except ValueError as e:
             raise gcmd.error("Refused: %s" % (e,))
-        self.owner.found = scan(self.owner.shipped_dir, self.owner.user_dir)
+        self.owner.found = self.owner._scan()
         info = self.owner.found.get(plugin)
         if info is None or info['error']:
             raise gcmd.error("Plugin %s is not installed, or its plugin.json "
@@ -546,7 +563,7 @@ class DevRoot:
         self.gcode.respond_info(msg)
 
     def status(self, gcmd):
-        self.owner.found = scan(self.owner.shipped_dir, self.owner.user_dir)
+        self.owner.found = self.owner._scan()
         lines = ["Developer root actions (off until the owner grants them: "
                  "ad5x-dev-root enable)"]
         declared = [(n, i) for n, i in sorted(self.owner.found.items())
@@ -612,7 +629,7 @@ class AD5XPlugins:
         except (OSError, ValueError):
             pass
         self.proc = None
-        self.found = scan(self.shipped_dir, self.user_dir)
+        self.found = self._scan()
         # Enabled at this start (plugins.cfg as Klipper read it)
         self.loaded = read_enabled(self.plugins_file)[0]
         self.warnings = []
@@ -635,6 +652,8 @@ class AD5XPlugins:
             self.gcode.register_command(cmd, getattr(self, "cmd_" + cmd),
                                         desc=getattr(self, "cmd_%s_help" % cmd))
     # Startup
+    def _scan(self):
+        return scan(self.shipped_dir, self.user_dir, self.printer)
     def _warn(self, msg):
         logging.warning("ad5x_plugins: %s", msg)
         self.warnings.append(msg)
@@ -877,7 +896,7 @@ class AD5XPlugins:
                 shutil.rmtree(tmp, ignore_errors=True)
                 raise Exception("not a valid plugin: %s" % (meta['error'],))
             os.rename(tmp, dest)
-            self.found = scan(self.shipped_dir, self.user_dir)
+            self.found = self._scan()
             if enable:
                 # Saved first: enabling restarts Klipper
                 self.job.update({'state': 'done',
@@ -919,7 +938,7 @@ class AD5XPlugins:
             if rc != 0:
                 raise Exception("git pull failed: %s" % (out[-300:],))
             after = head()
-            self.found = scan(self.shipped_dir, self.user_dir)
+            self.found = self._scan()
             if after == before:
                 return "up to date (%s)" % (after,)
             msg = "updated %s -> %s" % (before, after)
@@ -930,7 +949,7 @@ class AD5XPlugins:
                         ["git", "-C", d, "pull", "-q", "--ff-only"], done)
     cmd_REMOVE_PLUGIN_help = "Disable and delete an installed plugin: NAME="
     def cmd_REMOVE_PLUGIN(self, gcmd):
-        self.found = scan(self.shipped_dir, self.user_dir)
+        self.found = self._scan()
         name = gcmd.get('NAME').strip().lower()
         info = self.found.get(name)
         d = os.path.join(self.user_dir, name)
@@ -951,7 +970,7 @@ class AD5XPlugins:
             self._check_idle(gcmd)
             names = self._write_enabled(disable=[name])
         shutil.rmtree(d)
-        self.found = scan(self.shipped_dir, self.user_dir)
+        self.found = self._scan()
         self.job = {'name': name, 'action': 'remove', 'state': 'done',
                     'message': 'removed'}
         self._save_job()
@@ -964,7 +983,7 @@ class AD5XPlugins:
     cmd_ENABLE_PLUGIN_help = ("Enable a plugin and restart Klipper: NAME= "
                               "[RESTART=0]")
     def cmd_ENABLE_PLUGIN(self, gcmd):
-        self.found = scan(self.shipped_dir, self.user_dir)
+        self.found = self._scan()
         name = gcmd.get('NAME').strip().lower()
         info = self.found.get(name)
         if info is None:
@@ -998,7 +1017,7 @@ class AD5XPlugins:
     cmd_DISABLE_PLUGIN_help = ("Disable a plugin and restart Klipper: NAME= "
                                "[RESTART=0]")
     def cmd_DISABLE_PLUGIN(self, gcmd):
-        self.found = scan(self.shipped_dir, self.user_dir)
+        self.found = self._scan()
         name = gcmd.get('NAME').strip().lower()
         enabled = read_enabled(self.plugins_file)[0]
         if name not in enabled:
@@ -1024,7 +1043,7 @@ class AD5XPlugins:
         self.dev_root.status(gcmd)
     cmd_LIST_PLUGINS_help = "List the plugins (shipped and own) and which are on"
     def cmd_LIST_PLUGINS(self, gcmd):
-        self.found = scan(self.shipped_dir, self.user_dir)
+        self.found = self._scan()
         enabled = read_enabled(self.plugins_file)[0]
         lines = ["Plugin API %s" % (PLUGIN_API_VERSION,)]
         for name in sorted(set(self.found) | set(enabled)):

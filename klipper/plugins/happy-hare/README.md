@@ -17,6 +17,15 @@ Replaces the stock `[ifs]` driver with Happy Hare v4, providing:
 - **Compatibility Aliases**: maps `T0`–`T3`, `IFS_SWAP`, `IFS_LOAD`, `IFS_UNLOAD`,
   and `IFS_SELECT` to Happy Hare MMU commands.
 
+## Prerequisites
+
+Happy Hare drives the Flashforge AD5X IFS as a native Klipper MCU over RS-485.
+This requires:
+1. **Klipper Firmware on the IFS**: Flashed via `ad5x-mcu flash-ifs`
+2. **Klipper IFS Mode Enabled**: `/data/ad5x/ifs-klipper.enable` must be present
+
+If `/data/ad5x/ifs-klipper.enable` is not present, the plugin will refuse to enable.
+
 ## Usage
 
 Enable the plugin:

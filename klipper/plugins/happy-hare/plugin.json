@@ -5,6 +5,7 @@
   "author": "moggieuk / Hunter Laux",
   "url": "https://github.com/moggieuk/Happy-Hare",
   "requires_os": "1.0",
+  "requires_ifs_klipper": true,
   "requires": [],
   "conflicts": []
 }
