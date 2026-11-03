@@ -1,0 +1,17 @@
+Raise the multi-MCU homing sync timeout from 25 ms to 50 ms, as Flashforge's
+Klipper does. Apply only if X homing (endstop on the eboard, steppers on the
+mainboard) fails with "Communication timeout during homing".
+
+  git -C <klipper> apply klipper/patches/trsync-timeout-50ms.patch
+
+--- a/klippy/mcu.py
++++ b/klippy/mcu.py
+@@ -281,7 +281,7 @@
+             s.note_homing_end()
+         return params['trigger_reason']
+ 
+-TRSYNC_TIMEOUT = 0.025
++TRSYNC_TIMEOUT = 0.050
+ TRSYNC_SINGLE_MCU_TIMEOUT = 0.250
+ 
+ class TriggerDispatch:
