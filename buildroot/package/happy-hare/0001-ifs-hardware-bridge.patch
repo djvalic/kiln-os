@@ -1,0 +1,144 @@
+diff --git a/extras/mmu/mmu_sensor_utils.py b/extras/mmu/mmu_sensor_utils.py
+index ab21d6c..2c45e43 100644
+--- a/extras/mmu/mmu_sensor_utils.py
++++ b/extras/mmu/mmu_sensor_utils.py
+@@ -324,6 +324,16 @@ class MmuSensorFactory:
+         if self._is_empty_pin(switch_pin):
+             return None
+ 
++        if isinstance(switch_pin, str) and switch_pin.startswith('sensor:'):
++            linked = switch_pin[len('sensor:'):]
++            return MmuLinkedSensor(
++                config=config,
++                name_prefix=name_prefix,
++                gate=gate,
++                linked_name=linked,
++                **kwargs,
++            )
++
+         return MmuSwitchSensor(
+             config=config,
+             name_prefix=name_prefix,
+@@ -336,6 +346,8 @@ class MmuSensorFactory:
+     def _is_empty_pin(self, switch_pin):
+         if switch_pin is None or switch_pin == '':
+             return True
++        if isinstance(switch_pin, str) and switch_pin.startswith('sensor:'):
++            return False
+ 
+         ppins = self.printer.lookup_object('pins')
+         pin_params = ppins.parse_pin(switch_pin, can_invert=True, can_pullup=True)
+@@ -539,6 +551,40 @@ class MmuVirtualEndstopSensor(MmuSensor):
+ 
+ 
+ 
++# -----------------------------------------------------------------------------------------------------------
++# Linked sensor wrapper. Connects a virtual MMU sensor to an existing Klipper sensor
++# (e.g. adc_filament_sensor or filament_switch_sensor) by polling its status.
++# -----------------------------------------------------------------------------------------------------------
++
++class MmuLinkedSensor(MmuVirtualEndstopSensor):
++    def __init__(self, config, name_prefix, gate, linked_name, **kwargs):
++        super().__init__(config, name_prefix, gate, **kwargs)
++        self.linked_name = linked_name
++        self.linked_obj = None
++        self.printer.register_event_handler("klippy:connect", self._handle_connect)
++
++    def _handle_connect(self):
++        self.linked_obj = self.printer.lookup_object(f"filament_switch_sensor {self.linked_name}", None)
++        if self.linked_obj is None:
++            self.linked_obj = self.printer.lookup_object(f"adc_filament_sensor {self.linked_name}", None)
++        if self.linked_obj is None:
++            self.linked_obj = self.printer.lookup_object(self.linked_name, None)
++        if self.linked_obj is None:
++            raise self.printer.config_error(f"Cannot find linked sensor: {self.linked_name}")
++        self.printer.get_reactor().register_timer(self._poll_linked, self.printer.get_reactor().NOW)
++
++    def _poll_linked(self, eventtime):
++        if self.linked_obj is not None:
++            st = self.linked_obj.get_status(eventtime)
++            present = st.get('filament_detected', False)
++            self.trigger_handler(eventtime, present)
++        return eventtime + 0.25
++
++    def _endstop_trigger_time(self, eventtime):
++        return self.estimated_print_time(eventtime)
++
++
++
+ # -----------------------------------------------------------------------------------------------------------
+ # Compound endstop wrapper. Allows homing against multiple virtual endstops and an optional
+ # MCU endstop, triggering on the first to activate while recording the source of the trigger.
+diff --git a/extras/mmu/unit/mmu_buffer.py b/extras/mmu/unit/mmu_buffer.py
+index c49df7b..0a7dc77 100644
+--- a/extras/mmu/unit/mmu_buffer.py
++++ b/extras/mmu/unit/mmu_buffer.py
+@@ -84,10 +84,11 @@ class MmuBuffer:
+         )
+ 
+         # Setup analog (proportional) sync feedback
+-        # Uses single analog input; value scaled in [-1, 1]
++        # Uses single analog input or multiple analog inputs; value scaled in [-1, 1]
++        analog_pins = config.getlist('analog_pins', None)
+         analog_pin = config.get('analog_pin', None)
+         self.proportional_sensor = None
+-        if analog_pin:
++        if analog_pin or analog_pins:
+             self.proportional_sensor = MmuProportionalSensor(
+                 config,
+                 f"{self.name}:{SENSOR_PROPORTIONAL}",
+@@ -187,7 +188,16 @@ class MmuProportionalSensor:
+         self.tension_vsensor = None
+ 
+         # Config
+-        self._pin       = config.get('analog_pin')
++        pins_list       = config.getlist('analog_pins', None)
++        if pins_list:
++            self._pins  = pins_list
++            self._pin   = self._pins[0]
++        else:
++            self._pin   = config.get('analog_pin')
++            self._pins  = [self._pin]
++        self.active_gate = 0
++        self.printer.register_event_handler("mmu:gate_selected", self._handle_gate_selected)
++        self.printer.register_event_handler("mmu:tool_selected", self._handle_tool_selected)
+         max_tension     = config.getfloat('analog_max_tension', 1)
+         max_compression = config.getfloat('analog_max_compression', 0)
+ 
+@@ -233,15 +243,27 @@ class MmuProportionalSensor:
+ 
+         # Setup ADC
+         ppins = self.printer.lookup_object('pins')
+-        self.mcu_adc = ppins.setup_pin('adc', self._pin)
+-
+-        MmuAdcHelper.setup_adc_compat(
+-            self.mcu_adc,
+-            self._report_time,
+-            self._sample_time,
+-            self._sample_count,
+-            self._adc_callback,
+-        )
++        self.mcu_adcs = [ppins.setup_pin('adc', p) for p in self._pins]
++        for idx, adc in enumerate(self.mcu_adcs):
++            MmuAdcHelper.setup_adc_compat(
++                adc,
++                self._report_time,
++                self._sample_time,
++                self._sample_count,
++                lambda *args, g=idx: self._multi_adc_callback(g, *args)
++            )
++
++    def _handle_gate_selected(self, gate, prev_gate):
++        if gate is not None and 0 <= gate < len(self._pins):
++            self.active_gate = gate
++
++    def _handle_tool_selected(self, tool):
++        if tool is not None and 0 <= tool < len(self._pins):
++            self.active_gate = tool
++
++    def _multi_adc_callback(self, gate_idx, *args):
++        if gate_idx == self.active_gate:
++            self._adc_callback(*args)
+ 
+         self.runout_helper = MmuRunoutHelper(
+             self.printer,

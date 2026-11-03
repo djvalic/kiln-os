@@ -89,6 +89,7 @@ BR2_PACKAGE_FLUIDD=y
 # Touch screen UI on the panel (S70helixscreen, gated on
 # /data/ad5x/helixscreen.enable)
 BR2_PACKAGE_HELIXSCREEN=y
+BR2_PACKAGE_HAPPY_HARE=y
 BR2_PACKAGE_AD5X_SYSTEM=y
 
 # Images: squashfs with LZO (what the stock kernel reads), plus a tarball
