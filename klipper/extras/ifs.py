@@ -2569,4 +2569,7 @@ class IfsMaterials:
         return self.ifs.materials_status()
 
 def load_config(config):
+    if not config.getboolean('enable', True):
+        config.get_printer().objects.pop('ifs', None)
+        return None
     return IFS(config)

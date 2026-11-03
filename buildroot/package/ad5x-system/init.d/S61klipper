@@ -21,8 +21,10 @@ start)
 	if [ -f /data/ad5x/ifs-klipper.enable ]; then
 		mkdir -p /run/ad5x/ifs-mcu && chmod 755 /run/ad5x/ifs-mcu	# read by Klipper's user
 		rm -f /run/ad5x/ifs-mcu/*.cfg
-		if ad5x-mcu-version --port /dev/ttyS4 --baud 115200 --timeout 2 >/dev/null 2>&1; then
-			ln -s /usr/share/ad5x/config/generic-flashforge-ifs.cfg /run/ad5x/ifs-mcu/
+		if [ ! -f $PD/config/plugins.cfg ] || ! grep -q "happy-hare" $PD/config/plugins.cfg 2>/dev/null; then
+			if ad5x-mcu-version --port /dev/ttyS4 --baud 115200 --timeout 2 >/dev/null 2>&1; then
+				ln -s /usr/share/ad5x/config/generic-flashforge-ifs.cfg /run/ad5x/ifs-mcu/
+			fi
 		fi
 	fi
 	HOME=/home/klipper start-stop-daemon -S -b -m -p $PID -c klipper -N -10 \
