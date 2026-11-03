@@ -31,14 +31,13 @@ every start (`S60ad5x-eboard`), before Klipper:
 
 1. **Mainboard**: asks the firmware for its version (Klipper `identify` on
    `ttyS2`, `ad5x-mcu-version`). Anything else (Flashforge's firmware, an
-   older Klipper, no answer): `NationsCommand -c -d --pn /dev/ttyS2 --fn
-   mainboard.bin --v -r` through the chip's ROM bootloader, then identify
-   again. The ROM bootloader can't be overwritten, so a failed write is
-   retried at the next start.
+   older Klipper, no answer): `ad5x-flash-n32` (or stock `NationsCommand`)
+   through the chip's ROM bootloader, then identify again. The ROM bootloader
+   can't be overwritten, so a failed write is retried at the next start.
 2. **Eboard**: its bootloader accepts firmware only while it waits after
    power-on ("Ready" on `ttyS5`). If it waits and the last eboard flash on
-   record (`/data/ad5x/mcu/eboard`) isn't this version: `IAPCommand
-   eboard.hex /dev/ttyS5`, then `A` to start it. If its application already
+   record (`/data/ad5x/mcu/eboard`) isn't this version: `ad5x-flash-iap` (or
+   stock `IAPCommand`), then `A` to start it. If its application already
    runs with another version (the SoC restarted without a power-cycle, e.g.
    right after the install), the screen asks to switch the printer off and
    on; the next start flashes it. Before that screen, the start counts as
@@ -48,10 +47,12 @@ every start (`S60ad5x-eboard`), before Klipper:
 3. When both report the wanted version, `/data/ad5x/klipper.enable` is
    created once and Klipper starts.
 
-The flashing tools are Flashforge's own, from this printer: stock keeps them
-in its control directory on the usershare partition (`/usr/prog` under
-stock, never touched by the installer). `ad5x-mcu` copies them to
-`/data/ad5x/vendor/mcu/` the first time; our images don't contain them.
+The flashing tools are Kiln OS's native open-source Python tools
+(`tools/flash_n32.py` and `tools/flash_iap.py`, installed as
+`/usr/bin/ad5x-flash-n32` and `/usr/bin/ad5x-flash-iap`). Proprietary stock
+binaries (`NationsCommand`, `IAPCommand`, `IFSCommand`, `ifsF37`) are no
+longer required, though `ad5x-mcu` retains backward compatibility if they are
+present.
 
 **The way back is armed first.** Before it writes a board, `ad5x-mcu`
 creates `Update` and `UpdateM` in stock's control directory: stock's own
