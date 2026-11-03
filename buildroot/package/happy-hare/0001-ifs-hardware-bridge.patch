@@ -38,10 +38,9 @@ index 594cf39..395e2b3 100644
  
      def _ensure_safe_extruder_temperature(self, source="auto", wait=False):
 diff --git a/extras/mmu/mmu_filament_movement.py b/extras/mmu/mmu_filament_movement.py
-index 244285b..0dd5b9c 100644
 --- a/extras/mmu/mmu_filament_movement.py
 +++ b/extras/mmu/mmu_filament_movement.py
-@@ -430,6 +430,22 @@ class MmuFilamentMovement:
+@@ -430,6 +430,22 @@
          self._validate_gate_config(label, profile.endstop)
          self.set_filament_direction(DIRECTION_LOAD)
  
@@ -64,7 +63,7 @@ index 244285b..0dd5b9c 100644
          if profile.endstop == SENSOR_ENCODER:
              with self.require_encoder():
                  measured = 0.0
-@@ -598,6 +614,15 @@ class MmuFilamentMovement:
+@@ -598,6 +614,15 @@
          self._validate_gate_config(label, profile.endstop)
          self.set_filament_direction(DIRECTION_UNLOAD)
  
@@ -80,7 +79,7 @@ index 244285b..0dd5b9c 100644
          if profile.endstop == SENSOR_ENCODER:
  
              with self.require_encoder():
-@@ -792,6 +817,9 @@ class MmuFilamentMovement:
+@@ -792,6 +817,9 @@
          u = self.mmu_unit()
          ge = u.p.gate_homing_endstop if endstop is None else endstop
  
@@ -90,7 +89,7 @@ index 244285b..0dd5b9c 100644
          if ge == SENSOR_ENCODER:
              if not self.has_encoder():
                  raise MmuError(
-@@ -1308,7 +1336,7 @@ class MmuFilamentMovement:
+@@ -1308,7 +1336,7 @@
  
              self.log_debug("Performing synced pre-unload bowden move of %.1fmm to ensure filament is not trapped in extruder" % length)
  
@@ -99,6 +98,44 @@ index 244285b..0dd5b9c 100644
                  self.move_filament("Bowden safety pre-unload move", -length, motor="gear+extruder")
                  self.log_info("Slowly unloading bowden because unsure of filament position...")
  
+@@ -1856,12 +1884,11 @@
+                 # distance is then relative to the toolhead sensor, not the
+                 # extruder gears/entrance.
+                 if self.sensor_manager.check_sensor(SENSOR_TOOLHEAD):
+-                    raise MmuError(
+-                        "Possible toolhead sensor malfunction - filament detected "
+-                        "before it entered the extruder."
+-                    )
+-
+-                homing_max = extra_homing + u.p.toolhead_homing_max
++                    self.log_debug("Filament already detected at toolhead sensor")
++                    fhomed = True
++                    self.set_filament_pos_state(FILAMENT_POS_HOMED_TS)
++                else:
++                    homing_max = extra_homing + u.p.toolhead_homing_max
+ 
+                 self.log_debug(
+                     f"Homing up to {homing_max:.1f}mm to toolhead sensor"
+@@ -2750,7 +2777,7 @@
+                 else:
+                     self.log_debug("Tip forming performed by slicer, park_pos set to %.1fmm" % park_pos)
+ 
+-            elif do_form_tip == FORM_TIP_STANDALONE and (self.filament_pos >= FILAMENT_POS_IN_EXTRUDER or runout):
++            elif do_form_tip == FORM_TIP_STANDALONE and (self.filament_pos >= FILAMENT_POS_IN_EXTRUDER or (self.filament_pos >= FILAMENT_POS_END_BOWDEN and self.sensor_manager.check_sensor(SENSOR_TOOLHEAD)) or runout):
+ 
+                 with self._wrap_track_time('form_tip'):
+                     # Extruder only in runout case to give filament best chance to reach gear
+@@ -2928,7 +2955,9 @@
+ 
+         # Pre check to validate the presence of filament in the extruder and case where we don't need to form tip
+         filament_initially_present = self.sensor_manager.check_sensor(SENSOR_TOOLHEAD)
+-        if filament_initially_present is False:
++        form_macro = self.printer.lookup_object(f"gcode_macro {self._macro_name(self.p.form_tip_macro)}", None)
++        use_cutter = form_macro.variables.get('use_cutter', 0) if form_macro is not None else 0
++        if filament_initially_present is False and not self.has_toolhead_cutter and not use_cutter:
+             self.log_debug("Tip forming skipped because no filament was detected")
+ 
+             if self.filament_pos == FILAMENT_POS_LOADED:
 diff --git a/extras/mmu/mmu_sensor_utils.py b/extras/mmu/mmu_sensor_utils.py
 index ab21d6c..2c45e43 100644
 --- a/extras/mmu/mmu_sensor_utils.py
