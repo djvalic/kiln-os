@@ -1,7 +1,8 @@
 diff --git a/extras/mmu/mmu_constants.py b/extras/mmu/mmu_constants.py
+index d2569e0..acdd012 100644
 --- a/extras/mmu/mmu_constants.py
 +++ b/extras/mmu/mmu_constants.py
-@@ -170,7 +170,7 @@
+@@ -170,7 +170,7 @@ SENSOR_ENTRY_PREFIX      = "mmu_entry"
  SENSOR_NFC_PREFIX        = "mmu_nfc"        # Per-gate NFC/RFID reader used as a "tag detected" homing endstop
  
  EXTRUDER_ENDSTOPS = [SENSOR_EXTRUDER_ENCODER, SENSOR_GEAR_TOUCH, SENSOR_EXTRUDER_ENTRY, SENSOR_EXTRUDER_NONE, SENSOR_COMPRESSION]
@@ -11,9 +12,10 @@ diff --git a/extras/mmu/mmu_constants.py b/extras/mmu/mmu_constants.py
  # Gate endstops that are a per-UNIT resource shared by every gate on that unit, rather than
  # owned by a single gate (contrast SENSOR_EXIT_PREFIX, which is per-gate)
 diff --git a/extras/mmu/mmu_controller.py b/extras/mmu/mmu_controller.py
+index 594cf39..204cff8 100644
 --- a/extras/mmu/mmu_controller.py
 +++ b/extras/mmu/mmu_controller.py
-@@ -173,6 +173,7 @@
+@@ -173,6 +173,7 @@ class MmuController(MmuFilamentMovement):
          self.active_filament = {}
          self.filament_pos = FILAMENT_POS_UNKNOWN
          self.filament_direction = DIRECTION_UNKNOWN
@@ -21,7 +23,7 @@ diff --git a/extras/mmu/mmu_controller.py b/extras/mmu/mmu_controller.py
          self.action = ACTION_IDLE
          self._old_action = None
          self._clear_saved_toolhead_position()
-@@ -293,6 +294,12 @@
+@@ -293,6 +294,12 @@ class MmuController(MmuFilamentMovement):
          # Previous filament position
          self.filament_pos = self.var_manager.get(VARS_MMU_FILAMENT_POS, self.filament_pos)
  
@@ -34,7 +36,7 @@ diff --git a/extras/mmu/mmu_controller.py b/extras/mmu/mmu_controller.py
          if len(errors) > 0:
              self.log_warning("Warning: Some persisted state was ignored because it contained errors:\n%s" % '\n'.join(errors))
  
-@@ -659,6 +666,7 @@
+@@ -659,6 +666,7 @@ class MmuController(MmuFilamentMovement):
              'filament_position': self.drive().get_filament_position(),
              'filament_pos': self.filament_pos, # State machine position
              'filament_direction': self.filament_direction,
@@ -42,7 +44,7 @@ diff --git a/extras/mmu/mmu_controller.py b/extras/mmu/mmu_controller.py
              'pending_spool_id': self.pending_spool_id,
              'pending_td': self.pending_measurement['td'] if self.pending_measurement else None,
              'tool_extrusion_multipliers': self.tool_extrusion_multipliers,
-@@ -864,7 +872,7 @@
+@@ -864,7 +872,7 @@ class MmuController(MmuFilamentMovement):
          # decides whether the tip has already passed a sensor once homed via a
          # different, further-along endstop. Anything not in this tuple (shouldn't
          # happen) is treated as furthest-along/already passed.
@@ -51,7 +53,7 @@ diff --git a/extras/mmu/mmu_controller.py b/extras/mmu/mmu_controller.py
  
          # encoder/extruder are shared across a unit's gates (and the encoder is a
          # movement latch, not a presence sensor), so a trigger there says nothing
-@@ -2902,6 +2910,12 @@
+@@ -2902,6 +2910,12 @@ class MmuController(MmuFilamentMovement):
          self.filament_direction = direction
  
  
@@ -64,7 +66,7 @@ diff --git a/extras/mmu/mmu_controller.py b/extras/mmu/mmu_controller.py
      def set_filament_pos_state(self, state, silent=False):
          if state in (FILAMENT_POS_UNLOADED, FILAMENT_POS_UNKNOWN):
              self.td1.release()
-@@ -2950,7 +2964,11 @@
+@@ -2950,7 +2964,11 @@ class MmuController(MmuFilamentMovement):
  
  
      def _gate_homing_string(self):
@@ -78,9 +80,10 @@ diff --git a/extras/mmu/mmu_controller.py b/extras/mmu/mmu_controller.py
  
      def _ensure_safe_extruder_temperature(self, source="auto", wait=False):
 diff --git a/extras/mmu/mmu_filament_movement.py b/extras/mmu/mmu_filament_movement.py
+index 244285b..8486d4b 100644
 --- a/extras/mmu/mmu_filament_movement.py
 +++ b/extras/mmu/mmu_filament_movement.py
-@@ -430,6 +430,22 @@
+@@ -430,6 +430,22 @@ class MmuFilamentMovement:
          self._validate_gate_config(label, profile.endstop)
          self.set_filament_direction(DIRECTION_LOAD)
  
@@ -103,7 +106,7 @@ diff --git a/extras/mmu/mmu_filament_movement.py b/extras/mmu/mmu_filament_movem
          if profile.endstop == SENSOR_ENCODER:
              with self.require_encoder():
                  measured = 0.0
-@@ -598,6 +614,15 @@
+@@ -598,6 +614,15 @@ class MmuFilamentMovement:
          self._validate_gate_config(label, profile.endstop)
          self.set_filament_direction(DIRECTION_UNLOAD)
  
@@ -119,7 +122,7 @@ diff --git a/extras/mmu/mmu_filament_movement.py b/extras/mmu/mmu_filament_movem
          if profile.endstop == SENSOR_ENCODER:
  
              with self.require_encoder():
-@@ -792,6 +817,9 @@
+@@ -792,6 +817,9 @@ class MmuFilamentMovement:
          u = self.mmu_unit()
          ge = u.p.gate_homing_endstop if endstop is None else endstop
  
@@ -129,7 +132,7 @@ diff --git a/extras/mmu/mmu_filament_movement.py b/extras/mmu/mmu_filament_movem
          if ge == SENSOR_ENCODER:
              if not self.has_encoder():
                  raise MmuError(
-@@ -1212,6 +1240,15 @@
+@@ -1212,6 +1240,15 @@ class MmuFilamentMovement:
  
          self.log_always("Ejecting gate %d..." % gate)
  
@@ -145,7 +148,7 @@ diff --git a/extras/mmu/mmu_filament_movement.py b/extras/mmu/mmu_filament_movem
          # First find reliable starting position if we have individual gate exit sensor
          gate_exit_sensor = self.sensor_manager.check_gate_sensor(SENSOR_EXIT_PREFIX, gate)
          if gate_exit_sensor is True:
-@@ -1308,7 +1345,7 @@
+@@ -1308,7 +1345,7 @@ class MmuFilamentMovement:
  
              self.log_debug("Performing synced pre-unload bowden move of %.1fmm to ensure filament is not trapped in extruder" % length)
  
@@ -154,7 +157,7 @@ diff --git a/extras/mmu/mmu_filament_movement.py b/extras/mmu/mmu_filament_movem
                  self.move_filament("Bowden safety pre-unload move", -length, motor="gear+extruder")
                  self.log_info("Slowly unloading bowden because unsure of filament position...")
  
-@@ -1856,12 +1893,11 @@
+@@ -1856,44 +1893,45 @@ class MmuFilamentMovement:
                  # distance is then relative to the toolhead sensor, not the
                  # extruder gears/entrance.
                  if self.sensor_manager.check_sensor(SENSOR_TOOLHEAD):
@@ -164,15 +167,77 @@ diff --git a/extras/mmu/mmu_filament_movement.py b/extras/mmu/mmu_filament_movem
 -                    )
 -
 -                homing_max = extra_homing + u.p.toolhead_homing_max
+-
+-                self.log_debug(
+-                    f"Homing up to {homing_max:.1f}mm to toolhead sensor"
+-                    f"{' (synced)' if synced else ''}"
+-                )
 +                    self.log_debug("Filament already detected at toolhead sensor")
 +                    fhomed = True
++                    actual = 0.0
++                    bowden_extra = 0.0
 +                    self.set_filament_pos_state(FILAMENT_POS_HOMED_TS)
 +                else:
 +                    homing_max = extra_homing + u.p.toolhead_homing_max
  
-                 self.log_debug(
-                     f"Homing up to {homing_max:.1f}mm to toolhead sensor"
-@@ -2558,10 +2594,14 @@
+-                actual, fhomed, measured, _ = self.move_filament(
+-                    "Homing to toolhead sensor",
+-                    homing_max,
+-                    motor=motor,
+-                    homing_move=1,
+-                    endstop_name=SENSOR_TOOLHEAD,
+-                )
++                    self.log_debug(
++                        f"Homing up to {homing_max:.1f}mm to toolhead sensor"
++                        f"{' (synced)' if synced else ''}"
++                    )
+ 
+-                if fhomed:
+-                    self.set_filament_pos_state(FILAMENT_POS_HOMED_TS)
+-                    # Bowden part of move is homing distance minus the distance between entrance and toolhead sensor
+-                    bowden_extra = max(
+-                        actual
+-                        - (
+-                            u.toolhead_wrapper.p.toolhead_extruder_to_nozzle
+-                            - u.toolhead_wrapper.p.toolhead_sensor_to_nozzle
+-                        ),
+-                        0,
++                    actual, fhomed, measured, _ = self.move_filament(
++                        "Homing to toolhead sensor",
++                        homing_max,
++                        motor=motor,
++                        homing_move=1,
++                        endstop_name=SENSOR_TOOLHEAD,
+                     )
+-                else:
+-                    if self.gate_selected != TOOL_GATE_BYPASS:
+-                        self.set_filament_pos_state(FILAMENT_POS_EXTRUDER_ENTRY) # But could also still be POS_IN_BOWDEN!
++
++                    if fhomed:
++                        self.set_filament_pos_state(FILAMENT_POS_HOMED_TS)
++                        # Bowden part of move is homing distance minus the distance between entrance and toolhead sensor
++                        bowden_extra = max(
++                            actual
++                            - (
++                                u.toolhead_wrapper.p.toolhead_extruder_to_nozzle
++                                - u.toolhead_wrapper.p.toolhead_sensor_to_nozzle
++                            ),
++                            0,
++                        )
+                     else:
+-                        # For bypass its best to assume we didn't enter the extruder at all
+-                        self.set_filament_pos_state(FILAMENT_POS_UNLOADED)
+-                    raise MmuError("Failed to reach toolhead sensor after moving %.1fmm" % actual)
++                        if self.gate_selected != TOOL_GATE_BYPASS:
++                            self.set_filament_pos_state(FILAMENT_POS_EXTRUDER_ENTRY) # But could also still be POS_IN_BOWDEN!
++                        else:
++                            # For bypass its best to assume we didn't enter the extruder at all
++                            self.set_filament_pos_state(FILAMENT_POS_UNLOADED)
++                        raise MmuError("Failed to reach toolhead sensor after moving %.1fmm" % actual)
+ 
+             # Length may be reduced by previous unload in filament cutting use
+             # case. Ensure reduction is used only one time.
+@@ -2558,10 +2596,14 @@ class MmuFilamentMovement:
                      extruder_homing_buffer = 0.
                      bowden_move_ratio = None
  
@@ -188,7 +253,7 @@ diff --git a/extras/mmu/mmu_filament_movement.py b/extras/mmu/mmu_filament_movem
  
                      if start_filament_pos < FILAMENT_POS_HOMED_EXTRUDER:
                          if must_home:
-@@ -2626,6 +2666,8 @@
+@@ -2626,6 +2668,8 @@ class MmuFilamentMovement:
                          else:
                              self.wrap_gcode_command(self.p.post_load_macro, exception=True, wait=True)
  
@@ -197,7 +262,7 @@ diff --git a/extras/mmu/mmu_filament_movement.py b/extras/mmu/mmu_filament_movem
              td1_success = True
  
          except MmuError as ee:
-@@ -2750,7 +2792,7 @@
+@@ -2750,7 +2794,7 @@ class MmuFilamentMovement:
                  else:
                      self.log_debug("Tip forming performed by slicer, park_pos set to %.1fmm" % park_pos)
  
@@ -206,7 +271,7 @@ diff --git a/extras/mmu/mmu_filament_movement.py b/extras/mmu/mmu_filament_movem
  
                  with self._wrap_track_time('form_tip'):
                      # Extruder only in runout case to give filament best chance to reach gear
-@@ -2817,11 +2859,20 @@
+@@ -2817,11 +2861,20 @@ class MmuFilamentMovement:
                      (start_filament_pos >= FILAMENT_POS_END_BOWDEN and calibrated) or
                      (start_filament_pos >= FILAMENT_POS_HOMED_GATE and not full)
                  ):
@@ -228,7 +293,7 @@ diff --git a/extras/mmu/mmu_filament_movement.py b/extras/mmu/mmu_filament_movem
                      else:
                          # No Bowden stage exists. If unloading the extruder just
                          # reverse-homed off the same sensor used as the gate datum,
-@@ -2928,7 +2979,9 @@
+@@ -2928,7 +2981,9 @@ class MmuFilamentMovement:
  
          # Pre check to validate the presence of filament in the extruder and case where we don't need to form tip
          filament_initially_present = self.sensor_manager.check_sensor(SENSOR_TOOLHEAD)
@@ -240,9 +305,10 @@ diff --git a/extras/mmu/mmu_filament_movement.py b/extras/mmu/mmu_filament_movem
  
              if self.filament_pos == FILAMENT_POS_LOADED:
 diff --git a/extras/mmu/mmu_sensor_utils.py b/extras/mmu/mmu_sensor_utils.py
+index ab21d6c..2c45e43 100644
 --- a/extras/mmu/mmu_sensor_utils.py
 +++ b/extras/mmu/mmu_sensor_utils.py
-@@ -324,6 +324,16 @@
+@@ -324,6 +324,16 @@ class MmuSensorFactory:
          if self._is_empty_pin(switch_pin):
              return None
  
@@ -259,7 +325,7 @@ diff --git a/extras/mmu/mmu_sensor_utils.py b/extras/mmu/mmu_sensor_utils.py
          return MmuSwitchSensor(
              config=config,
              name_prefix=name_prefix,
-@@ -336,6 +346,8 @@
+@@ -336,6 +346,8 @@ class MmuSensorFactory:
      def _is_empty_pin(self, switch_pin):
          if switch_pin is None or switch_pin == '':
              return True
@@ -268,7 +334,7 @@ diff --git a/extras/mmu/mmu_sensor_utils.py b/extras/mmu/mmu_sensor_utils.py
  
          ppins = self.printer.lookup_object('pins')
          pin_params = ppins.parse_pin(switch_pin, can_invert=True, can_pullup=True)
-@@ -539,6 +551,40 @@
+@@ -539,6 +551,40 @@ class MmuVirtualEndstopSensor(MmuSensor):
  
  
  
@@ -310,9 +376,10 @@ diff --git a/extras/mmu/mmu_sensor_utils.py b/extras/mmu/mmu_sensor_utils.py
  # Compound endstop wrapper. Allows homing against multiple virtual endstops and an optional
  # MCU endstop, triggering on the first to activate while recording the source of the trigger.
 diff --git a/extras/mmu/unit/mmu_buffer.py b/extras/mmu/unit/mmu_buffer.py
+index c49df7b..989cd84 100644
 --- a/extras/mmu/unit/mmu_buffer.py
 +++ b/extras/mmu/unit/mmu_buffer.py
-@@ -84,10 +84,11 @@
+@@ -84,10 +84,11 @@ class MmuBuffer:
          )
  
          # Setup analog (proportional) sync feedback
@@ -326,7 +393,7 @@ diff --git a/extras/mmu/unit/mmu_buffer.py b/extras/mmu/unit/mmu_buffer.py
              self.proportional_sensor = MmuProportionalSensor(
                  config,
                  f"{self.name}:{SENSOR_PROPORTIONAL}",
-@@ -187,7 +188,16 @@
+@@ -187,7 +188,16 @@ class MmuProportionalSensor:
          self.tension_vsensor = None
  
          # Config
@@ -344,7 +411,7 @@ diff --git a/extras/mmu/unit/mmu_buffer.py b/extras/mmu/unit/mmu_buffer.py
          max_tension     = config.getfloat('analog_max_tension', 1)
          max_compression = config.getfloat('analog_max_compression', 0)
  
-@@ -218,6 +228,8 @@
+@@ -218,6 +228,8 @@ class MmuProportionalSensor:
          # State
          self.value_raw = 0.0 # Raw ADC value
          self.value = 0.0     # In [-1.0, 1.0]
@@ -353,7 +420,7 @@ diff --git a/extras/mmu/unit/mmu_buffer.py b/extras/mmu/unit/mmu_buffer.py
  
          # Virtual sensor setup
          threshold = self.analog_sensor_threshold
-@@ -233,15 +245,15 @@
+@@ -233,15 +245,15 @@ class MmuProportionalSensor:
  
          # Setup ADC
          ppins = self.printer.lookup_object('pins')
@@ -378,7 +445,7 @@ diff --git a/extras/mmu/unit/mmu_buffer.py b/extras/mmu/unit/mmu_buffer.py
  
          self.runout_helper = MmuRunoutHelper(
              self.printer,
-@@ -260,11 +272,30 @@
+@@ -260,11 +272,30 @@ class MmuProportionalSensor:
          # Create virtual tension sensor?
          if virtual_tension_sensor:
              self.tension_vsensor = MmuVirtualEndstopSensor(config, virtual_tension_sensor, None, register=register)
@@ -410,7 +477,7 @@ diff --git a/extras/mmu/unit/mmu_buffer.py b/extras/mmu/unit/mmu_buffer.py
  
      def _map_reading(self, v_raw):
          n = self._neutral_point
-@@ -355,4 +386,7 @@
+@@ -355,4 +386,7 @@ class MmuProportionalSensor:
              "enabled":          bool(self.runout_helper.sensor_enabled),
              "value":            self.value,             # in [-1.0, 1.0] (mapped)
              "value_raw":        self.value_raw,         # raw
@@ -419,9 +486,10 @@ diff --git a/extras/mmu/unit/mmu_buffer.py b/extras/mmu/unit/mmu_buffer.py
 +            "values_raw":       list(self.values_raw),
          }
 diff --git a/extras/mmu/unit/mmu_unit_parameters.py b/extras/mmu/unit/mmu_unit_parameters.py
+index b00f3cc..d0a6296 100644
 --- a/extras/mmu/unit/mmu_unit_parameters.py
 +++ b/extras/mmu/unit/mmu_unit_parameters.py
-@@ -359,6 +359,7 @@
+@@ -359,6 +359,7 @@ class MmuUnitParameters(TunableParametersBase):
          ParamSpec('extruder_collision_homing_step',   'int',       3, section="EXTRUDER MOVE", limits=dict(minval=2, maxval=5), guard=_guard_has_encoder),
          ParamSpec('toolhead_homing_max',              'float',  20.0, section="EXTRUDER MOVE", limits=dict(minval=0.0),         guard=_guard_has_sensor(SENSOR_TOOLHEAD)),
          ParamSpec('toolhead_unload_safety_margin',    'float',  10.0, section="EXTRUDER MOVE", limits=dict(minval=0.0)),
@@ -430,9 +498,10 @@ diff --git a/extras/mmu/unit/mmu_unit_parameters.py b/extras/mmu/unit/mmu_unit_p
          ParamSpec('toolhead_entry_tension_test',      'int',       1, section="EXTRUDER MOVE", limits=dict(minval=0, maxval=1)),
          ParamSpec('toolhead_post_load_tighten',       'int',      60, section="EXTRUDER MOVE", limits=dict(minval=0, maxval=100)),
 diff --git a/extras/mmu/unit/selectors/mmu_linear_selector.py b/extras/mmu/unit/selectors/mmu_linear_selector.py
+index a25385b..5512d88 100644
 --- a/extras/mmu/unit/selectors/mmu_linear_selector.py
 +++ b/extras/mmu/unit/selectors/mmu_linear_selector.py
-@@ -136,6 +136,7 @@
+@@ -136,6 +136,7 @@ class LinearSelector(PhysicalSelector):
          super().__init__(config, mmu_unit, params)
  
          self.bypass_offset = -1 # Required for get_status() success during init()
@@ -440,7 +509,7 @@ diff --git a/extras/mmu/unit/selectors/mmu_linear_selector.py b/extras/mmu/unit/
  
          self.selector_stepper_name = mmu_unit.config.get('selector_stepper') # Name of selector stepper
          stepper_section = f"mmu_stepper {self.selector_stepper_name}"
-@@ -270,6 +271,7 @@
+@@ -270,6 +271,7 @@ class LinearSelector(PhysicalSelector):
  
      def disable_motors(self):
          self.selector_stepper.do_enable(False)
@@ -448,7 +517,7 @@ diff --git a/extras/mmu/unit/selectors/mmu_linear_selector.py b/extras/mmu/unit/
  
          # Assume that if disabling motor then the position will be modified. Clears the persisted
          # gate too so the pair stays correlated -- see _invalidate_persisted_position()
-@@ -536,11 +538,22 @@
+@@ -536,11 +538,22 @@ class LinearSelector(PhysicalSelector):
          self.filament_hold_move()
  
          try:
@@ -472,7 +541,7 @@ diff --git a/extras/mmu/unit/selectors/mmu_linear_selector.py b/extras/mmu/unit/
              self._invalidate_persisted_position() # Where the carriage stopped is anyone's guess
              raise MmuError(f"Homing selector failed because of blockage or malfunction. Klipper reports: {e}") from e
  
-@@ -549,6 +562,8 @@
+@@ -549,6 +562,8 @@ class LinearSelector(PhysicalSelector):
          """
          Position gate to desired target position
          """
