@@ -117,6 +117,9 @@ start)
 	# keeping an edited copy as <name>.cfg.bak-<date> (config-updates.txt,
 	# CONFIG_BACKUPS in Klipper).
 	ad5x-config-templates /usr/share/ad5x/defaults $pd/config
+	# Moonraker (S62) reads its config after this: drop the old screen
+	# webcam section that S65 now replaces (no-op once it is gone)
+	[ -f $pd/config/moonraker.conf ] && ad5x-moonraker-migrate $pd/config/moonraker.conf
 	chown -R klipper:klipper $pd
 	chmod 700 /data/ad5x/ssh
 	;;

@@ -1,22 +1,61 @@
 #!/bin/sh
 # The touch screen in the browser, with touch: ad5x-fbstream on
 # 127.0.0.1:8092, nginx /screen/ (page), /screen/?action=stream,
-# /screen/?action=snapshot. Fluidd shows it as the "Screen" camera.
+# /screen/?action=snapshot. Fluidd shows it as the "screen" camera.
+# The tile is a Moonraker database webcam: enabled while the streamer
+# answers, disabled when SCREEN=off or it does not answer (so it is not a
+# dead tile). It is set at boot, in the background, like the USB cameras.
 # /data/ad5x/screen.conf (optional): SCREEN=off, FPS=2, QUALITY=70.
 BIN=/usr/bin/ad5x-fbstream
 PID=/run/ad5x-screen.pid
 CONF=/data/ad5x/screen.conf
+WEBCAM_API=http://127.0.0.1:7125/server/webcams/item
+
+# Moonraker (S62) normally answers already; the wait covers a slow boot
+wait_moonraker() {
+	w=0
+	while [ $w -lt 60 ] && ! wget -q -O /dev/null -T 3 http://127.0.0.1:7125/server/info; do
+		w=$((w + 1))
+		sleep 2
+	done
+}
+
+register_webcam() {	# true or false
+	wget -q -O /dev/null -T 5 --post-data "name=screen&enabled=$1&service=iframe&stream_url=/screen/&snapshot_url=/screen/?action=snapshot&location=printer&icon=mdiMonitor" \
+		"$WEBCAM_API" || echo "screen: could not register with Moonraker"
+	echo "screen: webcam enabled=$1"
+}
+
+# The streamer takes a few seconds to answer after start
+sync_webcam() {
+	wait_moonraker
+	i=0
+	while [ $i -lt 8 ]; do
+		if wget -q -O /dev/null -T 5 "http://127.0.0.1:8092/?action=snapshot"; then
+			register_webcam true
+			return
+		fi
+		i=$((i + 1))
+		sleep 2
+	done
+	register_webcam false
+}
+
 case "$1" in
 start)
-	[ -x $BIN ] || exit 0
 	SCREEN=on FPS=2 QUALITY=70
 	[ -f $CONF ] && . $CONF
-	[ "$SCREEN" = off ] && exit 0
-	start-stop-daemon -S -b -m -p $PID -x $BIN -- -p 8092 -f $FPS -q $QUALITY
+	if [ -x $BIN ] && [ "$SCREEN" != off ]; then
+		start-stop-daemon -S -b -m -p $PID -x $BIN -- -p 8092 -f $FPS -q $QUALITY
+		sync_webcam &
+	else
+		( wait_moonraker; register_webcam false ) &
+	fi
 	;;
 stop)
 	start-stop-daemon -K -p $PID -q
 	rm -f $PID
+	register_webcam false
 	;;
 restart)
 	$0 stop; sleep 1; $0 start

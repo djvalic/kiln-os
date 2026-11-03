@@ -10,6 +10,14 @@ the issue: it is closed by hand after the release.
 
 ## Unreleased
 
+- **Boards are flashed with Kiln OS's own tools** (issue #20, PR #32 by Hunter Laux): `ad5x-flash-n32` (mainboard) and `ad5x-flash-iap` (eboard and IFS) replace Flashforge's closed binaries, which are used only if the new tools are missing. The mainboard flasher reads the chip's ISP reply (boot version, UCID, UID) before it erases, refuses firmware larger than 512 KB, and pulses reset after a failed attempt. The mainboard's UID is pinned after its first verified flash (`mainboard.uid`); a later flash refuses to write if the chip's UID differs, so a board swap is not flashed by mistake. The eboard and the IFS are started with `A` after their image is written (the bootloader stays waiting without it), and a flash that does not report the application started is counted as failed.
+
+- **HelixScreen patches follow upstream v1.1.0-beta.15**: the builder's bump failed because patches 0016, 0017, 0024, 0028 and 0030 did not apply. Upstream beta.15 already has the 5 GHz band from scan results and its label refresh (0017), the Ethernet link-down status (0024), and the status-card scroll (in 0016), so those parts are dropped. The Wi-Fi IP from the kernel and the hidden-network SSID fix stay in 0016. 0028 and 0030 are refreshed to the beta.15 strings.
+
+- **Fluidd's "screen" tile follows the streamer**: the tile is no longer a static `[webcam screen]` entry in `moonraker.conf`. `S65ad5x-screen` registers it at boot as a database webcam, enabled while the touch-screen streamer answers and disabled when `SCREEN=off` (in `/data/ad5x/screen.conf`) or the streamer does not answer, so it is not a dead tile. The page's touch input is unchanged. `tools/test_screen_tile.sh` covers the cases. Checked on a printer after boot: the tile is registered and enabled while the streamer answers, and `SCREEN=off` turns it off.
+
+## v0.0.41
+
 - **Crash log of our kernel** (issue #29): a kernel panic is kept in a reserved 1 MiB of RAM and shows up in `/sys/fs/pstore` after the next boot (`dmesg-ramoops-0`, `console-ramoops-0`). Kept out of Linux' RAM: the last 1 MiB.
 
 ## v0.0.40

@@ -465,8 +465,7 @@ dir's `import` commit with `git format-patch`.
 | `0013-ad5x-keyboard-underscore` | The keyboard's second period on the number page is an underscore |
 | `0014-ad5x-home-no-swipe-with-arrows` | The home screen does not page by swipe where the arrows page it (resistive touch) |
 | `0015-ad5x-wizard-one-page-steps` | The Z offset step's buttons read Closer / Away (no hint line); the purge box is one row of arrows (Left, Right, Front, Back, Factory), so Accept and Abort fit on the page; shorter step text |
-| `0016-ad5x-network-menu-fixes` | Network settings: the status cards scroll so Test Network stays on screen with Wi-Fi and Ethernet both up; the Wi-Fi IP comes from the kernel when wpa_supplicant's status has none (issue #7); hidden networks with all-zero names are not listed |
-| `0017-ad5x-wifi-5ghz-from-scan` | The Wi-Fi band note follows the scan: a 5 GHz network in the list means 5 GHz works (issue #6) |
+| `0016-ad5x-network-menu-fixes` | Network settings: the Wi-Fi IP comes from the kernel when wpa_supplicant's status has none (issue #7); hidden networks with all-zero names are not listed |
 | `0018-ad5x-preset-no-aux-fan` | The AD5X preset has no aux fan (`chamber_fan` is not on the printer): an empty `fans/aux` is no longer filled from the preset at every boot, which made the fan step come back each start |
 | `0019-ad5x-buttons-no-drag-scroll` | Plain buttons do not pass a drag to the panel behind them (LVGL scroll chain off); list rows (`*_row`) keep drag-scroll. Set in `create_xml_hidden`, the home page walk and the home tile resize |
 

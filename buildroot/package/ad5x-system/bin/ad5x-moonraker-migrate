@@ -1,0 +1,46 @@
+#!/bin/sh
+# Remove the old static [webcam screen] section from a printer's moonraker.conf.
+# The screen tile is registered at boot by S65ad5x-screen as a database webcam,
+# and a config webcam of the same name makes that registration fail ("Cannot
+# overwrite webcam 'screen' sourced from Moonraker configuration"). Only the
+# exact section the image used to ship is removed; an edited one is left alone.
+# A backup is kept as moonraker.conf.bak-<date>, and config-updates.txt says so.
+#
+# usage: ad5x-moonraker-migrate FILE
+f=$1
+[ -f "$f" ] || exit 0
+exec /usr/bin/python3 - "$f" <<'PY'
+import os, shutil, sys, time
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+lines = text.split("\n")
+COMMENT = "# The touch screen with touch (S65ad5x-screen), as a page inside Fluidd"
+KEYS = ["service: iframe", "stream_url: /screen/", "snapshot_url: /screen/?action=snapshot"]
+out, i, removed = [], 0, False
+while i < len(lines):
+    if lines[i] == "[webcam screen]" and lines[i + 1:i + 4] == KEYS:
+        if out and out[-1] == COMMENT:
+            out.pop()
+        i += 4
+        if i < len(lines) and lines[i] == "":
+            i += 1
+        removed = True
+        continue
+    out.append(lines[i])
+    i += 1
+if not removed:
+    print("moonraker: no old [webcam screen] section, nothing to do")
+    sys.exit(0)
+stamp = time.strftime("%Y%m%d-%H%M%S")
+bak = path + ".bak-" + stamp
+shutil.copy2(path, bak)
+# write in place so the file keeps its owner (klipper) and mode
+with open(path, "w", encoding="utf-8") as fh:
+    fh.write("\n".join(out))
+notice = os.path.join(os.path.dirname(path), "config-updates.txt")
+with open(notice, "a", encoding="utf-8") as fh:
+    fh.write(time.strftime("%Y-%m-%d %H:%M") + " moonraker.conf: the old [webcam screen] section "
+             "was removed; the screen tile is now registered at boot. Your copy is "
+             + os.path.basename(bak) + "\n")
+print("moonraker: removed the old [webcam screen] section (backup " + os.path.basename(bak) + ")")
+PY
