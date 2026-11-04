@@ -390,6 +390,9 @@ class IFS:
         self.print_state = None
         # Startup check for a lane loaded before Kiln (see _adopt_loaded)
         self.adopt_pending = False
+        # Filaments named in the printing file, read once per file:
+        # ((path, size, mtime_ns), (types, colours))
+        self.file_filaments_cache = None
         # Swap heating: the target set by _heat, waited for (M109) just
         # before the first extruder move of the operation (_ensure_hot)
         self.heat_wait = None
@@ -763,10 +766,13 @@ class IFS:
             self.first_swap_pending = True
             self.refill_noticed = set()
             self.refill_notice = ""
+            self.file_filaments_cache = None
             if self.map_mode == "loaded":
                 self._map_loaded()
             self._warn_shared_slots()
         self.print_state = state
+        if ended:
+            self.file_filaments_cache = None
         if ended and self.tool_map != list(CHANNELS):
             self.tool_map = list(CHANNELS)
             self.gcode.respond_info("IFS: print ended, tool map reset")
@@ -1889,23 +1895,29 @@ class IFS:
             raise gcmd.error("IFS_MAP_TOOL: slot %d has no filament" % (slot,))
         self.tool_map[tool] = slot
         gcmd.respond_info("IFS: T%d -> slot %d" % (tool, slot))
-    def _file_filaments(self):
-        """(types, colours) per tool from the header or footer of the file
-        printing now ('; filament_type' and '; filament_colour', as Orca and
-        PrusaSlicer write them), so files made before this change work too.
-        ([], []) when there is no file or it has no such lines."""
-        vsd = self.printer.lookup_object('virtual_sdcard', None)
-        path = vsd.file_path() if vsd is not None else None
-        if not path:
-            return [], []
-        # Only the start and the end of the file are read: the lines sit in
-        # the header or the footer, and a whole-file read on the reactor
-        # thread stalled the MCU at print start (issue #22).
-        scan = 512 * 1024
+    # Orca and PrusaSlicer write '; filament_type' and '; filament_colour' in
+    # the config block at the end of the file (about 20 KB from the end in
+    # Orca files); read only this much of each end instead of every line.
+    FILAMENT_SCAN_BYTES = 128 * 1024
+    @staticmethod
+    def _parse_file_filaments(path, size):
+        """(types, colours) per tool from the first and last
+        FILAMENT_SCAN_BYTES of the file, the last winning."""
+        chunk = IFS.FILAMENT_SCAN_BYTES
         found = {}
-
-        def take(text):
-            for line in text.splitlines():
+        with open(path, 'rb') as f:
+            if size <= 2 * chunk:
+                blocks = [f.read()]     # one block: no line is cut
+            else:
+                head = f.read(chunk)
+                f.seek(size - chunk)
+                tail = f.read()
+                # Drop the lines cut where each block meets the gap
+                nl = tail.find(b'\n')
+                blocks = [head[:head.rfind(b'\n') + 1],
+                          tail[nl + 1:] if nl >= 0 else b'']
+        for block in blocks:
+            for line in block.decode('utf-8', 'replace').splitlines():
                 if not line.startswith(';'):
                     continue
                 key, sep, value = line[1:].partition('=')
@@ -1913,26 +1925,37 @@ class IFS:
                 if sep and key in ('filament_type', 'filament_colour'):
                     found[key] = [v.strip().strip('"')
                                   for v in value.split(';')]
-        try:
-            with open(path, 'rb') as f:
-                size = os.fstat(f.fileno()).st_size
-                head = f.read(scan)
-                if size > scan:
-                    head = head[:head.rfind(b'\n') + 1]  # drop a cut line
-                take(head.decode('utf-8', 'replace'))
-                if (size > scan and
-                        not ('filament_type' in found and
-                             'filament_colour' in found)):
-                    f.seek(size - scan)
-                    tail = f.read()
-                    if b'\n' in tail:
-                        tail = tail[tail.index(b'\n') + 1:]  # drop a cut line
-                    take(tail.decode('utf-8', 'replace'))
-        except OSError as e:
-            logging.warning("ifs: cannot read %s for filament colours: %s",
-                            path, e)
-            return [], []
         return found.get('filament_type', []), found.get('filament_colour', [])
+    def _file_filaments(self):
+        """(types, colours) per tool from the header or footer of the file
+        printing now ('; filament_type' and '; filament_colour', as Orca and
+        PrusaSlicer write them), so files made before this change work too.
+        ([], []) when there is no file or it has no such lines. Runs on the
+        reactor: a whole-file read stalled the MCU at print start (issue
+        #22), so this reads at most 2 * FILAMENT_SCAN_BYTES, once per file
+        (print start asks twice: _map_loaded and _warn_shared_slots)."""
+        vsd = self.printer.lookup_object('virtual_sdcard', None)
+        path = vsd.file_path() if vsd is not None else None
+        if not path:
+            return [], []
+        try:
+            st = os.stat(path)
+            key = (path, st.st_size, st.st_mtime_ns)
+            if self.file_filaments_cache and self.file_filaments_cache[0] == key:
+                return self.file_filaments_cache[1]
+            res = self._parse_file_filaments(path, st.st_size)
+        except OSError as e:
+            if not (self.file_filaments_cache
+                    and self.file_filaments_cache[0] == path):
+                logging.warning("ifs: cannot read %s for filament colours: %s",
+                                path, e)
+                self.gcode.respond_info(
+                    "IFS: warning: cannot read %s for filament colours: %s"
+                    % (os.path.basename(path), e))
+                self.file_filaments_cache = (path, ([], []))
+            return [], []
+        self.file_filaments_cache = (key, res)
+        return res
     def _warn_shared_slots(self):
         """Message only: two tools that map to one slot, but the file names
         different filament for them (type or colour), print with that slot's
