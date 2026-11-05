@@ -7,6 +7,8 @@ stock. Both boards of the developer's printer were flashed this way and run main
 (`firmware/ff-repo/stock5x`), the behaviour of the stock app and its four control-1.1.1 flashing tools,
 and the AD5M mod / xblax Klipper sources.
 
+**Current state (Kiln OS):** the boards are written only with Kiln OS's own tools, `ad5x-flash-n32` (mainboard) and `ad5x-flash-iap` (eboard, and the IFS as `ad5x-flash-ifs`). Flashforge's `NationsCommand`, `IAPCommand`, `IFSCommand` and `ifsF37` are described below for the record only: nothing from them is copied to the printer or run by Kiln OS.
+
 Summary:
 
 - Mainboard: no Flashforge bootloader. The N32G455's **ROM ISP bootloader**, entered by the SoC

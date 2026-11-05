@@ -69,6 +69,14 @@ cp "$WORK/out-mainboard/klipper.dict" "$DEST/mainboard.dict"
 cp "$WORK/out-eboard/klipper.hex"     "$DEST/eboard.hex"
 cp "$WORK/out-eboard/klipper.dict"    "$DEST/eboard.dict"
 if [ -d "$WORK/out-ifs" ]; then
+    # The IFS bootloader starts an application only if its stack pointer
+    # passes (SP & 0x2FFE0000) == 0x20000000; a stack at 0x20020000 left the
+    # IFS silent in its bootloader (2026-11-04). Refuse such an image.
+    SP=$(od -An -tx4 -N4 "$WORK/out-ifs/klipper.bin" | tr -d ' ')
+    if [ $(( 0x$SP & 0x2FFE0000 )) -ne $(( 0x20000000 )) ]; then
+        echo "ifs: stack pointer 0x$SP fails the IFS bootloader check; not writing ifs.hex" >&2
+        exit 1
+    fi
     cp "$WORK/out-ifs/klipper.hex"  "$DEST/ifs.hex"
     cp "$WORK/out-ifs/klipper.dict" "$DEST/ifs.dict"
 fi

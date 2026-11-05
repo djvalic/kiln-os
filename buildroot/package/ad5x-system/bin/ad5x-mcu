@@ -5,10 +5,10 @@
 # (eboard), at the version this image was tested against
 # (/usr/share/ad5x/mcu/VERSION, from klipper/mcu-dicts/FLASHED). At every
 # start (S60ad5x-eboard) "boot" checks both and flashes the ones that differ,
-# with Kiln OS's own flashers (ad5x-flash-n32, ad5x-flash-iap). Stock's
-# binaries (NationsCommand, IAPCommand, ifsF37, IFSCommand) are used only if
-# the new tools are missing; they are copied from stock's control directory
-# on the usershare partition to /data/ad5x/vendor/mcu, never part of our images:
+# with Kiln OS's own flashers (ad5x-flash-n32, ad5x-flash-iap, and ad5x-flash-ifs,
+# a link to ad5x-flash-iap). Flashforge's binaries (NationsCommand, IAPCommand,
+# ifsF37, IFSCommand) are not used at all; nothing from them is copied to the
+# printer or kept in our images:
 #   - mainboard: Klipper "identify" on ttyS2; any other answer (or none):
 #     ad5x-flash-n32 through the chip's ROM bootloader (BOOT0/NRST over GPIO),
 #     verified, then identified again;
@@ -37,14 +37,13 @@
 #                                      while Klipper runs: it holds the ports)
 #        ad5x-mcu flash-mainboard      flash the mainboard now (refused while
 #                                      Klipper runs)
-#        ad5x-mcu flash-ifs [HEX|stock] flash the IFS now: this version,
-#                                      HEX, or Flashforge's firmware back
-#                                      (refused while Klipper runs). If its
+#        ad5x-mcu flash-ifs [HEX]      flash the IFS now: this version, or
+#                                      HEX (refused while Klipper runs). If its
 #                                      bootloader doesn't answer, it keeps
 #                                      trying for 2 minutes: unplug the IFS
 #                                      cable and plug it back in
 #        ad5x-mcu arm-stock            arm stock's own board update
-#        ad5x-mcu tools                copy the flashing tools from stock
+#        ad5x-mcu tools                check the flashing tools are installed
 # /data/ad5x/mcu.disable: "boot" only starts the eboard, flashes nothing.
 # /data/ad5x/ifs-klipper.enable: "boot" also keeps the IFS on this version.
 # Log: /data/ad5x/mcu/log.
@@ -57,17 +56,30 @@
 : "${AD5X_DATA:=/data}" "${AD5X_SYS:=/sys}" "${AD5X_DEV:=/dev}" "${AD5X_RUN:=/run/ad5x}"
 : "${AD5X_MCU_FW:=/usr/share/ad5x/mcu}" "${AD5X_SCREENS:=/usr/share/ad5x/screens}"
 ST=$AD5X_DATA/ad5x/mcu
-TOOLS=$AD5X_DATA/ad5x/vendor/mcu
 LOG=$ST/log
 MB=$AD5X_DEV/ttyS2
 EB=$AD5X_DEV/ttyS5
 IFS_PORT=$AD5X_DEV/ttyS4
 WANT=$(cat "$AD5X_MCU_FW/VERSION" 2>/dev/null)
+# The IFS's own version (IFS_VERSION); an image without it uses VERSION
+IFS_WANT=$(cat "$AD5X_MCU_FW/IFS_VERSION" 2>/dev/null)
+IFS_WANT=${IFS_WANT:-$WANT}
 
 say() { echo "ad5x-mcu: $*"; echo "$(date '+%F %T') $*" >> "$LOG" 2>/dev/null; }
 blog() { command -v ad5x-bootlog >/dev/null 2>&1 && ad5x-bootlog "  mcu: $*" 2>/dev/null; true; }
 ver() {	# PORT -> the version its firmware reports, empty if none answers
 	ad5x-mcu-version --port "$1" --baud 230400 --timeout "${2:-3}" 2>/dev/null
+}
+secs() {	# seconds since boot: no RTC, so the clock jumps when NTP sets it (10 min, 2026-11-05)
+	s=$(cut -d. -f1 /proc/uptime 2>/dev/null)
+	echo "${s:-$(date +%s)}"
+}
+eboard_runs() {	# [SECONDS] the eboard application answers with WANT within SECONDS (60); logs how long it took
+	t0=$(secs); end=$((t0 + ${1:-60}))
+	while :; do
+		[ "$(ver "$EB" 5)" = "$WANT" ] && { say "eboard: answers $WANT after $(( $(secs) - t0 )) s"; return 0; }
+		[ "$(secs)" -lt $end ] || return 1
+	done
 }
 ifs_ver() {	# [TIMEOUT] -> the version the IFS reports as Klipper, empty if none answers
 	ad5x-mcu-version --port "$IFS_PORT" --baud 115200 --timeout "${1:-3}" 2>/dev/null
@@ -128,44 +140,10 @@ control_dir() {
 	[ -n "$best" ] && echo "$best"
 }
 
-tools() {	# make sure flashing tools are available (open-source or stock)
-	command -v ad5x-flash-n32 >/dev/null 2>&1 &&
-		command -v ad5x-flash-iap >/dev/null 2>&1 && return 0
-	[ -x "$TOOLS/NationsCommand" ] && [ -x "$TOOLS/IAPCommand" ] && return 0
-	us_mount ro || return 1
-	c=$(control_dir)
-	if [ -z "$c" ] || [ ! -f "$c/NationsCommand" ] || [ ! -f "$c/IAPCommand" ]; then
-		say "no flashing tools in stock's control directory (${c:-none} on usershare)"
-		us_umount; return 1
-	fi
-	mkdir -p "$TOOLS"
-	cp "$c/NationsCommand" "$c/IAPCommand" "$TOOLS/" &&
-		chmod 755 "$TOOLS/NationsCommand" "$TOOLS/IAPCommand" &&
-		( cd "$TOOLS" && sha256sum NationsCommand IAPCommand > SHA256SUMS )
-	rc=$?
-	us_umount
-	[ $rc = 0 ] && say "flashing tools copied from stock ${c##*/}"
-	return $rc
-}
-
-ifs_tools() {	# make sure IFS tools / stock-ifs.hex are available
-	command -v ad5x-flash-iap >/dev/null 2>&1 && [ -f "$TOOLS/stock-ifs.hex" ] && return 0
-	[ -x "$TOOLS/IFSCommand" ] && [ -x "$TOOLS/ifsF37" ] && [ -f "$TOOLS/stock-ifs.hex" ] && return 0
-	us_mount ro || return 1
-	c=$(control_dir)
-	if [ -z "$c" ] || [ ! -f "$c/ifs.hex" ]; then
-		say "no stock ifs.hex in stock's control directory (${c:-none} on usershare)"
-		us_umount; return 1
-	fi
-	mkdir -p "$TOOLS"
-	[ -f "$c/IFSCommand" ] && cp "$c/IFSCommand" "$TOOLS/" && chmod 755 "$TOOLS/IFSCommand"
-	[ -f "$c/ifsF37" ] && cp "$c/ifsF37" "$TOOLS/" && chmod 755 "$TOOLS/ifsF37"
-	cp "$c/ifs.hex" "$TOOLS/stock-ifs.hex" &&
-		( cd "$TOOLS" && sha256sum stock-ifs.hex > SHA256SUMS.ifs )
-	rc=$?
-	us_umount
-	[ $rc = 0 ] && say "IFS stock firmware copied from stock ${c##*/}"
-	return $rc
+tools() {	# the flashing tools are installed with the image
+	command -v ad5x-flash-n32 >/dev/null 2>&1 && command -v ad5x-flash-iap >/dev/null 2>&1 && return 0
+	say "flashing tools missing: ad5x-flash-n32 or ad5x-flash-iap (reinstall the image)"
+	return 1
 }
 
 arm_stock() {	# stock's own board update at its next start
@@ -196,18 +174,9 @@ arm_stock() {	# stock's own board update at its next start
 
 flash_mainboard() {
 	tools || return 1
-	if command -v ad5x-flash-n32 >/dev/null 2>&1; then
-		say "mainboard: flashing $WANT (ad5x-flash-n32)"
-		ad5x-flash-n32 -p "$MB" --uid-file "$ST/mainboard.uid" "$AD5X_MCU_FW/mainboard.bin" > "$ST/nations.log" 2>&1
-		rc=$?
-	else
-		w=$(mktemp -d)	# NationsCommand deletes ./UpdateM: run it where there is none
-		say "mainboard: flashing $WANT (NationsCommand)"
-		( cd "$w" && "$TOOLS/NationsCommand" -c -d --pn "$MB" --fn "$AD5X_MCU_FW/mainboard.bin" --v -r ) \
-			> "$ST/nations.log" 2>&1
-		rc=$?
-		rm -rf "$w"
-	fi
+	say "mainboard: flashing $WANT (ad5x-flash-n32)"
+	ad5x-flash-n32 -p "$MB" --uid-file "$ST/mainboard.uid" "$AD5X_MCU_FW/mainboard.bin" > "$ST/nations.log" 2>&1
+	rc=$?
 	if [ $rc != 0 ] || ! grep -q "verification succeeded" "$ST/nations.log"; then
 		say "mainboard: flashing failed (exit $rc, $ST/nations.log)"
 		return 1
@@ -220,21 +189,22 @@ flash_mainboard() {
 
 flash_eboard() {	# the bootloader must be waiting
 	tools || return 1
-	if command -v ad5x-flash-iap >/dev/null 2>&1; then
-		say "eboard: flashing $WANT (ad5x-flash-iap)"
-		ad5x-flash-iap -p "$EB" "$AD5X_MCU_FW/eboard.hex" > "$ST/iap.log" 2>&1
-		rc=$?
-		# ad5x-flash-iap sends 'A' after EOT; without this line the application did not start
-		if [ $rc = 0 ] && ! grep -q "Application started." "$ST/iap.log"; then
+	say "eboard: flashing $WANT (ad5x-flash-iap)"
+	ad5x-flash-iap -p "$EB" "$AD5X_MCU_FW/eboard.hex" > "$ST/iap.log" 2>&1
+	rc=$?
+	# ad5x-flash-iap sends 'A' after EOT and wants ACK back. Another reply (R, seen
+	# on the printer 2026-11-04) doesn't say the start failed: the image is written.
+	# After R the bootloader waits again: the application never answered in a
+	# 4-minute wait, and answered at once after boot_eboard's 'A' (2026-11-05).
+	# So start it again, then ask for its version: this version counts as started.
+	if [ $rc != 0 ] && grep -q "STM32Write: success" "$ST/iap.log" && ! grep -q "HD" "$ST/iap.log"; then
+		boot_eboard --port "$EB" 2>/dev/null || say "eboard: no start after R and 'A'"
+		if eboard_runs 60; then
+			say "eboard: start reply not ACK (ad5x-flash-iap), but it runs $WANT"
+			rc=0
+		else
 			say "eboard: written, but the application did not start (power-cycle the eboard)"
-			rc=1
 		fi
-	else
-		w=$(mktemp -d)	# IAPCommand deletes ./Update
-		say "eboard: flashing $WANT (IAPCommand)"
-		( cd "$w" && "$TOOLS/IAPCommand" "$AD5X_MCU_FW/eboard.hex" "$EB" ) > "$ST/iap.log" 2>&1
-		rc=$?
-		rm -rf "$w"
 	fi
 	# exit 0 with "Update :HD" means nothing was written
 	if [ $rc != 0 ] || ! grep -q "STM32Write: success" "$ST/iap.log" || grep -q "HD" "$ST/iap.log"; then
@@ -276,46 +246,21 @@ EOF
 }
 
 flash_ifs() {	# HEX WHAT: write HEX to the IFS (WHAT for the log)
-	if command -v ad5x-flash-ifs >/dev/null 2>&1 || command -v ad5x-flash-iap >/dev/null 2>&1; then
-		flasher=$(command -v ad5x-flash-ifs 2>/dev/null || echo ad5x-flash-iap)
-		say "ifs: flashing $2 ($flasher)"
-		end=$(( $(date +%s) + ${IFS_WAIT:-0} )) told= f37_arg="--f37"
-		while :; do
-			$flasher $f37_arg -p "$IFS_PORT" -w 20 "$1" > "$ST/ifs.log" 2>&1
-			rc=$?
-			f37_arg="--no-f37"
-			# ad5x-flash-iap sends 'A' after EOT; without this line the IFS did not start
-			[ $rc = 0 ] && grep -q "STM32Write: success" "$ST/ifs.log" && grep -q "Application started." "$ST/ifs.log" && return 0
-			if grep -q "Can not connect" "$ST/ifs.log" && [ "$(date +%s)" -lt $end ]; then
-				[ -n "$told" ] || say "ifs: no bootloader answers: unplug the IFS cable and plug it back in"
-				told=1; continue
-			fi
-			say "ifs: flashing failed (exit $rc, $ST/ifs.log)"
-			return 1
-		done
-	fi
-	ifs_tools || return 1
-	say "ifs: flashing $2 (IFSCommand)"
-	# Flashforge's firmware and ours (FLASHFORGE_IFS) erase the bootloader's
-	# flag page on F37 and reset into it; it then waits for IFSCommand.
-	# Nothing is written unless ifsF37 exits 0 (its output: $ST/ifsF37.log).
-	"$TOOLS/ifsF37" "$IFS_PORT" > "$ST/ifsF37.log" 2>&1
-	rc=$?
-	if [ $rc != 0 ]; then
-		say "ifs: the bootloader erase failed (ifsF37 exit $rc, $ST/ifsF37.log): nothing written"
-		return 1
-	fi
-	sleep 1
-	end=$(( $(date +%s) + ${IFS_WAIT:-0} )) told=
+	command -v ad5x-flash-ifs >/dev/null 2>&1 || { say "ifs: ad5x-flash-ifs missing (reinstall the image)"; return 1; }
+	say "ifs: flashing $2 (ad5x-flash-ifs)"
+	end=$(( $(secs) + ${IFS_WAIT:-0} )) told= f37_arg="--f37"
 	while :; do
-		w=$(mktemp -d)	# like IAPCommand, it may delete ./Update
-		# IFSCommand gives up after ~20 s without a bootloader, but resends
-		# a frame without limit
-		( cd "$w" && limit 300 "$TOOLS/IFSCommand" "$1" "$IFS_PORT" ) > "$ST/ifs.log" 2>&1
+		# ad5x-flash-ifs (= ad5x-flash-iap) sends F37 itself, then writes the IFS.
+		# Nothing after EOT (--no-start): the IFS bootloader starts the application
+		# itself, as with stock IFSCommand; an 'A' there left the application erased
+		ad5x-flash-ifs $f37_arg --no-start -p "$IFS_PORT" -w 20 "$1" > "$ST/ifs.log" 2>&1
 		rc=$?
-		rm -rf "$w"
-		[ $rc = 0 ] && grep -q "STM32Write: success" "$ST/ifs.log" && return 0
-		if grep -q "Can not connect" "$ST/ifs.log" && [ "$(date +%s)" -lt $end ]; then
+		f37_arg="--no-f37"
+		if [ $rc = 0 ] && grep -q "STM32Write: success" "$ST/ifs.log" && ! grep -q "HD" "$ST/ifs.log"; then
+			# written; flash_ifs_klipper checks the version the IFS then reports
+			return 0
+		fi
+		if grep -q "Can not connect" "$ST/ifs.log" && [ "$(secs)" -lt $end ]; then
 			[ -n "$told" ] || say "ifs: no bootloader answers: unplug the IFS cable and plug it back in"
 			told=1; continue
 		fi
@@ -334,15 +279,6 @@ flash_ifs_klipper() {	# HEX [WANT]: Klipper firmware; WANT empty: any version
 	fi
 	echo "$v" > "$ST/ifs"
 	say "ifs: $v"
-}
-
-flash_ifs_stock() {	# Flashforge's ifs.hex back
-	ifs_tools && flash_ifs "$TOOLS/stock-ifs.hex" "Flashforge's firmware" || return 1
-	rm -f "$ST/ifs"
-	sleep 2
-	v=$(ifs_f19)
-	[ -n "$v" ] || { say "ifs: flashed, but Flashforge's firmware doesn't answer"; return 1; }
-	say "ifs: Flashforge's firmware $v"
 }
 
 boot() {
@@ -383,7 +319,7 @@ boot() {
 		fi
 		boot_eboard --port "$EB" || say "eboard: no start after 'A'"
 	fi
-	ev=$(ver "$EB")
+	eboard_runs && ev=$WANT || ev=$(ver "$EB")
 	if [ "$ev" = "$WANT" ]; then
 		echo "$WANT" > "$ST/eboard"
 	else
@@ -393,15 +329,12 @@ boot() {
 	fi
 	# a flashed mainboard: check what it runs now
 	[ -z "$mbflashed" ] || mv=$(ver "$MB" 1)
-	# Keep the IFS backup (Flashforge's tools and ifs.hex) on this printer, from
-	# stock's copy on usershare. Best effort: a missing copy doesn't stop boot.
-	ifs_tools >/dev/null 2>&1 || true
 	# IFS: only when asked for; a failure doesn't hold Klipper back
 	if [ -f "$AD5X_MCU_FW/ifs.hex" ] && [ -f "$AD5X_DATA/ad5x/ifs-klipper.enable" ]; then
 		iv=$(ifs_ver 1)
-		if [ "$iv" != "$WANT" ]; then
-			say "ifs runs '${iv:-something else}', want $WANT"
-			{ arm && flash_ifs_klipper "$AD5X_MCU_FW/ifs.hex" "$WANT"; } ||
+		if [ "$iv" != "$IFS_WANT" ]; then
+			say "ifs runs '${iv:-something else}', want $IFS_WANT"
+			{ arm && flash_ifs_klipper "$AD5X_MCU_FW/ifs.hex" "$IFS_WANT"; } ||
 				say "ifs: not updated (ad5x-mcu flash-ifs)"
 		fi
 	fi
@@ -439,8 +372,6 @@ status() {
 	echo "eboard_flashed=$(cat "$ST/eboard" 2>/dev/null)"
 	if command -v ad5x-flash-n32 >/dev/null 2>&1 && command -v ad5x-flash-iap >/dev/null 2>&1; then
 		echo "tools=ok"
-	elif [ -x "$TOOLS/NationsCommand" ] && [ -x "$TOOLS/IAPCommand" ]; then
-		echo "tools=ok"
 	else
 		echo "tools=missing"
 	fi
@@ -455,9 +386,7 @@ status() {
 			echo "ifs=$v"
 		fi
 		echo "ifs_flashed=$(cat "$ST/ifs" 2>/dev/null)"
-		if command -v ad5x-flash-ifs >/dev/null 2>&1 || command -v ad5x-flash-iap >/dev/null 2>&1; then
-			echo "ifs_tools=ok"
-		elif [ -x "$TOOLS/IFSCommand" ] && [ -x "$TOOLS/ifsF37" ]; then
+		if command -v ad5x-flash-ifs >/dev/null 2>&1; then
 			echo "ifs_tools=ok"
 		else
 			echo "ifs_tools=missing"
@@ -479,11 +408,10 @@ flash-ifs)
 	mkdir -p "$ST"; arm_stock
 	export IFS_WAIT=120
 	case "$2" in
-	stock) flash_ifs_stock ;;
-	"") [ -n "$WANT" ] && flash_ifs_klipper "$AD5X_MCU_FW/ifs.hex" "$WANT" ;;
+	"") [ -n "$IFS_WANT" ] && flash_ifs_klipper "$AD5X_MCU_FW/ifs.hex" "$IFS_WANT" ;;
 	*) flash_ifs_klipper "$2" ;;
 	esac ;;
 arm-stock) mkdir -p "$ST"; arm_stock ;;
-tools) mkdir -p "$ST"; tools; ifs_tools || true ;;
+tools) mkdir -p "$ST"; tools ;;
 *) sed -n '2,49p' "$0"; exit 2 ;;
 esac

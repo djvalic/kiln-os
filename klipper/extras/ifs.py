@@ -73,6 +73,8 @@ RECONNECT_INTERVAL = 10.
 # MCU mode: length of one feeder move, in seconds at the feed speed (the
 # overshoot past a sensor is at most two of them)
 MCU_FEED_STEP_TIME = .5
+# Toolhead runout sensor stays off this long after a pre-feed (seconds)
+RUNOUT_SETTLE_TIME = 2.
 
 # Swap tuning (IFS_TUNE, QuickSwap-like; ideas from ninjamida/quickswap-5x,
 # MIT, no code used). Feed speeds tried, in mm/min; the sweep starts at
@@ -265,6 +267,9 @@ class IFS:
         # prefeed_backoff), acknowledged (F23) and released. Runs when
         # Klipper is ready and whenever the status poll sees a new spool,
         # never while printing. The loaded channel is only acknowledged.
+        # MCU mode: short moves up to prefeed_length, stopped by the toolhead
+        # sensor (no sensor: not fed), toolhead runout off meanwhile, only after ready, with no print running or
+        # paused and no G-code command running (other commands wait for it).
         self.prefeed = config.getboolean('prefeed_on_insert', True)
         self.prefeed_length = config.getfloat('prefeed_length', 600.,
                                               above=0.)
@@ -385,6 +390,7 @@ class IFS:
         self.silk = [0] * len(CHANNELS)
         self.stall = [0] * len(CHANNELS)
         self.busy = False
+        self.is_ready = False     # klippy:ready seen (MCU mode pre-feeds after it)
         self.error = None         # last failure, for printer.ifs.error
         self.stop_requested = False
         self.print_state = None
@@ -724,8 +730,8 @@ class IFS:
         # shutdown, restart): no print runs now, so its map mode goes back
         if self.zmod_prev is not None and not self._in_print():
             self._zmod_restore()
-        # MCU mode does not pre-feed yet
-        if self.prefeed and self.fd is not None:
+        self.is_ready = True
+        if self.prefeed and (self.is_mcu_mode or self.fd is not None):
             self.reactor.register_callback(self._ready_prefeed)
         self.reactor.register_timer(self._watch_print, self.reactor.NOW)
     def _watch_print(self, eventtime):
@@ -784,16 +790,45 @@ class IFS:
                 and idle.get_status(eventtime)['state'] == "Printing")
     def _prefeed_inserted(self, eventtime):
         """Pre-feed every channel flagged as newly inserted (stock does
-        this at power-on)."""
-        if (not self.prefeed or self.fd is None or self.busy
-                or self.printer.is_shutdown() or self._printing(eventtime)):
+        this at power-on). In MCU mode the moves are G-code
+        (manual_stepper), run from this timer: only after klippy:ready,
+        with no print running or paused, and only while no G-code command
+        runs (its mutex, taken before self.mutex as a command does)."""
+        if (not self.prefeed or self.busy or self.printer.is_shutdown()
+                or self._printing(eventtime)):
+            return
+        if not self.is_mcu_mode and self.fd is None:
             return
         inserted = self.last_status.get('ffs_channels_insert', 0)
         chans = [c for c in CHANNELS if inserted >> (c - 1) & 1]
         if not chans:
             return
+        if not self.is_mcu_mode:
+            self._prefeed_channels(chans)
+            return
+        ps = self.printer.lookup_object('print_stats', None)
+        state = ps.get_status(eventtime).get('state') if ps else None
+        if not self.is_ready or state in ("printing", "paused"):
+            return
+        gcode_mutex = self.gcode.get_mutex()
+        if gcode_mutex.test():
+            return      # a command runs: the flags stay, the next poll tries
+        with gcode_mutex:
+            self._prefeed_channels(chans)
+    def _prefeed_channels(self, chans):
         self.busy = True
         self.stop_requested = False
+        # MCU mode: the feeder moves are toolhead moves, so idle_timeout says
+        # "Printing" and the back off (the toolhead sensor goes empty) paused
+        # the idle printer as a runout (2026-11-05). Runout off meanwhile.
+        runout = None
+        if self.is_mcu_mode:
+            sensor = self.printer.lookup_object(
+                'filament_switch_sensor toolhead', None)
+            runout = getattr(sensor, 'runout_helper', None)
+        was_on = runout is not None and runout.sensor_enabled
+        if was_on:
+            runout.sensor_enabled = False
         try:
             with self.mutex:
                 for chan in chans:
@@ -804,18 +839,31 @@ class IFS:
                             self._clear_inserted(chan)
                         else:
                             self._prefeed_channel(chan)
-                    except IfsError as e:
+                    except (IfsError, self.gcode.error) as e:
                         logging.info("ifs: pre-feed channel %d failed: %s",
                                      chan, e)
                         self.gcode.respond_info(
                             "IFS: pre-feed channel %d failed: %s" % (chan, e))
-                        try:
-                            self._request("F15")
-                        except IfsError:
-                            pass
+                        if self.is_mcu_mode:
+                            # Motors off; the flag cleared, so the next poll
+                            # doesn't try again (take the spool out and in)
+                            self._clear_inserted(chan)
+                            self._reset_after_error()
+                        else:
+                            try:
+                                self._request("F15")
+                            except IfsError:
+                                pass
                         break
                 self._query_status()
         finally:
+            if was_on:
+                # Back on once the sensor has polled the empty toolhead and
+                # idle_timeout has seen the moves end
+                def runout_on(eventtime):
+                    runout.sensor_enabled = True
+                self.reactor.register_callback(
+                    runout_on, self.reactor.monotonic() + RUNOUT_SETTLE_TIME)
             self.busy = False
     def _check_stop(self, what):
         if self.stop_requested:
@@ -1178,34 +1226,6 @@ class IFS:
                 "MANUAL_STEPPER STEPPER=%s ENABLE=0" % (self.feeder_name,))
             raise
         return moved
-    def _mcu_feed_once(self, length, speed, stop, what):
-        """MCU mode: feed LENGTH mm at SPEED mm/min in one move (the stock
-        IFS's F10). If STOP() turns true on the way, the motor is switched
-        off: the filament stops, the rest of the move runs on a disabled
-        driver, and the feeder is left alone until it has. Returns (mm
-        fed, stopped)."""
-        speed_mms = max(1.0, float(speed) / 60.)
-        start = self.reactor.monotonic()
-        self.gcode.run_script_from_command(
-            "MANUAL_STEPPER STEPPER=%s ENABLE=1 SET_POSITION=0 MOVE=%s"
-            " SPEED=%s ACCEL=500 SYNC=0"
-            % (self.feeder_name, self._fmt(length), self._fmt(speed_mms)))
-        done = start + length / speed_mms + speed_mms / 500. + 1.
-        stopped = False
-        while self.reactor.monotonic() < done:
-            if stop() or self.stop_requested:
-                self.gcode.run_script_from_command(
-                    "MANUAL_STEPPER STEPPER=%s ENABLE=0" % (self.feeder_name,))
-                stopped = True
-                break
-            self.reactor.pause(self.reactor.monotonic() + self.sensor_poll)
-        fed = min(length, (self.reactor.monotonic() - start) * speed_mms)
-        # Until the move is over (on a disabled driver after a stop)
-        self.gcode.run_script_from_command(
-            "MANUAL_STEPPER STEPPER=%s SYNC=1" % (self.feeder_name,))
-        self.printer.lookup_object('toolhead').wait_moves()
-        self._check_stop(what)
-        return fed, stopped
     def _retract_until_clear(self, chan, length, speed, what):
         """F11 a lane until the head sensor clears (then F112). Returns the
         mm retracted (time x speed); raises if the sensor never clears."""
@@ -1414,11 +1434,15 @@ class IFS:
         loaded = self.channel       # _select() takes it as the loaded one
         try:
             self._select(chan)
-            # One move of prefeed_length, as stock; the toolhead sensor
-            # only as a safety stop
-            fed, reached = self._mcu_feed_once(
+            # Up to prefeed_length, as stock's F10, until the toolhead
+            # sensor sees it. Short moves (_mcu_feed): a disabled
+            # manual_stepper is enabled again by its next queued step, so
+            # one long move can't be cut short (it fed the whole 600 mm
+            # past the sensor on 2026-11-05)
+            fed, reached = self._mcu_feed(
                 self.prefeed_length, self.prefeed_speed,
-                lambda: bool(self._head_has_filament()), what)
+                lambda: bool(self._head_has_filament()), what,
+                self.load_timeout)
             logging.info("ifs: %s: fed %.0f mm, %s", what, fed,
                          "at the toolhead sensor" if reached
                          else "the toolhead sensor didn't see it")

@@ -92,15 +92,23 @@ AD5X_SYSTEM_PKGDIR = $(BR2_EXTERNAL_AD5X_PATH)/package/ad5x-system
 
 # The boards' Klipper firmware this image is tested against
 # (klipper/mcu-dicts/FLASHED, built by tools/build_mcu.sh); ad5x-mcu flashes
-# it when a board runs anything else. Plus its screens.
+# it when a board runs anything else. Plus its screens. The IFS (filament
+# unit) has its own version (klipper/mcu-dicts/FLASHED_IFS), so a new IFS
+# build does not reflash the mainboard or eboard.
 AD5X_SYSTEM_MCU_VERSION = $(strip $(shell cat $(BR2_EXTERNAL_AD5X_PATH)/../klipper/mcu-dicts/FLASHED))
 AD5X_SYSTEM_MCU_DIR = $(BR2_EXTERNAL_AD5X_PATH)/../klipper/mcu-firmware/$(AD5X_SYSTEM_MCU_VERSION)
+AD5X_SYSTEM_IFS_VERSION = $(strip $(shell cat $(BR2_EXTERNAL_AD5X_PATH)/../klipper/mcu-dicts/FLASHED_IFS))
+AD5X_SYSTEM_IFS_DIR = $(BR2_EXTERNAL_AD5X_PATH)/../klipper/mcu-firmware/$(AD5X_SYSTEM_IFS_VERSION)
 define AD5X_SYSTEM_INSTALL_MCU_FIRMWARE
 	cd $(AD5X_SYSTEM_MCU_DIR) && sha256sum -c --quiet SHA256SUMS
+	cd $(AD5X_SYSTEM_IFS_DIR) && sha256sum -c --quiet SHA256SUMS
 	mkdir -p $(TARGET_DIR)/usr/share/ad5x/mcu
 	cp $(AD5X_SYSTEM_MCU_DIR)/mainboard.bin $(AD5X_SYSTEM_MCU_DIR)/eboard.hex \
-		$(AD5X_SYSTEM_MCU_DIR)/ifs.hex $(AD5X_SYSTEM_MCU_DIR)/SHA256SUMS $(TARGET_DIR)/usr/share/ad5x/mcu/
+		$(AD5X_SYSTEM_MCU_DIR)/SHA256SUMS $(TARGET_DIR)/usr/share/ad5x/mcu/
+	cp $(AD5X_SYSTEM_IFS_DIR)/ifs.hex $(TARGET_DIR)/usr/share/ad5x/mcu/
+	cp $(AD5X_SYSTEM_IFS_DIR)/SHA256SUMS $(TARGET_DIR)/usr/share/ad5x/mcu/SHA256SUMS.ifs
 	echo $(AD5X_SYSTEM_MCU_VERSION) > $(TARGET_DIR)/usr/share/ad5x/mcu/VERSION
+	echo $(AD5X_SYSTEM_IFS_VERSION) > $(TARGET_DIR)/usr/share/ad5x/mcu/IFS_VERSION
 	python3 $(AD5X_SYSTEM_TOOLS)/make_install_screens.py --boards \
 		$(TARGET_DIR)/usr/share/ad5x/screens >/dev/null
 endef
