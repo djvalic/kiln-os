@@ -618,20 +618,6 @@ index 3b00755..2fa4b7f 100644
      // Thermal tint for the two heater glyphs. Each binder owns its own animator
      // and temperature observers, so the tile's numbers and icons agree.
      helix::ui::HeaterIconBinder nozzle_icon_binder_;
-diff --git a/src/api/moonraker_client_mock.cpp b/src/api/moonraker_client_mock.cpp
-index d4bd91e..3252c0e 100644
---- a/src/api/moonraker_client_mock.cpp
-+++ b/src/api/moonraker_client_mock.cpp
-@@ -3662,7 +3662,8 @@ void MoonrakerClientMock::populate_hardware() {
-                                 "temperature_sensor chamber"};
-         discovery_.fans() = {"fan_generic fanM106", "heater_fan heat_fan",
-                              "fan_generic chamber_fan", "fan_generic pcb_fan"};
--        discovery_.leds() = {};
-+        // The chamber light: [led chamber_led] (white_pin PA11) on the printer.
-+        discovery_.leds() = {"led chamber_led"};
-         break;
- 
-     case PrinterType::CREALITY_K2_PLUS:
 diff --git a/src/system/default_layout_resolver.cpp b/src/system/default_layout_resolver.cpp
 index a067d54..fff21c0 100644
 --- a/src/system/default_layout_resolver.cpp

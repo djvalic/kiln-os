@@ -1,0 +1,542 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Thu, 5 Nov 2026 22:00:00 -0500
+Subject: [PATCH] ams: Kiln's IFS settings in the filament system settings
+
+With Kiln OS's IFS driver, the filament system settings (device
+operations) get the IFS's own rows:
+
+- Endless Spool: Colour match (Exact, Similar, Any colour;
+  IFS_AUTO_REFILL MATCH=). The on/off switch is the panel's own
+  Endless Spool switch (0038).
+- Setup: Tool to slot (Slot per file, Auto colour; IFS_MAP_MODE MODE=).
+- Calibration: Tune IFS (IFS_TUNE; greyed while it runs or the IFS is
+  busy, refused during a print), its progress and message while it
+  runs, the last result after, and the tuned feed speed, load distance
+  per slot and unload distance ("Not tuned" where the defaults apply).
+- Filament Feeder: Pre-feed slot 1-4 (IFS_PREFEED CHANNEL=n), greyed
+  for an empty slot, the loaded slot or a busy IFS, refused during a
+  print.
+
+The driver's version is the system version shown at the top. Each
+section shows only where the driver publishes its fields; nothing
+changes on other firmware.
+
+Upstream: not applicable (AD5X OS specific)
+---
+diff --git a/include/ams_backend_ad5x_ifs.h b/include/ams_backend_ad5x_ifs.h
+index d4bbe82..a607d14 100644
+--- a/include/ams_backend_ad5x_ifs.h
++++ b/include/ams_backend_ad5x_ifs.h
+@@ -605,7 +605,21 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
+     /// mode get_endless_spool_capabilities() reports switchable.
+     AmsError apply_endless_spool_enabled(bool enabled) override;
+ 
++    /// Kiln OS's IFS commands: IFS_AUTO_REFILL MATCH=, IFS_MAP_MODE MODE=,
++    /// IFS_TUNE, IFS_PREFEED CHANNEL=.
++    AmsError do_execute_device_action(const std::string& action_id,
++                                      const std::any& value) override;
++
+   public:
++    /// Kiln OS's IFS driver in the device operations: the auto-refill colour
++    /// match (Endless Spool; the on/off switch is that panel's own, through
++    /// set_endless_spool_enabled()), the tool-to-slot mode (Setup), the swap
++    /// tuning with its progress and tuned values (Calibration) and a pre-feed
++    /// per slot (Filament Feeder). Each shows only where the driver publishes
++    /// its fields; nothing on other firmware.
++    [[nodiscard]] std::vector<helix::printer::DeviceSection> get_device_sections() const override;
++    [[nodiscard]] std::vector<helix::printer::DeviceAction> get_device_actions() const override;
++
+     // Backend-driven step model for the right-side vertical operation tracker.
+     // The AD5X synthesizes 3 firmware phases (HEATING→CUTTING→UNLOADING /
+     // HEATING→LOADING→PURGING) from extruder temp + head sensor in
+@@ -1930,6 +1944,21 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
+         bool ran = false;
+     };
+     KilnRefill kiln_refill_;
++    /// The rest of Kiln OS's driver state the device operations show, merged
++    /// across diff frames. Unset / false where the driver does not publish
++    /// it. Distances in mm, the speed in mm/min; unset = the [ifs] default
++    /// (not tuned). Guarded by mutex_.
++    struct KilnIfsInfo {
++        std::optional<std::string> map_mode; ///< "fixed" | "loaded"
++        bool tune_seen = false;
++        std::optional<double> tune_speed;
++        std::array<std::optional<double>, kNumPorts> tune_load_dist{};
++        std::optional<double> tune_unload_dist;
++        bool tune_running = false;
++        double tune_progress = 0.0; ///< 0..1
++        std::string tune_message;
++    };
++    KilnIfsInfo kiln_info_;
+     /// True while the SELECTING in system_info_.action was set by
+     /// apply_zmod_change_macro, so only that source clears it. Guarded by mutex_.
+     bool zmod_change_owns_action_ = false;
+diff --git a/src/printer/ams_backend_ad5x_ifs.cpp b/src/printer/ams_backend_ad5x_ifs.cpp
+index 1d9381c..3c6ac1f 100644
+--- a/src/printer/ams_backend_ad5x_ifs.cpp
++++ b/src/printer/ams_backend_ad5x_ifs.cpp
+@@ -8,6 +8,8 @@
+ #include "ui_temperature_utils.h"
+ #include "ui_update_queue.h"
+ 
++#include "ams_device_action_value.h"
++#include "ams_device_sections.h"
+ #include "ams_fault_event.h"
+ #include "ams_state.h"
+ #include "app_globals.h"
+@@ -5519,6 +5521,10 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+     std::optional<bool> auto_refill;
+     std::optional<std::string> refill_match;
+     std::optional<std::array<std::vector<int>, kNumPorts>> refill_backups;
++    // Kiln OS's tool-to-slot mode, its version and the swap tuning.
++    std::optional<std::string> map_mode;
++    std::optional<std::string> version;
++    std::optional<KilnIfsInfo> tune;
+ 
+     if (auto it = status.find("ifs"); it != status.end() && it->is_object()) {
+         const auto& obj = *it;
+@@ -5611,6 +5617,43 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+             refill_backups = std::move(lists);
+             saw_module_content = true;
+         }
++        if (auto m = obj.find("map_mode"); m != obj.end() && m->is_string()) {
++            map_mode = m->get<std::string>();
++            saw_module_content = true;
++        }
++        if (auto v = obj.find("version"); v != obj.end() && v->is_string()) {
++            version = v->get<std::string>();
++        }
++        // tune: {speed, load_dist {"1".."4"}, unload_dist, running, progress,
++        // message}; null where the [ifs] default applies.
++        if (auto t = obj.find("tune"); t != obj.end() && t->is_object()) {
++            const auto number = [](const json& o, const char* key) -> std::optional<double> {
++                auto f = o.find(key);
++                if (f == o.end() || !f->is_number()) {
++                    return std::nullopt;
++                }
++                return f->get<double>();
++            };
++            KilnIfsInfo parsed;
++            parsed.tune_seen = true;
++            parsed.tune_speed = number(*t, "speed");
++            parsed.tune_unload_dist = number(*t, "unload_dist");
++            if (auto ld = t->find("load_dist"); ld != t->end() && ld->is_object()) {
++                for (int c = 1; c <= kNumPorts; ++c) {
++                    parsed.tune_load_dist[static_cast<size_t>(c - 1)] =
++                        number(*ld, std::to_string(c).c_str());
++                }
++            }
++            if (auto r = t->find("running"); r != t->end() && r->is_boolean()) {
++                parsed.tune_running = r->get<bool>();
++            }
++            parsed.tune_progress = std::clamp(number(*t, "progress").value_or(0.0), 0.0, 1.0);
++            if (auto msg = t->find("message"); msg != t->end() && msg->is_string()) {
++                parsed.tune_message = msg->get<std::string>();
++            }
++            tune = std::move(parsed);
++            saw_module_content = true;
++        }
+     }
+     if (auto it = status.find("ifs_materials"); it != status.end() && it->is_object()) {
+         if (read_ifs_materials_object(*it, result)) {
+@@ -5736,6 +5779,37 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+         }
+     }
+ 
++    // What the device operations show: a change re-renders them.
++    if (map_mode || version || tune) {
++        std::lock_guard<std::mutex> lock(mutex_);
++        if (map_mode && map_mode != kiln_info_.map_mode) {
++            kiln_info_.map_mode = *map_mode;
++            action_changed = true;
++        }
++        if (version && *version != system_info_.version) {
++            system_info_.version = *version;
++            action_changed = true;
++        }
++        if (tune) {
++            const KilnIfsInfo& t = *tune;
++            if (!kiln_info_.tune_seen || t.tune_speed != kiln_info_.tune_speed ||
++                t.tune_load_dist != kiln_info_.tune_load_dist ||
++                t.tune_unload_dist != kiln_info_.tune_unload_dist ||
++                t.tune_running != kiln_info_.tune_running ||
++                t.tune_progress != kiln_info_.tune_progress ||
++                t.tune_message != kiln_info_.tune_message) {
++                action_changed = true;
++            }
++            kiln_info_.tune_seen = true;
++            kiln_info_.tune_speed = t.tune_speed;
++            kiln_info_.tune_load_dist = t.tune_load_dist;
++            kiln_info_.tune_unload_dist = t.tune_unload_dist;
++            kiln_info_.tune_running = t.tune_running;
++            kiln_info_.tune_progress = t.tune_progress;
++            kiln_info_.tune_message = t.tune_message;
++        }
++    }
++
+     if (action_changed) {
+         emit_event(EVENT_STATE_CHANGED);
+     }
+@@ -7552,6 +7626,220 @@ AmsError AmsBackendAd5xIfs::apply_endless_spool_enabled(bool enabled) {
+                                              : "IFS_AUTO_REFILL ENABLE=0");
+ }
+ 
++// --- Kiln OS's IFS in the device operations ---
++
++namespace {
++
++constexpr const char* kKilnPrefeedPrefix = "kiln_prefeed_";
++
++/// The colour match choices, as the dropdown shows them (Settings > Filament
++/// Auto-Refill uses the same words), and Klipper's names for them.
++struct KilnChoice {
++    const char* label;
++    const char* value;
++};
++constexpr KilnChoice kKilnMatches[] = {
++    {TR_NOOP("Exact"), "exact"}, {TR_NOOP("Similar"), "similar"}, {TR_NOOP("Any colour"), "any"}};
++constexpr KilnChoice kKilnMapModes[] = {{TR_NOOP("Slot per file"), "fixed"},
++                                        {TR_NOOP("Auto colour"), "loaded"}};
++
++template <size_t N> std::vector<std::string> kiln_choice_labels(const KilnChoice (&choices)[N]) {
++    std::vector<std::string> out;
++    for (const auto& c : choices) {
++        out.emplace_back(lv_tr(c.label));
++    }
++    return out;
++}
++
++/// The label shown for Klipper's @p value, or empty when it names none.
++template <size_t N>
++std::string kiln_choice_label(const KilnChoice (&choices)[N], const std::string& value) {
++    for (const auto& c : choices) {
++        if (value == c.value) {
++            return lv_tr(c.label);
++        }
++    }
++    return {};
++}
++
++/// Klipper's name for the shown @p label, or nullptr.
++template <size_t N>
++const char* kiln_choice_value(const KilnChoice (&choices)[N], const std::string& label) {
++    for (const auto& c : choices) {
++        if (label == lv_tr(c.label) || label == c.value) {
++            return c.value;
++        }
++    }
++    return nullptr;
++}
++
++std::string kiln_mm(double mm) {
++    return fmt::format("{:.0f} mm", mm);
++}
++
++} // namespace
++
++std::vector<helix::printer::DeviceSection> AmsBackendAd5xIfs::get_device_sections() const {
++    using helix::printer::device_section;
++    std::vector<helix::printer::DeviceSection> sections;
++    std::lock_guard<std::mutex> lock(mutex_);
++    if (!ifs_module_live_.load() || has_ifs_vars_) {
++        return sections;
++    }
++    if (kiln_refill_live_locked()) {
++        sections.push_back(
++            device_section("endless_spool", 0, TR_NOOP("Which spool auto-refill takes over with")));
++    }
++    if (kiln_info_.map_mode.has_value()) {
++        sections.push_back(
++            device_section("setup", 1, TR_NOOP("Which slot each tool of a print uses")));
++    }
++    if (kiln_info_.tune_seen) {
++        sections.push_back(device_section("calibration", 2,
++                                          TR_NOOP("Tune the IFS feed speed and load distances")));
++    }
++    if (kiln_info_.tune_seen || kiln_refill_.enabled.has_value()) {
++        sections.push_back(
++            device_section("feeder", 3, TR_NOOP("Feed a spool up to the toolhead in advance")));
++    }
++    return sections;
++}
++
++std::vector<helix::printer::DeviceAction> AmsBackendAd5xIfs::get_device_actions() const {
++    using DA = helix::printer::DeviceAction;
++    std::vector<DA> actions;
++    std::lock_guard<std::mutex> lock(mutex_);
++    if (!ifs_module_live_.load() || has_ifs_vars_) {
++        return actions;
++    }
++    const bool ifs_busy =
++        kiln_owns_action_ || ams_action_holds_system(system_info_.action) || kiln_info_.tune_running;
++
++    if (kiln_refill_live_locked()) {
++        actions.push_back(DA::dropdown(
++            "kiln_refill_match", "Colour match", "endless_spool", kiln_choice_labels(kKilnMatches),
++            kiln_choice_label(kKilnMatches, kiln_refill_.match), "palette",
++            "Exact: the same colour code. Similar: close shades. Any colour: the same material is "
++            "enough."));
++    }
++
++    if (kiln_info_.map_mode.has_value()) {
++        actions.push_back(DA::dropdown(
++            "kiln_map_mode", "Tool to slot", "setup", kiln_choice_labels(kKilnMapModes),
++            kiln_choice_label(kKilnMapModes, *kiln_info_.map_mode), "filament",
++            "Slot per file: the file's own slot for each tool. Auto colour: each tool uses the "
++            "loaded slot with the same material and the nearest colour, so a file made before can "
++            "still print."));
++    }
++
++    if (kiln_info_.tune_seen) {
++        DA tune = DA::button("kiln_tune", "Tune IFS", "calibration", "tune",
++                             "Finds the fastest reliable feed speed and each slot's distance to "
++                             "the toolhead sensor. Cuts and loads filament; takes several minutes.")
++                      .with_machine_motion();
++        if (kiln_info_.tune_running) {
++            tune.enabled = false;
++            tune.disable_reason = TR_NOOP("Tuning is running");
++        } else if (ifs_busy) {
++            tune.enabled = false;
++            tune.disable_reason = TR_NOOP("The IFS is busy");
++        }
++        actions.push_back(std::move(tune));
++
++        if (kiln_info_.tune_running) {
++            std::string progress =
++                fmt::format("{:.0f}%", kiln_info_.tune_progress * 100.0);
++            if (!kiln_info_.tune_message.empty()) {
++                progress += " · " + kiln_info_.tune_message;
++            }
++            actions.push_back(DA::info("kiln_tune_progress", "Tuning", "calibration",
++                                       std::move(progress), "progress_clock"));
++        } else if (!kiln_info_.tune_message.empty()) {
++            actions.push_back(DA::info("kiln_tune_result", "Last tune", "calibration",
++                                       kiln_info_.tune_message, "info_outline"));
++        }
++
++        const std::string not_tuned = lv_tr("Not tuned");
++        actions.push_back(DA::info(
++            "kiln_tune_speed", "Feed speed", "calibration",
++            kiln_info_.tune_speed ? fmt::format("{:.0f} mm/min", *kiln_info_.tune_speed)
++                                  : not_tuned,
++            "speed_up"));
++        std::string load;
++        bool any_load = false;
++        for (int i = 0; i < kNumPorts; ++i) {
++            const auto& d = kiln_info_.tune_load_dist[static_cast<size_t>(i)];
++            any_load = any_load || d.has_value();
++            load += fmt::format("{}{}: {}", i ? " · " : "", i + 1, d ? kiln_mm(*d) : "-");
++        }
++        actions.push_back(DA::info("kiln_tune_load", "Load distance", "calibration",
++                                   any_load ? load : not_tuned, "arrow_down"));
++        actions.push_back(DA::info(
++            "kiln_tune_unload", "Unload distance", "calibration",
++            kiln_info_.tune_unload_dist ? kiln_mm(*kiln_info_.tune_unload_dist) : not_tuned,
++            "arrow_up"));
++    }
++
++    if (kiln_info_.tune_seen || kiln_refill_.enabled.has_value()) {
++        // One literal per slot: the label is its own translation key.
++        static constexpr const char* kPrefeedLabels[kNumPorts] = {
++            TR_NOOP("Pre-feed slot 1"), TR_NOOP("Pre-feed slot 2"), TR_NOOP("Pre-feed slot 3"),
++            TR_NOOP("Pre-feed slot 4")};
++        for (int i = 0; i < kNumPorts; ++i) {
++            DA prefeed =
++                DA::button(kKilnPrefeedPrefix + std::to_string(i + 1), kPrefeedLabels[i],
++                           "feeder", "",
++                           "Feeds the spool up to the toolhead sensor and backs it off, so a "
++                           "swap to it is quick")
++                    .with_machine_motion();
++            prefeed.slot_index = i;
++            if (!port_presence_[static_cast<size_t>(i)]) {
++                prefeed.enabled = false;
++                prefeed.disable_reason = TR_NOOP("No filament in this slot");
++            } else if (system_info_.current_slot == i) {
++                prefeed.enabled = false;
++                prefeed.disable_reason = TR_NOOP("Loaded in the toolhead");
++            } else if (ifs_busy) {
++                prefeed.enabled = false;
++                prefeed.disable_reason = TR_NOOP("The IFS is busy");
++            }
++            actions.push_back(std::move(prefeed));
++        }
++    }
++    return actions;
++}
++
++AmsError AmsBackendAd5xIfs::do_execute_device_action(const std::string& action_id,
++                                                     const std::any& value) {
++    if (action_id == "kiln_refill_match" || action_id == "kiln_map_mode") {
++        const bool match = action_id == "kiln_refill_match";
++        const auto [choice, err] = helix::printer::device_action_value<std::string>(
++            value, match ? "colour match" : "tool to slot");
++        if (!err) {
++            return err;
++        }
++        const char* name = match ? kiln_choice_value(kKilnMatches, choice)
++                                 : kiln_choice_value(kKilnMapModes, choice);
++        if (name == nullptr) {
++            return AmsErrorHelper::invalid_parameter("Unknown choice: " + choice);
++        }
++        return execute_gcode(match ? fmt::format("IFS_AUTO_REFILL MATCH={}", name)
++                                   : fmt::format("IFS_MAP_MODE MODE={}", name));
++    }
++    if (action_id == "kiln_tune") {
++        return execute_gcode("IFS_TUNE");
++    }
++    if (action_id.rfind(kKilnPrefeedPrefix, 0) == 0) {
++        const auto channel =
++            helix::text_io::parse_leading<int>(action_id.substr(std::strlen(kKilnPrefeedPrefix)));
++        if (!channel || *channel < 1 || *channel > kNumPorts) {
++            return AmsErrorHelper::invalid_parameter("Unknown slot: " + action_id);
++        }
++        return execute_gcode(fmt::format("IFS_PREFEED CHANNEL={}", *channel));
++    }
++    return AmsErrorHelper::not_supported("Unknown IFS action: " + action_id);
++}
++
+ std::string AmsBackendAd5xIfs::build_runout_detail_locked() const {
+     std::string detail =
+         lv_tr("Filament ran out - nothing at the toolhead and the print is paused.");
+diff --git a/tests/unit/test_ams_ad5x_kiln_ifs.cpp b/tests/unit/test_ams_ad5x_kiln_ifs.cpp
+index 06dc81f..486fc84 100644
+--- a/tests/unit/test_ams_ad5x_kiln_ifs.cpp
++++ b/tests/unit/test_ams_ad5x_kiln_ifs.cpp
+@@ -9,11 +9,14 @@
+ #include "../lvgl_test_fixture.h"
+ #include "../test_helpers/print_state_test_drivers.h"
+ #include "ams_backend_ad5x_ifs.h"
++#include "ams_device_sections.h"
+ #include "ams_types.h"
+ #include "app_globals.h"
+ #include "printer_state.h"
+ #include "test_helpers/ad5x_ifs_test_access.h"
+ 
++#include <algorithm>
++#include <any>
+ #include <chrono>
+ #include <string>
+ #include <vector>
+@@ -427,3 +430,121 @@ TEST_CASE("AD5X IFS waits for Kiln's auto-refill only when it can refill",
+         CHECK(Ad5xIfsTestAccess::runout_detail(backend).find("is a backup") != std::string::npos);
+     }
+ }
++
++// --- Device operations ---
++
++namespace {
++
++json kiln_info_frame(bool tune_running = false) {
++    return json{{"ifs",
++                 {{"map_mode", "fixed"},
++                  {"version", "3.0.7"},
++                  {"tune",
++                   {{"speed", 1500.0},
++                    {"load_dist", {{"1", 512.4}, {"2", nullptr}, {"3", 498.0}, {"4", nullptr}}},
++                    {"unload_dist", nullptr},
++                    {"tube_unload", nullptr},
++                    {"running", tune_running},
++                    {"progress", tune_running ? 0.45 : 0.0},
++                    {"message", tune_running ? "Speed 1500 mm/min" : ""}}}}}};
++}
++
++const helix::printer::DeviceAction* find_action(
++    const std::vector<helix::printer::DeviceAction>& actions, const std::string& id) {
++    for (const auto& a : actions) {
++        if (a.id == id) {
++            return &a;
++        }
++    }
++    return nullptr;
++}
++
++} // namespace
++
++TEST_CASE("AD5X IFS lists Kiln's device operations", "[ams][ad5x_ifs][kiln_ifs][device_actions]") {
++    KilnCaptureBackend backend;
++
++    SECTION("nothing before the driver's fields arrive") {
++        CHECK(backend.get_device_sections().empty());
++        CHECK(backend.get_device_actions().empty());
++    }
++
++    Ad5xIfsTestAccess::handle_status(backend, kiln_idle_frame());
++    Ad5xIfsTestAccess::handle_status(backend, kiln_refill_frame(true));
++    Ad5xIfsTestAccess::handle_status(backend, kiln_info_frame());
++
++    SECTION("sections from the shared vocabulary") {
++        const auto sections = backend.get_device_sections();
++        std::vector<std::string> ids;
++        for (const auto& s : sections) {
++            ids.push_back(s.id);
++            const auto* kind = helix::printer::find_device_section_kind(s.id);
++            REQUIRE(kind != nullptr);
++            CHECK(s.label == kind->label);
++        }
++        CHECK(ids == std::vector<std::string>{"endless_spool", "setup", "calibration", "feeder"});
++        // Every action sits in a declared section.
++        for (const auto& a : backend.get_device_actions()) {
++            INFO(a.id);
++            CHECK(std::find(ids.begin(), ids.end(), a.section) != ids.end());
++        }
++    }
++    SECTION("values the driver published") {
++        const auto actions = backend.get_device_actions();
++        const auto* match = find_action(actions, "kiln_refill_match");
++        REQUIRE(match);
++        CHECK(std::any_cast<std::string>(match->current_value) == "Similar");
++        const auto* map = find_action(actions, "kiln_map_mode");
++        REQUIRE(map);
++        CHECK(std::any_cast<std::string>(map->current_value) == "Slot per file");
++        const auto* speed = find_action(actions, "kiln_tune_speed");
++        REQUIRE(speed);
++        CHECK(std::any_cast<std::string>(speed->current_value) == "1500 mm/min");
++        const auto* load = find_action(actions, "kiln_tune_load");
++        REQUIRE(load);
++        CHECK(std::any_cast<std::string>(load->current_value) ==
++              "1: 512 mm · 2: - · 3: 498 mm · 4: -");
++        const auto* unload = find_action(actions, "kiln_tune_unload");
++        REQUIRE(unload);
++        CHECK(std::any_cast<std::string>(unload->current_value) == "Not tuned");
++        CHECK(find_action(actions, "kiln_tune_progress") == nullptr);
++        CHECK(backend.get_system_info().version == "3.0.7");
++    }
++    SECTION("pre-feed only a slot with filament that is not loaded") {
++        const auto actions = backend.get_device_actions();
++        const auto* one = find_action(actions, "kiln_prefeed_1");
++        const auto* two = find_action(actions, "kiln_prefeed_2");
++        const auto* three = find_action(actions, "kiln_prefeed_3");
++        REQUIRE(one);
++        REQUIRE(two);
++        REQUIRE(three);
++        CHECK_FALSE(one->enabled); // loaded
++        CHECK_FALSE(two->enabled); // empty
++        CHECK(three->enabled);
++        CHECK(three->moves_machine);
++        CHECK(three->slot_index == 2);
++    }
++    SECTION("a running tune shows its progress and holds the buttons") {
++        Ad5xIfsTestAccess::handle_status(backend, kiln_info_frame(/*tune_running=*/true));
++        const auto actions = backend.get_device_actions();
++        const auto* progress = find_action(actions, "kiln_tune_progress");
++        REQUIRE(progress);
++        CHECK(std::any_cast<std::string>(progress->current_value) == "45% · Speed 1500 mm/min");
++        CHECK_FALSE(find_action(actions, "kiln_tune")->enabled);
++        CHECK_FALSE(find_action(actions, "kiln_prefeed_3")->enabled);
++        CHECK_FALSE(backend.execute_device_action("kiln_tune").success());
++        CHECK(backend.sent.empty());
++    }
++    SECTION("the commands") {
++        REQUIRE(backend.execute_device_action("kiln_refill_match", std::string("Exact")).success());
++        REQUIRE(backend.execute_device_action("kiln_map_mode", std::string("Auto colour")).success());
++        REQUIRE(backend.execute_device_action("kiln_tune").success());
++        REQUIRE(backend.execute_device_action("kiln_prefeed_3").success());
++        CHECK(backend.sent == std::vector<std::string>{"IFS_AUTO_REFILL MATCH=exact",
++                                                       "IFS_MAP_MODE MODE=loaded", "IFS_TUNE",
++                                                       "IFS_PREFEED CHANNEL=3"});
++        CHECK_FALSE(backend.execute_device_action("kiln_prefeed_1").success());
++        CHECK_FALSE(
++            backend.execute_device_action("kiln_map_mode", std::string("sideways")).success());
++    }
++}

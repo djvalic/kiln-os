@@ -777,7 +777,7 @@ class AD5XSetup:
                     "No filament in the toolhead: load a slot first")
             # The IFS step leaves the head empty: load the slot it cut out
             self._set("Loading slot %d" % (chan,), .02)
-            self._gcode("IFS_LOAD CHANNEL=%d" % (chan,))
+            self._gcode("IFS_LOAD SLOT=%d" % (chan,))
         # PRINT_START applies the saved offset (and its prime line prints
         # with it): save the fresh start for it; abort puts z_saved back
         start_z = self.patch_start_z

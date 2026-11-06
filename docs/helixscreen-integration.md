@@ -38,10 +38,14 @@ of the real configs. Not run against HelixScreen itself.
 
 | Contract item | Ours |
 |---|---|
-| `ifs.loaded_channels` | F13 `silk_state` mask -> 1-based list (`[]` before the first poll) |
-| `ifs.active_channel` | F13 `chan` (int; `null` before the first poll) |
-| `ifs.activity`, `activity_channel` | `FFS_state` decoded with `FX`'s table (3 polling, 5 ready, 7/11/12/15 + 11·(ch−1), 127 `driver_error`) plus ours: 1 `selecting`, 10/14 + 11·(ch−1) `loading`/`unloading` (the values F10/F11 set), 0x7e `homing`; else `unknown(n)` |
+| `ifs.loaded_channels` | F13 `silk_state` mask -> 1-based list (`[]` before the first poll). IFS on Klipper firmware: from its inlet sensors, read every `presence_interval` (0.25 s), also during an operation |
+| `ifs.active_channel` | F13 `chan` (int; `null` before the first poll). IFS on Klipper firmware: the slot the selector was last moved to, the loaded slot (`channel`) until the selector has homed (after start or a reset) |
+| `ifs.activity`, `activity_channel` | `FFS_state` decoded with `FX`'s table (3 polling, 5 ready, 7/11/12/15 + 11·(ch−1), 127 `driver_error`) plus ours: 1 `selecting`, 10/14 + 11·(ch−1) `loading`/`unloading` (the values F10/F11 set), 0x7e `homing`; else `unknown(n)`. While an operation runs and F13 reads `ready` (between the IFS's own moves; on Klipper firmware always), the step the module runs: `homing` (selector homing, channel 0), `selecting`, `loading` (load, pre-feed, refill, tuning feed, push, purge), `unloading` (cut, retract, eject), with the slot it moves (a swap: the old slot while unloading, the new one from its select on). `driver_error` (channel = `error_channel`) after an operation failed with a motor, homing or feed fault, until `IFS_RESET`/`IFS_RESET_DRIVER` or the next successful command |
 | `ifs.error` | Text of the last failed operation or of a failed connect, `null` after a success or `IFS_RESET_DRIVER` |
+| `ifs.mode` (ours) | `"mcu"` (IFS on Klipper firmware) or `"serial"` (stock firmware over the serial link) |
+| `ifs.operation`, `phase`, `target_channel` (ours) | While a command runs: `operation` `load` (empty nozzle) / `swap` (a slot in it) / `unload` / `eject` / `prefeed` / `refill` (auto-refill's pre-feed and swap) / `tune` / `select` (also `IFS_RELEASE`) / `feed` / `retract`; `phase` `heating` (waiting for the nozzle) / `cutting` / `unloading` / `homing` / `selecting` / `feeding` / `purging` / `priming`, as the steps run (the swap templates included); `target_channel` the slot loaded, or taken out for unload/eject. Idle: `""`, `""`, 0 |
+| `ifs.error_channel` (ours) | Slot the last error concerns (the slot the failed step moved, else the operation's target), 0 none or unknown |
+| `ifs.tune` (ours) | `speed`, `load_dist` (`"1"`-`"4"`), `unload_dist`, `tube_unload`, `flush` (tuned value or `null`), `running`, `progress`, `message` |
 | `ifs.tool_map` | `{"0": 1, ...}`; per print, reset when `print_stats` leaves `printing` for complete/cancelled/error/standby (as `FX`) |
 | `ifs.channel_count`, `pending_insert_channels` | 4; F13 `ffs_channels_insert` decoded |
 | `ifs_materials.slots` | `{"1": {"type", "color": "#RRGGBB", "temp"}}`, also `loaded`, `temperatures`, `available`, `channel_count`. Stored in save variable `ifs_materials` (migrated from `ifs_colors`). `temp` = per-slot override, else `FX`'s handling table (PLA 220, PETG 250, ...; `temp_<type>` in `[ifs]`) |
@@ -119,6 +123,7 @@ appear in `objects/list`. The start-up `objects.query`
 | Object | Dialect | Fields read | Meaning (source) |
 |---|---|---|---|
 | `ifs` | module | `loaded_channels` (int[], 1-based), `active_channel` (int), `activity` (`polling`/`ready`/`clamped`/`loading`/`unclamping`/`unloading`/`driver_error`), `error` (str), `tool_map` (`{"0":1,..}` string tool keys, 1-based lane values) | `H ams_backend_ad5x_ifs.cpp:5044-5170`, `:1022-1060`. Producer: `FX .py/klipper/plugins/ifs.py:555-594` (also `connected`, `channel_count`, `version`, `probed`, `state`, `activity_channel`, `moving_channels`, `pending_insert_channels`, `params`) |
+| `ifs` (Kiln OS, our patches 0037-0039) | module | `operation`, `phase`, `target_channel`, `activity_channel` (action, steps, detail line, pulsing and header slot of an operation the driver runs); `auto_refill`, `refill_match`, `refill_backups` (Endless Spool, runout pop-up wait); `map_mode`, `version`, `tune` (device operations) | Producer: `klipper/extras/ifs.py` `get_status()`. Each is optional: without it the screen behaves as upstream |
 | `ifs_materials` | module | `slots` = `{"1": {"type": "PLA", "color": "#RRGGBB" or "#RGB", "temp": 220}, ...}` | `H :5001-5040`. Producer: `FX ifs_materials.py:206-234` (also `available`, `enabled`, `loaded`, `purge_first_mm`, `temperatures`) |
 | `save_variables` | module | `ifs_loaded` (int, 1-based, 0 = none): lane in the nozzle, written at the end of a successful `IFS_LOAD`/`IFS_UNLOAD` | `H :938-960`; `FX macros/ifs.cfg:609,791` |
 | `filament_switch_sensor toolhead` | module | `filament_detected` | Head-presence authority (`H :334-336`); `FX` registers it as `[ifs_toolhead_sensor toolhead]` |
@@ -130,7 +135,8 @@ appear in `objects/list`. The start-up `objects.query`
 | `save_variables` `<less_waste or bambufy>_colors/_types/_tools/_current_tool/_external` | lessWaste/bambufy | slot colours/types, 16-entry tool->port map, bypass | `H :777-` (`parse_save_variables`); `LW lesswaste.cfg:940` (`_IFS_VARS`) |
 
 The module dialect latches (`ifs_module_live_`) on the first status frame in
-which `ifs` carries `loaded_channels`, `active_channel`, `activity` or `error`,
+which `ifs` carries `loaded_channels`, `active_channel`, `activity` or `error`
+(with patches 0037-0039 also one of the Kiln fields above),
 or `ifs_materials` carries a parsable `slots` entry (`H :5045-5115`). An `ifs`
 object with other fields only does **not** latch it. Once latched, every zMod
 poll and command stands down (`H :4684-4690`, `:4739`).
@@ -148,6 +154,8 @@ poll and command stands down (`H :4684-4690`, `:4739`).
 | Cancel | `IFS_STOP` | `IFS_UNLOCK` (`H :2561`) |
 | Edit slot colour/material | `IFS_SET_MATERIAL SLOT=n TYPE=PLA COLOR=7EC8E3` (bare hex) (`H :3056-3067`) | read-modify-write of `Adventurer5M.json` (`H :3083-3090`), plus `_IFS_VARS colors=[..]` / `types=[..]` with a plugin (`H :3510-3513`) |
 | Tool remap | `IFS_MAP_TOOL TOOL=t SLOT=n`, `IFS_MAP_TOOL RESET=1` (`H :3309`, `:3347`) | `_IFS_VARS tools=[16 ints]` (plugin only) |
+| Endless Spool on/off (Kiln, 0038) | `IFS_AUTO_REFILL ENABLE=0\|1` | none |
+| Device operations (Kiln, 0039) | `IFS_AUTO_REFILL MATCH=exact\|similar\|any`, `IFS_MAP_MODE MODE=fixed\|loaded`, `IFS_TUNE`, `IFS_PREFEED CHANNEL=n` | none |
 | State refresh | none | `IFS_STATUS` (expects one JSON line with `Chan`, `Ports`) then `GET_ZCOLOR SILENT=1` (`// ` text lines) (`H :4776`, `:4801`) |
 
 Material names are limited to the zMod whitelist `PLA, PLA-CF, SILK, TPU, ABS,

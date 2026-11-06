@@ -1,0 +1,34 @@
+From c9e3e147ddb2e62316b8c10cfef29387ac9df19a Mon Sep 17 00:00:00 2001
+From: valix <djvalic.wc@gmail.com>
+Date: Fri, 6 Nov 2026 04:56:03 -0500
+Subject: [PATCH] Snapshot: count it served before waking the HTTP thread
+
+With no stream client, _http_send_snapshot() only runs when a new JPEG
+is exposed. The JPEG thread exposed the frame (waking the HTTP thread)
+and only then decremented snapshot_requested, so the HTTP thread could
+see the request as still pending, skip it, and never run again: the
+snapshot request hung for good (its 3 s timeout is checked only there).
+Decrement first, then expose.
+---
+ src/ustreamer/stream.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/src/ustreamer/stream.c b/src/ustreamer/stream.c
+index 9ae94e4..345b01b 100644
+--- a/src/ustreamer/stream.c
++++ b/src/ustreamer/stream.c
+@@ -336,10 +336,13 @@ static void *_jpeg_thread(void *v_ctx) {
+ 			if (wr->job_failed) {
+ 				// pass
+ 			} else if (wr->job_timely) {
+-				_stream_expose_jpeg(stream, job->dest);
++				// Count the snapshot as served before the HTTP thread is woken:
++				// it answers waiting snapshots only when the count is zero, and
++				// with no stream client no further frame comes to wake it again.
+ 				if (atomic_load(&stream->run->http->snapshot_requested) > 0) { // Process real snapshots
+ 					atomic_fetch_sub(&stream->run->http->snapshot_requested, 1);
+ 				}
++				_stream_expose_jpeg(stream, job->dest);
+ 				US_LOG_PERF("JPEG: ##### Encoded JPEG exposed; worker=%s, latency=%.3Lf",
+ 					wr->name, us_get_now_monotonic() - job->dest->grab_begin_ts);
+ 			} else {

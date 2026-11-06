@@ -1,0 +1,566 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Thu, 5 Nov 2026 21:30:00 -0500
+Subject: [PATCH] ams: AD5X IFS endless spool follows Kiln's auto-refill
+
+With Kiln OS's IFS driver (ifs.auto_refill published, no lessWaste or
+bambufy plugin), Endless Spool is auto-refill: on or off from
+auto_refill, "on, but nothing will switch" when no slot has a backup,
+and switchable, so the Endless Spool switch in the filament system
+settings sends IFS_AUTO_REFILL ENABLE=. The backups are the driver's
+refill_backups (its refill_match rule: exact, similar or any colour);
+each slot's nearest backup is the endless-spool relation the screen
+shows, and only a listed slot counts as an eligible backup.
+
+The runout pop-up on a paused print waits 180 s only when auto-refill
+is on, the slot that ran out had a backup and no refill has run for
+this runout yet; otherwise 30 s. Its text says whether auto-refill is
+off, has no backup for the spool, or had one that did not take over.
+The driver lists no backups for a slot without filament, so the slot
+that ran out keeps the list it had.
+
+Settings > Filament Auto-Refill (0010) is unchanged; both send the same
+commands. Without auto_refill (older driver) nothing changes.
+
+Upstream: not applicable (AD5X OS specific)
+---
+diff --git a/include/ams_backend_ad5x_ifs.h b/include/ams_backend_ad5x_ifs.h
+index 2e80112..d4bbe82 100644
+--- a/include/ams_backend_ad5x_ifs.h
++++ b/include/ams_backend_ad5x_ifs.h
+@@ -556,16 +556,30 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
+      * latch that has already been seen to drop out from under us mid-session -
+      * an editable toggle would silently stop working with no way to tell.
+      *
+-     * get_endless_spool_config() is deliberately NOT overridden either: the
+-     * firmware computes the match at runout time (find_backup_slot_locked) and
+-     * stores no per-slot relation, so the base's empty relation is the honest
+-     * answer. endless_spool_backup_eligibility() is where the rule is exposed.
++     * Kiln OS's IFS driver (module live, no plugin, `ifs.auto_refill`
++     * published) is a fourth mode: `auto_refill` is the switch
++     * (IFS_AUTO_REFILL ENABLE=, so `switchable`), `refill_backups` the
++     * backups it would pick under its `refill_match` rule. FirmwareManaged:
++     * the driver picks them, there is nothing per slot to write.
+      *
+      * @note Takes `mutex_`; callers must NOT hold it.
+      */
+     [[nodiscard]] helix::printer::EndlessSpoolCapabilities
+     get_endless_spool_capabilities() const override;
+ 
++    /**
++     * @brief The backups Kiln OS's driver would pick, while auto-refill is on.
++     *
++     * Each slot's nearest backup from `refill_backups`, as directed edges.
++     * Elsewhere the firmware computes the match at runout time
++     * (find_backup_slot_locked) and stores no per-slot relation, so the base's
++     * empty relation is the honest answer; endless_spool_backup_eligibility()
++     * is where the rule is exposed.
++     *
++     * @note Takes `mutex_`; callers must NOT hold it.
++     */
++    [[nodiscard]] helix::printer::EndlessSpoolConfig get_endless_spool_config() const override;
++
+     /**
+      * @brief The AD5X switchover rule, not the generic material-compatibility one.
+      *
+@@ -587,6 +601,10 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
+     /// non-recursive, so this must not lock).
+     [[nodiscard]] std::vector<helix::RecoveryAction> build_recovery_actions() const override;
+ 
++    /// IFS_AUTO_REFILL ENABLE=0|1: reached only for Kiln OS's driver, the one
++    /// mode get_endless_spool_capabilities() reports switchable.
++    AmsError apply_endless_spool_enabled(bool enabled) override;
++
+   public:
+     // Backend-driven step model for the right-side vertical operation tracker.
+     // The AD5X synthesizes 3 firmware phases (HEATING→CUTTING→UNLOADING /
+@@ -1307,6 +1325,24 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
+     /// interrupted by us declaring a runout on top of it. Caller holds mutex_.
+     [[nodiscard]] std::chrono::seconds runout_confirm_delay_locked() const;
+ 
++    /// The lane a runout names: the active slot, else the seated channel,
++    /// FFMInfo.channel or the remembered lane, else -1. The firmware routinely
++    /// drops its active pointer on a runout (#995 "Extruder: None"). Caller
++    /// holds mutex_.
++    [[nodiscard]] int runout_lane_locked() const;
++
++    /// Kiln OS's auto-refill speaks for endless spool: the module is live, no
++    /// lessWaste/bambufy plugin owns the IFS, and `ifs.auto_refill` was
++    /// published. Caller holds mutex_.
++    [[nodiscard]] bool kiln_refill_live_locked() const;
++
++    /// The first backup Kiln OS's driver lists for @p slot whose port holds
++    /// filament, or -1. @p remembered reads the list the slot had while it
++    /// still held filament: the driver lists backups only for slots with
++    /// filament, so the lane that ran out has none by the time a runout is
++    /// raised. Caller holds mutex_.
++    [[nodiscard]] int kiln_refill_backup_locked(int slot, bool remembered) const;
++
+     /// Read the `variable_*` payload out of a `gcode_macro _ifs_vars`
+     /// get_status() dict. Returns true when something we publish changed.
+     /// Caller must hold mutex_.
+@@ -1879,6 +1915,21 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
+     /// only its idle report clears it, and the action timeout leaves it to the
+     /// driver. Guarded by mutex_.
+     bool kiln_owns_action_ = false;
++    /// Kiln OS's auto-refill (`ifs.auto_refill`, `refill_match`,
++    /// `refill_backups`), merged across diff frames; `enabled` stays unset on
++    /// a driver without it. Backups are 0-based slots per 0-based slot,
++    /// nearest colour first. Guarded by mutex_.
++    struct KilnRefill {
++        std::optional<bool> enabled;
++        std::string match;
++        std::optional<std::array<std::vector<int>, kNumPorts>> backups;
++        /// Each slot's last non-empty list, kept after the slot ran empty.
++        std::array<std::vector<int>, kNumPorts> remembered{};
++        /// A refill ran since the toolhead last read filament: a runout after
++        /// it is not one the driver is still about to handle.
++        bool ran = false;
++    };
++    KilnRefill kiln_refill_;
+     /// True while the SELECTING in system_info_.action was set by
+     /// apply_zmod_change_macro, so only that source clears it. Guarded by mutex_.
+     bool zmod_change_owns_action_ = false;
+diff --git a/src/printer/ams_backend_ad5x_ifs.cpp b/src/printer/ams_backend_ad5x_ifs.cpp
+index 46124cd..1d9381c 100644
+--- a/src/printer/ams_backend_ad5x_ifs.cpp
++++ b/src/printer/ams_backend_ad5x_ifs.cpp
+@@ -5515,6 +5515,10 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+     std::optional<std::string> phase;
+     std::optional<int> target_channel;
+     std::optional<int> activity_channel;
++    // Kiln OS's auto-refill.
++    std::optional<bool> auto_refill;
++    std::optional<std::string> refill_match;
++    std::optional<std::array<std::vector<int>, kNumPorts>> refill_backups;
+ 
+     if (auto it = status.find("ifs"); it != status.end() && it->is_object()) {
+         const auto& obj = *it;
+@@ -5578,6 +5582,35 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+             activity_channel = m->get<int>();
+             saw_module_content = true;
+         }
++        if (auto r = obj.find("auto_refill"); r != obj.end() && r->is_boolean()) {
++            auto_refill = r->get<bool>();
++            saw_module_content = true;
++        }
++        if (auto r = obj.find("refill_match"); r != obj.end() && r->is_string()) {
++            refill_match = r->get<std::string>();
++            saw_module_content = true;
++        }
++        // {"1": [3, 2], "2": [], ...}: per slot, the slots that would take over,
++        // nearest colour first. String keys, as Moonraker serialises them.
++        if (auto r = obj.find("refill_backups"); r != obj.end() && r->is_object()) {
++            std::array<std::vector<int>, kNumPorts> lists{};
++            for (auto b = r->begin(); b != r->end(); ++b) {
++                const auto key = helix::text_io::parse_leading<int>(b.key());
++                if (!key || *key < 1 || *key > kNumPorts || !b.value().is_array()) {
++                    continue;
++                }
++                for (const auto& ch : b.value()) {
++                    if (ch.is_number_integer()) {
++                        const int c = ch.get<int>();
++                        if (c >= 1 && c <= kNumPorts && c != *key) {
++                            lists[static_cast<size_t>(*key - 1)].push_back(c - 1);
++                        }
++                    }
++                }
++            }
++            refill_backups = std::move(lists);
++            saw_module_content = true;
++        }
+     }
+     if (auto it = status.find("ifs_materials"); it != status.end() && it->is_object()) {
+         if (read_ifs_materials_object(*it, result)) {
+@@ -5675,6 +5708,34 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+         }
+         action_changed = apply_kiln_step_locked();
+     }
++
++    // Kiln OS's auto-refill: the endless-spool capabilities read it, so a
++    // change is a state change too.
++    if (auto_refill || refill_match || refill_backups) {
++        std::lock_guard<std::mutex> lock(mutex_);
++        const KilnRefill before = kiln_refill_;
++        if (auto_refill) {
++            kiln_refill_.enabled = *auto_refill;
++        }
++        if (refill_match) {
++            kiln_refill_.match = *refill_match;
++        }
++        if (refill_backups) {
++            kiln_refill_.backups = *refill_backups;
++            // A slot with filament says what its backups are now; one that ran
++            // empty keeps the list it had (presence came in with this frame).
++            for (size_t i = 0; i < kiln_refill_.remembered.size(); ++i) {
++                if (port_presence_[i]) {
++                    kiln_refill_.remembered[i] = (*refill_backups)[i];
++                }
++            }
++        }
++        if (kiln_refill_.enabled != before.enabled || kiln_refill_.match != before.match ||
++            kiln_refill_.backups != before.backups) {
++            action_changed = true;
++        }
++    }
++
+     if (action_changed) {
+         emit_event(EVENT_STATE_CHANGED);
+     }
+@@ -5884,6 +5945,9 @@ bool AmsBackendAd5xIfs::apply_kiln_step_locked() {
+         if (runout_active_ && !operation.empty()) {
+             clear_runout_locked("the IFS driver is changing the filament");
+         }
++        if (operation == "refill") {
++            kiln_refill_.ran = true;
++        }
+         // Our own ops keep the phase tracker's steps. An op that set an
+         // action without the tracker (do_change_tool's T<n>) is the driver's
+         // to describe.
+@@ -7155,6 +7219,8 @@ void AmsBackendAd5xIfs::note_head_switch_reading_locked(bool detected) {
+ 
+     if (detected) {
+         head_empty_since_.reset();
++        // Filament again: a later runout is a new one for auto-refill.
++        kiln_refill_.ran = false;
+         if (runout_active_) {
+             clear_runout_locked("filament detected at the toolhead again");
+         }
+@@ -7192,12 +7258,73 @@ std::chrono::seconds AmsBackendAd5xIfs::runout_confirm_delay_locked() const {
+     // talking over the recovery the printer is already performing. Stock zMod
+     // is always-on (no toggle), so the !has_ifs_vars_ path always qualifies;
+     // plugins qualify only when variable_backup reads true.
++    //
++    // Kiln OS's auto-refill has a switch and names its backups, so it
++    // qualifies only when it is on, the lane that ran out has a backup and no
++    // refill has run for this runout yet (one that did and left the head empty
++    // has given up).
++    if (kiln_refill_live_locked()) {
++        if (!kiln_refill_.enabled.value_or(false) || kiln_refill_.ran) {
++            return kRunoutConfirmDelay;
++        }
++        const int lane = runout_lane_locked();
++        bool backup = false;
++        for (int i = 0; i < kNumPorts && !backup; ++i) {
++            if (lane < 0 || lane == i) {
++                backup = kiln_refill_backup_locked(i, /*remembered=*/true) >= 0;
++            }
++        }
++        return backup ? kRunoutConfirmDelayWithBackup : kRunoutConfirmDelay;
++    }
+     if (!has_ifs_vars_ || ifs_backup_variable_.value_or(false)) {
+         return kRunoutConfirmDelayWithBackup;
+     }
+     return kRunoutConfirmDelay;
+ }
+ 
++int AmsBackendAd5xIfs::runout_lane_locked() const {
++    if (system_info_.current_slot >= 0) {
++        return system_info_.current_slot;
++    }
++    if (seated_chan_ > 0) {
++        return seated_chan_ - 1;
++    }
++    if (ffm_channel_ > 0) {
++        return ffm_channel_ - 1;
++    }
++    if (persisted_seated_slot_.has_value()) {
++        return *persisted_seated_slot_;
++    }
++    return -1;
++}
++
++bool AmsBackendAd5xIfs::kiln_refill_live_locked() const {
++    return ifs_module_live_.load() && !has_ifs_vars_ && kiln_refill_.enabled.has_value();
++}
++
++int AmsBackendAd5xIfs::kiln_refill_backup_locked(int slot, bool remembered) const {
++    if (slot < 0 || slot >= kNumPorts) {
++        return -1;
++    }
++    const auto idx = static_cast<size_t>(slot);
++    const std::vector<int>* list = nullptr;
++    if (remembered) {
++        list = &kiln_refill_.remembered[idx];
++    } else if (kiln_refill_.backups.has_value()) {
++        list = &(*kiln_refill_.backups)[idx];
++    }
++    if (list == nullptr) {
++        return -1;
++    }
++    for (int backup : *list) {
++        if (backup >= 0 && backup < kNumPorts && backup != slot &&
++            port_presence_[static_cast<size_t>(backup)]) {
++            return backup;
++        }
++    }
++    return -1;
++}
++
+ bool AmsBackendAd5xIfs::evaluate_runout_locked() {
+     const bool paused = print_is_paused();
+ 
+@@ -7250,16 +7377,7 @@ bool AmsBackendAd5xIfs::evaluate_runout_locked() {
+     // Which lane ran out. The firmware routinely drops its active pointer on a
+     // runout (#995 "Extruder: None"), so fall through every seated authority we
+     // have rather than reporting -1.
+-    runout_slot_ = -1;
+-    if (system_info_.current_slot >= 0) {
+-        runout_slot_ = system_info_.current_slot;
+-    } else if (seated_chan_ > 0) {
+-        runout_slot_ = seated_chan_ - 1;
+-    } else if (ffm_channel_ > 0) {
+-        runout_slot_ = ffm_channel_ - 1;
+-    } else if (persisted_seated_slot_.has_value()) {
+-        runout_slot_ = *persisted_seated_slot_;
+-    }
++    runout_slot_ = runout_lane_locked();
+ 
+     runout_active_ = true;
+     // The cross-backend flag. AmsState gates its runout indicator on
+@@ -7305,6 +7423,14 @@ bool AmsBackendAd5xIfs::backup_eligible_locked(int slot, int candidate) const {
+         slot == candidate) {
+         return false;
+     }
++    if (kiln_refill_live_locked() && kiln_refill_.backups.has_value()) {
++        // Kiln OS's driver lists the backups itself, under its own
++        // refill_match rule (exact, similar or any colour): its list is the
++        // rule, so what the UI offers is what the driver would pick.
++        const auto& list = (*kiln_refill_.backups)[static_cast<size_t>(slot)];
++        return port_presence_[static_cast<size_t>(candidate)] &&
++               std::find(list.begin(), list.end(), candidate) != list.end();
++    }
+     const auto src = static_cast<size_t>(slot);
+     if (materials_[src].empty() || colors_[src].empty()) {
+         return false; // Nothing to match against; claim nothing.
+@@ -7322,6 +7448,11 @@ bool AmsBackendAd5xIfs::backup_eligible_locked(int slot, int candidate) const {
+ }
+ 
+ int AmsBackendAd5xIfs::find_backup_slot_locked(int runout_slot) const {
++    if (kiln_refill_live_locked()) {
++        // The driver's nearest backup, from the list the lane had while it
++        // still held filament.
++        return kiln_refill_backup_locked(runout_slot, /*remembered=*/true);
++    }
+     for (int i = 0; i < kNumPorts; ++i) {
+         if (backup_eligible_locked(runout_slot, i)) {
+             return i;
+@@ -7346,6 +7477,23 @@ helix::printer::EndlessSpoolCapabilities AmsBackendAd5xIfs::get_endless_spool_ca
+     using namespace helix::printer;
+ 
+     EndlessSpoolCapabilities caps;
++    if (kiln_refill_live_locked()) {
++        // Kiln OS's auto-refill: its own switch (IFS_AUTO_REFILL ENABLE=),
++        // backups the driver picks under refill_match. On with no slot backed
++        // up says that a runout will still pause the print.
++        caps.availability = EndlessSpoolAvailability::Available;
++        bool any_backup = false;
++        for (int i = 0; i < kNumPorts && !any_backup; ++i) {
++            any_backup = kiln_refill_backup_locked(i, /*remembered=*/false) >= 0;
++        }
++        caps.enabled = !*kiln_refill_.enabled ? EndlessSpoolEnabled::Off
++                       : any_backup           ? EndlessSpoolEnabled::On
++                                              : EndlessSpoolEnabled::OnWithoutBackup;
++        caps.editability = EndlessSpoolEditability::ReadOnly;
++        caps.restriction = EndlessSpoolRestriction::FirmwareManaged;
++        caps.switchable = true;
++        return caps;
++    }
+     if (!has_ifs_vars_) {
+         // Stock zMod's "Infinite Spool Mode" — `ANALOG_PRUTOK`
+         // (zmod_ifs.py:cmd_ANALOG_PRUTOK), wired to head_switch_sensor's
+@@ -7384,6 +7532,26 @@ helix::printer::EndlessSpoolCapabilities AmsBackendAd5xIfs::get_endless_spool_ca
+     return caps;
+ }
+ 
++helix::printer::EndlessSpoolConfig AmsBackendAd5xIfs::get_endless_spool_config() const {
++    std::lock_guard<std::mutex> lock(mutex_);
++    if (!kiln_refill_live_locked() || !*kiln_refill_.enabled) {
++        return {};
++    }
++    // The backup the driver would take first, per slot.
++    std::vector<int> edges(static_cast<size_t>(kNumPorts), -1);
++    for (int i = 0; i < kNumPorts; ++i) {
++        edges[static_cast<size_t>(i)] = kiln_refill_backup_locked(i, /*remembered=*/false);
++    }
++    return helix::printer::endless_spool_config_from_edges(edges);
++}
++
++AmsError AmsBackendAd5xIfs::apply_endless_spool_enabled(bool enabled) {
++    spdlog::info("{} Auto-refill {}", backend_log_tag(), enabled ? "on" : "off");
++    // A refusal Klipper reports puts the switch back where the driver is.
++    return send_endless_spool_switch(enabled ? "IFS_AUTO_REFILL ENABLE=1"
++                                             : "IFS_AUTO_REFILL ENABLE=0");
++}
++
+ std::string AmsBackendAd5xIfs::build_runout_detail_locked() const {
+     std::string detail =
+         lv_tr("Filament ran out - nothing at the toolhead and the print is paused.");
+@@ -7418,6 +7586,24 @@ std::string AmsBackendAd5xIfs::build_runout_detail_locked() const {
+         }
+     };
+ 
++    if (kiln_refill_live_locked()) {
++        // Kiln OS's auto-refill: switched off, no backup, or a backup it did
++        // not take (the refill failed, or the print paused before it ran).
++        if (!*kiln_refill_.enabled) {
++            detail += lv_tr("Auto-refill is off, so no backup spool takes over.");
++            return detail;
++        }
++        const int backup = find_backup_slot_locked(runout_slot_);
++        if (backup >= 0) {
++            detail += fmt::format(lv_tr("Auto-refill is on and {} is a backup, but it did not "
++                                        "take over."),
++                                  helix::ui::lane_label(lane_noun(), backup));
++        } else {
++            detail += lv_tr("Auto-refill is on, but no slot holds a backup for this spool.");
++        }
++        return detail;
++    }
++
+     if (!has_ifs_vars_) {
+         // Stock zMod "Infinite Spool Mode" (ANALOG_PRUTOK) — always on, no toggle.
+         append_switchover_rule(lv_tr("Infinite Spool Mode"));
+diff --git a/tests/unit/test_ams_ad5x_kiln_ifs.cpp b/tests/unit/test_ams_ad5x_kiln_ifs.cpp
+index 177bdca..06dc81f 100644
+--- a/tests/unit/test_ams_ad5x_kiln_ifs.cpp
++++ b/tests/unit/test_ams_ad5x_kiln_ifs.cpp
+@@ -292,3 +292,138 @@ TEST_CASE_METHOD(KilnRunoutFixture, "AD5X IFS drops a raised runout when Kiln st
+     CHECK_FALSE(Ad5xIfsTestAccess::runout_active(backend));
+     CHECK(Ad5xIfsTestAccess::action(backend) == AmsAction::HEATING);
+ }
++
++// --- Auto-refill as endless spool ---
++
++namespace {
++
++/// Captures the G-code the backend sends.
++class KilnCaptureBackend : public AmsBackendAd5xIfs {
++  public:
++    KilnCaptureBackend() : AmsBackendAd5xIfs(nullptr, nullptr) {}
++
++    std::vector<std::string> sent;
++
++    helix::AmsError execute_gcode(const std::string& gcode) override {
++        sent.push_back(gcode);
++        return helix::AmsErrorHelper::success();
++    }
++    helix::AmsError execute_gcode(const std::string& gcode,
++                                  helix::SharedCallback<void()>) override {
++        sent.push_back(gcode);
++        return helix::AmsErrorHelper::success();
++    }
++    helix::AmsError execute_gcode(const std::string& gcode, helix::SharedCallback<void()>,
++                                  helix::SharedCallback<void(const MoonrakerError&)>,
++                                  bool) override {
++        sent.push_back(gcode);
++        return helix::AmsErrorHelper::success();
++    }
++};
++
++/// Auto-refill state: slots 1 and 3 hold filament and back each other up.
++json kiln_refill_frame(bool on, json backups = json{{"1", {3}}, {"2", json::array()},
++                                                    {"3", {1}}, {"4", json::array()}}) {
++    return json{{"ifs",
++                 {{"auto_refill", on},
++                  {"refill_match", "similar"},
++                  {"refill_backups", std::move(backups)},
++                  {"loaded_channels", {1, 3}},
++                  {"active_channel", 1}}}};
++}
++
++} // namespace
++
++TEST_CASE("AD5X IFS reports Kiln's auto-refill as endless spool", "[ams][ad5x_ifs][kiln_ifs]") {
++    using namespace helix::printer;
++    KilnCaptureBackend backend;
++    Ad5xIfsTestAccess::handle_status(backend, kiln_idle_frame());
++
++    SECTION("on, with backups") {
++        Ad5xIfsTestAccess::handle_status(backend, kiln_refill_frame(true));
++        const auto caps = backend.get_endless_spool_capabilities();
++        CHECK(caps.available());
++        CHECK(caps.enabled == EndlessSpoolEnabled::On);
++        CHECK(caps.switchable);
++        CHECK(caps.restriction == EndlessSpoolRestriction::FirmwareManaged);
++        CHECK(caps.provider.empty());
++        // The driver's own list is the rule.
++        CHECK(endless_spool_backup_for(backend.get_endless_spool_config(), 0) == 2);
++        CHECK(endless_spool_backup_for(backend.get_endless_spool_config(), 2) == 0);
++        CHECK(backend.endless_spool_backup_eligibility(0, 2) == BackupEligibility::Eligible);
++        CHECK(backend.endless_spool_backup_eligibility(0, 1) == BackupEligibility::Incompatible);
++    }
++    SECTION("on, nothing backed up") {
++        Ad5xIfsTestAccess::handle_status(
++            backend, kiln_refill_frame(true, json{{"1", json::array()}, {"3", json::array()}}));
++        CHECK(backend.get_endless_spool_capabilities().enabled ==
++              EndlessSpoolEnabled::OnWithoutBackup);
++        CHECK(backend.get_endless_spool_config().empty());
++    }
++    SECTION("off") {
++        Ad5xIfsTestAccess::handle_status(backend, kiln_refill_frame(false));
++        CHECK(backend.get_endless_spool_capabilities().enabled == EndlessSpoolEnabled::Off);
++        CHECK(backend.get_endless_spool_config().empty());
++    }
++    SECTION("the switch sends IFS_AUTO_REFILL") {
++        Ad5xIfsTestAccess::handle_status(backend, kiln_refill_frame(true));
++        REQUIRE(backend.set_endless_spool_enabled(false).success());
++        CHECK(backend.sent == std::vector<std::string>{"IFS_AUTO_REFILL ENABLE=0"});
++    }
++    SECTION("a diff frame keeps the switch") {
++        Ad5xIfsTestAccess::handle_status(backend, kiln_refill_frame(true));
++        Ad5xIfsTestAccess::handle_status(backend, json{{"ifs", {{"refill_match", "exact"}}}});
++        CHECK(backend.get_endless_spool_capabilities().enabled == EndlessSpoolEnabled::On);
++    }
++}
++
++TEST_CASE("AD5X IFS without Kiln's auto_refill keeps the firmware answer",
++          "[ams][ad5x_ifs][kiln_ifs]") {
++    using namespace helix::printer;
++    KilnCaptureBackend backend;
++    Ad5xIfsTestAccess::handle_status(backend, kiln_idle_frame());
++    const auto caps = backend.get_endless_spool_capabilities();
++    CHECK(caps.enabled == EndlessSpoolEnabled::On);
++    CHECK_FALSE(caps.switchable);
++    CHECK_FALSE(backend.set_endless_spool_enabled(false).success());
++    CHECK(backend.sent.empty());
++}
++
++TEST_CASE("AD5X IFS waits for Kiln's auto-refill only when it can refill",
++          "[ams][ad5x_ifs][kiln_ifs][runout]") {
++    AmsBackendAd5xIfs backend(nullptr, nullptr);
++    Ad5xIfsTestAccess::handle_status(backend, kiln_idle_frame());
++    Ad5xIfsTestAccess::handle_status(backend, kiln_refill_frame(true));
++    REQUIRE(backend.get_current_slot() == 0);
++
++    // Slot 1 runs out: the driver lists no backups for an empty slot, but the
++    // list it had still says slot 3 takes over.
++    Ad5xIfsTestAccess::handle_status(
++        backend, json{{"ifs",
++                       {{"loaded_channels", {3}},
++                        {"refill_backups", {{"1", json::array()}, {"3", json::array()}}}}}});
++    CHECK(Ad5xIfsTestAccess::runout_confirm_delay(backend) == std::chrono::seconds(180));
++    CHECK(Ad5xIfsTestAccess::find_backup_slot(backend, 0) == 2);
++
++    SECTION("after a refill ran") {
++        Ad5xIfsTestAccess::handle_status(backend, kiln_step("refill", "feeding", 3, 3));
++        Ad5xIfsTestAccess::handle_status(backend, kiln_idle_frame());
++        CHECK(Ad5xIfsTestAccess::runout_confirm_delay(backend) == std::chrono::seconds(30));
++    }
++    SECTION("auto-refill off") {
++        Ad5xIfsTestAccess::handle_status(backend, json{{"ifs", {{"auto_refill", false}}}});
++        CHECK(Ad5xIfsTestAccess::runout_confirm_delay(backend) == std::chrono::seconds(30));
++        Ad5xIfsTestAccess::set_runout_state(backend, 0, false, std::nullopt);
++        CHECK(Ad5xIfsTestAccess::runout_detail(backend).find("Auto-refill is off") !=
++              std::string::npos);
++    }
++    SECTION("the backup slot is empty too") {
++        Ad5xIfsTestAccess::handle_status(
++            backend, json{{"ifs", {{"loaded_channels", json::array()}}}});
++        CHECK(Ad5xIfsTestAccess::runout_confirm_delay(backend) == std::chrono::seconds(30));
++    }
++    SECTION("the runout text names the backup") {
++        Ad5xIfsTestAccess::set_runout_state(backend, 0, false, std::nullopt);
++        CHECK(Ad5xIfsTestAccess::runout_detail(backend).find("is a backup") != std::string::npos);
++    }
++}

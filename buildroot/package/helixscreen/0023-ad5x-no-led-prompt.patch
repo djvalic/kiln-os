@@ -1,6 +1,8 @@
+diff --git a/src/printer/hardware_validator.cpp b/src/printer/hardware_validator.cpp
+index e0c0b17..97a586f 100644
 --- a/src/printer/hardware_validator.cpp
 +++ b/src/printer/hardware_validator.cpp
-@@ -672,36 +672,8 @@
+@@ -658,36 +658,8 @@ void HardwareValidator::validate_new_hardware(Config* config,
          expected_hardware = config->get_string_array(config->df() + "hardware/expected");
      }
  
@@ -39,9 +41,11 @@
  
      // Check for fans not assigned to any role
      const auto& discovered_fans = hardware.fans();
+diff --git a/src/ui/ui_wizard_led_select.cpp b/src/ui/ui_wizard_led_select.cpp
+index 6426af2..aafae5c 100644
 --- a/src/ui/ui_wizard_led_select.cpp
 +++ b/src/ui/ui_wizard_led_select.cpp
-@@ -190,20 +190,7 @@
+@@ -190,20 +190,7 @@ bool WizardLedSelectStep::is_validated() const {
  // ============================================================================
  
  bool WizardLedSelectStep::should_skip() const {
@@ -55,7 +59,7 @@
 -    bool should_skip = leds.empty();
 -
 -    if (should_skip) {
--        spdlog::info("[{}] No LEDs discovered, skipping step", get_name());
+-        spdlog::debug("[{}] No LEDs discovered, skipping step", get_name());
 -    } else {
 -        spdlog::debug("[{}] Found {} LED(s), showing step", get_name(), leds.size());
 -    }

@@ -49,7 +49,7 @@ BOARDS="mainboard eboard"
 for board in $BOARDS; do
     cp "$REPO/klipper/mcu-configs/ad5x-$board$SUFFIX.config" "$WORK/$board.config"
     make -s -C "$KLIPPER" KCONFIG_CONFIG="$WORK/$board.config" OUT="$WORK/out-$board/" olddefconfig
-    make -s -C "$KLIPPER" -j"$(nproc)" KCONFIG_CONFIG="$WORK/$board.config" OUT="$WORK/out-$board/"
+    make -s -C "$KLIPPER" -j"${KILN_JOBS:-$(nproc)}" KCONFIG_CONFIG="$WORK/$board.config" OUT="$WORK/out-$board/"
     # IAPCommand wants Intel hex. Make it ourselves (mainline writes only
     # klipper.bin for stm32) and, like stock ADM_App.hex, put the reset
     # handler (vector table word 1) in the start-address record, not the

@@ -1,8 +1,8 @@
 diff --git a/translations/de.yml b/translations/de.yml
-index 9be891a..ddc39d6 100644
+index b7bd456..6f454c7 100644
 --- a/translations/de.yml
 +++ b/translations/de.yml
-@@ -209,10 +209,10 @@ translations:
+@@ -211,10 +211,10 @@ translations:
    AFC retracts filament from the toolhead at end of print: AFC zieht das Filament
      am Druckende aus dem Werkzeugkopf zurück
    ALL DEVICES: ALLE GERÄTE
@@ -17,7 +17,7 @@ index 9be891a..ddc39d6 100644
    API Key: 'API-Schlüssel'
    API Key (if Moonraker requires a login): 'API-Schlüssel (falls Moonraker eine Anmeldung verlangt)'
    API not available: API nicht verfügbar
-@@ -303,7 +303,7 @@ translations:
+@@ -305,7 +305,7 @@ translations:
    Always show Android navigation bar instead of using gestures: Android-Navigationsleiste
      immer anzeigen statt Gesten zu nutzen
    Ambient Transfer: Umgebungswärmeübertragung
@@ -26,7 +26,7 @@ index 9be891a..ddc39d6 100644
    An API key is 32 characters, each 0-9 or a-f.: 'Ein API-Schlüssel hat 32 Zeichen, jeweils 0-9 oder a-f.'
    An accelerometer was detected on your printer.: Ein Beschleunigungssensor wurde
      an Ihrem Drucker erkannt.
-@@ -532,7 +532,7 @@ translations:
+@@ -534,7 +534,7 @@ translations:
    Bypass enabled: Bypass aktiviert
    Bypass failed: Bypass fehlgeschlagen
    ? Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?
@@ -35,7 +35,7 @@ index 9be891a..ddc39d6 100644
    Bypass mode is not currently active: 'Der Bypass-Modus ist derzeit nicht aktiv'
    Bypass off macro: 'Bypass-aus-Makro'
    Bypass on macro: 'Bypass-ein-Makro'
-@@ -2513,7 +2513,7 @@ translations:
+@@ -2517,7 +2517,7 @@ translations:
    Niimbot (Bluetooth): Niimbot (Bluetooth)
    'No': Nein
    No ACE unit was found.: "Keine ACE-Einheit gefunden."
@@ -44,7 +44,7 @@ index 9be891a..ddc39d6 100644
    No API connection: Keine API-Verbindung
    No Bluetooth printer selected — pick one in settings: Kein Bluetooth-Drucker ausgewählt
      — in den Einstellungen auswählen
-@@ -4187,9 +4187,9 @@ translations:
+@@ -4197,9 +4197,9 @@ translations:
    The timelapse or logs folder overlaps a protected folder, so cleanup is off.: "Der Zeitraffer- oder Protokoll-Ordner überlappt einen geschützten Ordner, daher ist die Bereinigung ausgeschaltet."
    The tool change under way finished, and the tool was not parked: 'Der laufende Werkzeugwechsel wurde abgeschlossen, und das Werkzeug wurde nicht geparkt'
    The tool change under way finished, and {} was not put back on the carriage: 'Der laufende Werkzeugwechsel wurde abgeschlossen, und {} wurde nicht wieder auf den Wagen gesetzt'
@@ -53,14 +53,14 @@ index 9be891a..ddc39d6 100644
    ? The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?
 -  : Im Werkzeugkopf befindet sich Filament, aber kein AMS-Slot meldet es als geladen. Der Drucker verweigert möglicherweise das Laden eines Slots, bis er geleert ist. Trotzdem starten?
 +  : Im Werkzeugkopf befindet sich Filament, aber kein IFS-Slot meldet es als geladen. Der Drucker verweigert möglicherweise das Laden eines Slots, bis er geleert ist. Trotzdem starten?
+   The toolhead is not homed, so this would home into the print: 'Der Werkzeugkopf ist nicht referenziert, das Referenzieren würde in den Druck fahren'
    The toolhead sensor indicates filament is already loaded. Proceed with load anyway?: Der
      Werkzeugkopfsensor zeigt an, dass Filament bereits geladen ist. Trotzdem mit dem
-     Laden fortfahren?
 diff --git a/translations/es.yml b/translations/es.yml
-index 248c73a..ce32d7c 100644
+index 026f740..1c1c422 100644
 --- a/translations/es.yml
 +++ b/translations/es.yml
-@@ -207,10 +207,10 @@ translations:
+@@ -209,10 +209,10 @@ translations:
    AFC retracts filament from the toolhead at end of print: AFC retrae el filamento
      del cabezal al finalizar la impresión
    ALL DEVICES: TODOS LOS DISPOSITIVOS
@@ -75,7 +75,7 @@ index 248c73a..ce32d7c 100644
    API Key: 'Clave API'
    API Key (if Moonraker requires a login): 'Clave API (si Moonraker requiere inicio de sesión)'
    API not available: API no disponible
-@@ -301,7 +301,7 @@ translations:
+@@ -303,7 +303,7 @@ translations:
    Always show Android navigation bar instead of using gestures: Mostrar siempre la
      barra de navegación de Android en lugar de usar gestos
    Ambient Transfer: Transferencia ambiente
@@ -84,7 +84,7 @@ index 248c73a..ce32d7c 100644
    An API key is 32 characters, each 0-9 or a-f.: 'Una clave API tiene 32 caracteres, cada uno 0-9 o a-f.'
    An accelerometer was detected on your printer.: Se detectó un acelerómetro en su
      impresora.
-@@ -526,7 +526,7 @@ translations:
+@@ -528,7 +528,7 @@ translations:
    Bypass enabled: Bypass activado
    Bypass failed: Error en bypass
    ? Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?
@@ -93,7 +93,7 @@ index 248c73a..ce32d7c 100644
    Bypass mode is not currently active: 'El modo bypass no está activo actualmente'
    Bypass off macro: 'Macro de bypass desactivado'
    Bypass on macro: 'Macro de bypass activado'
-@@ -2504,7 +2504,7 @@ translations:
+@@ -2508,7 +2508,7 @@ translations:
    Niimbot (Bluetooth): Niimbot (Bluetooth)
    'No': 'No'
    No ACE unit was found.: "No se encontró ninguna unidad ACE."
@@ -102,7 +102,7 @@ index 248c73a..ce32d7c 100644
    No API connection: Sin conexión a la API
    No Bluetooth printer selected — pick one in settings: No hay impresora Bluetooth
      seleccionada — elige una en ajustes
-@@ -4179,9 +4179,9 @@ translations:
+@@ -4189,9 +4189,9 @@ translations:
    The timelapse or logs folder overlaps a protected folder, so cleanup is off.: "La carpeta de timelapse o de registros se solapa con una carpeta protegida, por eso la limpieza está desactivada."
    The tool change under way finished, and the tool was not parked: 'El cambio de herramienta en curso terminó y la herramienta no se aparcó'
    The tool change under way finished, and {} was not put back on the carriage: 'El cambio de herramienta en curso terminó y {} no se volvió a poner en el carro'
@@ -111,14 +111,14 @@ index 248c73a..ce32d7c 100644
    ? The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?
 -  : El cabezal tiene filamento, pero ninguna ranura del AMS informa que esté cargado. La impresora puede negarse a cargar una ranura hasta que se vacíe. ¿Iniciar de todos modos?
 +  : El cabezal tiene filamento, pero ninguna ranura del IFS informa que esté cargado. La impresora puede negarse a cargar una ranura hasta que se vacíe. ¿Iniciar de todos modos?
+   The toolhead is not homed, so this would home into the print: 'El cabezal no está referenciado, referenciarlo chocaría contra la impresión'
    The toolhead sensor indicates filament is already loaded. Proceed with load anyway?: El
      sensor del cabezal indica que ya hay filamento cargado. ¿Continuar con la carga
-     de todos modos?
 diff --git a/translations/fr.yml b/translations/fr.yml
-index 40b2ab0..dc93400 100644
+index 4f9665c..7281e76 100644
 --- a/translations/fr.yml
 +++ b/translations/fr.yml
-@@ -209,10 +209,10 @@ translations:
+@@ -211,10 +211,10 @@ translations:
    AFC retracts filament from the toolhead at end of print: AFC rétracte le filament
      de la tête d'outil à la fin de l'impression
    ALL DEVICES: TOUS LES APPAREILS
@@ -133,7 +133,7 @@ index 40b2ab0..dc93400 100644
    API Key: 'Clé API'
    API Key (if Moonraker requires a login): 'Clé API (si Moonraker exige une connexion)'
    API not available: API non disponible
-@@ -303,7 +303,7 @@ translations:
+@@ -305,7 +305,7 @@ translations:
    Always show Android navigation bar instead of using gestures: Toujours afficher
      la barre de navigation Android au lieu des gestes
    Ambient Transfer: Transfert ambiant
@@ -142,7 +142,7 @@ index 40b2ab0..dc93400 100644
    An API key is 32 characters, each 0-9 or a-f.: 'Une clé API compte 32 caractères, chacun 0-9 ou a-f.'
    An accelerometer was detected on your printer.: Un accéléromètre a été détecté sur
      votre imprimante.
-@@ -531,7 +531,7 @@ translations:
+@@ -533,7 +533,7 @@ translations:
    Bypass enabled: Bypass activé
    Bypass failed: Échec du bypass
    ? Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?
@@ -151,7 +151,7 @@ index 40b2ab0..dc93400 100644
    Bypass mode is not currently active: 'Le mode bypass n''est pas actif actuellement'
    Bypass off macro: 'Macro de désactivation du bypass'
    Bypass on macro: 'Macro d''activation du bypass'
-@@ -2519,7 +2519,7 @@ translations:
+@@ -2523,7 +2523,7 @@ translations:
    Niimbot (Bluetooth): Niimbot (Bluetooth)
    'No': Non
    No ACE unit was found.: "Aucune unité ACE trouvée."
@@ -160,7 +160,7 @@ index 40b2ab0..dc93400 100644
    No API connection: Aucune connexion API
    No Bluetooth printer selected — pick one in settings: Aucune imprimante Bluetooth
      sélectionnée — choisissez-en une dans les paramètres
-@@ -4206,9 +4206,9 @@ translations:
+@@ -4216,9 +4216,9 @@ translations:
    The timelapse or logs folder overlaps a protected folder, so cleanup is off.: "Le dossier timelapse ou de logs chevauche un dossier protégé, le nettoyage est donc désactivé."
    The tool change under way finished, and the tool was not parked: 'Le changement d''outil en cours s''est terminé et l''outil n''a pas été rangé'
    The tool change under way finished, and {} was not put back on the carriage: 'Le changement d''outil en cours s''est terminé et {} n''a pas été remis sur le chariot'
@@ -169,14 +169,14 @@ index 40b2ab0..dc93400 100644
    ? The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?
 -  : La tête d'outil contient du filament mais aucun slot de l'AMS ne le signale comme chargé. L'imprimante peut refuser de charger un slot tant qu'il n'est pas vidé. Démarrer quand même ?
 +  : La tête d'outil contient du filament mais aucun slot de l'IFS ne le signale comme chargé. L'imprimante peut refuser de charger un slot tant qu'il n'est pas vidé. Démarrer quand même ?
+   The toolhead is not homed, so this would home into the print: 'La tête d''outil n''est pas référencée, le référencement heurterait l''impression'
    The toolhead sensor indicates filament is already loaded. Proceed with load anyway?: Le
      capteur de la tête d'outil indique que du filament est déjà chargé. Procéder au
-     chargement quand même ?
 diff --git a/translations/it.yml b/translations/it.yml
-index 2b73d5c..7e8e52a 100644
+index d1f6f9b..79e8409 100644
 --- a/translations/it.yml
 +++ b/translations/it.yml
-@@ -207,10 +207,10 @@ translations:
+@@ -209,10 +209,10 @@ translations:
    AFC retracts filament from the toolhead at end of print: AFC ritrae il filamento
      dalla testina al termine della stampa
    ALL DEVICES: TUTTI I DISPOSITIVI
@@ -191,7 +191,7 @@ index 2b73d5c..7e8e52a 100644
    API Key: 'Chiave API'
    API Key (if Moonraker requires a login): 'Chiave API (se Moonraker richiede l''accesso)'
    API not available: API non disponibile
-@@ -301,7 +301,7 @@ translations:
+@@ -303,7 +303,7 @@ translations:
    Always show Android navigation bar instead of using gestures: Mostra sempre la barra
      di navigazione Android invece dei gesti
    Ambient Transfer: Trasferimento ambiente
@@ -200,7 +200,7 @@ index 2b73d5c..7e8e52a 100644
    An API key is 32 characters, each 0-9 or a-f.: 'Una chiave API ha 32 caratteri, ciascuno 0-9 o a-f.'
    An accelerometer was detected on your printer.: È stato rilevato un accelerometro
      sulla stampante.
-@@ -527,7 +527,7 @@ translations:
+@@ -529,7 +529,7 @@ translations:
    Bypass enabled: Bypass abilitato
    Bypass failed: Bypass fallito
    ? Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?
@@ -209,7 +209,7 @@ index 2b73d5c..7e8e52a 100644
    Bypass mode is not currently active: 'La modalità bypass non è attiva'
    Bypass off macro: 'Macro di disattivazione bypass'
    Bypass on macro: 'Macro di attivazione bypass'
-@@ -2504,7 +2504,7 @@ translations:
+@@ -2508,7 +2508,7 @@ translations:
    Niimbot (Bluetooth): Niimbot (Bluetooth)
    'No': 'No'
    No ACE unit was found.: "Nessuna unità ACE trovata."
@@ -218,7 +218,7 @@ index 2b73d5c..7e8e52a 100644
    No API connection: Nessuna connessione API
    No Bluetooth printer selected — pick one in settings: Nessuna stampante Bluetooth
      selezionata — sceglierne una nelle impostazioni
-@@ -4178,9 +4178,9 @@ translations:
+@@ -4188,9 +4188,9 @@ translations:
    The timelapse or logs folder overlaps a protected folder, so cleanup is off.: "La cartella timelapse o di log sovrappone una cartella protetta, quindi la pulizia è disattivata."
    The tool change under way finished, and the tool was not parked: 'Il cambio utensile in corso è terminato e l''utensile non è stato parcheggiato'
    The tool change under way finished, and {} was not put back on the carriage: 'Il cambio utensile in corso è terminato e {} non è stato rimesso sul carrello'
@@ -227,14 +227,14 @@ index 2b73d5c..7e8e52a 100644
    ? The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?
 -  : La testina contiene filamento ma nessuno slot AMS lo riporta come caricato. La stampante potrebbe rifiutare il caricamento di uno slot finché non viene svuotata. Avviare comunque?
 +  : La testina contiene filamento ma nessuno slot IFS lo riporta come caricato. La stampante potrebbe rifiutare il caricamento di uno slot finché non viene svuotata. Avviare comunque?
+   The toolhead is not homed, so this would home into the print: 'La testina non ha eseguito l''homing, l''homing finirebbe contro la stampa'
    The toolhead sensor indicates filament is already loaded. Proceed with load anyway?: Il
      sensore della testina indica che il filamento è già caricato. Procedere comunque
-     con il caricamento?
 diff --git a/translations/ja.yml b/translations/ja.yml
-index 2333303..0447340 100644
+index cbea498..f35e192 100644
 --- a/translations/ja.yml
 +++ b/translations/ja.yml
-@@ -201,10 +201,10 @@ translations:
+@@ -203,10 +203,10 @@ translations:
    AFC reset failed: AFCリセット失敗
    AFC retracts filament from the toolhead at end of print: AFCは印刷終了時にツールヘッドからフィラメントを引き戻します
    ALL DEVICES: すべてのデバイス
@@ -249,7 +249,7 @@ index 2333303..0447340 100644
    API Key: 'APIキー'
    API Key (if Moonraker requires a login): 'APIキー（Moonrakerがログインを要求する場合）'
    API not available: APIが利用できません
-@@ -287,7 +287,7 @@ translations:
+@@ -289,7 +289,7 @@ translations:
    Always Show Bypass Spool: バイパススプールを常に表示
    Always show Android navigation bar instead of using gestures: ジェスチャーの代わりにAndroidナビゲーションバーを常に表示
    Ambient Transfer: 環境熱伝達
@@ -258,7 +258,7 @@ index 2333303..0447340 100644
    An API key is 32 characters, each 0-9 or a-f.: 'APIキーは32文字で、各文字は0-9またはa-fです。'
    An accelerometer was detected on your printer.: プリンターで加速度センサーが検出されました。
    An app on your network is asking to connect to this printer.: 'ネットワーク上のアプリがこのプリンターへの接続を求めています。'
-@@ -498,7 +498,7 @@ translations:
+@@ -500,7 +500,7 @@ translations:
    Bypass enabled: バイパス有効
    Bypass failed: バイパスに失敗しました
    ? Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?
@@ -267,7 +267,7 @@ index 2333303..0447340 100644
    Bypass mode is not currently active: 'バイパスモードは現在アクティブではありません'
    Bypass off macro: 'バイパスオフのマクロ'
    Bypass on macro: 'バイパスオンのマクロ'
-@@ -2376,7 +2376,7 @@ translations:
+@@ -2380,7 +2380,7 @@ translations:
    Niimbot (Bluetooth): Niimbot (Bluetooth)
    'No': いいえ
    No ACE unit was found.: "ACEユニットが見つかりません。"
@@ -276,7 +276,7 @@ index 2333303..0447340 100644
    No API connection: API 接続なし
    No Bluetooth printer selected — pick one in settings: Bluetooth プリンターが選択されていません
      — 設定で選択してください
-@@ -3963,9 +3963,9 @@ translations:
+@@ -3973,9 +3973,9 @@ translations:
    The timelapse or logs folder overlaps a protected folder, so cleanup is off.: "タイムラプスまたはログのフォルダーが保護されたフォルダーと重なっているため、クリーンアップはオフになっています。"
    The tool change under way finished, and the tool was not parked: '実行中のツール変更は完了し、ツールは格納されていません'
    The tool change under way finished, and {} was not put back on the carriage: '実行中のツール変更は完了し、{}はキャリッジに戻されていません'
@@ -285,14 +285,14 @@ index 2333303..0447340 100644
    ? The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?
 -  : ツールヘッドにフィラメントがありますが、装填済みと報告しているAMSスロットはありません。取り除くまで、プリンターがスロットの装填を拒否する場合があります。それでも印刷を開始しますか？
 +  : ツールヘッドにフィラメントがありますが、装填済みと報告しているIFSスロットはありません。取り除くまで、プリンターがスロットの装填を拒否する場合があります。それでも印刷を開始しますか？
+   The toolhead is not homed, so this would home into the print: 'ツールヘッドがホーミングされていないため、ホーミングするとノズルが造形物に当たります'
    The toolhead sensor indicates filament is already loaded. Proceed with load anyway?: ツールヘッドセンサーがフィラメント装填済みを検出しました。それでも装填を続行しますか？
    The toolhead sensor indicates no filament is present. Proceed with unload anyway?: ツールヘッドセンサーがフィラメント未検出を報告しました。それでもアンロードを続行しますか？
-   The unit is already running another operation. Wait for it to finish, or reset the CFS if it stays stuck: ユニットは既に別の処理を実行中です。完了を待つか、固まったままの場合は CFS をリセットしてください
 diff --git a/translations/pt.yml b/translations/pt.yml
-index 0bbb82b..175cfd2 100644
+index 393cdf6..44c4d29 100644
 --- a/translations/pt.yml
 +++ b/translations/pt.yml
-@@ -207,10 +207,10 @@ translations:
+@@ -209,10 +209,10 @@ translations:
    AFC retracts filament from the toolhead at end of print: AFC retrai o filamento
      do cabeçote ao final da impressão
    ALL DEVICES: TODOS OS DISPOSITIVOS
@@ -307,7 +307,7 @@ index 0bbb82b..175cfd2 100644
    API Key: 'Chave de API'
    API Key (if Moonraker requires a login): 'Chave de API (se o Moonraker exigir login)'
    API not available: API não disponível
-@@ -301,7 +301,7 @@ translations:
+@@ -303,7 +303,7 @@ translations:
    Always show Android navigation bar instead of using gestures: Mostrar sempre a barra
      de navegação Android em vez de usar gestos
    Ambient Transfer: Transferência Ambiente
@@ -316,7 +316,7 @@ index 0bbb82b..175cfd2 100644
    An API key is 32 characters, each 0-9 or a-f.: 'Uma chave de API tem 32 caracteres, cada um 0-9 ou a-f.'
    An accelerometer was detected on your printer.: Um acelerômetro foi detectado na
      sua impressora.
-@@ -525,7 +525,7 @@ translations:
+@@ -527,7 +527,7 @@ translations:
    Bypass enabled: Bypass ativado
    Bypass failed: Falha no bypass
    ? Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?
@@ -325,7 +325,7 @@ index 0bbb82b..175cfd2 100644
    Bypass mode is not currently active: 'O modo bypass não está ativo no momento'
    Bypass off macro: 'Macro de desligar bypass'
    Bypass on macro: 'Macro de ligar bypass'
-@@ -2506,7 +2506,7 @@ translations:
+@@ -2510,7 +2510,7 @@ translations:
    Niimbot (Bluetooth): Niimbot (Bluetooth)
    'No': Não
    No ACE unit was found.: "Nenhuma unidade ACE encontrada."
@@ -334,7 +334,7 @@ index 0bbb82b..175cfd2 100644
    No API connection: Sem conexão com a API
    No Bluetooth printer selected — pick one in settings: Nenhuma impressora Bluetooth
      selecionada — escolha uma nas configurações
-@@ -4184,9 +4184,9 @@ translations:
+@@ -4194,9 +4194,9 @@ translations:
    The timelapse or logs folder overlaps a protected folder, so cleanup is off.: "A pasta de timelapse ou de logs sobrepõe-se a uma pasta protegida, por isso a limpeza está desligada."
    The tool change under way finished, and the tool was not parked: 'A troca de ferramenta em andamento terminou e a ferramenta não foi estacionada'
    The tool change under way finished, and {} was not put back on the carriage: 'A troca de ferramenta em andamento terminou e {} não foi devolvida ao carro'
@@ -343,14 +343,14 @@ index 0bbb82b..175cfd2 100644
    ? The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?
 -  : O cabeçote tem filamento, mas nenhum slot AMS o reporta como carregado. A impressora pode não conseguir carregar um slot até que ele seja esvaziado. Iniciar mesmo assim?
 +  : O cabeçote tem filamento, mas nenhum slot IFS o reporta como carregado. A impressora pode não conseguir carregar um slot até que ele seja esvaziado. Iniciar mesmo assim?
+   The toolhead is not homed, so this would home into the print: 'O cabeçote não fez home, fazer home colidiria com a impressão'
    The toolhead sensor indicates filament is already loaded. Proceed with load anyway?: O
      sensor do cabeçote indica que o filamento já está carregado. Prosseguir com o
-     carregamento mesmo assim?
 diff --git a/translations/ru.yml b/translations/ru.yml
-index 35ec30a..5863a7a 100644
+index 44a0712..018349a 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -222,7 +222,7 @@ translations:
+@@ -224,7 +224,7 @@ translations:
    A restart is already in progress: Перезапуск уже выполняется
    A right, B left: "A справа, B слева"
    ? A sensor that measures the distance to the bed. HelixScreen uses it for Z offset calibration and probe tests on the Probe screen.
@@ -359,7 +359,7 @@ index 35ec30a..5863a7a 100644
    A sensor that reads the air temperature inside the enclosure. Watch it on the chamber temperature screen.: 'Датчик, измеряющий температуру воздуха внутри камеры. Следите за ней на экране температуры камеры.'
    A spool may be tangled or the drive gear is jammed: Катушка может быть запутана или заклинило приводную шестерню
    ? A system that feeds several filaments to the toolhead, shown with its slot count. Manage the slots on the filament system screen.
-@@ -249,10 +249,10 @@ translations:
+@@ -251,10 +251,10 @@ translations:
    AFC retracts filament from the toolhead at end of print: AFC выгружает филамент
      из печатающей головки по завершении печати
    ALL DEVICES: ВСЕ УСТРОЙСТВА
@@ -374,7 +374,7 @@ index 35ec30a..5863a7a 100644
    API Key: 'API-ключ'
    API Key (if Moonraker requires a login): 'API-ключ (если Moonraker требует входа)'
    API not available: API недоступен
-@@ -342,7 +342,7 @@ translations:
+@@ -344,7 +344,7 @@ translations:
    Always show Android navigation bar instead of using gestures: Всегда показывать
      панель навигации Android вместо жестов
    Ambient Transfer: Теплообмен с окружающей средой
@@ -383,7 +383,7 @@ index 35ec30a..5863a7a 100644
    An API key is 32 characters, each 0-9 or a-f.: 'API-ключ состоит из 32 символов, каждый 0-9 или a-f.'
    An accelerometer was detected on your printer.: На вашем принтере обнаружен акселерометр.
    An app on your network is asking to connect to this printer.: 'Приложение в вашей сети запрашивает подключение к этому принтеру.'
-@@ -572,7 +572,7 @@ translations:
+@@ -574,7 +574,7 @@ translations:
    Bypass enabled: Байпас включён
    Bypass failed: Ошибка байпаса
    ? Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?
@@ -392,7 +392,7 @@ index 35ec30a..5863a7a 100644
    Bypass mode is not currently active: 'Режим обхода сейчас не активен'
    Bypass off macro: 'Макрос выключения обхода'
    Bypass on macro: 'Макрос включения обхода'
-@@ -706,7 +706,7 @@ translations:
+@@ -708,7 +708,7 @@ translations:
    'Capabilities: ': 'Возможности: '
    Carriage empty: Каретка пуста
    Carriage empty · tap a head: 'Каретка пуста · выберите головку'
@@ -401,7 +401,7 @@ index 35ec30a..5863a7a 100644
      калибровка отправлена — используйте панель Z-Offset для настройки
    Cartographer touch calibrate sent: Cartographer тактильная калибровка отправлена
    Category: Категория
-@@ -1757,7 +1757,7 @@ translations:
+@@ -1759,7 +1759,7 @@ translations:
    Get help and share feedback: Получить помощь и поделиться отзывом
    Glass Effects: Эффекты стекла
    Global: Общий
@@ -410,7 +410,7 @@ index 35ec30a..5863a7a 100644
    Good: Хорошо
    Good Accuracy: Хорошая точность
    Good Enough: "Достаточно"
-@@ -2311,7 +2311,7 @@ translations:
+@@ -2315,7 +2315,7 @@ translations:
    MCU, host, and auxiliary temperature monitoring: Мониторинг температуры MCU, хоста
      и вспомогательных датчиков
    'MCU: ': 'MCU: '
@@ -419,7 +419,7 @@ index 35ec30a..5863a7a 100644
    MDI Icons: Иконки MDI
    MISSING CONFIGURED: ОТСУТСТВУЕТ НАСТРОЕННОЕ
    MMU command failed: Ошибка команды MMU
-@@ -2544,7 +2544,7 @@ translations:
+@@ -2548,7 +2548,7 @@ translations:
    Niimbot (Bluetooth): Niimbot (Bluetooth)
    'No': Нет
    No ACE unit was found.: "Блок ACE не найден."
@@ -428,7 +428,7 @@ index 35ec30a..5863a7a 100644
    No API connection: Нет соединения с API
    No Bluetooth printer selected — pick one in settings: Bluetooth-принтер не выбран
      — выберите его в настройках
-@@ -2756,7 +2756,7 @@ translations:
+@@ -2765,7 +2765,7 @@ translations:
    'Off': Выкл
    'Off:': 'Выкл:'
    'Off: runs with these values without asking': 'Выкл.: запуск с этими значениями без запроса'
@@ -437,7 +437,7 @@ index 35ec30a..5863a7a 100644
    Offset: Смещение
    Offsets Saved: Смещения сохранены
    Offsets saved: Смещения сохранены
-@@ -3514,9 +3514,9 @@ translations:
+@@ -3523,9 +3523,9 @@ translations:
    Save Hardware: Сохранить оборудование
    Save Printer Configuration: Сохранить конфигурацию принтера
    Save Theme As: Сохранить тему как
@@ -450,7 +450,7 @@ index 35ec30a..5863a7a 100644
    Save calibration: Сохранить калибровку
    Save changes to persist them across restarts?: Сохранить изменения, чтобы они сохранились
      после перезапуска?
-@@ -3526,7 +3526,7 @@ translations:
+@@ -3535,7 +3535,7 @@ translations:
    Save the new heater values to printer.cfg? Klipper restarts.: Сохранить новые значения нагревателя в printer.cfg? Klipper перезапустится.
    Save to Spool: Сохранить на катушку
    Save to Spoolman: Сохранить в Spoolman
@@ -459,7 +459,7 @@ index 35ec30a..5863a7a 100644
    Saved to Spoolman, but the spool's price, location, lot and notes didn't save.: 'Сохранено в Spoolman, но цена, расположение, партия и заметки катушки не сохранились.'
    Saved to crash_report.txt (QR not available): Сохранено в crash_report.txt (QR недоступен)
    Saved to printer configuration.: Сохранено в конфигурацию принтера.
-@@ -3538,7 +3538,7 @@ translations:
+@@ -3547,7 +3547,7 @@ translations:
    Saves to Klipper config and restarts firmware.: Сохраняет в конфигурацию Klipper
      и перезапускает прошивку.
    Saving Configuration...: Сохранение конфигурации...
@@ -468,7 +468,7 @@ index 35ec30a..5863a7a 100644
    Saving and finishing...: Сохранение и завершение...
    Saving calibration: Сохранение калибровки
    Saving calibration...: Сохранение калибровки...
-@@ -4224,9 +4224,9 @@ translations:
+@@ -4234,9 +4234,9 @@ translations:
    The timelapse or logs folder overlaps a protected folder, so cleanup is off.: "Папка таймлапсов или журналов пересекается с защищённой папкой, поэтому очистка выключена."
    The tool change under way finished, and the tool was not parked: 'Текущая смена инструмента завершена, инструмент не припаркован'
    The tool change under way finished, and {} was not put back on the carriage: 'Текущая смена инструмента завершена, {} не возвращён на каретку'
@@ -477,10 +477,10 @@ index 35ec30a..5863a7a 100644
    ? The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?
 -  : 'В печатающей головке есть филамент, но ни один слот AMS не сообщает о его загрузке. Принтер может отказаться загружать слот, пока она не будет очищена. Всё равно начать?'
 +  : 'В печатающей головке есть филамент, но ни один слот IFS не сообщает о его загрузке. Принтер может отказаться загружать слот, пока она не будет очищена. Всё равно начать?'
+   The toolhead is not homed, so this would home into the print: 'Печатающая головка не запаркована, парковка ударит её о модель'
    The toolhead sensor indicates filament is already loaded. Proceed with load anyway?: Датчик
      печатающей головки показывает, что филамент уже загружен. Всё равно продолжить
-     загрузку?
-@@ -4333,11 +4333,11 @@ translations:
+@@ -4344,11 +4344,11 @@ translations:
    'This wait ends only at its temperature: canceling takes an emergency stop and a firmware restart.': 'Это ожидание заканчивается только по достижении температуры: для отмены нужны аварийная остановка и перезапуск прошивки.'
    ? This will apply the Z-offset to your endstop and restart Klipper to save the configuration.
      The printer will briefly disconnect.
@@ -494,7 +494,7 @@ index 35ec30a..5863a7a 100644
      конфигурации. Принтер ненадолго отключится.
    ? This will collect system info, logs, settings, and printer data to help diagnose
      issues. No passwords or sensitive data will be included.
-@@ -4356,7 +4356,7 @@ translations:
+@@ -4367,7 +4367,7 @@ translations:
      Klipper будет перезапущена. Активные операции будут прерваны.
    This will restart Klipper.: Это перезапустит Klipper.
    This will restore the default jog step distances for all three modes.: Это восстановит шаги перемещения по умолчанию для всех трёх режимов.
@@ -503,7 +503,7 @@ index 35ec30a..5863a7a 100644
    ? This writes the tool offsets to the printer's config and restarts Klipper, which takes a few seconds. Until then they apply only to this session.
    : Смещения инструментов будут записаны в конфигурацию принтера, и Klipper перезапустится, это займёт несколько секунд. До этого они действуют только в текущем сеансе.
    ? This {0} is set up for {1}, but it looks stock ({2}% confidence). A wrong profile applies incorrect pre-print options and presets.
-@@ -4725,7 +4725,7 @@ translations:
+@@ -4737,7 +4737,7 @@ translations:
    Width: Ширина
    Width Sensor: 'Датчик диаметра'
    Width Sensors: Датчики ширины
@@ -512,7 +512,7 @@ index 35ec30a..5863a7a 100644
    Will not switch spools on runout: При обрыве катушка не переключится
    Wipe nozzle on silicone cleaning strip: 'Очистить сопло о силиконовую полоску'
    Within {0:.1f} Hz of each other at {1:.0f} Hz: "В пределах {0:.1f} Гц друг от друга на {1:.0f} Гц"
-@@ -4775,7 +4775,7 @@ translations:
+@@ -4787,7 +4787,7 @@ translations:
    Z: Z
    Z Calibration: Калибровка Z
    Z Movement: Движение Z
@@ -521,7 +521,7 @@ index 35ec30a..5863a7a 100644
    Z Range: Диапазон Z
    Z Tilt Adjust...: Регулировка наклона Z...
    Z is at its limit ({}mm): Z на пределе ({}mm)
-@@ -4788,9 +4788,9 @@ translations:
+@@ -4800,9 +4800,9 @@ translations:
    Z {}, will lift to {}mm: 'Z {}, подъём до {}мм'
    'Z {}, will lift to {}mm: last print is {}mm tall': 'Z {}, подъём до {}мм: высота последней печати {}мм'
    'Z-Off:': 'Z-Off:'
@@ -533,7 +533,7 @@ index 35ec30a..5863a7a 100644
    Z-Tilt: Z-наклон
    Z-Tilt Adjust: Регулировка Z-наклона
    Z-Tilt Adjust complete: Z-Tilt завершён
-@@ -4800,14 +4800,14 @@ translations:
+@@ -4812,14 +4812,14 @@ translations:
    Z-Tilt may still be running — response timed out: Z-Tilt может ещё выполняться —
      время ожидания истекло
    Z-Tilt timed out: Z-Tilt — время ожидания истекло
@@ -554,10 +554,10 @@ index 35ec30a..5863a7a 100644
    'Z: 0.000': 'Z: 0.000'
    Zone {:.0f}-{:.0f} Hz: "Зона {:.0f}-{:.0f} Гц"
 diff --git a/translations/zh.yml b/translations/zh.yml
-index f4813c4..d4bfc86 100644
+index c6431b6..7303760 100644
 --- a/translations/zh.yml
 +++ b/translations/zh.yml
-@@ -200,10 +200,10 @@ translations:
+@@ -202,10 +202,10 @@ translations:
    AFC reset failed: AFC重置失败
    AFC retracts filament from the toolhead at end of print: AFC 在打印结束时将耗材从工具头退出
    ALL DEVICES: 所有设备
@@ -572,7 +572,7 @@ index f4813c4..d4bfc86 100644
    API Key: 'API 密钥'
    API Key (if Moonraker requires a login): 'API 密钥（如果 Moonraker 要求登录）'
    API not available: API 不可用
-@@ -286,7 +286,7 @@ translations:
+@@ -288,7 +288,7 @@ translations:
    Always Show Bypass Spool: 始终显示旁路料盘
    Always show Android navigation bar instead of using gestures: 始终显示 Android 导航栏而不使用手势
    Ambient Transfer: 环境传热
@@ -581,7 +581,7 @@ index f4813c4..d4bfc86 100644
    An API key is 32 characters, each 0-9 or a-f.: 'API 密钥为 32 个字符，每个为 0-9 或 a-f。'
    An accelerometer was detected on your printer.: 在您的打印机上检测到加速度计。
    An app on your network is asking to connect to this printer.: '网络中的某个应用请求连接到此打印机。'
-@@ -497,7 +497,7 @@ translations:
+@@ -499,7 +499,7 @@ translations:
    Bypass enabled: 旁通已启用
    Bypass failed: 旁通失败
    ? Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?
@@ -590,7 +590,7 @@ index f4813c4..d4bfc86 100644
    Bypass mode is not currently active: '旁通模式当前未启用'
    Bypass off macro: '关闭旁路宏'
    Bypass on macro: '开启旁路宏'
-@@ -2370,7 +2370,7 @@ translations:
+@@ -2374,7 +2374,7 @@ translations:
    Niimbot (Bluetooth): Niimbot（蓝牙）
    'No': 否
    No ACE unit was found.: "未找到 ACE 单元。"
@@ -599,7 +599,7 @@ index f4813c4..d4bfc86 100644
    No API connection: 无 API 连接
    No Bluetooth printer selected — pick one in settings: 未选择蓝牙打印机 — 请在设置中选择
    No Bluetooth printers found: 未找到蓝牙打印机
-@@ -3954,9 +3954,9 @@ translations:
+@@ -3964,9 +3964,9 @@ translations:
    The timelapse or logs folder overlaps a protected folder, so cleanup is off.: "延时摄影或日志文件夹与受保护的文件夹重叠，因此清理功能已关闭。"
    The tool change under way finished, and the tool was not parked: '正在进行的换工具已完成，工具未停放'
    The tool change under way finished, and {} was not put back on the carriage: '正在进行的换工具已完成，{}未放回打印头'
@@ -608,6 +608,6 @@ index f4813c4..d4bfc86 100644
    ? The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?
 -  : '工具头内有耗材，但没有 AMS 槽位报告已装载。在清空之前，打印机可能拒绝装载槽位。仍要开始打印吗？'
 +  : '工具头内有耗材，但没有 IFS 槽位报告已装载。在清空之前，打印机可能拒绝装载槽位。仍要开始打印吗？'
+   The toolhead is not homed, so this would home into the print: '工具头尚未归位，归位会使喷嘴碰到打印件'
    The toolhead sensor indicates filament is already loaded. Proceed with load anyway?: 工具头传感器显示耗材已装载。仍要继续装载吗？
    The toolhead sensor indicates no filament is present. Proceed with unload anyway?: 工具头传感器显示无耗材。仍要继续卸载吗？
-   The unit is already running another operation. Wait for it to finish, or reset the CFS if it stays stuck: 该单元正在执行其他操作。请等待其完成；若持续卡住，请重置 CFS

@@ -1,0 +1,870 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Thu, 5 Nov 2026 21:00:00 -0500
+Subject: [PATCH] ams: AD5X IFS shows what Kiln's IFS driver is doing
+
+Kiln OS's IFS driver says which operation runs (operation: load,
+unload, swap, refill, eject, prefeed, feed, retract, select, tune), its
+phase (heating, cutting, unloading, homing, selecting, feeding, purging,
+priming), the slot it heads for (target_channel) and the slot moving
+now (activity_channel). A swap the slicer, a macro or auto-refill
+starts now shows on the IFS screen and in the Print Status card like
+one started from the screen: the action and its step (a swap or a
+refill shows Heat, Cut, Retract, then Feed and Purge), a translated
+line such as "Swap to Slot 3 · Cutting filament" in place of the fixed
+"IFS: loading", the target slot and the slot moving pulsing, and the
+moving slot in the header. A lane-only move (pre-feed, tune, select)
+shows as Selecting with no toolhead steps.
+
+While the driver runs an operation the action stays busy, also between
+its moves, so the runout check stays quiet through a refill or swap;
+the 90 s action timeout and the head-sensor snap to idle leave the
+driver's operation alone, as the driver reports its own end. A runout
+raised on a paused print is dropped when the driver starts changing
+the filament; an operation that ends with the print paused and the
+toolhead empty arms the runout check again. Operations started from
+the screen keep the phase tracker's steps.
+
+An older driver without these fields keeps the plain activity mapping
+(homing and selecting now show as Selecting).
+
+Upstream: not applicable (AD5X OS specific)
+---
+diff --git a/include/ams_backend_ad5x_ifs.h b/include/ams_backend_ad5x_ifs.h
+index 705aa6a..2e80112 100644
+--- a/include/ams_backend_ad5x_ifs.h
++++ b/include/ams_backend_ad5x_ifs.h
+@@ -597,6 +597,27 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
+     [[nodiscard]] OperationStepModel get_operation_step_model(StepOperationType op) const override;
+     [[nodiscard]] lv_subject_t* get_operation_step_index_subject(StepOperationType op) override;
+ 
++    /// Kiln OS's IFS driver names what it is doing: `operation` ("" when
++    /// idle; load, unload, swap, refill, eject, prefeed, feed, retract,
++    /// select, tune) and its `phase` (heating, cutting, unloading, homing,
++    /// selecting, feeding, purging, priming). How such a step shows: the
++    /// action, the step of get_operation_step_model() it is at (-1 none) and
++    /// that model's operation. A swap or an auto-refill shows the unload steps
++    /// while it heats, cuts and retracts, then the load steps. A lane-only
++    /// move (pre-feed, feed, retract, select, tune) is SELECTING with no
++    /// steps. An empty @p operation is an older driver: @p activity alone.
++    struct KilnStepView {
++        AmsAction action = AmsAction::IDLE;
++        int phase_index = -1;
++        std::optional<StepOperationType> op;
++    };
++    [[nodiscard]] static KilnStepView kiln_step_view(const std::string& operation,
++                                                     const std::string& phase,
++                                                     const std::string& activity);
++
++    /// The operation Kiln OS's IFS driver runs, while it owns the action.
++    [[nodiscard]] std::optional<StepOperationType> running_step_operation() const override;
++
+     // User-initiated state refresh. Re-reads Adventurer5M.json (the JSON poll
+     // is the primary truth source on both old and new zmod) and schedules a
+     // GET_ZCOLOR SILENT=1 follow-up to refresh the active-slot view. Both
+@@ -1150,6 +1171,16 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
+     /// @return true if the frame carried either object.
+     bool apply_ifs_module_objects(const nlohmann::json& status);
+ 
++    /// Show kiln_step_ in system_info_: the action and step (unless an op of
++    /// ours runs), the detail line, the target slot (pending_target_slot) and
++    /// the slot moving now (operation_working_slot). Caller holds mutex_.
++    /// @return true when any of them changed.
++    bool apply_kiln_step_locked();
++
++    /// The detail line for kiln_step_, translated: "Swap to Slot 3 ·
++    /// Cutting filament". Caller holds mutex_.
++    [[nodiscard]] std::string kiln_step_detail_locked() const;
++
+     /// Z-Mod's change macro keeps the target tool in
+     /// `gcode_macro END_CHANGE_FILAMENT`.last_data.channel from the start of a
+     /// filament change to its end, and 99 otherwise. Its runout auto-swap and
+@@ -1830,6 +1861,24 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
+     /// none), re-supplied into Ports-only diff frames for the same reason
+     /// zmod_last_chan_ exists. Guarded by mutex_.
+     std::optional<int> module_last_chan_;
++    /// What Kiln OS's IFS driver reports doing, merged across diff frames.
++    /// Channels are 1-based, 0 for none: `target_channel` is the slot the
++    /// operation heads for, `activity_channel` the slot moving now. An older
++    /// driver publishes `activity` alone and `operation` stays unset.
++    /// Guarded by mutex_.
++    struct KilnIfsStep {
++        std::string activity;
++        std::optional<std::string> operation;
++        std::string phase;
++        int target_channel = 0;
++        int activity_channel = 0;
++        std::string error;
++    };
++    KilnIfsStep kiln_step_;
++    /// True while system_info_.action is the driver's (apply_kiln_step_locked):
++    /// only its idle report clears it, and the action timeout leaves it to the
++    /// driver. Guarded by mutex_.
++    bool kiln_owns_action_ = false;
+     /// True while the SELECTING in system_info_.action was set by
+     /// apply_zmod_change_macro, so only that source clears it. Guarded by mutex_.
+     bool zmod_change_owns_action_ = false;
+diff --git a/src/printer/ams_backend_ad5x_ifs.cpp b/src/printer/ams_backend_ad5x_ifs.cpp
+index 84a3f9d..46124cd 100644
+--- a/src/printer/ams_backend_ad5x_ifs.cpp
++++ b/src/printer/ams_backend_ad5x_ifs.cpp
+@@ -798,6 +798,13 @@ void AmsBackendAd5xIfs::handle_status(const json& status_obj) {
+             if (system_info_.action != before || system_info_.operation_detail != detail_before) {
+                 state_changed = true;
+             }
++        } else if (kiln_owns_action_ && kiln_step_.phase == "heating") {
++            // The Kiln driver's heating line names the live temperatures.
++            std::string detail = kiln_step_detail_locked();
++            if (detail != system_info_.operation_detail) {
++                set_operation_detail_locked(std::move(detail));
++                state_changed = true;
++            }
+         }
+     }
+ 
+@@ -2885,6 +2892,11 @@ AmsError AmsBackendAd5xIfs::cancel() {
+         } else {
+             system_info_.operation_phase = -1;
+         }
++        // The driver's next frame says whether it is still stopping.
++        if (kiln_owns_action_) {
++            set_operation_detail_locked("");
++            kiln_owns_action_ = false;
++        }
+     }
+     return execute_gcode(cancel_cmd);
+ }
+@@ -5497,6 +5509,12 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+     bool saw_module_content = false;
+     std::string activity;
+     std::string error_text;
++    std::optional<std::string> error_field;
++    // Kiln OS's driver: the operation, its phase and the slots it moves.
++    std::optional<std::string> operation;
++    std::optional<std::string> phase;
++    std::optional<int> target_channel;
++    std::optional<int> activity_channel;
+ 
+     if (auto it = status.find("ifs"); it != status.end() && it->is_object()) {
+         const auto& obj = *it;
+@@ -5539,6 +5557,25 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+         }
+         if (auto e = obj.find("error"); e != obj.end() && e->is_string()) {
+             error_text = e->get<std::string>();
++            error_field = error_text;
++            saw_module_content = true;
++        } else if (e != obj.end() && e->is_null()) {
++            error_field = std::string(); // null: no error
++        }
++        if (auto o = obj.find("operation"); o != obj.end() && o->is_string()) {
++            operation = o->get<std::string>();
++            saw_module_content = true;
++        }
++        if (auto p = obj.find("phase"); p != obj.end() && p->is_string()) {
++            phase = p->get<std::string>();
++            saw_module_content = true;
++        }
++        if (auto t = obj.find("target_channel"); t != obj.end() && t->is_number_integer()) {
++            target_channel = t->get<int>();
++            saw_module_content = true;
++        }
++        if (auto m = obj.find("activity_channel"); m != obj.end() && m->is_number_integer()) {
++            activity_channel = m->get<int>();
+             saw_module_content = true;
+         }
+     }
+@@ -5607,48 +5644,290 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+     // freshly pushed-in lane. Those set no tracker and install no ack callback;
+     // the board's activity is the only Moonraker-visible signal they produce.
+     // Transitions are deliberately one-directional per frame (busy only from
+-    // IDLE, idle only from a busy the board itself reported): a polling "ready"
+-    // frame must never erase the HEATING a tracked op just published.
++    // IDLE or the board's own busy, idle only from a busy the board itself
++    // reported): a polling "ready" frame must never erase the HEATING a
++    // tracked op just published.
++    //
++    // Kiln OS's driver also names the operation, its phase and the slots it
++    // moves, so a swap the slicer, a macro or auto-refill started shows its
++    // steps like one of ours. Diff frames carry only what changed: the fields
++    // are merged, and a frame carrying none of them changes nothing.
+     bool action_changed = false;
+-    if (!activity.empty()) {
++    if (!activity.empty() || operation || phase || target_channel || activity_channel) {
+         std::lock_guard<std::mutex> lock(mutex_);
+-        const AmsAction before = system_info_.action;
++        if (!activity.empty()) {
++            kiln_step_.activity = activity;
++        }
++        if (error_field) {
++            kiln_step_.error = *error_field;
++        }
++        if (operation) {
++            kiln_step_.operation = *operation;
++        }
++        if (phase) {
++            kiln_step_.phase = *phase;
++        }
++        if (target_channel) {
++            kiln_step_.target_channel = *target_channel;
++        }
++        if (activity_channel) {
++            kiln_step_.activity_channel = *activity_channel;
++        }
++        action_changed = apply_kiln_step_locked();
++    }
++    if (action_changed) {
++        emit_event(EVENT_STATE_CHANGED);
++    }
++    return true;
++}
++
++namespace {
++
++/// An `activity` that moves something: an older driver's only busy signal.
++bool kiln_activity_busy(const std::string& activity) {
++    return activity == "loading" || activity == "unloading" || activity == "homing" ||
++           activity == "selecting";
++}
++
++/// 0-based slot of a 1-based driver channel, -1 for none.
++int kiln_channel_slot(int channel) {
++    return channel >= 1 && channel <= AmsBackendAd5xIfs::kNumPorts ? channel - 1 : -1;
++}
++
++} // namespace
++
++AmsBackendAd5xIfs::KilnStepView AmsBackendAd5xIfs::kiln_step_view(const std::string& operation,
++                                                                  const std::string& phase,
++                                                                  const std::string& activity) {
++    KilnStepView v;
++    if (operation.empty()) {
++        // An older driver, or no operation running: the activity alone, with
++        // no step (the sidebar guesses the operation as before).
+         if (activity == "loading") {
+-            if (!phase_tracker_.active && system_info_.action == AmsAction::IDLE) {
+-                system_info_.action = AmsAction::LOADING;
+-                action_start_time_ = std::chrono::steady_clock::now();
+-                set_operation_detail_locked("IFS: loading");
+-            }
++            v.action = AmsAction::LOADING;
+         } else if (activity == "unloading") {
+-            if (!phase_tracker_.active && system_info_.action == AmsAction::IDLE) {
+-                system_info_.action = AmsAction::UNLOADING;
++            v.action = AmsAction::UNLOADING;
++        } else if (activity == "homing" || activity == "selecting") {
++            v.action = AmsAction::SELECTING;
++        }
++        return v;
++    }
++
++    const bool unload = operation == "unload" || operation == "eject";
++    const bool load = operation == "load" || operation == "swap" || operation == "refill";
++    if (!unload && !load) {
++        // A lane-only move: nothing at the toolhead, so no Heat/Feed/Purge.
++        v.action = AmsAction::SELECTING;
++        return v;
++    }
++
++    // Indices are get_operation_step_model()'s: unload = Heat, Cut, Retract;
++    // load = Heat, Feed, Purge. A swap's heating is for its cut.
++    const StepOperationType load_op =
++        operation == "load" ? StepOperationType::LOAD_FRESH : StepOperationType::LOAD_SWAP;
++    const auto set = [&v](AmsAction action, StepOperationType op, int index) {
++        v.action = action;
++        v.op = op;
++        v.phase_index = index;
++    };
++    if (phase == "heating") {
++        set(AmsAction::HEATING, operation == "load" ? load_op : StepOperationType::UNLOAD, 0);
++    } else if (phase == "cutting") {
++        set(AmsAction::CUTTING, StepOperationType::UNLOAD, 1);
++    } else if (phase == "unloading") {
++        set(AmsAction::UNLOADING, StepOperationType::UNLOAD, 2);
++    } else if (unload) {
++        // Homing, selecting, a purge: still the retract end of the unload.
++        set(AmsAction::UNLOADING, StepOperationType::UNLOAD, phase.empty() ? -1 : 2);
++    } else if (phase == "homing" || phase == "selecting" || phase == "feeding") {
++        set(AmsAction::LOADING, load_op, 1);
++    } else if (phase == "purging" || phase == "priming") {
++        set(AmsAction::PURGING, load_op, 2);
++    } else {
++        set(activity == "unloading" ? AmsAction::UNLOADING : AmsAction::LOADING, load_op, -1);
++    }
++    return v;
++}
++
++std::optional<StepOperationType> AmsBackendAd5xIfs::running_step_operation() const {
++    std::lock_guard<std::mutex> lock(mutex_);
++    if (!kiln_owns_action_ || phase_tracker_.active) {
++        return std::nullopt;
++    }
++    return kiln_step_view(kiln_step_.operation.value_or(""), kiln_step_.phase, kiln_step_.activity)
++        .op;
++}
++
++std::string AmsBackendAd5xIfs::kiln_step_detail_locked() const {
++    const KilnIfsStep& s = kiln_step_;
++    const std::string op = s.operation.value_or("");
++    const int target = kiln_channel_slot(s.target_channel);
++    const int moving = kiln_channel_slot(s.activity_channel);
++    const auto lane = [this](int slot) { return helix::ui::lane_label(lane_noun(), slot); };
++    // The slot the operation is about: where it heads, else the one moving.
++    const int slot = target >= 0 ? target : moving;
++    // The same slot for an unload or a lane move: the one moving, else the target.
++    const int own = moving >= 0 ? moving : target;
++
++    std::string what;
++    if (op == "swap") {
++        what = slot >= 0 ? fmt::format(lv_tr("Swap to {}"), lane(slot)) : lv_tr("Swapping filament");
++    } else if (op == "refill") {
++        what = slot >= 0 ? fmt::format(lv_tr("Auto-refill to {}"), lane(slot))
++                         : lv_tr("Auto-refill");
++    } else if (op == "load") {
++        what = slot >= 0 ? fmt::format(lv_tr("Loading {}"), lane(slot)) : lv_tr("Loading filament");
++    } else if (op == "unload") {
++        what = own >= 0 ? fmt::format(lv_tr("Unloading {}"), lane(own))
++                        : lv_tr("Unloading filament");
++    } else if (op == "eject") {
++        what = own >= 0 ? fmt::format(lv_tr("Ejecting {}"), lane(own)) : lv_tr("Ejecting filament");
++    } else if (op == "prefeed") {
++        what = own >= 0 ? fmt::format(lv_tr("Pre-feeding {}"), lane(own))
++                        : lv_tr("Pre-feeding filament");
++    } else if (op == "feed") {
++        what = own >= 0 ? fmt::format(lv_tr("Feeding {}"), lane(own)) : lv_tr("Feeding filament");
++    } else if (op == "retract") {
++        what = own >= 0 ? fmt::format(lv_tr("Retracting {}"), lane(own))
++                        : lv_tr("Retracting filament");
++    } else if (op == "select") {
++        what = slot >= 0 ? fmt::format(lv_tr("Selecting {}"), lane(slot)) : lv_tr("Selecting a slot");
++    } else if (op == "tune") {
++        what = own >= 0 ? fmt::format(lv_tr("Tuning {}"), lane(own)) : lv_tr("Tuning the IFS");
++    } else if (s.activity == "loading") {
++        what = lv_tr("Loading filament");
++    } else if (s.activity == "unloading") {
++        what = lv_tr("Unloading filament");
++    } else if (s.activity == "homing") {
++        what = lv_tr("Homing the IFS");
++    } else if (s.activity == "selecting") {
++        what = own >= 0 ? fmt::format(lv_tr("Selecting {}"), lane(own)) : lv_tr("Selecting a slot");
++    }
++    if (op.empty()) {
++        return what; // an older driver names no phase
++    }
++
++    std::string step;
++    if (s.phase == "heating") {
++        const int target_deci = last_extruder_target_deci_;
++        const int temp_deci = last_extruder_temp_deci_;
++        if (target_deci > 0 && temp_deci > 0) {
++            step = fmt::format(lv_tr("Heating nozzle to {}°C ({}°C)"),
++                               helix::ui::temperature::deci_to_degrees(target_deci),
++                               helix::ui::temperature::deci_to_degrees(temp_deci));
++        } else if (target_deci > 0) {
++            step = fmt::format(lv_tr("Heating nozzle to {}°C"),
++                               helix::ui::temperature::deci_to_degrees(target_deci));
++        } else {
++            step = lv_tr("Heating nozzle");
++        }
++    } else if (s.phase == "cutting") {
++        step = lv_tr("Cutting filament");
++    } else if (s.phase == "unloading") {
++        step = lv_tr("Retracting filament");
++    } else if (s.phase == "homing") {
++        step = lv_tr("Homing the IFS");
++    } else if (s.phase == "selecting") {
++        step = lv_tr("Selecting the slot");
++    } else if (s.phase == "feeding") {
++        step = lv_tr("Feeding filament");
++    } else if (s.phase == "purging") {
++        step = lv_tr("Purging");
++    } else if (s.phase == "priming") {
++        step = lv_tr("Priming the nozzle");
++    }
++    if (what.empty() || step.empty()) {
++        return what.empty() ? step : what;
++    }
++    return what + " · " + step;
++}
++
++bool AmsBackendAd5xIfs::apply_kiln_step_locked() {
++    const AmsAction action_before = system_info_.action;
++    const std::string detail_before = system_info_.operation_detail;
++    const int phase_before = system_info_.operation_phase;
++    const int target_before = system_info_.pending_target_slot;
++    const int working_before = system_info_.operation_working_slot;
++
++    const KilnIfsStep& s = kiln_step_;
++    const std::string operation = s.operation.value_or("");
++    const bool busy = !operation.empty() || kiln_activity_busy(s.activity);
++    // An older driver idles on "ready" / "polling"; clamped and unclamping are
++    // sub-second states inside a load or unload, and guessing a direction from
++    // them would be wrong. With `operation` published, "" is idle.
++    const bool idle = !busy && (s.operation.has_value() || s.activity == "ready" ||
++                                s.activity == "polling");
++
++    if (s.activity == "driver_error") {
++        // The board's stepper driver faulted. Report it unless a fault with
++        // richer state (the runout detector) already holds ERROR - and never
++        // clear it from here; the module's IFS_RESET_DRIVER recovery path owns
++        // that.
++        if (system_info_.action != AmsAction::ERROR && !runout_active_) {
++            system_info_.action = AmsAction::ERROR;
++            set_operation_detail_locked(s.error.empty() ? lv_tr("IFS driver error") : s.error);
++        }
++        if (kiln_owns_action_) {
++            system_info_.operation_phase = -1;
++            kiln_owns_action_ = false;
++        }
++    } else if (busy) {
++        const int target = kiln_channel_slot(s.target_channel);
++        const int moving = kiln_channel_slot(s.activity_channel);
++        // The slots pulse while busy: the one the operation heads for, else
++        // the one moving. The header names the one moving.
++        system_info_.pending_target_slot = target >= 0 ? target : moving;
++        system_info_.operation_working_slot = moving >= 0 ? moving : target;
++
++        // A runout raised on a paused print that the driver now handles (an
++        // auto-refill, a swap from the console): the swap is the recovery.
++        if (runout_active_ && !operation.empty()) {
++            clear_runout_locked("the IFS driver is changing the filament");
++        }
++        // Our own ops keep the phase tracker's steps. An op that set an
++        // action without the tracker (do_change_tool's T<n>) is the driver's
++        // to describe.
++        const bool may_take =
++            !phase_tracker_.active &&
++            (kiln_owns_action_ || system_info_.action == AmsAction::IDLE ||
++             system_info_.action == AmsAction::LOADING ||
++             system_info_.action == AmsAction::UNLOADING);
++        if (may_take) {
++            const KilnStepView view = kiln_step_view(operation, s.phase, s.activity);
++            if (view.action != system_info_.action ||
++                view.phase_index != system_info_.operation_phase) {
+                 action_start_time_ = std::chrono::steady_clock::now();
+-                set_operation_detail_locked("IFS: unloading");
+-            }
+-        } else if (activity == "ready" || activity == "polling") {
+-            if (!phase_tracker_.active && (system_info_.action == AmsAction::LOADING ||
+-                                           system_info_.action == AmsAction::UNLOADING)) {
+-                system_info_.action = AmsAction::IDLE;
+-                set_operation_detail_locked("");
+             }
+-        } else if (activity == "driver_error") {
+-            // The board's stepper driver faulted. Report it unless a fault with
+-            // richer state (the runout detector) already holds ERROR - and
+-            // never clear it from here; the module's IFS_RESET_DRIVER recovery
+-            // path owns that.
+-            if (system_info_.action != AmsAction::ERROR && !runout_active_) {
+-                system_info_.action = AmsAction::ERROR;
+-                set_operation_detail_locked(error_text.empty() ? "IFS driver error" : error_text);
++            system_info_.action = view.action;
++            system_info_.operation_phase = view.phase_index;
++            set_operation_detail_locked(kiln_step_detail_locked());
++            kiln_owns_action_ = true;
++        }
++    } else if (idle) {
++        system_info_.pending_target_slot = -1;
++        system_info_.operation_working_slot = -1;
++        if (!phase_tracker_.active &&
++            (kiln_owns_action_ || system_info_.action == AmsAction::LOADING ||
++             system_info_.action == AmsAction::UNLOADING)) {
++            // An operation of the driver's ended with the print paused and the
++            // toolhead empty (a refill or swap that did not load): that is the
++            // runout the detector reports, armed now because the head went
++            // empty while the operation still ran.
++            if (kiln_owns_action_ && head_switch_seen_ && !head_switch_present_ &&
++                print_is_paused() && !runout_active_) {
++                head_empty_since_ = std::chrono::steady_clock::now();
+             }
++            system_info_.action = AmsAction::IDLE;
++            system_info_.operation_phase = -1;
++            set_operation_detail_locked("");
+         }
+-        // clamped / unclamping are sub-second transitional states of a load or
+-        // unload already covered above; mapping them would guess a direction.
+-        action_changed = system_info_.action != before;
++        kiln_owns_action_ = false;
+     }
+-    if (action_changed) {
+-        emit_event(EVENT_STATE_CHANGED);
+-    }
+-    return true;
++
++    return system_info_.action != action_before || system_info_.operation_detail != detail_before ||
++           system_info_.operation_phase != phase_before ||
++           system_info_.pending_target_slot != target_before ||
++           system_info_.operation_working_slot != working_before;
+ }
+ 
+ void AmsBackendAd5xIfs::apply_zcolor_result(const ZColorSilentResult& result) {
+@@ -6614,6 +6893,8 @@ void AmsBackendAd5xIfs::begin_phase_tracking_locked(bool is_unload) {
+     phase_tracker_ = IfsPhaseTracker{};
+     phase_tracker_.active = true;
+     phase_tracker_.is_unload = is_unload;
++    // Our op owns the action now, not the Kiln driver's report.
++    kiln_owns_action_ = false;
+     // Seed the indeterminate detector: op just started, so the no-progress clock
+     // starts now and the last-progress temp baseline is cleared so the first real
+     // extruder frame counts as a value change (#1065 row 14).
+@@ -6636,6 +6917,16 @@ void AmsBackendAd5xIfs::on_klipper_restarted() {
+             end_phase_tracking_locked();
+         }
+         system_info_.operation_indeterminate = false;
++        // The driver's operation ended with Klipper; the next frames say anew.
++        if (kiln_owns_action_) {
++            system_info_.action = AmsAction::IDLE;
++            system_info_.operation_phase = -1;
++            set_operation_detail_locked("");
++            kiln_owns_action_ = false;
++        }
++        kiln_step_ = KilnIfsStep{};
++        system_info_.pending_target_slot = -1;
++        system_info_.operation_working_slot = -1;
+     }
+     AmsSubscriptionBackend::on_klipper_restarted();
+ }
+@@ -6833,6 +7124,11 @@ void AmsBackendAd5xIfs::detect_load_unload_completion(bool head_detected) {
+     if (phase_tracker_.active) {
+         return;
+     }
++    // The Kiln driver's own operation: a swap drops the head sensor halfway,
++    // and the driver reports the end itself.
++    if (kiln_owns_action_) {
++        return;
++    }
+ 
+     // Legacy / external / firmware-initiated path: a head transition completes
+     // the operation directly. Preserved exactly for backward compatibility.
+@@ -7280,6 +7576,12 @@ void AmsBackendAd5xIfs::check_action_timeout() {
+         }
+     }
+ 
++    // The Kiln driver reports its own operation's end and errors; a long
++    // tune or swap is not a stuck one.
++    if (kiln_owns_action_) {
++        return;
++    }
++
+     const AmsAction a = system_info_.action;
+     // Cover every non-idle operation phase: the legacy LOADING/UNLOADING plus
+     // the synthesized HEATING/CUTTING/PURGING the phase tracker drives. Without
+diff --git a/tests/test_helpers/ad5x_ifs_test_access.h b/tests/test_helpers/ad5x_ifs_test_access.h
+index 91c1e9f..b4c7129 100644
+--- a/tests/test_helpers/ad5x_ifs_test_access.h
++++ b/tests/test_helpers/ad5x_ifs_test_access.h
+@@ -118,6 +118,15 @@ class Ad5xIfsTestAccess {
+         b.system_info_.action = a;
+         b.action_start_time_ = std::chrono::steady_clock::now();
+     }
++    // Start the phase tracker the way do_load_filament() / do_unload_filament()
++    // do, without dispatching a macro.
++    static void begin_phase_tracking(AmsBackendAd5xIfs& b, bool is_unload) {
++        std::lock_guard<std::mutex> lock(b.mutex_);
++        b.system_info_.action = AmsAction::HEATING;
++        b.action_start_time_ = std::chrono::steady_clock::now();
++        b.begin_phase_tracking_locked(is_unload);
++        b.apply_phase_action_locked();
++    }
+     // Flip running_ so check_preconditions() passes without a live Moonraker
+     // connection (mirrors TestableAfcBackend::set_running). Required by any test
+     // exercising a public action method (load/unload/eject) that runs the
+diff --git a/tests/unit/test_ams_ad5x_kiln_ifs.cpp b/tests/unit/test_ams_ad5x_kiln_ifs.cpp
+new file mode 100644
+index 0000000..177bdca
+--- /dev/null
++++ b/tests/unit/test_ams_ad5x_kiln_ifs.cpp
+@@ -0,0 +1,294 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//
++// Kiln OS's IFS driver (klipper/extras/ifs.py) publishes the standalone
++// module's `ifs` object plus what it is doing: `operation`, `phase`,
++// `target_channel` and `activity_channel`. These tests pin how the AD5X
++// backend shows that, and that an older driver without the fields keeps the
++// plain `activity` mapping.
++
++#include "../lvgl_test_fixture.h"
++#include "../test_helpers/print_state_test_drivers.h"
++#include "ams_backend_ad5x_ifs.h"
++#include "ams_types.h"
++#include "app_globals.h"
++#include "printer_state.h"
++#include "test_helpers/ad5x_ifs_test_access.h"
++
++#include <chrono>
++#include <string>
++#include <vector>
++
++#include "../catch_amalgamated.hpp"
++
++using helix::Ad5xIfsTestAccess;
++using helix::AmsAction;
++using helix::AmsBackendAd5xIfs;
++using helix::StepOperationType;
++
++using json = nlohmann::json;
++
++namespace {
++
++/// An idle Kiln `ifs` frame: lanes 1 and 3 hold filament, lane 1 is loaded.
++json kiln_idle_frame() {
++    return json{{"ifs",
++                 {{"connected", true},
++                  {"error", nullptr},
++                  {"activity", "ready"},
++                  {"activity_channel", 0},
++                  {"active_channel", 1},
++                  {"loaded_channels", {1, 3}},
++                  {"operation", ""},
++                  {"phase", ""},
++                  {"target_channel", 0}}}};
++}
++
++/// A diff frame: only the step fields.
++json kiln_step(const char* operation, const char* phase, int target, int moving,
++               const char* activity = "loading") {
++    return json{{"ifs",
++                 {{"operation", operation},
++                  {"phase", phase},
++                  {"target_channel", target},
++                  {"activity_channel", moving},
++                  {"activity", activity}}}};
++}
++
++} // namespace
++
++TEST_CASE("AD5X IFS maps Kiln's operation and phase onto steps", "[ams][ad5x_ifs][kiln_ifs]") {
++    using V = AmsBackendAd5xIfs;
++
++    SECTION("an unload heats, cuts and retracts") {
++        auto v = V::kiln_step_view("unload", "heating", "unloading");
++        CHECK(v.action == AmsAction::HEATING);
++        CHECK(v.phase_index == 0);
++        CHECK(v.op == StepOperationType::UNLOAD);
++        v = V::kiln_step_view("unload", "cutting", "unloading");
++        CHECK(v.action == AmsAction::CUTTING);
++        CHECK(v.phase_index == 1);
++        v = V::kiln_step_view("unload", "unloading", "unloading");
++        CHECK(v.action == AmsAction::UNLOADING);
++        CHECK(v.phase_index == 2);
++    }
++    SECTION("a swap shows the unload steps, then the load steps") {
++        auto v = V::kiln_step_view("swap", "heating", "loading");
++        CHECK(v.op == StepOperationType::UNLOAD);
++        CHECK(v.phase_index == 0);
++        v = V::kiln_step_view("swap", "unloading", "unloading");
++        CHECK(v.op == StepOperationType::UNLOAD);
++        CHECK(v.phase_index == 2);
++        v = V::kiln_step_view("swap", "selecting", "selecting");
++        CHECK(v.action == AmsAction::LOADING);
++        CHECK(v.op == StepOperationType::LOAD_SWAP);
++        CHECK(v.phase_index == 1);
++        v = V::kiln_step_view("refill", "feeding", "loading");
++        CHECK(v.op == StepOperationType::LOAD_SWAP);
++        CHECK(v.phase_index == 1);
++        v = V::kiln_step_view("swap", "priming", "loading");
++        CHECK(v.action == AmsAction::PURGING);
++        CHECK(v.phase_index == 2);
++    }
++    SECTION("a load into an empty toolhead heats, feeds and purges") {
++        auto v = V::kiln_step_view("load", "heating", "loading");
++        CHECK(v.op == StepOperationType::LOAD_FRESH);
++        CHECK(v.phase_index == 0);
++        v = V::kiln_step_view("load", "purging", "loading");
++        CHECK(v.action == AmsAction::PURGING);
++        CHECK(v.op == StepOperationType::LOAD_FRESH);
++    }
++    SECTION("a lane-only move has no toolhead steps") {
++        for (const char* op : {"prefeed", "feed", "retract", "select", "tune"}) {
++            auto v = V::kiln_step_view(op, "feeding", "loading");
++            CHECK(v.action == AmsAction::SELECTING);
++            CHECK(v.phase_index == -1);
++            CHECK_FALSE(v.op.has_value());
++        }
++    }
++    SECTION("no operation: the activity alone") {
++        CHECK(V::kiln_step_view("", "", "loading").action == AmsAction::LOADING);
++        CHECK(V::kiln_step_view("", "", "unloading").action == AmsAction::UNLOADING);
++        CHECK(V::kiln_step_view("", "", "homing").action == AmsAction::SELECTING);
++        CHECK(V::kiln_step_view("", "", "ready").action == AmsAction::IDLE);
++        CHECK_FALSE(V::kiln_step_view("", "", "loading").op.has_value());
++    }
++}
++
++TEST_CASE("AD5X IFS shows a swap Kiln's driver runs", "[ams][ad5x_ifs][kiln_ifs]") {
++    AmsBackendAd5xIfs backend(nullptr, nullptr);
++    Ad5xIfsTestAccess::handle_status(backend, kiln_idle_frame());
++    REQUIRE(Ad5xIfsTestAccess::module_live(backend));
++    REQUIRE(Ad5xIfsTestAccess::action(backend) == AmsAction::IDLE);
++
++    // A slicer's T2 mid-print: slot 1 to slot 3, cutting slot 1 first.
++    Ad5xIfsTestAccess::handle_status(backend, kiln_step("swap", "cutting", 3, 1, "unloading"));
++    auto info = backend.get_system_info();
++    CHECK(info.action == AmsAction::CUTTING);
++    CHECK(info.operation_phase == 1);
++    CHECK(info.pending_target_slot == 2);
++    CHECK(info.operation_working_slot == 0);
++    CHECK(info.operation_detail.find("3") != std::string::npos);
++    CHECK(info.operation_detail.find("Cutting filament") != std::string::npos);
++    CHECK(backend.running_step_operation() == StepOperationType::UNLOAD);
++
++    // Feeding slot 3: the load half.
++    Ad5xIfsTestAccess::handle_status(backend, kiln_step("swap", "feeding", 3, 3));
++    info = backend.get_system_info();
++    CHECK(info.action == AmsAction::LOADING);
++    CHECK(info.operation_phase == 1);
++    CHECK(info.operation_working_slot == 2);
++    CHECK(backend.running_step_operation() == StepOperationType::LOAD_SWAP);
++
++    // A long phase is not a stuck one: the driver reports its own end.
++    Ad5xIfsTestAccess::check_action_timeout(backend, std::chrono::seconds(600));
++    CHECK(Ad5xIfsTestAccess::action(backend) == AmsAction::LOADING);
++
++    // Done: a diff frame carrying only the cleared operation.
++    Ad5xIfsTestAccess::handle_status(
++        backend, json{{"ifs", {{"operation", ""}, {"phase", ""}, {"target_channel", 0},
++                               {"activity_channel", 0}, {"activity", "ready"}}}});
++    info = backend.get_system_info();
++    CHECK(info.action == AmsAction::IDLE);
++    CHECK(info.operation_phase == -1);
++    CHECK(info.pending_target_slot == -1);
++    CHECK(info.operation_working_slot == -1);
++    CHECK(info.operation_detail.empty());
++    CHECK_FALSE(backend.running_step_operation().has_value());
++}
++
++TEST_CASE("AD5X IFS keeps a Kiln operation busy between its moves", "[ams][ad5x_ifs][kiln_ifs]") {
++    AmsBackendAd5xIfs backend(nullptr, nullptr);
++    Ad5xIfsTestAccess::handle_status(backend, kiln_idle_frame());
++
++    // An auto-refill whose board pauses between the unload and the load: the
++    // activity reads "ready", the operation still runs. The runout detector
++    // reads any non-IDLE action as an operation in flight.
++    Ad5xIfsTestAccess::handle_status(backend, kiln_step("refill", "unloading", 3, 1, "unloading"));
++    Ad5xIfsTestAccess::handle_status(backend, json{{"ifs", {{"activity", "ready"}}}});
++    CHECK(Ad5xIfsTestAccess::action(backend) == AmsAction::UNLOADING);
++    CHECK(backend.get_system_info().operation_detail.find("Auto-refill") != std::string::npos);
++}
++
++TEST_CASE("AD5X IFS shows a Kiln pre-feed as a lane move", "[ams][ad5x_ifs][kiln_ifs]") {
++    AmsBackendAd5xIfs backend(nullptr, nullptr);
++    Ad5xIfsTestAccess::handle_status(backend, kiln_idle_frame());
++
++    Ad5xIfsTestAccess::handle_status(backend, kiln_step("prefeed", "feeding", 0, 3));
++    const auto info = backend.get_system_info();
++    CHECK(info.action == AmsAction::SELECTING);
++    CHECK(info.operation_phase == -1);
++    // Slot 3 pulses although slot 1 is the one loaded.
++    CHECK(info.pending_target_slot == 2);
++    CHECK(info.operation_detail.find("Pre-feeding") != std::string::npos);
++    CHECK_FALSE(backend.running_step_operation().has_value());
++}
++
++TEST_CASE("AD5X IFS without Kiln's step fields keeps the activity mapping",
++          "[ams][ad5x_ifs][kiln_ifs]") {
++    AmsBackendAd5xIfs backend(nullptr, nullptr);
++    // An older driver: no operation / phase / target_channel.
++    Ad5xIfsTestAccess::handle_status(
++        backend, json{{"ifs", {{"activity", "loading"}, {"active_channel", 0},
++                               {"loaded_channels", json::array()}}}});
++    auto info = backend.get_system_info();
++    CHECK(info.action == AmsAction::LOADING);
++    CHECK(info.operation_phase == -1);
++    CHECK(info.operation_detail == "Loading filament");
++    CHECK_FALSE(backend.running_step_operation().has_value());
++
++    // clamped is a moment inside the load: no change.
++    Ad5xIfsTestAccess::handle_status(backend, json{{"ifs", {{"activity", "clamped"}}}});
++    CHECK(Ad5xIfsTestAccess::action(backend) == AmsAction::LOADING);
++
++    Ad5xIfsTestAccess::handle_status(backend, json{{"ifs", {{"activity", "ready"}}}});
++    CHECK(Ad5xIfsTestAccess::action(backend) == AmsAction::IDLE);
++    CHECK(backend.get_system_info().operation_detail.empty());
++}
++
++TEST_CASE("AD5X IFS leaves our own load's steps to the phase tracker",
++          "[ams][ad5x_ifs][kiln_ifs]") {
++    AmsBackendAd5xIfs backend(nullptr, nullptr);
++    Ad5xIfsTestAccess::handle_status(backend, kiln_idle_frame());
++    // The tracker's first phase, as do_load_filament() leaves it.
++    Ad5xIfsTestAccess::begin_phase_tracking(backend, /*is_unload=*/false);
++    REQUIRE(Ad5xIfsTestAccess::action(backend) == AmsAction::HEATING);
++
++    Ad5xIfsTestAccess::handle_status(backend, kiln_step("load", "purging", 3, 3));
++    const auto info = backend.get_system_info();
++    CHECK(info.action == AmsAction::HEATING);
++    // The slots still follow the driver.
++    CHECK(info.pending_target_slot == 2);
++    CHECK_FALSE(backend.running_step_operation().has_value());
++}
++
++namespace {
++
++/// LVGL plus the global PrinterState the runout detector reads.
++struct KilnRunoutFixture : public LVGLTestFixture {
++    KilnRunoutFixture() {
++        get_printer_state().init_subjects(false);
++        set_print_state(helix::PrintJobState::STANDBY);
++    }
++    ~KilnRunoutFixture() override {
++        set_print_state(helix::PrintJobState::STANDBY);
++    }
++    static void set_print_state(helix::PrintJobState s) {
++        if (get_printer_state().print_state().get_print_state_enum_subject()) {
++            helix::test::set_wire_state(get_printer_state(), s);
++        }
++    }
++    static json head(bool detected) {
++        return json{{"filament_switch_sensor toolhead", {{"filament_detected", detected}}}};
++    }
++};
++
++} // namespace
++
++TEST_CASE_METHOD(KilnRunoutFixture, "AD5X IFS holds the runout check while Kiln refills",
++                 "[ams][ad5x_ifs][kiln_ifs][runout]") {
++    AmsBackendAd5xIfs backend(nullptr, nullptr);
++    Ad5xIfsTestAccess::set_zcolor_supported(backend, false);
++    Ad5xIfsTestAccess::handle_status(backend, kiln_idle_frame());
++    Ad5xIfsTestAccess::handle_status(backend, head(true));
++    set_print_state(helix::PrintJobState::PAUSED);
++
++    // The refill cuts the spent strand: the head empties while it runs.
++    Ad5xIfsTestAccess::handle_status(backend, kiln_step("refill", "unloading", 3, 1, "unloading"));
++    Ad5xIfsTestAccess::handle_status(backend, head(false));
++    CHECK_FALSE(Ad5xIfsTestAccess::head_empty_armed(backend));
++    CHECK_FALSE(Ad5xIfsTestAccess::evaluate_runout(backend));
++
++    SECTION("a refill that loads the backup raises nothing") {
++        Ad5xIfsTestAccess::handle_status(backend, head(true));
++        Ad5xIfsTestAccess::handle_status(backend, kiln_idle_frame());
++        CHECK(Ad5xIfsTestAccess::action(backend) == AmsAction::IDLE);
++        CHECK_FALSE(Ad5xIfsTestAccess::head_empty_armed(backend));
++    }
++    SECTION("a refill that ends with the head empty arms the check") {
++        Ad5xIfsTestAccess::handle_status(backend, kiln_idle_frame());
++        CHECK(Ad5xIfsTestAccess::action(backend) == AmsAction::IDLE);
++        REQUIRE(Ad5xIfsTestAccess::head_empty_armed(backend));
++        Ad5xIfsTestAccess::age_head_empty(backend, std::chrono::seconds(600));
++        Ad5xIfsTestAccess::age_op_dispatch(backend, std::chrono::seconds(600));
++        CHECK(Ad5xIfsTestAccess::evaluate_runout(backend));
++        CHECK(Ad5xIfsTestAccess::runout_active(backend));
++    }
++}
++
++TEST_CASE_METHOD(KilnRunoutFixture, "AD5X IFS drops a raised runout when Kiln starts a refill",
++                 "[ams][ad5x_ifs][kiln_ifs][runout]") {
++    AmsBackendAd5xIfs backend(nullptr, nullptr);
++    Ad5xIfsTestAccess::set_zcolor_supported(backend, false);
++    Ad5xIfsTestAccess::handle_status(backend, kiln_idle_frame());
++    Ad5xIfsTestAccess::handle_status(backend, head(true));
++    set_print_state(helix::PrintJobState::PAUSED);
++    Ad5xIfsTestAccess::handle_status(backend, head(false));
++    Ad5xIfsTestAccess::age_head_empty(backend, std::chrono::seconds(600));
++    Ad5xIfsTestAccess::age_op_dispatch(backend, std::chrono::seconds(600));
++    REQUIRE(Ad5xIfsTestAccess::evaluate_runout(backend));
++    REQUIRE(Ad5xIfsTestAccess::action(backend) == AmsAction::ERROR);
++
++    Ad5xIfsTestAccess::handle_status(backend, kiln_step("refill", "heating", 3, 1, "ready"));
++    CHECK_FALSE(Ad5xIfsTestAccess::runout_active(backend));
++    CHECK(Ad5xIfsTestAccess::action(backend) == AmsAction::HEATING);
++}

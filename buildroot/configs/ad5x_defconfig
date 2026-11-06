@@ -16,6 +16,8 @@ BR2_TOOLCHAIN_BUILDROOT_CXX=y
 BR2_KERNEL_HEADERS_5_10=y
 
 BR2_DL_DIR="$(BR2_EXTERNAL_AD5X_PATH)/dl"
+# Fixes to Buildroot's own packages: board/ad5x/patches/<package>/
+BR2_GLOBAL_PATCH_DIR="$(BR2_EXTERNAL_AD5X_PATH)/board/ad5x/patches"
 
 # System. The stock kernel has no cgroups, so no systemd: BusyBox init and
 # mdev, like stock.

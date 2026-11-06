@@ -48,6 +48,15 @@ WHOLE_BOARD_ACTIVITY = {1: "selecting", 3: "polling", STATE_READY: "ready",
                         STATE_HOMING: "homing", STATE_FAULT: "driver_error"}
 CHANNEL_ACTIVITY = {7: "clamped", 10: "loading", 11: "loading",
                     12: "unclamping", 14: "unloading", 15: "unloading"}
+# Host-tracked progress (printer.ifs operation, phase): the command that
+# runs and the step of its choreography. activity/activity_channel come from
+# the step too while the board itself reads ready (MCU mode always does).
+# IFS_RELEASE counts as "select"; an auto-refill's pre-feed and swap as
+# "refill".
+OPERATIONS = ("load", "unload", "swap", "eject", "prefeed", "refill", "tune",
+              "select", "feed", "retract")
+PHASES = ("heating", "cutting", "unloading", "homing", "selecting", "feeding",
+          "purging", "priming")
 
 # Nozzle temperature to move each material at (handling, not printing),
 # as FX's ifs_materials.py uses. Override or add with temp_<type> in [ifs].
@@ -90,7 +99,12 @@ TUNE_VARS = ("ifs_speed", "ifs_unload_dist", "ifs_tube_unload",
     "ifs_load_dist_%d" % (c,) for c in CHANNELS)
 
 class IfsError(Exception):
-    pass
+    """fault: a motor, homing or feed failure (printer.ifs.activity reads
+    driver_error until a reset or the next success). False for a refusal
+    before anything moved, a link failure or IFS_STOP."""
+    def __init__(self, msg, fault=True):
+        Exception.__init__(self, msg)
+        self.fault = fault
 
 def decode_activity(state):
     """FFS_state -> (activity name, channel or 0); (None, None) if unknown."""
@@ -206,6 +220,15 @@ class IFS:
         # spool went in since (the stock firmware's ffs_channels_insert)
         self.mcu_present = None
         self.mcu_inserted = 0
+        # MCU mode: slot the selector points at (printer.ifs.active_channel),
+        # 0 = unknown (not homed since start or since a reset)
+        self.mcu_selected = 0
+        # MCU mode: seconds between reads of the inlet sensors for slot
+        # presence (they report about every 0.3 s; read also while an
+        # operation runs). Pre-feed, refill and adopt keep status_interval.
+        self.presence_interval = config.getfloat('presence_interval', .25,
+                                                 above=0.)
+        self.presence_timer = None
         self.feeder_name = config.get('feeder_stepper', 'ifs_feeder')
         self.selector_name = config.get('selector_stepper', 'ifs_selector')
         self.selector_channel_dist = config.getfloat('selector_channel_dist', 10.24, above=0.)
@@ -392,6 +415,15 @@ class IFS:
         self.busy = False
         self.is_ready = False     # klippy:ready seen (MCU mode pre-feeds after it)
         self.error = None         # last failure, for printer.ifs.error
+        self.error_channel = 0    # slot it concerns, 0 = none or unknown
+        self.driver_fault = False  # a motor fault: activity driver_error
+        # Host-tracked progress (OPERATIONS, PHASES): set by _run and the
+        # steps, cleared when the operation ends
+        self.operation = ""
+        self.phase = ""
+        self.step_activity = None   # activity of the step running now
+        self.step_channel = 0       # slot that step moves, 0 none
+        self.target_channel = 0
         self.stop_requested = False
         self.print_state = None
         # Startup check for a lane loaded before Kiln (see _adopt_loaded)
@@ -408,6 +440,7 @@ class IFS:
         self.tune_unloaded = 0        # lane the last IFS_TUNE cut out of the head
         self.tune_message = ""
         self.last_feed = 0.           # mm fed by the last measured feed
+        self.mcu_stop_at = None       # MCU: mm moved when the stop fired
         # Events and commands
         self.printer.register_event_handler("klippy:connect",
                                             self._handle_connect)
@@ -468,6 +501,10 @@ class IFS:
         if self.status_interval and self.status_timer is None:
             self.status_timer = self.reactor.register_timer(
                 self._status_event, self.reactor.NOW)
+        if (self.is_mcu_mode and self.status_interval
+                and self.presence_timer is None):
+            self.presence_timer = self.reactor.register_timer(
+                self._presence_event, self.reactor.NOW)
     def _schedule_reconnect(self):
         if self.retry_timer is None:
             self.retry_timer = self.reactor.register_timer(
@@ -575,6 +612,9 @@ class IFS:
         if self.status_timer is not None:
             self.reactor.unregister_timer(self.status_timer)
             self.status_timer = None
+        if self.presence_timer is not None:
+            self.reactor.unregister_timer(self.presence_timer)
+            self.presence_timer = None
         if self.fd_handle is not None:
             self.reactor.unregister_fd(self.fd_handle)
             self.fd_handle = None
@@ -604,13 +644,13 @@ class IFS:
             ev.complete(True)
     def _write(self, cmd):
         if self.fd is None:
-            raise IfsError("IFS not connected")
+            raise IfsError("IFS not connected", fault=False)
         logging.debug("ifs: -> %s", cmd)
         try:
             os.write(self.fd, (cmd + "\r\n").encode("ascii"))
         except OSError as e:
             self._drop_link(e)
-            raise IfsError("write failed: %s" % (e,))
+            raise IfsError("write failed: %s" % (e,), fault=False)
     def _request(self, cmd):
         """Send one command and return its reply (caller holds the mutex).
 
@@ -643,7 +683,7 @@ class IFS:
                     logging.debug("ifs: <- %s", reply)
                     return reply
             if self.reactor.monotonic() >= end:
-                raise IfsError("no reply to %s" % (cmd,))
+                raise IfsError("no reply to %s" % (cmd,), fault=False)
             self.rx_event = self.reactor.completion()
             self.rx_event.wait(end)
             self.rx_event = None
@@ -689,7 +729,8 @@ class IFS:
         st = {
             'FFS_state': STATE_READY,
             'silk_state': silk_mask,
-            'chan': self.channel,
+            # Where the selector points; not homed yet: the loaded slot
+            'chan': self.mcu_selected or self.channel,
             'ffs_channels_insert': self.mcu_inserted,
             'stall_state': 0,
         }
@@ -700,9 +741,16 @@ class IFS:
             return self._query_status_mcu()
         st = parse_fields(self._request("F13"))
         if 'FFS_state' not in st:
-            raise IfsError("bad F13 reply")
+            raise IfsError("bad F13 reply", fault=False)
         self.last_status = st
         return st
+    def _presence_event(self, eventtime):
+        # MCU mode: the inlet sensors are local objects, so slot presence
+        # (loaded_channels, silk, pending_insert_channels) follows them
+        # within about half a second, also while an operation runs. No link
+        # and no G-code: safe from a timer at any time.
+        self._query_status_mcu()
+        return eventtime + self.presence_interval
     def _status_event(self, eventtime):
         if not self.busy and not self.mutex.test():
             with self.mutex:
@@ -815,23 +863,37 @@ class IFS:
             return      # a command runs: the flags stay, the next poll tries
         with gcode_mutex:
             self._prefeed_channels(chans)
+    def _runout_off(self):
+        """MCU mode: the feeder moves are toolhead moves, so idle_timeout
+        says "Printing" and a strand leaving the toolhead sensor outside a
+        swap (a pre-feed's back off, a tuning park) paused the idle printer
+        as a runout (2026-11-05). Switches the toolhead runout off; returns
+        the function that puts it back on, or None if nothing changed."""
+        if not self.is_mcu_mode:
+            return None
+        sensor = self.printer.lookup_object(
+            'filament_switch_sensor toolhead', None)
+        runout = getattr(sensor, 'runout_helper', None)
+        if runout is None or not runout.sensor_enabled:
+            return None
+        runout.sensor_enabled = False
+        def restore():
+            # Back on once the sensor has polled the empty toolhead and
+            # idle_timeout has seen the moves end
+            def runout_on(eventtime):
+                runout.sensor_enabled = True
+            self.reactor.register_callback(
+                runout_on, self.reactor.monotonic() + RUNOUT_SETTLE_TIME)
+        return restore
     def _prefeed_channels(self, chans):
         self.busy = True
         self.stop_requested = False
-        # MCU mode: the feeder moves are toolhead moves, so idle_timeout says
-        # "Printing" and the back off (the toolhead sensor goes empty) paused
-        # the idle printer as a runout (2026-11-05). Runout off meanwhile.
-        runout = None
-        if self.is_mcu_mode:
-            sensor = self.printer.lookup_object(
-                'filament_switch_sensor toolhead', None)
-            runout = getattr(sensor, 'runout_helper', None)
-        was_on = runout is not None and runout.sensor_enabled
-        if was_on:
-            runout.sensor_enabled = False
+        self.operation = "prefeed"
+        restore = self._runout_off()
         try:
             with self.mutex:
                 for chan in chans:
+                    self.target_channel = chan
                     try:
                         if chan == self.channel:
                             # Loaded in the toolhead: feeding or backing it
@@ -857,17 +919,25 @@ class IFS:
                         break
                 self._query_status()
         finally:
-            if was_on:
-                # Back on once the sensor has polled the empty toolhead and
-                # idle_timeout has seen the moves end
-                def runout_on(eventtime):
-                    runout.sensor_enabled = True
-                self.reactor.register_callback(
-                    runout_on, self.reactor.monotonic() + RUNOUT_SETTLE_TIME)
+            if restore is not None:
+                restore()
+            self._end_operation()
             self.busy = False
     def _check_stop(self, what):
         if self.stop_requested:
-            raise IfsError("%s stopped by IFS_STOP" % (what,))
+            raise IfsError("%s stopped by IFS_STOP" % (what,), fault=False)
+    def _track(self, phase=None, activity=None, chan=None):
+        """Host-tracked progress for printer.ifs: the step starting now
+        (PHASES, activity, the slot it moves). None keeps that value."""
+        if phase is not None:
+            self.phase = phase
+        if activity is not None:
+            self.step_activity = activity
+        if chan is not None:
+            self.step_channel = chan
+    def _end_operation(self):
+        self.operation, self.target_channel = "", 0
+        self.phase, self.step_activity, self.step_channel = "", None, 0
     def _wait_ready(self, timeout, what):
         if self.is_mcu_mode:
             self.last_status['FFS_state'] = STATE_READY
@@ -891,26 +961,47 @@ class IFS:
         # Cached values only: never touches the serial link or the toolhead.
         st = self.last_status
         inserted = st.get('ffs_channels_insert', 0)
-        activity, activity_channel = decode_activity(st.get('FFS_state'))
+        if self.is_mcu_mode:
+            # No board state of its own: the selector position as we moved
+            # it (the loaded slot until it is homed), the activity from the
+            # steps below
+            selected = self.mcu_selected or self.channel
+            activity, activity_channel = "ready", 0
+        else:
+            selected = st.get('chan')
+            activity, activity_channel = decode_activity(st.get('FFS_state'))
+        if self.busy and self.step_activity and activity in ("ready", None):
+            # The step running now (F13 reads ready between the board's own
+            # moves: a cut, a template, the extruder)
+            activity, activity_channel = self.step_activity, self.step_channel
+        elif self.driver_fault and not self.busy and activity == "ready":
+            activity, activity_channel = "driver_error", self.error_channel
         return {
             'connected': self.is_mcu_mode or (self.fd is not None),
+            'mode': "mcu" if self.is_mcu_mode else "serial",
             'version': self.version,
             'busy': self.busy,
             'channel': self.channel,
             'state': st.get('FFS_state'),
-            'selected': st.get('chan'),
+            'selected': selected,
             'inserted': [bool(inserted >> (c - 1) & 1) for c in CHANNELS],
             'silk': list(self.silk),
             'stall': list(self.stall),
             'colors': self.colors,
             # FX "module" contract, read by HelixScreen
             'channel_count': len(CHANNELS),
-            'active_channel': st.get('chan'),
+            'active_channel': selected,
             'loaded_channels': mask_channels(st.get('silk_state')),
             'pending_insert_channels': mask_channels(inserted),
             'activity': activity,
             'activity_channel': activity_channel,
+            # Not part of FX's contract: what runs, how far it is, for which
+            # slot ("", "", 0 when idle); the slot of the last error
+            'operation': self.operation,
+            'phase': self.phase if self.operation else "",
+            'target_channel': self.target_channel,
             'error': self.error,
+            'error_channel': self.error_channel,
             'auto_refill': self.auto_refill,
             'map_mode': self.map_mode,
             'refill': self.refill_note,
@@ -926,6 +1017,7 @@ class IFS:
                               for c in CHANNELS},
                 'unload_dist': self.tuned['unload_dist'],
                 'tube_unload': self.tuned['tube_unload'],
+                'flush': self.tuned['flush'],
                 'running': self.tune_progress is not None,
                 'progress': self.tune_progress or 0.,
                 'message': self.tune_message,
@@ -959,6 +1051,7 @@ class IFS:
         return "%g" % (v,)
     def _home_selector(self):
         if not self.selector_homed:
+            self._track("homing", "homing", 0)
             try:
                 self.gcode.run_script_from_command(
                     "MANUAL_STEPPER STEPPER=%s ENABLE=1 SET_POSITION=0" % (self.selector_name,))
@@ -984,6 +1077,7 @@ class IFS:
     def _select(self, chan):
         if self.is_mcu_mode:
             self._home_selector()
+            self._track("selecting", "selecting", chan)
             target_pos = (chan - 1) * self.selector_channel_dist
             self.gcode.run_script_from_command(
                 "MANUAL_STEPPER STEPPER=%s ENABLE=1 MOVE=%.2f SPEED=10 ACCEL=100"
@@ -992,10 +1086,13 @@ class IFS:
                 "MANUAL_STEPPER STEPPER=%s ENABLE=0" % (self.selector_name,))
             self.gcode.run_script_from_command(
                 "MANUAL_STEPPER STEPPER=%s ENABLE=1" % (self.feeder_name,))
-            self.channel = chan
+            # Selected, not loaded: self.channel is the slot in the nozzle,
+            # set only once a load has succeeded (_set_channel)
+            self.mcu_selected = chan
             self.last_status['FFS_state'] = STATE_READY
             self.last_status['chan'] = chan
             return
+        self._track("selecting", "selecting", chan)
         self._command("F24 C%d" % (chan,))
         self._wait_ready(self.select_timeout, "select channel %d" % (chan,))
     def _head_has_filament(self):
@@ -1005,7 +1102,7 @@ class IFS:
         adc = qa.adc.get(self.head_sensor) if qa is not None else None
         if adc is None:
             raise IfsError("head_sensor '%s' is not a query_adc object" % (
-                self.head_sensor,))
+                self.head_sensor,), fault=False)
         value = adc.get_last_value()[1]
         return value <= self.head_below or value >= self.head_above
     def _adopt_loaded(self):
@@ -1067,9 +1164,10 @@ class IFS:
             raise IfsError("load channel %d: the toolhead still has "
                            "filament in it (IFS_UNLOAD SLOT=n, or "
                            "IFS_SET_CHANNEL CHANNEL=n if slot n is in the "
-                           "nozzle)" % (chan,))
+                           "nozzle)" % (chan,), fault=False)
         if self.is_mcu_mode:
             for attempt in range(self.load_retries + 1):
+                self._track("feeding", "loading", chan)
                 try:
                     if self._fast_load(chan):
                         return self.last_status
@@ -1093,6 +1191,7 @@ class IFS:
                     self._unload_start(chan, self.backoff_length, self.unload_speed)
             return self.last_status
         for attempt in range(self.load_retries + 1):
+            self._track("feeding", "loading", chan)
             try:
                 if self._fast_load(chan):
                     return self.last_status
@@ -1104,6 +1203,7 @@ class IFS:
                     raise
                 # Stock recovery: reset, back the strand off, try again.
                 logging.info("ifs: load retry after: %s", e)
+                self._track("unloading", "unloading", chan)
                 self._request("F15")
                 self._command("F11 C%d L%s S%s" % (
                     chan, self._fmt(self.backoff_length),
@@ -1127,13 +1227,18 @@ class IFS:
     def _feed_until_head(self, chan, length, speed, what):
         """F10 a lane and watch the head sensor closely: F112 as soon as it
         sees filament. True if it did, False if the IFS ended the move
-        first. self.last_feed = mm fed (time x speed); errors raise."""
+        first. self.last_feed = mm fed (time x speed); errors raise. MCU
+        mode: True when the sensor saw it; last_feed = mm fed when it did
+        (the moves still queued then run on: up to two more), else the mm
+        fed."""
+        self._track("feeding", "loading", chan)
         start = self.reactor.monotonic()
         self.last_feed = 0.
         if self.is_mcu_mode:
-            self.last_feed, reached = self._mcu_feed(
+            moved, reached = self._mcu_feed(
                 length, speed, lambda: bool(self._head_has_filament()),
                 what, self.load_timeout)
+            self.last_feed = self.mcu_stop_at if reached else moved
             return reached
         self._command("F10 C%d L%s S%s" % (
             chan, self._fmt(length), self._fmt(speed)))
@@ -1168,7 +1273,9 @@ class IFS:
         leaves the rest queued, and the next enable would run it), and
         Klipper doesn't blend moves without X/Y/Z: so short moves, the
         next queued while one runs. After STOP() at most the running and
-        the queued move still go. EXTRUDE: the extruder moves with it."""
+        the queued move still go. EXTRUDE: the extruder moves with it.
+        self.mcu_stop_at: the mm moved when STOP() was seen (from the
+        moves' timing; for measuring), None if it never was."""
         toolhead = self.printer.lookup_object('toolhead')
         mcu = self.printer.lookup_object('mcu')
         speed_mms = max(1.0, float(speed) / 60.)
@@ -1176,38 +1283,59 @@ class IFS:
         sign = -1. if length < 0. else 1.
         total = abs(length)
         end = self.reactor.monotonic() + timeout
+        self.mcu_stop_at = None
         self.gcode.run_script_from_command(
             "MANUAL_STEPPER STEPPER=%s ENABLE=1 SET_POSITION=0"
             % (self.feeder_name,))
         queued = 0.
-        ends = []       # print time each queued move ends
+        ends = []       # (print time it ends, mm at its start, mm at its end)
         def queue_move():
             pos = min(total, queued + step)
-            self.gcode.run_script_from_command(
-                "MANUAL_STEPPER STEPPER=%s MOVE=%s SPEED=%s ACCEL=500"
-                % (self.feeder_name, self._fmt(sign * pos),
-                   self._fmt(speed_mms)))
-            if extrude:     # G1 E is relative (M83): this step's length
+            if extrude:
+                # SYNC=0, so the extruder step starts with the feeder step:
+                # with SYNC=1 the toolhead waited for the feeder move before
+                # the G1 E, and the two took turns. G1 E is relative (M83);
+                # the bare SYNC=1 then waits for both.
                 self.gcode.run_script_from_command(
-                    "M83\nG1 E%s F%s" % (self._fmt(sign * (pos - queued)),
-                                         self._fmt(speed)))
-            ends.append(toolhead.get_last_move_time())
+                    "MANUAL_STEPPER STEPPER=%s MOVE=%s SPEED=%s ACCEL=500 "
+                    "SYNC=0\nM83\nG1 E%s F%s\nMANUAL_STEPPER STEPPER=%s SYNC=1"
+                    % (self.feeder_name, self._fmt(sign * pos),
+                       self._fmt(speed_mms), self._fmt(sign * (pos - queued)),
+                       self._fmt(speed), self.feeder_name))
+            else:
+                self.gcode.run_script_from_command(
+                    "MANUAL_STEPPER STEPPER=%s MOVE=%s SPEED=%s ACCEL=500"
+                    % (self.feeder_name, self._fmt(sign * pos),
+                       self._fmt(speed_mms)))
+            ends.append((toolhead.get_last_move_time(), queued, pos))
             return pos
+        def moved_at(now):
+            # Back from the end of the move running then, at the feed speed
+            # (its acceleration is off by well under a millimetre)
+            t = mcu.estimated_print_time(now)
+            for t1, p0, p1 in ends:
+                if t < t1:
+                    return max(p0, p1 - (t1 - t) * speed_mms)
+            return ends[-1][2] if ends else queued
         try:
             while True:
                 while queued < total and len(ends) < 2:
                     queued = queue_move()
                 if not ends:
-                    return queued, stop()
+                    if stop():
+                        self.mcu_stop_at = queued
+                        return queued, True
+                    return queued, False
                 # Wait for the oldest move to end, watching the sensor
                 while True:
                     self._check_stop(what)
-                    if stop():
-                        return queued, True
                     now = self.reactor.monotonic()
+                    if stop():
+                        self.mcu_stop_at = moved_at(now)
+                        return queued, True
                     if now >= end:
                         raise IfsError("%s timed out" % (what,))
-                    if mcu.estimated_print_time(now) >= ends[0]:
+                    if mcu.estimated_print_time(now) >= ends[0][0]:
                         break
                     self.reactor.pause(now + self.sensor_poll)
                 ends.pop(0)
@@ -1226,17 +1354,20 @@ class IFS:
                 "MANUAL_STEPPER STEPPER=%s ENABLE=0" % (self.feeder_name,))
             raise
         return moved
-    def _retract_until_clear(self, chan, length, speed, what):
+    def _retract_until_clear(self, chan, length, speed, what, extrude=False):
         """F11 a lane until the head sensor clears (then F112). Returns the
-        mm retracted (time x speed); raises if the sensor never clears."""
+        mm retracted (time x speed); raises if the sensor never clears.
+        MCU mode: the mm retracted when it cleared (the queued moves pull
+        a little further). EXTRUDE: the extruder retracts with it."""
+        self._track("unloading", "unloading", chan)
         start = self.reactor.monotonic()
         if self.is_mcu_mode:
             moved, clear = self._mcu_feed(
                 -length, speed, lambda: self._head_has_filament() is False,
-                what, self.unload_timeout)
+                what, self.unload_timeout, extrude)
             if not clear and self._head_has_filament():
                 raise IfsError("%s: filament still in the toolhead" % (what,))
-            return moved
+            return self.mcu_stop_at if clear else moved
         self._unload_start(chan, length, speed)
         end = start + self.unload_timeout
         next_query = start
@@ -1268,20 +1399,29 @@ class IFS:
         return self.tuned['tube_unload'] or self.retract_length
     def _tube_speed(self):
         return self.tuned['speed'] or self.retract_speed
-    def _unload_start(self, chan, length, speed):
+    def _unload_start(self, chan, length, speed, timeout=None, extrude=False):
+        # timeout: MCU mode's limit for the move (eject_timeout for an
+        # eject), unload_timeout if None. extrude: MCU mode, the extruder
+        # retracts with the feeder (the unload only)
+        self._track("unloading", "unloading", chan)
         if self.is_mcu_mode:
             # Done when it returns (as F11 is on the serial link), and cut
             # by IFS_STOP
             self._mcu_move(-length, speed, "unload channel %d" % (chan,),
-                           self.unload_timeout)
+                           timeout or self.unload_timeout, extrude)
             self.gcode.run_script_from_command(
                 "MANUAL_STEPPER STEPPER=%s ENABLE=0" % (self.feeder_name,))
             return
         self._command("F11 C%d L%s S%s" % (
             chan, self._fmt(length), self._fmt(speed)))
     def _release(self, chan):
+        # The selector moves; the phase stays (a purge round's release is
+        # part of the purge)
+        phase = self.phase or "selecting"
+        self._track(phase, "selecting", chan)
         if self.is_mcu_mode:
             self._home_selector()
+            self._track(phase, "selecting", chan)
             target_pos = (chan - 1) * self.selector_channel_dist + self.selector_release_offset
             self.gcode.run_script_from_command(
                 "MANUAL_STEPPER STEPPER=%s ENABLE=1 MOVE=%.2f SPEED=10 ACCEL=100"
@@ -1290,6 +1430,7 @@ class IFS:
                 "MANUAL_STEPPER STEPPER=%s ENABLE=0" % (self.selector_name,))
             self.gcode.run_script_from_command(
                 "MANUAL_STEPPER STEPPER=%s ENABLE=0" % (self.feeder_name,))
+            self.mcu_selected = chan    # at the slot's release position
             self.last_status['FFS_state'] = STATE_READY
             return
         self._command("F39 C%d" % (chan,))
@@ -1307,6 +1448,7 @@ class IFS:
         # push_length, or prime_length for a swap without purge.
         toolhead = self.printer.lookup_object('toolhead')
         length = self.push_length if length is None else length
+        self._track(activity="loading", chan=chan)
         if self.is_mcu_mode:
             # Feeder and extruder together, in short moves, so IFS_STOP cuts
             # the push (see _mcu_move)
@@ -1356,23 +1498,32 @@ class IFS:
         return round(self.purge_finish * scale, 3)
     def _unload(self, chan, length=None):
         """Stock unload: select the old channel, pull it back while the
-        extruder retracts (unload_gcode, params.LENGTH/SPEED), stop as soon
-        as the toolhead is clear, then pull the strand further back (into
-        the tube). Lengths are the tuned ones when IFS_TUNE saved them.
-        Returns the mm pulled until the head sensor cleared, or None
-        without a head sensor."""
+        extruder retracts, stop as soon as the toolhead is clear, then pull
+        the strand further back (into the tube). Serial: unload_gcode
+        retracts the extruder (params.LENGTH/SPEED, RETRACT=1) while F11
+        runs. MCU mode: a G1 E queued first would run before the feeder (a
+        manual_stepper move starts at the toolhead's last move time), so
+        the extruder retracts here, step by step with the feeder as in the
+        push, and stops with it; unload_gcode gets RETRACT=0. LENGTH: the
+        tuned one (strand travel to the sensor clearing + 10 mm) when
+        IFS_TUNE saved it. Returns the mm pulled until the head sensor
+        cleared, or None without a head sensor."""
         toolhead = self.printer.lookup_object('toolhead')
         what = "unload channel %d" % (chan,)
         length = length or self._unload_len()
+        mcu = self.is_mcu_mode
         self._select(chan)
+        self._track("unloading", "unloading", chan)
         self._run_template(self.unload_template, OLD=chan, NEW=0,
-                           LENGTH=length, SPEED=self.unload_speed)
+                           LENGTH=length, SPEED=self.unload_speed,
+                           RETRACT=0 if mcu else 1)
         cleared = None
         if self.head_sensor is not None:
             cleared = self._retract_until_clear(chan, length,
-                                                self.unload_speed, what)
+                                                self.unload_speed, what,
+                                                extrude=mcu)
         else:
-            self._unload_start(chan, length, self.unload_speed)
+            self._unload_start(chan, length, self.unload_speed, extrude=mcu)
         toolhead.wait_moves()
         self._wait_ready(self.unload_timeout, what)
         tube = self._tube_len()
@@ -1393,6 +1544,7 @@ class IFS:
             self._prefeed_channel_mcu(chan, use_head, what)
             return
         self._select(chan)
+        self._track("feeding", "loading", chan)
         self._command("F10 C%d L%s S%s" % (
             chan, self._fmt(self.prefeed_length),
             self._fmt(self.prefeed_speed)))
@@ -1416,6 +1568,7 @@ class IFS:
         self._request("F112")
         self._wait_ready(self.select_timeout, what)
         if reached and self.prefeed_backoff:
+            self._track("unloading", "unloading", chan)
             self._command("F11 C%d L%s S%s" % (
                 chan, self._fmt(self.prefeed_backoff),
                 self._fmt(self.prefeed_speed)))
@@ -1431,29 +1584,24 @@ class IFS:
                 "IFS: channel %d not pre-fed: the toolhead sensor can't see"
                 " it (filament in the toolhead, or no head_sensor)" % (chan,))
             return
-        loaded = self.channel       # _select() takes it as the loaded one
-        try:
-            self._select(chan)
-            # Up to prefeed_length, as stock's F10, until the toolhead
-            # sensor sees it. Short moves (_mcu_feed): a disabled
-            # manual_stepper is enabled again by its next queued step, so
-            # one long move can't be cut short (it fed the whole 600 mm
-            # past the sensor on 2026-11-05)
-            fed, reached = self._mcu_feed(
-                self.prefeed_length, self.prefeed_speed,
-                lambda: bool(self._head_has_filament()), what,
-                self.load_timeout)
-            logging.info("ifs: %s: fed %.0f mm, %s", what, fed,
-                         "at the toolhead sensor" if reached
-                         else "the toolhead sensor didn't see it")
-            if reached and self.prefeed_backoff:
-                self._unload_start(chan, self.prefeed_backoff,
-                                   self.prefeed_speed)
-            self._clear_inserted(chan)
-            self._release(chan)
-        finally:
-            self.channel = loaded
-            self.last_status['chan'] = loaded
+        self._select(chan)
+        self._track("feeding", "loading", chan)
+        # Up to prefeed_length, as stock's F10, until the toolhead sensor
+        # sees it. Short moves (_mcu_feed): a disabled manual_stepper is
+        # enabled again by its next queued step, so one long move can't be
+        # cut short (it fed the whole 600 mm past the sensor on 2026-11-05)
+        fed, reached = self._mcu_feed(
+            self.prefeed_length, self.prefeed_speed,
+            lambda: bool(self._head_has_filament()), what,
+            self.load_timeout)
+        logging.info("ifs: %s: fed %.0f mm, %s", what, fed,
+                     "at the toolhead sensor" if reached
+                     else "the toolhead sensor didn't see it")
+        if reached and self.prefeed_backoff:
+            self._unload_start(chan, self.prefeed_backoff,
+                               self.prefeed_speed)
+        self._clear_inserted(chan)
+        self._release(chan)
     def _set_channel(self, chan):
         # ifs_loaded: the lane in the nozzle, 0 = none (FX's variable, read
         # by HelixScreen). Written once a load or unload has succeeded.
@@ -1503,30 +1651,52 @@ class IFS:
         """Run an operation under the mutex, turning IFS errors into
         G-code errors after a best-effort controller reset. wait=False skips
         waiting for queued moves (for commands that don't move the toolhead
-        and must work at any time: stop, reset)."""
+        and must work at any time: stop, reset). op= (OPERATIONS) and
+        target= (its slot) are printer.ifs operation/target_channel while it
+        runs; without op it is no operation (a query, a raw command)."""
         # A stop pressed while the queued moves of an earlier command run
         # counts for this one: the flag is cleared before the wait, not after
         self.stop_requested = False
         if kw.get('wait', True):
             toolhead = self.printer.lookup_object('toolhead')
             toolhead.wait_moves()
+        op = kw.get('op', "")
+        if op in ("load", "swap", "prefeed") and self.refill_busy:
+            op = "refill"       # IFS_PREFEED/IFS_SWAP from _do_refill
         self.busy = True
+        if op:
+            self._end_operation()
+            self.operation, self.target_channel = op, kw.get('target', 0)
         try:
             with self.mutex:
                 try:
                     result = func(*args)
                 except IfsError as e:
                     self.error = str(e)
+                    self.error_channel = 0
+                    if op:
+                        # The slot the failed step moved, else the target
+                        self.error_channel = (self.step_channel
+                                              or self.target_channel)
+                        self.driver_fault = (e.fault
+                                             and not self.stop_requested)
                     reset = self._reset_after_error()
                     self._abort_swap()
                     msg = "IFS: %s" % (e,)
                     if reset:
                         msg += " (reset failed: %s)" % (reset,)
                     raise self.gcode.error(msg)
-                self.error = None
+                self._clear_error()
                 return result
         finally:
+            if op:
+                self._end_operation()
             self.busy = False
+    def _clear_error(self):
+        # A success, IFS_RESET or IFS_RESET_DRIVER: no error, no driver_error
+        self.error = None
+        self.error_channel = 0
+        self.driver_fault = False
     def _reset_after_error(self):
         """After a failed operation: the IFS back to idle (F15), or in MCU
         mode both motors off. Returns "" or why that failed; never raises,
@@ -1537,6 +1707,7 @@ class IFS:
                     self.gcode.run_script_from_command(
                         "MANUAL_STEPPER STEPPER=%s ENABLE=0" % (name,))
                 self.selector_homed = False
+                self.mcu_selected = 0
             else:
                 self._request("F15")
             return ""
@@ -1576,15 +1747,17 @@ class IFS:
         # Wait for the target _heat set, once, before an extruder move
         if self.heat_wait is not None:
             temp, self.heat_wait = self.heat_wait, None
+            phase, self.phase = self.phase, "heating"
             self.gcode.run_script_from_command("M109 S%g" % (temp,))
+            self.phase = phase
     def _restore_heat(self, target):
         self.heat_wait = None
         if target is not None:
             self.gcode.run_script_from_command("M104 S%g" % (target,))
-    def _with_heat(self, gcmd, chans, func, *args):
+    def _with_heat(self, gcmd, chans, func, *args, **kw):
         restore = self._heat(gcmd, chans)
         try:
-            self._run(func, *args)
+            self._run(func, *args, **kw)
         finally:
             self._restore_heat(restore)
     def _get_channel(self, gcmd, name='CHANNEL'):
@@ -1624,49 +1797,64 @@ class IFS:
                               st.get('stall_state', 0)))
     cmd_IFS_SELECT_help = "Point the IFS switch at a channel"
     def cmd_IFS_SELECT(self, gcmd):
-        self._run(self._select, self._get_channel(gcmd))
+        chan = self._get_channel(gcmd)
+        self._run(self._select, chan, op="select", target=chan)
     # Low-level moves (FX names: IFS_FEED / IFS_RETRACT)
     cmd_IFS_FEED_help = "Feed a channel toward the toolhead (raw IFS move)"
     def cmd_IFS_FEED(self, gcmd):
         chan = self._get_channel(gcmd)
         length = gcmd.get_float('LENGTH', self.load_length, above=0.)
         speed = gcmd.get_float('SPEED', self.load_speed, above=0.)
-        self._run(self._load, chan, length, speed)
+        def feed():
+            if self.is_mcu_mode:
+                # The feeder drives the slot the selector clamps (on the
+                # serial link F10 names the slot)
+                self._select(chan)
+            return self._load(chan, length, speed)
+        self._run(feed, op="feed", target=chan)
     cmd_IFS_RETRACT_help = "Retract a channel and wait for the IFS (raw move)"
     def cmd_IFS_RETRACT(self, gcmd):
         chan = self._get_channel(gcmd)
         length = gcmd.get_float('LENGTH', self.unload_length, above=0.)
         speed = gcmd.get_float('SPEED', self.unload_speed, above=0.)
         def retract():
+            if self.is_mcu_mode:
+                self._select(chan)      # as IFS_FEED
             self._unload_start(chan, length, speed)
             self._wait_ready(self.unload_timeout, "retract channel %d" % chan)
-        self._run(retract)
+        self._run(retract, op="retract", target=chan)
     cmd_IFS_RELEASE_help = "Release a channel's filament path"
     def cmd_IFS_RELEASE(self, gcmd):
-        self._run(self._release, self._get_channel(gcmd))
-    cmd_IFS_RESET_help = "Stop the IFS and return it to idle (F15)"
-    def cmd_IFS_RESET(self, gcmd):
+        chan = self._get_channel(gcmd)
+        self._run(self._release, chan, op="select", target=chan)
+    def _reset(self):
+        """IFS_RESET / IFS_RESET_DRIVER: MCU mode both motors off (the
+        selector homes again before its next move), else F15 and a fresh
+        F13. Clears the error and driver_error."""
         if self.is_mcu_mode:
             self.gcode.run_script_from_command(
                 "MANUAL_STEPPER STEPPER=%s ENABLE=0" % (self.feeder_name,))
             self.gcode.run_script_from_command(
                 "MANUAL_STEPPER STEPPER=%s ENABLE=0" % (self.selector_name,))
             self.selector_homed = False
-            gcmd.respond_info("IFS: reset (motors disabled)")
+            self.mcu_selected = 0
+            self._clear_error()
             return
-        self._run(self._request, "F15", wait=False)
+        def reset():
+            self._request("F15")
+            # printer.ifs shows the board as it is now, not the fault the
+            # last poll saw
+            self._query_status()
+        self._run(reset, wait=False)        # clears them when it succeeds
+    cmd_IFS_RESET_help = "Stop the IFS and return it to idle (F15)"
+    def cmd_IFS_RESET(self, gcmd):
+        self._reset()
+        if self.is_mcu_mode:
+            gcmd.respond_info("IFS: reset (motors disabled)")
     cmd_IFS_RESET_DRIVER_help = ("Recover the IFS after a fault (F15; same as "
                                  "IFS_RESET)")
     def cmd_IFS_RESET_DRIVER(self, gcmd):
-        if self.is_mcu_mode:
-            self.gcode.run_script_from_command(
-                "MANUAL_STEPPER STEPPER=%s ENABLE=0" % (self.feeder_name,))
-            self.gcode.run_script_from_command(
-                "MANUAL_STEPPER STEPPER=%s ENABLE=0" % (self.selector_name,))
-            self.selector_homed = False
-            gcmd.respond_info("IFS: driver reset")
-            return
-        self._run(self._request, "F15", wait=False)
+        self._reset()
         gcmd.respond_info("IFS: driver reset")
     cmd_IFS_STOP_help = "Stop the IFS feeding (F112)"
     def cmd_IFS_STOP(self, gcmd):
@@ -2059,10 +2247,14 @@ class IFS:
         if chan == self.channel:
             raise gcmd.error("IFS_PREFEED: channel %d is loaded in the "
                              "toolhead" % (chan,))
-        self._run(self._prefeed_channel, chan)
+        self._run(self._prefeed_channel, chan, op="prefeed", target=chan)
     # Full operations
     def _swap(self, old, new, flush=None, rounds=None, purge=True):
         toolhead = self.printer.lookup_object('toolhead')
+        if old:
+            self._track("cutting", "unloading", old)
+        else:
+            self._track("selecting", "selecting", new)
         self._run_template(self.before_template, OLD=old, NEW=new)
         self.swap_open = (old, new)
         # Stock cuts only when the toolhead sensor shows filament. With
@@ -2075,6 +2267,7 @@ class IFS:
         elif old:
             # Cut at the toolhead (cut_gcode also moves to the purge
             # box), then unload the old strand there.
+            self._track("cutting", "unloading", old)
             self._ensure_hot()
             self._run_template(self.cut_template, OLD=old, NEW=new)
             toolhead.wait_moves()
@@ -2105,6 +2298,7 @@ class IFS:
         logging.info("ifs: swap %d -> %d, flush volume %s, %d rounds of "
                      "%.0f mm", old, new, vol, rounds, flush)
         for rnd in range(1, rounds + 1):
+            self._track("purging", "loading", new)
             self._run_template(self.purge_start_template, OLD=old,
                                NEW=new, ROUND=rnd, ROUNDS=rounds)
             toolhead.wait_moves()
@@ -2113,6 +2307,8 @@ class IFS:
                 self._push(new)
             self._release(new)
             self._set_channel(new)
+            # The extruder purges (the IFS has let go)
+            self._track("purging", "loading", new)
             extra = {'FLUSH': flush, 'FLUSH_SPEED': self.flush_speed}
             if self.sensor_purge:
                 extra['FLUSH'] = self._sensor_purge(new)
@@ -2132,6 +2328,7 @@ class IFS:
         toolhead = self.printer.lookup_object('toolhead')
         logging.info("ifs: swap %d -> %d without purge, prime %.0f mm",
                      old, new, self.prime_length)
+        self._track("priming", "loading", new)
         self._run_template(self.purge_start_template, OLD=old, NEW=new,
                            ROUND=1, ROUNDS=1)
         toolhead.wait_moves()
@@ -2140,6 +2337,7 @@ class IFS:
             self._push(new, self.prime_length)
         self._release(new)
         self._set_channel(new)
+        self._track("priming", "loading", new)
         self._run_template(self.prime_template, OLD=old, NEW=new)
         toolhead.wait_moves()
         self._clear_inserted(new)
@@ -2191,12 +2389,14 @@ class IFS:
         unload releases the lane too, so the spool can be pulled by hand
         (not after IFS_STOP: that already halted the lane)."""
         toolhead = self.printer.lookup_object('toolhead')
+        self._track("cutting", "unloading", chan)
         self._run_template(self.before_template, OLD=chan, NEW=0)
         try:
             if self._head_has_filament() is False:
                 logging.info("ifs: toolhead empty, skipping cut of channel %d",
                              chan)
             else:
+                self._track("cutting", "unloading", chan)
                 self._ensure_hot()
                 self._run_template(self.cut_template, OLD=chan, NEW=0)
                 toolhead.wait_moves()
@@ -2212,7 +2412,7 @@ class IFS:
                     if isinstance(err, IfsError):
                         raise IfsError("%s; the lane may still be clamped, "
                                        "IFS_RELEASE CHANNEL=%d frees it"
-                                       % (err, chan))
+                                       % (err, chan), err.fault)
             raise
         self._set_channel(0)
         self._release(chan)
@@ -2220,7 +2420,8 @@ class IFS:
     def _eject(self, chan):
         """Pull an idle lane out of the IFS (spool change), then release."""
         self._select(chan)
-        self._unload_start(chan, self.eject_length, self.eject_speed)
+        self._unload_start(chan, self.eject_length, self.eject_speed,
+                           self.eject_timeout)
         self._wait_ready(self.eject_timeout, "eject channel %d" % (chan,))
         self._release(chan)
     def _tool_change(self, gcmd, new):
@@ -2242,8 +2443,9 @@ class IFS:
         rounds = gcmd.get_int('ROUNDS', None, minval=1, maxval=5)
         purge = self._swap_purges(gcmd)
         self._require_homed()
+        # "swap" takes a slot out of the nozzle first, "load" fills it
         self._with_heat(gcmd, (old, new), self._swap, old, new, flush, rounds,
-                        purge)
+                        purge, op="swap" if old else "load", target=new)
     cmd_IFS_SWAP_help = ("Change to another IFS channel (cut, unload, load, "
                          "purge): CHANNEL= [TEMP=] [FLUSH=mm] [ROUNDS=] "
                          "[PURGE=0|1]")
@@ -2264,7 +2466,8 @@ class IFS:
             raise gcmd.error("IFS_UNLOAD: slot %d is not loaded (slot %d is)"
                              % (slot, self.channel))
         self._require_homed()
-        self._with_heat(gcmd, (slot,), self._unload_toolhead, slot)
+        self._with_heat(gcmd, (slot,), self._unload_toolhead, slot,
+                        op="unload", target=slot)
     cmd_IFS_EJECT_help = ("Pull a slot's filament out of the IFS (unloads "
                           "the nozzle first if it is the loaded one): SLOT=")
     def cmd_IFS_EJECT(self, gcmd):
@@ -2274,17 +2477,25 @@ class IFS:
             def unload_and_eject():
                 self._unload_toolhead(slot)
                 self._eject(slot)
-            self._with_heat(gcmd, (slot,), unload_and_eject)
+            self._with_heat(gcmd, (slot,), unload_and_eject, op="eject",
+                            target=slot)
             return
         if not self.channel and self._head_has_filament():
             raise gcmd.error("IFS_EJECT: the toolhead holds filament from an "
                              "unknown slot; IFS_UNLOAD SLOT=n first")
-        self._run(self._eject, slot)
+        self._run(self._eject, slot, op="eject", target=slot)
     # Swap tuning (QuickSwap-like). Measures feed speed, each lane's
     # distance to the toolhead sensor and the unload length, from the head
     # sensor's timing (time x speed, so about +-5 mm at 1200 mm/min).
     # Results go to variables.cfg (TUNE_VARS) and replace the [ifs]
     # defaults in swaps. Caller holds the mutex (via _run).
+    # MCU mode measures the load distances and the unload length from the
+    # feeder moves (_mcu_feed: mm moved when the sensor saw the change, to
+    # about a millimetre plus the sensor's report lag). It does not sweep
+    # the speed or run the tube test: the feeder has no stall detection,
+    # so a slipping drive or a lane blocked at the merge would show only at
+    # the length limit, after grinding the strand. Swaps keep load_speed
+    # (or an ifs_speed tuned on stock firmware).
     def _tune_note(self, progress, msg):
         self.tune_progress = max(0., min(1., progress))
         self.tune_message = msg
@@ -2300,10 +2511,16 @@ class IFS:
         unload leaves it: until the sensor clears, then the tube
         pull-back."""
         what = "park channel %d" % (chan,)
+        tube_speed = speed
+        if self.is_mcu_mode:
+            # The stop at the sensor runs on up to two feeder moves, longer
+            # the faster: park at a swap's own speeds, so the lane rests
+            # where a swap's unload leaves it
+            speed, tube_speed = self.unload_speed, self._tube_speed()
         self._retract_until_clear(chan, self.load_length, speed, what)
         tube = self._tube_len()
         if tube:
-            self._unload_start(chan, tube, speed)
+            self._unload_start(chan, tube, tube_speed)
             self._wait_ready(self.unload_timeout, what)
     def _tune_run(self, chan, speed):
         """Feed a lane from where it rests up to the head sensor, then park
@@ -2320,9 +2537,11 @@ class IFS:
         was fed (best effort)."""
         fed = self.last_feed
         try:
-            self._request("F15")
-            self._wait_ready(self.select_timeout, "recover channel %d"
-                             % (chan,))
+            if not self.is_mcu_mode:
+                # MCU mode has no board fault to clear (and no serial link)
+                self._request("F15")
+                self._wait_ready(self.select_timeout, "recover channel %d"
+                                 % (chan,))
             if self._head_has_filament():
                 self._tune_park(chan, self.load_speed)
             elif fed > 0.:
@@ -2445,16 +2664,18 @@ class IFS:
                     and self._head_has_filament() is not False:
                 self._tune_note(.02, "measuring the unload of slot %d"
                                 % (self.channel,))
+                self.target_channel = self.channel
                 cleared = self._tune_unload(self.channel)
                 if cleared is not None:
                     self._save_tuned('unload_dist', 'ifs_unload_dist',
                                      float(math.ceil(cleared + 10.)))
             if self._head_has_filament():
                 raise IfsError("the toolhead holds filament; unload it first "
-                               "(IFS_UNLOAD)")
+                               "(IFS_UNLOAD)", fault=False)
             speed = self.tuned['speed'] or self.load_speed
             first = chans[0]
             if do_speed:
+                self.target_channel = first
                 self._tune_note(.1, "slot %d: settling" % (first,))
                 self._select(first)
                 self._tune_run(first, self.load_speed)
@@ -2462,6 +2683,7 @@ class IFS:
                 self._save_tuned('speed', 'ifs_speed', speed)
             if do_load:
                 for i, chan in enumerate(chans):
+                    self.target_channel = chan
                     self._tune_note(.5 + .35 * i / len(chans),
                                     "slot %d: measuring the load distance"
                                     % (chan,))
@@ -2470,6 +2692,7 @@ class IFS:
                     self._save_tuned('load_dist', 'ifs_load_dist_%d' % (chan,),
                                      round(dist, 1))
             if do_tube and len(chans) >= 2:
+                self.target_channel = chans[0]
                 self._tune_note(.85, "tube test with slots %d and %d"
                                 % (chans[0], chans[1]))
                 self._save_tuned('tube_unload', 'ifs_tube_unload',
@@ -2492,7 +2715,7 @@ class IFS:
             "%.0f mm" % t['flush'] if t['flush'] else "default"))
     def _tune_channels(self, gcmd):
         """CHANNEL=, else every slot with filament in the IFS (fresh F13)."""
-        if self.fd is None:
+        if not self.is_mcu_mode and self.fd is None:
             raise gcmd.error("IFS: not connected")
         if self.head_sensor is None:
             raise gcmd.error("IFS tuning needs the toolhead sensor "
@@ -2514,6 +2737,16 @@ class IFS:
         return loaded
     def _tune_cmd(self, gcmd, do_speed, do_load, do_unload, do_tube):
         chans = self._tune_channels(gcmd)
+        if self.is_mcu_mode and (do_speed or do_tube):
+            # See the note above _tune_note: no speed sweep, no tube test
+            gcmd.respond_info(
+                "IFS: on Klipper firmware the feed speed stays %.0f mm/min "
+                "and the tube pull-back %.0f mm (no stall detection on the "
+                "feeder to find their limits)" % (
+                    self.tuned['speed'] or self.load_speed, self._tube_len()))
+            do_speed = do_tube = False
+            if not (do_load or do_unload):
+                return
         if do_tube and len(chans) < 2:
             if gcmd.get_int('TUBE', 0):
                 raise gcmd.error("IFS tuning: the tube test needs two slots "
@@ -2521,14 +2754,22 @@ class IFS:
             do_tube = False
         unload = do_unload and self.channel \
             and self._head_has_filament() is not False
-        if unload:
-            # A real unload: cut and extruder move, so homed and hot. Only
-            # for that part: feeding to the head sensor needs no heat.
-            self._require_homed()
-            self.tune_unloaded = self.channel
-            self._with_heat(gcmd, (self.channel,), self._tune_all, chans,
-                            False, False, True, False)
-        self._run(self._tune_all, chans, do_speed, do_load, False, do_tube)
+        restore = self._runout_off()
+        try:
+            if unload:
+                # A real unload: cut and extruder move, so homed and hot.
+                # Only for that part: feeding to the head sensor needs no
+                # heat.
+                self._require_homed()
+                self.tune_unloaded = self.channel
+                self._with_heat(gcmd, (self.channel,), self._tune_all, chans,
+                                False, False, True, False, op="tune",
+                                target=self.channel)
+            self._run(self._tune_all, chans, do_speed, do_load, False, do_tube,
+                      op="tune", target=chans[0])
+        finally:
+            if restore is not None:
+                restore()
         gcmd.respond_info("IFS tuning saved: " + self._tune_summary())
     cmd_IFS_TUNE_help = ("Tune swaps (QuickSwap-like): unload length, feed "
                          "speed, each slot's load distance; saved in "

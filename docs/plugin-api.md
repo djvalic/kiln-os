@@ -252,7 +252,7 @@ printer` before calling one.
 
 Swap templates in `[ifs]` a plugin may replace (same parameters):
 `before_gcode` (`OLD`, `NEW`), `cut_gcode` (`OLD`, `NEW`),
-`unload_gcode` (`OLD`, `NEW`, `LENGTH`, `SPEED`), `purge_start_gcode`
+`unload_gcode` (`OLD`, `NEW`, `LENGTH`, `SPEED`, `RETRACT`: 1 when the template retracts the extruder, 0 on IFS Klipper firmware where the module retracts it with the feeder), `purge_start_gcode`
 (`OLD`, `NEW`, `ROUND`, `ROUNDS`), `purge_gcode` (`OLD`, `NEW`,
 `ROUND`, `ROUNDS`, `FLUSH`, `FLUSH_SPEED`), `prime_gcode` (`OLD`,
 `NEW`; in macros/ `ifs_templates.cfg`), `after_gcode` (`OLD`, `NEW`).
@@ -287,7 +287,7 @@ save variable: 0 or 2 = prime only, other = purge; else purge.
 
 | Object | Fields |
 |---|---|
-| `printer.ifs` | `connected`, `version`, `busy`, `channel` (loaded, 0 none), `state`, `selected`, `inserted[4]`, `colors[4]`, `channel_count`, `active_channel`, `loaded_channels`, `pending_insert_channels`, `activity`, `activity_channel`, `error`, `tool_map` (`"0"`-`"3"` -> slot), `tune`, `auto_refill`, `refill` (1.2: last auto-refill message), `refill_match`, `refill_backups` (`"1"`-`"4"` -> the slots that would take over, nearest colour first; `[]` none), `refill_notice` (a print loaded a slot with no backup; "" otherwise) (1.4) |
+| `printer.ifs` | `connected`, `version`, `busy`, `channel` (loaded, 0 none), `state`, `selected`, `inserted[4]`, `colors[4]`, `channel_count`, `active_channel`, `loaded_channels`, `pending_insert_channels`, `activity`, `activity_channel`, `error`, `tool_map` (`"0"`-`"3"` -> slot), `tune`, `auto_refill`, `refill` (1.2: last auto-refill message), `refill_match`, `refill_backups` (`"1"`-`"4"` -> the slots that would take over, nearest colour first; `[]` none), `refill_notice` (a print loaded a slot with no backup; "" otherwise) (1.4); next version: `mode` (`mcu`/`serial`), `operation`, `phase`, `target_channel`, `error_channel`, `tune.flush` (`docs/helixscreen-integration.md`, section 0) |
 | `printer.ad5x_nozzle` | `size` (running), `saved` (nozzle.cfg, null), `local` (local.cfg sets it), `sizes` (1.4) |
 | `printer.ad5x_sound` | `speaker`, `enabled`, `volume`, `events` (event -> file, "" off), `files`, `playing` (1.4) |
 | `printer.ad5x_soak` | `enabled`, `calibration` (1.4: per bed temperature `settle`, `drift`, `warp`, `points`, `from`, `stable`, `date`), `running`, `soak`, `last` |

@@ -135,6 +135,7 @@ static double cal[6] = { 1, 0, 0, 0, 1, 0 };	// a b c d e f
 static int cal_valid;
 static int range[4];				// min_x max_x min_y max_y
 static int range_valid;
+static int range_swap;				// touch_range swap_axes
 
 // Number after "key": inside the object that follows "section": (enough
 // for HelixScreen's settings.json; not a general JSON parser)
@@ -181,9 +182,16 @@ static void load_calibration(void)
 		ok = 1;
 		for (i = 0; i < 4; i++)
 			ok &= json_num(js, "touch_range", rk[i], &r[i]) == 0;
-		range_valid = ok && r[1] > r[0] && r[3] > r[2];
+		// A min above its max is an inverted axis: HelixScreen's
+		// three-point calibration (1.1.0-beta.16) stores a flipped Y that
+		// way, where the older calibration flipped it in the affine
+		range_valid = ok && r[1] != r[0] && r[3] != r[2];
 		for (i = 0; range_valid && i < 4; i++)
 			range[i] = (int)r[i];
+		const char *rp = strstr(js, "\"touch_range\"");
+		const char *re = rp ? strchr(rp, '}') : NULL;
+		const char *sw = rp ? strstr(rp, "\"swap_axes\": true") : NULL;
+		range_swap = range_valid && sw && (!re || sw < re);
 	}
 	free(js);
 	fclose(f);
@@ -215,6 +223,18 @@ static void emit(int type, int code, int value)
 		perror("touch write");
 }
 
+static int roundi(double v)
+{
+	return (int)(v < 0 ? v - 0.5 : v + 0.5);
+}
+
+// v clamped between a and b, in either order
+static int clampi(int v, int a, int b)
+{
+	int lo = a < b ? a : b, hi = a < b ? b : a;
+	return v < lo ? lo : v > hi ? hi : v;
+}
+
 // Screen pixel -> raw panel value: undo the affine, then the range scale
 static void to_raw(double sx, double sy, int *rx, int *ry)
 {
@@ -228,12 +248,15 @@ static void to_raw(double sx, double sy, int *rx, int *ry)
 		}
 	}
 	if (range_valid) {
-		*rx = (int)(range[0] + px * (range[1] - range[0]) / (screen_w - 1) + 0.5);
-		*ry = (int)(range[2] + py * (range[3] - range[2]) / (screen_h - 1) + 0.5);
-		if (*rx < range[0]) *rx = range[0];
-		if (*rx > range[1]) *rx = range[1];
-		if (*ry < range[2]) *ry = range[2];
-		if (*ry > range[3]) *ry = range[3];
+		// lv_map from the panel range to pixels, inverted; either axis
+		// may run backwards (min above max)
+		int x = roundi(range[0] + px * (range[1] - range[0]) / (screen_w - 1));
+		int y = roundi(range[2] + py * (range[3] - range[2]) / (screen_h - 1));
+		x = clampi(x, range[0], range[1]);
+		y = clampi(y, range[2], range[3]);
+		// swap_axes: LVGL takes x from ABS_Y and y from ABS_X
+		*rx = range_swap ? y : x;
+		*ry = range_swap ? x : y;
 	} else {
 		*rx = (int)px;
 		*ry = (int)py;
