@@ -2593,4 +2593,9 @@ class IfsMaterials:
         return self.ifs.materials_status()
 
 def load_config(config):
+    if not config.getboolean('enable', True):
+        for opt in config.fileconfig.options(config.section):
+            config.access_tracking[(config.section.lower(), opt.lower())] = 1
+        config.get_printer().objects.pop('ifs', None)
+        return None
     return IFS(config)

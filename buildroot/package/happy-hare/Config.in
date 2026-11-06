@@ -1,0 +1,11 @@
+config BR2_PACKAGE_HAPPY_HARE
+	bool "happy-hare"
+	depends on BR2_PACKAGE_KLIPPER
+	depends on BR2_PACKAGE_MOONRAKER
+	help
+	  Happy Hare multi-material MMU software (v4) for Klipper and Moonraker.
+	  Supports servoless linear selector MMUs, active sync-feedback buffers,
+	  and native integration with HelixScreen and web UIs.
+
+	  https://github.com/moggieuk/Happy-Hare
+

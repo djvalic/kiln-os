@@ -1,0 +1,11 @@
+{
+  "name": "happy-hare",
+  "description": "Happy Hare v4 MMU software for Flashforge IFS multi-material system",
+  "version": "4.1.0",
+  "author": "moggieuk / Hunter Laux",
+  "url": "https://github.com/moggieuk/Happy-Hare",
+  "requires_os": "1.0",
+  "requires_ifs_klipper": true,
+  "requires": [],
+  "conflicts": []
+}
