@@ -24,10 +24,10 @@ the ps_chip_* subjects without a callout layout; there the fans now
 publish without their label, as each stat has its own caption.
 ---
 diff --git a/src/ui/ui_print_status_tiles.cpp b/src/ui/ui_print_status_tiles.cpp
-index 3855e1e..bd77229 100644
+index 3052d45..3752753 100644
 --- a/src/ui/ui_print_status_tiles.cpp
 +++ b/src/ui/ui_print_status_tiles.cpp
-@@ -458,9 +458,13 @@ void PrintStatusTiles::update_now() {
+@@ -515,9 +515,13 @@ void PrintStatusTiles::update_now() {
  
      if (!area || !probe) {
          // No printer tile in this tree: the chips publish their content alone.
@@ -43,7 +43,7 @@ index 3855e1e..bd77229 100644
          return;
      }
 diff --git a/ui_xml/components/print_status_printer_tile.xml b/ui_xml/components/print_status_printer_tile.xml
-index a2a4272..1ed8f4e 100644
+index 2d5188e..1ed8f4e 100644
 --- a/ui_xml/components/print_status_printer_tile.xml
 +++ b/ui_xml/components/print_status_printer_tile.xml
 @@ -1,143 +1,247 @@
@@ -79,11 +79,10 @@ index a2a4272..1ed8f4e 100644
 -              width="100%" height="100%" style_pad_all="0" style_bg_opa="0" style_border_width="0" scrollable="false"
 -              clickable="false" ignore_layout="true">
 -        <bind_flag_if_eq subject="ps_callout_mode" flag="hidden" ref_value="0"/>
--        <region_glow name="ps_glow_nozzle"
--                     color="#danger" tone_subject="ps_chip_nozzle_tone" shown_subject="ps_glow_nozzle"/>
--        <region_glow name="ps_glow_bed" color="#danger" tone_subject="ps_chip_bed_tone" shown_subject="ps_glow_bed"/>
--        <region_glow name="ps_glow_chamber"
--                     color="#danger" tone_subject="ps_chip_chamber_tone" shown_subject="ps_glow_chamber"/>
+-        <!-- PrintStatusTiles paints the heater glows from the heat state. -->
+-        <region_glow name="ps_glow_nozzle" tone_subject="ps_chip_nozzle_tone" shown_subject="ps_glow_nozzle"/>
+-        <region_glow name="ps_glow_bed" tone_subject="ps_chip_bed_tone" shown_subject="ps_glow_bed"/>
+-        <region_glow name="ps_glow_chamber" tone_subject="ps_chip_chamber_tone" shown_subject="ps_glow_chamber"/>
 -        <region_glow name="ps_glow_part_fan"
 -                     color="#info" tone_subject="ps_chip_part_fan_tone" shown_subject="ps_glow_part_fan"/>
 -        <region_glow name="ps_glow_hotend_fan"
@@ -110,7 +109,38 @@ index a2a4272..1ed8f4e 100644
 -                       progress_subject="ps_chip_nozzle_progress" state_subject="ps_chip_nozzle_state">
 -          <bind_flag_if cond="ps_chip_nozzle_shown eq 0 or ps_toolhead_merged eq 1" flag="hidden"/>
 -          <event_cb trigger="clicked" callback="on_temp_card_clicked"/>
--          <icon src="heater" size="xs">
+-          <!-- The chip text carries the tool badge, so the icon stays bare. -->
+-          <nozzle_icon size="xs" badge_subject="">
+-            <bind_flag_if_eq subject="ps_callout_mode" flag="hidden" ref_value="1"/>
+-          </nozzle_icon>
+-        </activity_chip>
+-        <activity_chip name="ps_chip_bed"
+-                       text_subject="ps_chip_bed_text" shown_subject="ps_chip_bed_shown"
+-                       compact_subject="ps_callout_mode" tone_subject="ps_chip_bed_tone"
+-                       progress_subject="ps_chip_bed_progress" state_subject="ps_chip_bed_state">
+-          <bind_flag_if cond="ps_chip_bed_shown eq 0" flag="hidden"/>
+-          <event_cb trigger="clicked" callback="on_temp_card_clicked"/>
+-          <heater_icon src="radiator" glyph_name="bed_icon_glyph" size="xs">
+-            <bind_flag_if_eq subject="ps_callout_mode" flag="hidden" ref_value="1"/>
+-          </heater_icon>
+-        </activity_chip>
+-        <activity_chip name="ps_chip_chamber"
+-                       text_subject="ps_chip_chamber_text" shown_subject="ps_chip_chamber_shown"
+-                       compact_subject="ps_callout_mode" tone_subject="ps_chip_chamber_tone"
+-                       progress_subject="ps_chip_chamber_progress" state_subject="ps_chip_chamber_state">
+-          <bind_flag_if cond="ps_chip_chamber_shown eq 0" flag="hidden"/>
+-          <event_cb trigger="clicked" callback="on_temp_card_clicked"/>
+-          <heater_icon src="fridge_industrial" glyph_name="chamber_icon_glyph" size="xs">
+-            <bind_flag_if_eq subject="ps_callout_mode" flag="hidden" ref_value="1"/>
+-          </heater_icon>
+-        </activity_chip>
+-        <activity_chip name="ps_chip_part_fan"
+-                       text_subject="ps_chip_part_fan_text" shown_subject="ps_chip_part_fan_shown"
+-                       compact_subject="ps_callout_mode" tone_subject="ps_chip_part_fan_tone"
+-                       progress_subject="ps_chip_part_fan_progress">
+-          <bind_flag_if cond="ps_chip_part_fan_shown eq 0 or ps_toolhead_merged eq 1" flag="hidden"/>
+-          <event_cb trigger="clicked" callback="on_print_status_fans_clicked"/>
+-          <icon src="fan" size="xs">
 -            <bind_flag_if_eq subject="ps_callout_mode" flag="hidden" ref_value="1"/>
 +  <styles>
 +    <!-- Sizes and flow are attributes on each object: a style's size loses to
@@ -154,36 +184,6 @@ index a2a4272..1ed8f4e 100644
 +          <icon src="heater" size="xs" variant="muted" clickable="false">
 +            <bind_style_if_eq name="icon_hot" subject="ps_chip_nozzle_tone" ref_value="1"/>
            </icon>
--        </activity_chip>
--        <activity_chip name="ps_chip_bed"
--                       text_subject="ps_chip_bed_text" shown_subject="ps_chip_bed_shown"
--                       compact_subject="ps_callout_mode" tone_subject="ps_chip_bed_tone"
--                       progress_subject="ps_chip_bed_progress" state_subject="ps_chip_bed_state">
--          <bind_flag_if cond="ps_chip_bed_shown eq 0" flag="hidden"/>
--          <event_cb trigger="clicked" callback="on_temp_card_clicked"/>
--          <icon src="radiator" size="xs">
--            <bind_flag_if_eq subject="ps_callout_mode" flag="hidden" ref_value="1"/>
--          </icon>
--        </activity_chip>
--        <activity_chip name="ps_chip_chamber"
--                       text_subject="ps_chip_chamber_text" shown_subject="ps_chip_chamber_shown"
--                       compact_subject="ps_callout_mode" tone_subject="ps_chip_chamber_tone"
--                       progress_subject="ps_chip_chamber_progress" state_subject="ps_chip_chamber_state">
--          <bind_flag_if cond="ps_chip_chamber_shown eq 0" flag="hidden"/>
--          <event_cb trigger="clicked" callback="on_temp_card_clicked"/>
--          <icon src="fridge_industrial" size="xs">
--            <bind_flag_if_eq subject="ps_callout_mode" flag="hidden" ref_value="1"/>
--          </icon>
--        </activity_chip>
--        <activity_chip name="ps_chip_part_fan"
--                       text_subject="ps_chip_part_fan_text" shown_subject="ps_chip_part_fan_shown"
--                       compact_subject="ps_callout_mode" tone_subject="ps_chip_part_fan_tone"
--                       progress_subject="ps_chip_part_fan_progress">
--          <bind_flag_if cond="ps_chip_part_fan_shown eq 0 or ps_toolhead_merged eq 1" flag="hidden"/>
--          <event_cb trigger="clicked" callback="on_print_status_fans_clicked"/>
--          <icon src="fan" size="xs">
--            <bind_flag_if_eq subject="ps_callout_mode" flag="hidden" ref_value="1"/>
--          </icon>
 -        </activity_chip>
 -        <activity_chip name="ps_chip_hotend_fan"
 -                       text_subject="ps_chip_hotend_fan_text" shown_subject="ps_chip_hotend_fan_shown"
@@ -334,7 +334,7 @@ index a2a4272..1ed8f4e 100644
 +        <icon src="filament" size="xs" variant="primary"/>
 +        <text_small bind_text="ams_action_detail"
 +                    flex_grow="1" width="1" long_mode="dots" style_text_color="#text"/>
-+      </lv_obj>
+       </lv_obj>
 +      <lv_obj name="kiln_ps_slots"
 +              width="100%" height="1" flex_grow="1" flex_flow="row" style_pad_all="0" style_pad_column="#space_sm"
 +              style_bg_opa="0" style_border_width="0" scrollable="false">
@@ -410,12 +410,12 @@ index a2a4272..1ed8f4e 100644
 +          </lv_obj>
 +          <text_tiny bind_text="ams_slot_3_remaining" width="100%" long_mode="dots" style_text_color="#text_muted"/>
 +        </lv_obj>
-       </lv_obj>
-     </lv_obj>
++      </lv_obj>
++    </lv_obj>
 +    <!-- Room left over on a printer without an IFS. -->
 +    <lv_obj width="100%" height="1" flex_grow="1" style_bg_opa="0" style_border_width="0" clickable="false">
 +      <bind_flag_if_not_eq subject="ams_slot_count" flag="hidden" ref_value="0"/>
-+    </lv_obj>
+     </lv_obj>
      <!-- A chamber heater fault, an offline heater or a refused target. Rides
 -         over the top of the picture and hides itself while the heater is healthy. -->
 +         over the top of the card and hides itself while the heater is healthy. -->

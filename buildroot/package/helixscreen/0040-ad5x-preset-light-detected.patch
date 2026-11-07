@@ -1,0 +1,73 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Sat, 7 Nov 2026 12:00:00 -0500
+Subject: [PATCH] presets: the AD5X's light stays on detection
+
+Upstream's AD5X preset (v1.1.0-beta.17) sets capability_overrides.led to
+"disable" on first setup, because Z-Mod declares [led chamber_light] on
+every AD5X whether a light is wired or not. Kiln OS declares its own
+[led chamber_led] for the light on PA11, so the override would hide the
+home screen's light tile, the light chip and "Chamber light off when the
+screen sleeps" (0011, 0031) on every fresh install. Without it the led
+capability follows detection, as before beta.17; Settings > Devices >
+"Chamber light fitted" still turns it off.
+---
+diff --git a/assets/config/presets/ad5x.json b/assets/config/presets/ad5x.json
+index d9a0d7d..56721b6 100644
+--- a/assets/config/presets/ad5x.json
++++ b/assets/config/presets/ad5x.json
+@@ -50,9 +50,6 @@
+         "led chamber_led"
+       ]
+     },
+-    "capability_overrides": {
+-      "led": "disable"
+-    },
+     "default_macros": {
+       "cooldown": "SET_HEATER_TEMPERATURE HEATER=extruder TARGET=0\nSET_HEATER_TEMPERATURE HEATER=heater_bed TARGET=0",
+       "load_filament": { "label": "Load", "gcode": "LOAD_FILAMENT" },
+diff --git a/tests/unit/test_config_preset.cpp b/tests/unit/test_config_preset.cpp
+index 688bd49..561f404 100644
+--- a/tests/unit/test_config_preset.cpp
++++ b/tests/unit/test_config_preset.cpp
+@@ -1045,14 +1045,14 @@ TEST_CASE_METHOD(PresetConfigFixture, "snapmaker_u1 preset carries no home panel
+ }
+ 
+ TEST_CASE_METHOD(PresetConfigFixture,
+-                 "Config::apply_preset_file writes the AD5X led override on first setup only",
++                 "Config::apply_preset_file writes no AD5X led override",
+                  "[config][preset]") {
+     SetUp();
+     copy_shipped_preset("ad5x");
+ 
+-    SECTION("first setup takes the override") {
++    SECTION("first setup leaves the light to detection") {
+         REQUIRE(config.apply_preset_file("ad5x") == true);
+-        CHECK(printer_data()["capability_overrides"]["led"] == "disable");
++        CHECK_FALSE(printer_data().contains("capability_overrides"));
+     }
+ 
+     SECTION("a set-up printer keeps its capabilities") {
+diff --git a/tests/unit/test_preset_database_links.cpp b/tests/unit/test_preset_database_links.cpp
+index 29e16aa..a3dbb69 100644
+--- a/tests/unit/test_preset_database_links.cpp
++++ b/tests/unit/test_preset_database_links.cpp
+@@ -269,14 +269,13 @@ TEST_CASE("the OpenCreator Creator 5 presets name the hardware OpenCreator has",
+           expected.end());
+ }
+ 
+-// Z-Mod declares [led chamber_light] on every AD5X whether or not a light is
+-// wired, and a stock AD5X has none, so the preset turns the led capability off.
+-TEST_CASE("the AD5X preset turns the light capability off and names its led object",
++// Kiln OS: the AD5X's light on PA11 is its own [led chamber_led], so the
++// preset leaves the led capability to detection.
++TEST_CASE("the AD5X preset leaves the light capability on and names its led object",
+           "[printer_detector][presets][assets]") {
+     const json ad5x = load_json(std::string(kPresetDir) + "/ad5x.json");
+     const json& printer = ad5x["printer"];
+-    REQUIRE(printer.contains("capability_overrides"));
+-    CHECK(printer["capability_overrides"].value("led", "") == "disable");
++    CHECK_FALSE(printer.contains("capability_overrides"));
+     const json& expected = printer["hardware"]["expected"];
+     REQUIRE(expected.is_array());
+     CHECK(std::find(expected.begin(), expected.end(), "led chamber_light") != expected.end());

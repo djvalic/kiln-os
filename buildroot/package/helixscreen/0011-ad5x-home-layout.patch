@@ -530,20 +530,23 @@ index 0000000..e7c2971
 +  }
 +}
 diff --git a/include/default_layout_resolver.h b/include/default_layout_resolver.h
-index 8439954..1296621 100644
+index 5928eb1..6d7bde2 100644
 --- a/include/default_layout_resolver.h
 +++ b/include/default_layout_resolver.h
-@@ -56,8 +56,8 @@ struct ResolvedPlacement {
+@@ -63,9 +63,10 @@ struct ResolvedPlacement {
  struct ResolvedDefault {
      std::vector<ResolvedPlacement> placed;
      std::vector<std::string> disabled; // losing candidates + tier `disabled` ids
--    std::string signature; // tier|cols|rows|variant chain|preset|name=value,... for every consulted
--                           // subject, sorted
-+    std::string signature; // tier|cols|rows|variant chain|preset[#seed revision]|name=value,...
-+                           // for every consulted subject, sorted
+-    /// tier|cols|rows|variant chain|preset|name=value,... for every consulted
+-    /// subject, sorted, then |table=<version> when the table carries a positive
+-    /// `version`, so changing the shipped table re-resolves every unedited default.
++    /// tier|cols|rows|variant chain|preset[#seed revision]|name=value,... for
++    /// every consulted subject, sorted, then |table=<version> when the table
++    /// carries a positive `version`, so changing the shipped table re-resolves
++    /// every unedited default.
+     std::string signature;
      bool ok = false; // false: table unusable (missing, no anchors for this tier); caller falls back
  };
- 
 diff --git a/include/favorite_macro_config.h b/include/favorite_macro_config.h
 index 9050c82..f51b9b5 100644
 --- a/include/favorite_macro_config.h
@@ -619,10 +622,10 @@ index 3b00755..2fa4b7f 100644
      // and temperature observers, so the tile's numbers and icons agree.
      helix::ui::HeaterIconBinder nozzle_icon_binder_;
 diff --git a/src/system/default_layout_resolver.cpp b/src/system/default_layout_resolver.cpp
-index a067d54..fff21c0 100644
+index 1c79c4b..83558a0 100644
 --- a/src/system/default_layout_resolver.cpp
 +++ b/src/system/default_layout_resolver.cpp
-@@ -473,9 +473,19 @@ ResolvedDefault resolve_default_layout(const json& table, const json* overlay,
+@@ -515,9 +515,19 @@ ResolvedDefault resolve_default_layout(const json& table, const json* overlay,
                                         const std::vector<std::string>& variant_chain,
                                         std::string_view preset, const CapabilitySnapshot& caps) {
      ResolvedDefault out;
@@ -643,15 +646,15 @@ index a067d54..fff21c0 100644
          return out;
      }
  
-@@ -531,7 +541,7 @@ ResolvedDefault resolve_default_layout(const json& table, const json* overlay,
+@@ -573,7 +583,7 @@ ResolvedDefault resolve_default_layout(const json& table, const json* overlay,
  
      out.placed = r.take_placed();
      out.disabled = r.disabled();
--    out.signature = make_signature(tier, cols, rows, variant_chain, preset, r.consulted());
-+    out.signature = make_signature(tier, cols, rows, variant_chain, seed_key, r.consulted());
+-    out.signature = make_signature(tier, cols, rows, variant_chain, preset, r.consulted(),
++    out.signature = make_signature(tier, cols, rows, variant_chain, seed_key, r.consulted(),
+                                    ju::safe_int(doc, "version", 0));
      out.ok = !out.placed.empty();
      spdlog::debug("[DefaultLayoutResolver] tier={} grid={}x{} table={} placed={} disabled={} "
-                   "signature={}",
 diff --git a/src/ui/modals/favorite_macro_config_modal.cpp b/src/ui/modals/favorite_macro_config_modal.cpp
 index b523074..f9ee93c 100644
 --- a/src/ui/modals/favorite_macro_config_modal.cpp
@@ -984,12 +987,12 @@ index b20ca75..1b0b203 100644
      /// standing in for the attached tile's own label.
      static std::string tool_target_caption(PreheatWidget& widget, lv_obj_t* label) {
 diff --git a/tests/unit/test_default_layout.cpp b/tests/unit/test_default_layout.cpp
-index ebec034..a4f7bfe 100644
+index af35efb..532832b 100644
 --- a/tests/unit/test_default_layout.cpp
 +++ b/tests/unit/test_default_layout.cpp
-@@ -2868,3 +2868,138 @@ TEST_CASE("default_layout: a printer that is not a tool changer gets the layout
-         }
-     }
+@@ -2940,3 +2940,138 @@ TEST_CASE("default_layout: a tool changer's medium default leaves the temperatur
+     CHECK(image->colspan == 4);
+     CHECK(placed_widget(plain, "tool_switcher") == nullptr);
  }
 +
 +// ============================================================================
@@ -1127,13 +1130,14 @@ index ebec034..a4f7bfe 100644
 +    }
 +}
 diff --git a/tests/unit/test_default_layout_resolver.cpp b/tests/unit/test_default_layout_resolver.cpp
-index e1b6fd3..4f13fa8 100644
+index 12bd1b0..9c934a0 100644
 --- a/tests/unit/test_default_layout_resolver.cpp
 +++ b/tests/unit/test_default_layout_resolver.cpp
-@@ -509,6 +509,15 @@ TEST_CASE("resolver: signature tracks exactly the consulted subjects",
-               a.signature);
-         CHECK(resolve(table, "medium", base, 12, 8, nullptr, {}, "ad5x").signature != a.signature);
+@@ -568,6 +568,16 @@ TEST_CASE("resolver: signature tracks exactly the consulted subjects",
+         versioned["version"] = 3;
+         CHECK(resolve(versioned, "medium", base).signature != v2.signature);
      }
++
 +    SECTION("a seed's revision is part of it, its absence is not") {
 +        const json seed = parse(R"json({"anchors": []})json");
 +        const json revised = parse(R"json({"revision": "kiln-1", "anchors": []})json");
@@ -1183,10 +1187,10 @@ index 44fe0ff..10316d6 100644
 +    }
 +}
 diff --git a/tests/unit/test_grid_edit_mode.cpp b/tests/unit/test_grid_edit_mode.cpp
-index 86d9547..795d867 100644
+index f3a235f..4366f75 100644
 --- a/tests/unit/test_grid_edit_mode.cpp
 +++ b/tests/unit/test_grid_edit_mode.cpp
-@@ -240,16 +240,16 @@ TEST_CASE("GridEditMode: clamp_span respects min/max from registry", "[grid_edit
+@@ -242,16 +242,16 @@ TEST_CASE("GridEditMode: clamp_span respects min/max from registry", "[grid_edit
  
  TEST_CASE("GridEditMode: clamp_span holds an axis whose min equals its max",
            "[grid_edit][resize]") {
@@ -1209,7 +1213,7 @@ index 86d9547..795d867 100644
      CHECK(r2 == def->rowspan);
      (void)c;
      (void)c2;
-@@ -1354,15 +1354,15 @@ TEST_CASE("clamp_span: clamps to widget min/max", "[grid_edit][sizing]") {
+@@ -1356,15 +1356,15 @@ TEST_CASE("clamp_span: clamps to widget min/max", "[grid_edit][sizing]") {
  }
  
  TEST_CASE("clamp_span: a fixed axis stays fixed while the other scales", "[grid_edit][sizing]") {
@@ -1230,7 +1234,7 @@ index 86d9547..795d867 100644
      CHECK(c1 == def->effective_max_colspan());
      CHECK(r1 == def->rowspan);
  }
-@@ -1760,14 +1760,8 @@ TEST_CASE("snap_step_for: whole-cell widgets step by a full cell",
+@@ -2123,14 +2123,8 @@ TEST_CASE("snap_step_for: whole-cell widgets step by a full cell",
      CHECK(wc == helix::GridLayout::TRACKS_PER_CELL);
      CHECK(wr == helix::GridLayout::TRACKS_PER_CELL);
  

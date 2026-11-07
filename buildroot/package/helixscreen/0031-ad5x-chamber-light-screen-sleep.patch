@@ -103,7 +103,7 @@ index 0000000..0f5b1d6
 +
 +} // namespace helix::led
 diff --git a/src/application/application.cpp b/src/application/application.cpp
-index beec722..ba9874f 100644
+index 02af6ef..6bf7f50 100644
 --- a/src/application/application.cpp
 +++ b/src/application/application.cpp
 @@ -45,6 +45,7 @@
@@ -114,7 +114,7 @@ index beec722..ba9874f 100644
  #include "light_button_config.h"
  #include "moonraker_manager.h"
  #include "page_scroll_auto_inject.h"
-@@ -1436,6 +1437,13 @@ bool Application::init_display() {
+@@ -1437,6 +1438,13 @@ bool Application::init_display() {
      });
  #endif
  
@@ -256,18 +256,18 @@ index 0000000..8837118
 +
 +} // namespace helix::led
 diff --git a/src/printer/printer_discovery.cpp b/src/printer/printer_discovery.cpp
-index 598380f..2e29012 100644
+index db7af8a..427af28 100644
 --- a/src/printer/printer_discovery.cpp
 +++ b/src/printer/printer_discovery.cpp
-@@ -9,6 +9,7 @@
+@@ -10,6 +10,7 @@
  #include "i_moonraker_client.h"
  #include "led/led_auto_state.h"
  #include "led/led_controller.h"
 +#include "led/led_screen_light.h"
  #include "moonraker_api.h"
  #include "printer_name_sync.h"
- #include "runtime_config.h"
-@@ -109,6 +110,7 @@ void init_subsystems_from_hardware(const PrinterDiscovery& hardware, IMoonrakerA
+ #include "printer_state.h"
+@@ -114,6 +115,7 @@ void init_subsystems_from_hardware(const PrinterDiscovery& hardware, IMoonrakerA
      // invoked inside a queue_update() drain), so the observe<int> subscriptions
      // are main-thread-safe.
      helix::led::LedAutoState::instance().init(printer_state);
@@ -333,10 +333,10 @@ index 83309d0..4a2128b 100644
           {"row_dark_mode", "row_theme_settings", "row_animations", "row_widget_labels",
            "row_bed_mesh_mode"}},
 diff --git a/translations/de.yml b/translations/de.yml
-index 5dc37ef..aedb706 100644
+index 7e03c96..2917546 100644
 --- a/translations/de.yml
 +++ b/translations/de.yml
-@@ -47,6 +47,8 @@ translations:
+@@ -49,6 +49,8 @@ translations:
    '%u layers': '%u Schichten'
    '%zu events queued': '%zu Ereignisse in Warteschlange'
    '%zu plugins failed to load': '%zu Plugins konnten nicht geladen werden'
@@ -346,10 +346,10 @@ index 5dc37ef..aedb706 100644
    "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' und '{}' existieren bereits. Gespeicherte Netze ersetzen?"
    (different grade): (andere Klasse)
 diff --git a/translations/en.yml b/translations/en.yml
-index 3f7e871..6689bf8 100644
+index b9c1833..eefa58f 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -47,6 +47,8 @@ translations:
+@@ -49,6 +49,8 @@ translations:
    '%u layers': '%u layers'
    '%zu events queued': '%zu events queued'
    '%zu plugins failed to load': '%zu plugins failed to load'
@@ -359,10 +359,10 @@ index 3f7e871..6689bf8 100644
    "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' and '{}' already exist. Replace the stored meshes?"
    (different grade): (different grade)
 diff --git a/translations/es.yml b/translations/es.yml
-index 35f171a..0d8cc54 100644
+index 8d0d397..31fbf22 100644
 --- a/translations/es.yml
 +++ b/translations/es.yml
-@@ -47,6 +47,8 @@ translations:
+@@ -49,6 +49,8 @@ translations:
    '%u layers': '%u capas'
    '%zu events queued': '%zu eventos en cola'
    '%zu plugins failed to load': '%zu plugins no se cargaron'
@@ -372,10 +372,10 @@ index 35f171a..0d8cc54 100644
    "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' y '{}' ya existen. ¿Reemplazar las mallas guardadas?"
    (different grade): (grado diferente)
 diff --git a/translations/fr.yml b/translations/fr.yml
-index b7f9b95..224f251 100644
+index 91ae2b1..1b15481 100644
 --- a/translations/fr.yml
 +++ b/translations/fr.yml
-@@ -47,6 +47,8 @@ translations:
+@@ -49,6 +49,8 @@ translations:
    '%u layers': '%u couches'
    '%zu events queued': '%zu événements en file'
    '%zu plugins failed to load': '%zu plugins n''ont pas pu se charger'
@@ -385,10 +385,10 @@ index b7f9b95..224f251 100644
    "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' et '{}' existent déjà. Remplacer les maillages enregistrés ?"
    (different grade): (grade différent)
 diff --git a/translations/it.yml b/translations/it.yml
-index b00c26e..0e57e0f 100644
+index b0eaf46..9056e3e 100644
 --- a/translations/it.yml
 +++ b/translations/it.yml
-@@ -47,6 +47,8 @@ translations:
+@@ -49,6 +49,8 @@ translations:
    '%u layers': '%u strati'
    '%zu events queued': '%zu eventi in coda'
    '%zu plugins failed to load': Caricamento di %zu plugin non riuscito
@@ -398,10 +398,10 @@ index b00c26e..0e57e0f 100644
    "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' e '{}' esistono già. Sostituire le mesh salvate?"
    (different grade): (grado diverso)
 diff --git a/translations/ja.yml b/translations/ja.yml
-index b065ff9..e9977a6 100644
+index 04bd35c..1236078 100644
 --- a/translations/ja.yml
 +++ b/translations/ja.yml
-@@ -47,6 +47,8 @@ translations:
+@@ -49,6 +49,8 @@ translations:
    '%u layers': '%uレイヤー'
    '%zu events queued': '%zu 件のイベントを待機中'
    '%zu plugins failed to load': '%zu 個のプラグインの読み込みに失敗しました'
@@ -411,10 +411,10 @@ index b065ff9..e9977a6 100644
    "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' と '{}' は既に存在します。保存されたメッシュを置き換えますか？"
    (different grade): (グレード違い)
 diff --git a/translations/pt.yml b/translations/pt.yml
-index edba43d..d799abc 100644
+index ca6629b..8e4feb3 100644
 --- a/translations/pt.yml
 +++ b/translations/pt.yml
-@@ -47,6 +47,8 @@ translations:
+@@ -49,6 +49,8 @@ translations:
    '%u layers': '%u camadas'
    '%zu events queued': '%zu eventos na fila'
    '%zu plugins failed to load': '%zu plugins falharam ao carregar'
@@ -424,10 +424,10 @@ index edba43d..d799abc 100644
    "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' e '{}' já existem. Substituir as malhas salvas?"
    (different grade): (grau diferente)
 diff --git a/translations/ru.yml b/translations/ru.yml
-index ff885d9..2764a6b 100644
+index 13c6866..edc3f47 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -91,6 +91,8 @@ translations:
+@@ -93,6 +93,8 @@ translations:
      many: '%zu событий в очереди'
      other: '%zu события в очереди'
    '%zu plugins failed to load': Не удалось загрузить %zu плагинов
@@ -437,10 +437,10 @@ index ff885d9..2764a6b 100644
    "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' и '{}' уже существуют. Заменить сохранённые сетки?"
    (different grade): (другая марка)
 diff --git a/translations/zh.yml b/translations/zh.yml
-index 45a3136..db6fa64 100644
+index dc3fa9a..463b785 100644
 --- a/translations/zh.yml
 +++ b/translations/zh.yml
-@@ -47,6 +47,8 @@ translations:
+@@ -49,6 +49,8 @@ translations:
    '%u layers': '%u 层'
    '%zu events queued': '%zu 个事件已排队'
    '%zu plugins failed to load': '%zu 个插件加载失败'
@@ -466,132 +466,132 @@ index 08d7b0d..662699c 100644
          <info_note icon="info"
                     text="Touch screen to wake from sleep" style_pad_left="#space_lg" style_pad_right="#space_lg"/>
 diff --git a/ui_xml/translations/de.xml b/ui_xml/translations/de.xml
-index f35957d..9c9b9d7 100644
+index c7539d9..82a6ff6 100644
 --- a/ui_xml/translations/de.xml
 +++ b/ui_xml/translations/de.xml
-@@ -624,6 +624,8 @@
-   <translation tag="Chamber heater didn&apos;t start" de="Kammerheizung ist nicht gestartet"/>
+@@ -637,6 +637,8 @@
    <translation tag="Chamber heater didn&apos;t start. {}" de="Kammerheizung ist nicht gestartet. {}"/>
    <translation tag="Chamber heating to %d°C..." de="Kammer heizt auf %d°C auf..."/>
+   <translation tag="Chamber light fitted" de="Kammerlicht eingebaut"/>
 +  <translation tag="Chamber light off when the screen sleeps" de="Kammerlicht aus, wenn der Bildschirm in den Ruhemodus geht"/>
 +  <translation tag="Chamber light turns off when the screen sleeps, but stays on during a print" de="Das Kammerlicht geht aus, wenn der Bildschirm in den Ruhemodus geht, bleibt beim Drucken aber an"/>
    <translation tag="Chamber target set to {}°C" de="Kammer-Ziel auf {}°C gesetzt"/>
    <translation tag="Chamber temp must be 0-%d°C" de="Kammertemperatur muss 0-%d°C betragen"/>
-   <translation tag="Change" de="Ändern"/>
+   <translation tag="Chamber too hot" de="Kammer zu heiß"/>
 diff --git a/ui_xml/translations/en.xml b/ui_xml/translations/en.xml
-index 405014d..c59701b 100644
+index a037063..e4b3f5c 100644
 --- a/ui_xml/translations/en.xml
 +++ b/ui_xml/translations/en.xml
-@@ -624,6 +624,8 @@
-   <translation tag="Chamber heater didn&apos;t start" en="Chamber heater didn&apos;t start"/>
+@@ -637,6 +637,8 @@
    <translation tag="Chamber heater didn&apos;t start. {}" en="Chamber heater didn&apos;t start. {}"/>
    <translation tag="Chamber heating to %d°C..." en="Chamber heating to %d°C..."/>
+   <translation tag="Chamber light fitted" en="Chamber light fitted"/>
 +  <translation tag="Chamber light off when the screen sleeps" en="Chamber light off when the screen sleeps"/>
 +  <translation tag="Chamber light turns off when the screen sleeps, but stays on during a print" en="Chamber light turns off when the screen sleeps, but stays on during a print"/>
    <translation tag="Chamber target set to {}°C" en="Chamber target set to {}°C"/>
    <translation tag="Chamber temp must be 0-%d°C" en="Chamber temp must be 0-%d°C"/>
-   <translation tag="Change" en="Change"/>
+   <translation tag="Chamber too hot" en="Chamber too hot"/>
 diff --git a/ui_xml/translations/es.xml b/ui_xml/translations/es.xml
-index 8d120ab..ec01d83 100644
+index e7984f0..617a40a 100644
 --- a/ui_xml/translations/es.xml
 +++ b/ui_xml/translations/es.xml
-@@ -624,6 +624,8 @@
-   <translation tag="Chamber heater didn&apos;t start" es="El calentador de la cámara no arrancó"/>
+@@ -637,6 +637,8 @@
    <translation tag="Chamber heater didn&apos;t start. {}" es="El calentador de la cámara no arrancó. {}"/>
    <translation tag="Chamber heating to %d°C..." es="Calentando cámara a %d°C..."/>
+   <translation tag="Chamber light fitted" es="Luz de cámara instalada"/>
 +  <translation tag="Chamber light off when the screen sleeps" es="Luz de cámara apagada cuando la pantalla se suspende"/>
 +  <translation tag="Chamber light turns off when the screen sleeps, but stays on during a print" es="La luz de cámara se apaga cuando la pantalla se suspende, pero permanece encendida durante la impresión"/>
    <translation tag="Chamber target set to {}°C" es="Objetivo de cámara establecido en {}°C"/>
    <translation tag="Chamber temp must be 0-%d°C" es="La temperatura de la cámara debe ser 0-%d°C"/>
-   <translation tag="Change" es="Cambiar"/>
+   <translation tag="Chamber too hot" es="Cámara demasiado caliente"/>
 diff --git a/ui_xml/translations/fr.xml b/ui_xml/translations/fr.xml
-index 55c44f4..80f0d25 100644
+index fee29d8..8c50dbd 100644
 --- a/ui_xml/translations/fr.xml
 +++ b/ui_xml/translations/fr.xml
-@@ -624,6 +624,8 @@
-   <translation tag="Chamber heater didn&apos;t start" fr="Le chauffage de la chambre n&apos;a pas démarré"/>
+@@ -637,6 +637,8 @@
    <translation tag="Chamber heater didn&apos;t start. {}" fr="Le chauffage de la chambre n&apos;a pas démarré. {}"/>
    <translation tag="Chamber heating to %d°C..." fr="Chauffe de la chambre à %d°C..."/>
+   <translation tag="Chamber light fitted" fr="Éclairage de chambre installé"/>
 +  <translation tag="Chamber light off when the screen sleeps" fr="Lumière de l&apos;enceinte éteinte quand l&apos;écran se met en veille"/>
 +  <translation tag="Chamber light turns off when the screen sleeps, but stays on during a print" fr="La lumière de l&apos;enceinte s&apos;éteint quand l&apos;écran se met en veille, mais reste allumée pendant l&apos;impression"/>
    <translation tag="Chamber target set to {}°C" fr="Cible de chambre définie à {}°C"/>
    <translation tag="Chamber temp must be 0-%d°C" fr="La température de l&apos;enceinte doit être entre 0 et %d°C"/>
-   <translation tag="Change" fr="Modifier"/>
+   <translation tag="Chamber too hot" fr="Chambre trop chaude"/>
 diff --git a/ui_xml/translations/it.xml b/ui_xml/translations/it.xml
-index 8bf1fff..5edd622 100644
+index 9a17e72..74ec2b0 100644
 --- a/ui_xml/translations/it.xml
 +++ b/ui_xml/translations/it.xml
-@@ -624,6 +624,8 @@
-   <translation tag="Chamber heater didn&apos;t start" it="Il riscaldatore della camera non si è avviato"/>
+@@ -637,6 +637,8 @@
    <translation tag="Chamber heater didn&apos;t start. {}" it="Il riscaldatore della camera non si è avviato. {}"/>
    <translation tag="Chamber heating to %d°C..." it="Riscaldamento camera a %d°C..."/>
+   <translation tag="Chamber light fitted" it="Luce della camera installata"/>
 +  <translation tag="Chamber light off when the screen sleeps" it="Luce della camera spenta quando lo schermo va in standby"/>
 +  <translation tag="Chamber light turns off when the screen sleeps, but stays on during a print" it="La luce della camera si spegne quando lo schermo va in standby, ma resta accesa durante la stampa"/>
    <translation tag="Chamber target set to {}°C" it="Target camera impostato a {}°C"/>
    <translation tag="Chamber temp must be 0-%d°C" it="La temperatura della camera deve essere 0-%d°C"/>
-   <translation tag="Change" it="Cambia"/>
+   <translation tag="Chamber too hot" it="Camera troppo calda"/>
 diff --git a/ui_xml/translations/ja.xml b/ui_xml/translations/ja.xml
-index 737caba..9450005 100644
+index 4ba65ee..d93de96 100644
 --- a/ui_xml/translations/ja.xml
 +++ b/ui_xml/translations/ja.xml
-@@ -624,6 +624,8 @@
-   <translation tag="Chamber heater didn&apos;t start" ja="チャンバーヒーターが起動しませんでした"/>
+@@ -637,6 +637,8 @@
    <translation tag="Chamber heater didn&apos;t start. {}" ja="チャンバーヒーターが起動しませんでした。{}"/>
    <translation tag="Chamber heating to %d°C..." ja="チャンバーを%d°Cに加熱中..."/>
+   <translation tag="Chamber light fitted" ja="チャンバーライト搭載"/>
 +  <translation tag="Chamber light off when the screen sleeps" ja="Chamber light off when the screen sleeps"/>
 +  <translation tag="Chamber light turns off when the screen sleeps, but stays on during a print" ja="Chamber light turns off when the screen sleeps, but stays on during a print"/>
    <translation tag="Chamber target set to {}°C" ja="チャンバー目標温度を{}°C に設定"/>
    <translation tag="Chamber temp must be 0-%d°C" ja="チャンバー温度は 0〜%d°C にしてください"/>
-   <translation tag="Change" ja="変更"/>
+   <translation tag="Chamber too hot" ja="チャンバーが高温です"/>
 diff --git a/ui_xml/translations/pt.xml b/ui_xml/translations/pt.xml
-index ad70d99..553b6e6 100644
+index 5610291..d814b8a 100644
 --- a/ui_xml/translations/pt.xml
 +++ b/ui_xml/translations/pt.xml
-@@ -624,6 +624,8 @@
-   <translation tag="Chamber heater didn&apos;t start" pt="O aquecedor da câmara não ligou"/>
+@@ -637,6 +637,8 @@
    <translation tag="Chamber heater didn&apos;t start. {}" pt="O aquecedor da câmara não ligou. {}"/>
    <translation tag="Chamber heating to %d°C..." pt="Aquecendo câmara a %d°C..."/>
+   <translation tag="Chamber light fitted" pt="Luz da câmara instalada"/>
 +  <translation tag="Chamber light off when the screen sleeps" pt="Luz da câmara apagada quando a tela suspende"/>
 +  <translation tag="Chamber light turns off when the screen sleeps, but stays on during a print" pt="A luz da câmara apaga quando a tela suspende, mas fica acesa durante a impressão"/>
    <translation tag="Chamber target set to {}°C" pt="Alvo da câmara definido para {}°C"/>
    <translation tag="Chamber temp must be 0-%d°C" pt="A temperatura da câmara deve ser 0-%d°C"/>
-   <translation tag="Change" pt="Alterar"/>
+   <translation tag="Chamber too hot" pt="Câmara demasiado quente"/>
 diff --git a/ui_xml/translations/ru.xml b/ui_xml/translations/ru.xml
-index b19af6d..0637dd5 100644
+index 348a243..c5c0983 100644
 --- a/ui_xml/translations/ru.xml
 +++ b/ui_xml/translations/ru.xml
-@@ -663,6 +663,8 @@
-   <translation tag="Chamber heater didn&apos;t start" ru="Нагреватель камеры не запустился"/>
+@@ -676,6 +676,8 @@
    <translation tag="Chamber heater didn&apos;t start. {}" ru="Нагреватель камеры не запустился. {}"/>
    <translation tag="Chamber heating to %d°C..." ru="Нагрев камеры до %d°C..."/>
+   <translation tag="Chamber light fitted" ru="Подсветка камеры установлена"/>
 +  <translation tag="Chamber light off when the screen sleeps" ru="Подсветка камеры выключается, когда экран засыпает"/>
 +  <translation tag="Chamber light turns off when the screen sleeps, but stays on during a print" ru="Подсветка камеры выключается, когда экран засыпает, но остаётся включённой во время печати"/>
    <translation tag="Chamber target set to {}°C" ru="Целевая температура камеры установлена на {}°C"/>
    <translation tag="Chamber temp must be 0-%d°C" ru="Температура камеры должна быть 0-%d°C"/>
-   <translation tag="Change" ru="Изменить"/>
+   <translation tag="Chamber too hot" ru="Камера перегрета"/>
 diff --git a/ui_xml/translations/translations.xml b/ui_xml/translations/translations.xml
-index 406c0bc..1709ba1 100644
+index 72e3e83..f89acf6 100644
 --- a/ui_xml/translations/translations.xml
 +++ b/ui_xml/translations/translations.xml
-@@ -663,6 +663,8 @@
-   <translation tag="Chamber heater didn&apos;t start" de="Kammerheizung ist nicht gestartet" en="Chamber heater didn&apos;t start" es="El calentador de la cámara no arrancó" fr="Le chauffage de la chambre n&apos;a pas démarré" it="Il riscaldatore della camera non si è avviato" ja="チャンバーヒーターが起動しませんでした" pt="O aquecedor da câmara não ligou" ru="Нагреватель камеры не запустился" zh="腔体加热器未启动"/>
+@@ -676,6 +676,8 @@
    <translation tag="Chamber heater didn&apos;t start. {}" de="Kammerheizung ist nicht gestartet. {}" en="Chamber heater didn&apos;t start. {}" es="El calentador de la cámara no arrancó. {}" fr="Le chauffage de la chambre n&apos;a pas démarré. {}" it="Il riscaldatore della camera non si è avviato. {}" ja="チャンバーヒーターが起動しませんでした。{}" pt="O aquecedor da câmara não ligou. {}" ru="Нагреватель камеры не запустился. {}" zh="腔体加热器未启动。{}"/>
    <translation tag="Chamber heating to %d°C..." de="Kammer heizt auf %d°C auf..." en="Chamber heating to %d°C..." es="Calentando cámara a %d°C..." fr="Chauffe de la chambre à %d°C..." it="Riscaldamento camera a %d°C..." ja="チャンバーを%d°Cに加熱中..." pt="Aquecendo câmara a %d°C..." ru="Нагрев камеры до %d°C..." zh="腔体加热至 %d°C..."/>
+   <translation tag="Chamber light fitted" de="Kammerlicht eingebaut" en="Chamber light fitted" es="Luz de cámara instalada" fr="Éclairage de chambre installé" it="Luce della camera installata" ja="チャンバーライト搭載" pt="Luz da câmara instalada" ru="Подсветка камеры установлена" zh="已安装腔体灯"/>
 +  <translation tag="Chamber light off when the screen sleeps" de="Kammerlicht aus, wenn der Bildschirm in den Ruhemodus geht" en="Chamber light off when the screen sleeps" es="Luz de cámara apagada cuando la pantalla se suspende" fr="Lumière de l&apos;enceinte éteinte quand l&apos;écran se met en veille" it="Luce della camera spenta quando lo schermo va in standby" ja="Chamber light off when the screen sleeps" pt="Luz da câmara apagada quando a tela suspende" ru="Подсветка камеры выключается, когда экран засыпает" zh="Chamber light off when the screen sleeps"/>
 +  <translation tag="Chamber light turns off when the screen sleeps, but stays on during a print" de="Das Kammerlicht geht aus, wenn der Bildschirm in den Ruhemodus geht, bleibt beim Drucken aber an" en="Chamber light turns off when the screen sleeps, but stays on during a print" es="La luz de cámara se apaga cuando la pantalla se suspende, pero permanece encendida durante la impresión" fr="La lumière de l&apos;enceinte s&apos;éteint quand l&apos;écran se met en veille, mais reste allumée pendant l&apos;impression" it="La luce della camera si spegne quando lo schermo va in standby, ma resta accesa durante la stampa" ja="Chamber light turns off when the screen sleeps, but stays on during a print" pt="A luz da câmara apaga quando a tela suspende, mas fica acesa durante a impressão" ru="Подсветка камеры выключается, когда экран засыпает, но остаётся включённой во время печати" zh="Chamber light turns off when the screen sleeps, but stays on during a print"/>
    <translation tag="Chamber target set to {}°C" de="Kammer-Ziel auf {}°C gesetzt" en="Chamber target set to {}°C" es="Objetivo de cámara establecido en {}°C" fr="Cible de chambre définie à {}°C" it="Target camera impostato a {}°C" ja="チャンバー目標温度を{}°C に設定" pt="Alvo da câmara definido para {}°C" ru="Целевая температура камеры установлена на {}°C" zh="腔体目标温度设置为 {}°C"/>
    <translation tag="Chamber temp must be 0-%d°C" de="Kammertemperatur muss 0-%d°C betragen" en="Chamber temp must be 0-%d°C" es="La temperatura de la cámara debe ser 0-%d°C" fr="La température de l&apos;enceinte doit être entre 0 et %d°C" it="La temperatura della camera deve essere 0-%d°C" ja="チャンバー温度は 0〜%d°C にしてください" pt="A temperatura da câmara deve ser 0-%d°C" ru="Температура камеры должна быть 0-%d°C" zh="腔体温度必须为 0-%d°C"/>
-   <translation tag="Change" de="Ändern" en="Change" es="Cambiar" fr="Modifier" it="Cambia" ja="変更" pt="Alterar" ru="Изменить" zh="更改"/>
+   <translation tag="Chamber too hot" de="Kammer zu heiß" en="Chamber too hot" es="Cámara demasiado caliente" fr="Chambre trop chaude" it="Camera troppo calda" ja="チャンバーが高温です" pt="Câmara demasiado quente" ru="Камера перегрета" zh="腔体温度过高"/>
 diff --git a/ui_xml/translations/zh.xml b/ui_xml/translations/zh.xml
-index 4a4792f..4d4a844 100644
+index 200331e..59c55f1 100644
 --- a/ui_xml/translations/zh.xml
 +++ b/ui_xml/translations/zh.xml
-@@ -624,6 +624,8 @@
-   <translation tag="Chamber heater didn&apos;t start" zh="腔体加热器未启动"/>
+@@ -637,6 +637,8 @@
    <translation tag="Chamber heater didn&apos;t start. {}" zh="腔体加热器未启动。{}"/>
    <translation tag="Chamber heating to %d°C..." zh="腔体加热至 %d°C..."/>
+   <translation tag="Chamber light fitted" zh="已安装腔体灯"/>
 +  <translation tag="Chamber light off when the screen sleeps" zh="Chamber light off when the screen sleeps"/>
 +  <translation tag="Chamber light turns off when the screen sleeps, but stays on during a print" zh="Chamber light turns off when the screen sleeps, but stays on during a print"/>
    <translation tag="Chamber target set to {}°C" zh="腔体目标温度设置为 {}°C"/>
    <translation tag="Chamber temp must be 0-%d°C" zh="腔体温度必须为 0-%d°C"/>
-   <translation tag="Change" zh="更改"/>
+   <translation tag="Chamber too hot" zh="腔体温度过高"/>
