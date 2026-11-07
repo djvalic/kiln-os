@@ -106,7 +106,7 @@ Kiln OS $VERSION, install stick. See docs/install.md.
    1.3 GB). It restarts into Kiln OS by itself.
 3. Log: ad5x-install.log on the stick.
 Works on the stock firmware, with or without zMod. Never put an AD5X-*.tgz on
-this stick. Back to stock later: ad5x-restore-stock (recovery OS).
+this stick. Back to stock later: ad5x-restore-stock over SSH (docs/install.md).
 TXT
 [ -n "$PRIVATE" ] && echo "PRIVATE build: contains Flashforge/Ingenic files. Never share it." >> "$OUT/README.txt"
 ls "$OUT" | grep -qi '^AD5X-.*\.tgz$' && die "an AD5X-*.tgz ended up in $OUT"

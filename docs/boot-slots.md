@@ -141,7 +141,10 @@ Stock 3.1.0 package content: `xImage` 4,837,440 bytes (md5
 Consequences for us:
 - **A stock firmware update run from slot A (flag `ota:kernel`) overwrites
   slot B (our OS) and switches to it.** Users must not apply Flashforge
-  packages with a kernel part while our OS lives in slot B.
+  packages with a kernel part while stock runs from slot A and our OS lives
+  in slot B. (Our OS never reads such a stick; after `ad5x-restore-stock`,
+  stock runs from slot B and its update writes slot A, the recovery OS: the
+  way back to stock in both slots, docs/install.md.)
 - Our installer must decide the target from `/proc/cmdline` `root=`,
   never from the flag alone. If the flag and the running root disagree,
   stock's logic would write the mounted root.

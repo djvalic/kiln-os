@@ -1,0 +1,311 @@
+file_manager: unpack sliced .3mf uploads to G-code
+
+OrcaSlicer's "Use 3MF instead of G-code" (and Bambu-style plate files)
+uploads a .gcode.3mf. Moonraker stored it as a plain file and answered
+201, so the printer never printed it (issue #35). A sliced .3mf is now
+unpacked on upload: Metadata/plate_<N>.gcode becomes <name>.gcode (several
+plates: <name>_plate<N>.gcode, none started), the .3mf is dropped, and the
+upload goes on as that G-code (metadata, print=true). A .3mf with no
+sliced plate, a broken zip or an implausible size is refused with 400
+and a message. An optional "plate" form field picks the plate of a .3mf
+with several. kiln_3mf.py has only the standard library, so
+tools/test_moonraker_3mf.py tests it on the laptop.
+
+Upstream: not submitted (AD5X open OS)
+
+diff --git a/moonraker/components/application.py b/moonraker/components/application.py
+index cbdd1af..48b245f 100644
+--- a/moonraker/components/application.py
++++ b/moonraker/components/application.py
+@@ -974,6 +974,8 @@ class FileUploadHandler(AuthorizedRequestHandler):
+                 'print': ValueTarget(),
+                 'path': ValueTarget(),
+                 'checksum': ValueTarget(),
++                # Kiln OS: the plate of a sliced .3mf (file_manager/kiln_3mf.py)
++                'plate': ValueTarget(),
+             }
+             self._file = FileTarget(tmpname)
+             self._sha256_target = SHA256Target()
+diff --git a/moonraker/components/file_manager/file_manager.py b/moonraker/components/file_manager/file_manager.py
+index 6fe3ce3..3bb4e45 100644
+--- a/moonraker/components/file_manager/file_manager.py
++++ b/moonraker/components/file_manager/file_manager.py
+@@ -23,6 +23,7 @@ from inotify_simple import flags as iFlags
+ from ...utils import source_info
+ from ...utils import json_wrapper as jsonw
+ from ...common import RequestType, TransportType
++from . import kiln_3mf
+ 
+ # Annotation imports
+ from typing import (
+@@ -872,6 +873,25 @@ class FileManager:
+         if unzip_ufp:
+             filename = os.path.splitext(filename)[0] + ".gcode"
+             dest_path = os.path.splitext(dest_path)[0] + ".gcode"
++        # Kiln OS: a sliced .3mf is unpacked to G-code (kiln_3mf.py); the
++        # upload then goes on as that .gcode. An optional "plate" form
++        # field picks the plate of a .3mf with several.
++        unzip_3mf: Optional[List[Tuple[int, str]]] = None
++        single_3mf = True
++        if root == "gcodes" and kiln_3mf.is_3mf(dest_path):
++            plate_arg = str(upload_args.get("plate", "")).strip()
++            if plate_arg and not plate_arg.isdigit():
++                raise self.server.error(f"Invalid plate: {plate_arg}", 400)
++            try:
++                unzip_3mf, single_3mf = kiln_3mf.plan(
++                    upload_args['tmp_file_path'], filename,
++                    int(plate_arg) if plate_arg else None,
++                    shutil.disk_usage(root_path).free)
++            except kiln_3mf.ThreeMFError as e:
++                raise self.server.error(str(e), 400)
++            filename = unzip_3mf[0][1]
++            dest_path = os.path.abspath(os.path.join(root_path, filename))
++            f_ext = ".gcode"
+         if (
+             os.path.isfile(dest_path) and
+             os.access in os.supports_effective_ids and
+@@ -888,6 +908,8 @@ class FileManager:
+             'tmp_file_path': upload_args['tmp_file_path'],
+             'start_print': start_print,
+             'unzip_ufp': unzip_ufp,
++            'unzip_3mf': unzip_3mf,
++            'single_3mf': single_3mf,
+             'ext': f_ext,
+             "is_link": os.path.islink(dest_path),
+             "user": upload_args.get("current_user")
+@@ -910,7 +932,7 @@ class FileManager:
+             upload_info['filename'], finfo).wait()
+         started: bool = False
+         queued: bool = False
+-        if upload_info['start_print']:
++        if upload_info['start_print'] and upload_info['single_3mf']:
+             user: Optional[UserInfo] = upload_info.get("user")
+             if can_start:
+                 kapis: APIComp = self.server.lookup_component('klippy_apis')
+@@ -964,6 +986,18 @@ class FileManager:
+                 tmp_path = upload_info['tmp_file_path']
+                 finfo = self.get_path_info(tmp_path, upload_info['root'])
+                 finfo['ufp_path'] = tmp_path
++            elif upload_info['unzip_3mf']:
++                tmp_path = upload_info['tmp_file_path']
++                root_path = self.file_paths[upload_info['root']]
++                for plate, name in upload_info['unzip_3mf']:
++                    dest = os.path.join(root_path, name)
++                    if os.path.islink(dest):
++                        dest = os.path.realpath(dest)
++                    await self.event_loop.run_in_thread(
++                        kiln_3mf.extract, tmp_path, plate, dest)
++                os.remove(tmp_path)
++                finfo = self.get_path_info(upload_info['dest_path'],
++                                           upload_info['root'])
+             else:
+                 dest_path = upload_info['dest_path']
+                 if upload_info["is_link"]:
+@@ -972,6 +1006,8 @@ class FileManager:
+                     upload_info['tmp_file_path'], dest_path)
+                 finfo = self.get_path_info(upload_info['dest_path'],
+                                            upload_info['root'])
++        except kiln_3mf.ThreeMFError as e:
++            raise self.server.error(str(e), 400)
+         except Exception:
+             logging.exception("Upload Write Error")
+             raise self.server.error("Unable to save file", 500)
+diff --git a/moonraker/components/file_manager/kiln_3mf.py b/moonraker/components/file_manager/kiln_3mf.py
+new file mode 100644
+index 0000000..2ef3dc6
+--- /dev/null
++++ b/moonraker/components/file_manager/kiln_3mf.py
+@@ -0,0 +1,193 @@
++# Kiln OS: print sliced .gcode.3mf uploads (OrcaSlicer "Use 3MF instead of
++# G-code", Bambu-style plate files).
++#
++# A sliced .3mf is a zip with the G-code of each sliced plate in
++# Metadata/plate_<N>.gcode (plus .md5 and a .png preview). The upload is
++# unpacked into <name>.gcode next to where the .3mf would have gone, the
++# .3mf itself is dropped (as Moonraker does for .ufp), and the .gcode is
++# then handled like any G-code upload: metadata, print=true. A .3mf with
++# no sliced plate (a project file) is refused with a message instead of
++# being stored as a file that never prints.
++#
++# File names follow HelixScreen's helix_3mf plugin: x.gcode.3mf -> x.gcode,
++# several plates -> x_plate<N>.gcode.
++#
++# Only the standard library: tools/test_moonraker_3mf.py tests this on the
++# laptop without Moonraker's dependencies.
++#
++# This file may be distributed under the terms of the GNU GPLv3 license.
++from __future__ import annotations
++import hashlib
++import logging
++import os
++import re
++import shutil
++import tempfile
++import zipfile
++import xml.etree.ElementTree as ET
++from typing import List, Optional, Tuple
++
++PLATE_RE = re.compile(r"^Metadata/plate_(\d+)\.gcode$")
++SLICE_INFO = "Metadata/slice_info.config"
++CHUNK = 64 * 1024
++MAX_ENTRIES = 10000
++MAX_GCODE = 2 * 1024 ** 3        # one plate's G-code, uncompressed
++MAX_RATIO = 100                  # uncompressed / compressed, past 64 MiB
++RATIO_FROM = 64 * 1024 ** 2
++FREE_MARGIN = 64 * 1024 ** 2     # left free on the gcodes filesystem
++MAX_SMALL = 1024 ** 2            # slice_info.config, .md5
++
++
++class ThreeMFError(Exception):
++    """A .3mf that can't be printed; the message is for the user."""
++
++
++def is_3mf(name: str) -> bool:
++    return name.lower().endswith(".3mf")
++
++
++def stem(name: str) -> str:
++    """dir/x.gcode.3mf -> dir/x; dir/x.3mf -> dir/x"""
++    low = name.lower()
++    for ext in (".gcode.3mf", ".3mf"):
++        if low.endswith(ext):
++            return name[:-len(ext)]
++    return name
++
++
++def out_name(name: str, plate: int, several: bool) -> str:
++    """The .gcode a plate of the .3mf @name is written to."""
++    return stem(name) + (f"_plate{plate}" if several else "") + ".gcode"
++
++
++def _slice_info_plates(zf: zipfile.ZipFile) -> List[int]:
++    """Plate indexes slice_info.config lists as sliced."""
++    try:
++        info = zf.getinfo(SLICE_INFO)
++    except KeyError:
++        return []
++    if info.file_size > MAX_SMALL:
++        return []
++    try:
++        root = ET.fromstring(zf.read(info))
++    except Exception:
++        return []
++    plates = []
++    for p in root.iter("plate"):
++        for m in p.iter("metadata"):
++            if m.get("key") == "index" and (m.get("value") or "").isdigit():
++                plates.append(int(m.get("value")))
++    return plates
++
++
++def plan(path: str, name: str, plate: Optional[int] = None,
++         free: Optional[int] = None) -> Tuple[List[Tuple[int, str]], bool]:
++    """Check the upload at @path (sent as @name) and pick what to unpack.
++
++    Returns ([(plate, output name), ...], single): one entry and True when
++    one plate is to be printed, every sliced plate and False when the
++    upload holds several and none was chosen. @plate: a plate number the
++    client asked for. @free: bytes free on the target filesystem.
++    Raises ThreeMFError with a message for the user.
++    """
++    try:
++        zf = zipfile.ZipFile(path)
++    except (zipfile.BadZipFile, OSError):
++        raise ThreeMFError(f"{os.path.basename(name)} is not a valid .3mf "
++                           "(not a zip archive)")
++    with zf:
++        infos = zf.infolist()
++        if len(infos) > MAX_ENTRIES:
++            raise ThreeMFError(f"{os.path.basename(name)}: too many entries "
++                               f"in the archive ({len(infos)})")
++        plates = {}
++        for info in infos:
++            m = PLATE_RE.match(info.filename)
++            if m:
++                plates[int(m.group(1))] = info
++        if not plates:
++            raise ThreeMFError(
++                f"{os.path.basename(name)} has no sliced plate (a project "
++                "file): slice it, then send it again, as G-code or as a "
++                "sliced .gcode.3mf")
++        if plate is not None:
++            if plate not in plates:
++                raise ThreeMFError(
++                    f"{os.path.basename(name)}: plate {plate} is not sliced "
++                    f"(sliced: {', '.join(map(str, sorted(plates)))})")
++            chosen = [plate]
++        elif len(plates) == 1:
++            chosen = list(plates)
++        else:
++            listed = [p for p in _slice_info_plates(zf) if p in plates]
++            chosen = listed if len(set(listed)) == 1 else sorted(plates)
++        total = 0
++        for p in chosen:
++            info = plates[p]
++            if info.flag_bits & 0x1:
++                raise ThreeMFError(f"{os.path.basename(name)}: plate {p} is "
++                                   "encrypted")
++            if info.compress_type not in (zipfile.ZIP_STORED,
++                                          zipfile.ZIP_DEFLATED,
++                                          zipfile.ZIP_BZIP2,
++                                          zipfile.ZIP_LZMA):
++                raise ThreeMFError(f"{os.path.basename(name)}: plate {p} uses "
++                                   "an unsupported compression")
++            if info.file_size > MAX_GCODE:
++                raise ThreeMFError(f"{os.path.basename(name)}: plate {p} is "
++                                   f"too large ({info.file_size} bytes)")
++            if (info.file_size > RATIO_FROM and
++                    info.file_size > MAX_RATIO * max(info.compress_size, 1)):
++                raise ThreeMFError(f"{os.path.basename(name)}: plate {p} "
++                                   "unpacks to an implausible size")
++            total += info.file_size
++        if free is not None and total > free - FREE_MARGIN:
++            raise ThreeMFError(f"{os.path.basename(name)}: not enough free "
++                               f"space for its G-code ({total} bytes)")
++        several = len(chosen) > 1
++        return [(p, out_name(name, p, several)) for p in chosen], not several
++
++
++def extract(path: str, plate: int, dest: str) -> None:
++    """Stream plate @plate of the .3mf at @path to @dest.
++
++    zipfile checks the entry's CRC as its last bytes are read. The slicer's
++    md5 (plate_<N>.gcode.md5) is compared too; a mismatch is only logged,
++    since a post-processing script may change the G-code after Orca wrote
++    the md5. On failure @dest is left untouched.
++    """
++    entry = f"Metadata/plate_{plate}.gcode"
++    d = os.path.dirname(dest) or "."
++    fd, tmp = tempfile.mkstemp(prefix=".kiln3mf-", dir=d)
++    out = os.fdopen(fd, "wb")
++    digest = hashlib.md5()
++    try:
++        # The same mode a plain upload of the file would have had
++        os.chmod(tmp, os.stat(path).st_mode & 0o777)
++        with zipfile.ZipFile(path) as zf:
++            with zf.open(entry) as src, out:
++                while True:
++                    chunk = src.read(CHUNK)
++                    if not chunk:
++                        break
++                    digest.update(chunk)
++                    out.write(chunk)
++            want = None
++            try:
++                info = zf.getinfo(entry + ".md5")
++                if info.file_size <= MAX_SMALL:
++                    want = zf.read(info).decode("ascii", "ignore").strip().lower()
++            except KeyError:
++                pass
++        if want and want != digest.hexdigest():
++            logging.warning(f"3mf {path}: plate {plate} md5 {digest.hexdigest()}"
++                            f" differs from the archive's {want}")
++        shutil.move(tmp, dest)
++    except ThreeMFError:
++        raise
++    except Exception as e:
++        raise ThreeMFError(f"plate {plate} could not be unpacked: {e}")
++    finally:
++        out.close()
++        if os.path.exists(tmp):
++            os.remove(tmp)

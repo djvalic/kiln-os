@@ -1,0 +1,81 @@
+file_manager: say why an upload's print did not start
+
+An upload with print=true answered 201 with print_started false and no
+reason when the printer was busy or Klipper refused the start (the error
+was dropped): OrcaSlicer showed the print as sent and nothing happened
+(issue #35). The reason now goes to the log, to the console as a
+"!! Upload <file>: print not started: <reason>" G-code response (Fluidd,
+Mainsail, the touch screen), and into the reply as "print_error". The
+upload itself still succeeds (201), so clients don't retry it.
+A refused upload (a .3mf project file, a busy file) now has its
+reason in the reply too, not only in Moonraker's log.
+
+Upstream: not submitted (AD5X open OS)
+
+diff --git a/moonraker/components/application.py b/moonraker/components/application.py
+index 48b245f..f4964c4 100644
+--- a/moonraker/components/application.py
++++ b/moonraker/components/application.py
+@@ -1032,8 +1032,9 @@ class FileUploadHandler(AuthorizedRequestHandler):
+         try:
+             result = await self.file_manager.finalize_upload(form_args)
+         except ServerError as e:
++            # Kiln OS: the reason goes to the client too, not only the log
+             raise tornado.web.HTTPError(
+-                e.status_code, str(e))
++                e.status_code, str(e), reason=str(e).replace("\n", " "))
+         # Return 201 and add the Location Header
+         item: Dict[str, Any] = result.get('item', {})
+         root: Optional[str] = item.get('root', None)
+diff --git a/moonraker/components/file_manager/file_manager.py b/moonraker/components/file_manager/file_manager.py
+index 3bb4e45..f6349aa 100644
+--- a/moonraker/components/file_manager/file_manager.py
++++ b/moonraker/components/file_manager/file_manager.py
+@@ -932,28 +932,44 @@ class FileManager:
+             upload_info['filename'], finfo).wait()
+         started: bool = False
+         queued: bool = False
+-        if upload_info['start_print'] and upload_info['single_3mf']:
++        # Kiln OS: why a requested print didn't start (issue #35)
++        print_error: Optional[str] = None
++        if upload_info['start_print'] and not upload_info['single_3mf']:
++            print_error = (
++                "the .3mf has several sliced plates, each unpacked to its own "
++                "_plate<N>.gcode; start one of them")
++        elif upload_info['start_print']:
+             user: Optional[UserInfo] = upload_info.get("user")
+             if can_start:
+                 kapis: APIComp = self.server.lookup_component('klippy_apis')
+                 try:
+                     await kapis.start_print(upload_info['filename'], user=user)
+-                except self.server.error:
++                except self.server.error as e:
+                     # Attempt to start print failed
+-                    pass
++                    print_error = str(e) or "Klipper refused the print"
+                 else:
+                     started = True
++            else:
++                print_error = "a print is already running or paused"
+             if self.queue_gcodes and not started:
+                 job_queue: JobQueue = self.server.lookup_component('job_queue')
+                 await job_queue.queue_job(
+                     upload_info['filename'], check_exists=False, user=user)
+                 queued = True
++                print_error = None
++        if print_error is not None:
++            msg = (f"Upload {upload_info['filename']}: print not started: "
++                   f"{print_error}")
++            logging.warning(msg)
++            self.server.send_event("server:gcode_response", f"!! {msg}")
+         self.fs_observer.on_item_create("gcodes", upload_info["dest_path"])
+         result = dict(self._sched_changed_event(
+             "create_file", "gcodes", upload_info["dest_path"],
+             immediate=upload_info["is_link"]
+         ))
+         result.update({"print_started": started, "print_queued": queued})
++        if print_error is not None:
++            result["print_error"] = print_error
+         return result
+ 
+     async def _finish_standard_upload(

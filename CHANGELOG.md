@@ -10,6 +10,13 @@ the issue: it is closed by hand after the release.
 
 ## Unreleased
 
+- **Sliced 3MF files print** (issue #35): with OrcaSlicer's "Use 3MF instead of G-code" on, the printer stored the `.gcode.3mf` and never printed it, while Orca showed it as sent. The sliced plate's G-code is now unpacked to `<name>.gcode` and printed like any G-code, with its thumbnails and filaments. A 3MF with several sliced plates gives one `<name>_plate<N>.gcode` per plate to start by hand; a project 3MF that was never sliced is refused with a message saying to slice it.
+- **A print that is sent but doesn't start says why** (issue #35): when Orca (or anything else) uploads with "print", and the print can't start because one is already running or paused, or Klipper isn't ready or refuses the file, Fluidd's console now shows `!! Upload <file>: print not started: <reason>`. Before, nothing happened and nothing was said.
+- **`ad5x-restore-stock` works from the main OS** (issue #35): it was only in the recovery OS, so over SSH on Kiln OS it answered "not found", and nothing said how to reach the recovery OS. Now `ad5x-restore-stock --dry-run` checks that the stock copy saved at install is intact, that no print is running and what slot A holds; `ad5x-restore-stock` then reboots into the recovery OS, where Restore stock puts stock back. If slot A still holds stock (the recovery OS was never written), it starts stock directly.
+- **Going back to stock is explained** (issue #35): docs/install.md now gives the steps from the main OS, the power-off after the restore, and how to install Kiln OS again afterwards (`ad5x-install-retry` on the stick). The old "never apply a Flashforge update" warning is narrowed: Kiln OS ignores such a stick, and once stock is restored, a Flashforge update is the way to a printer that is stock in both slots.
+
+## v0.0.44
+
 - **Colour changes unload more reliably with the IFS on Klipper firmware** (issue #20): the extruder and the IFS now pull the old filament back together and stop as soon as the toolhead sensor is clear, as the stock firmware does. Before, the extruder pulled back first while the IFS held the filament, then the IFS pulled; a swap could stop with "filament still in the toolhead". IFS Tune now measures the unload the same way a swap does: run the unload tuning again after this update.
 
 - **Touch screen updated to HelixScreen v1.1.0-beta.16** (from beta.15): each screen start no longer holds Moonraker near 100% for minutes on the AD5X, filament slots keep their details when Moonraker answers slowly, and a slow print start is no longer marked failed. Four Kiln OS screen patches were brought up to date for it.

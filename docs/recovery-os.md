@@ -332,8 +332,10 @@ A write cut short must not leave a slot A the printer would boot:
 Only stock in slot A is never touched by it (`S99ad5x-install-recovery` is
 the first install's step, `--replace-stock`).
 
-A stock firmware update (an `AD5X-*.tgz` stick) run from slot B would write
-slot A. Never apply one.
+A stock firmware update (an `AD5X-*.tgz` stick) run from slot B writes slot
+A, this recovery system. After "Restore stock" that is the way to a printer
+that is stock in both slots (docs/install.md, "Going back to stock"); Kiln OS
+itself never reads such a stick.
 
 ## Tests (laptop)
 

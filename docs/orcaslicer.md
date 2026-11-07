@@ -6,10 +6,20 @@ Add the printer in OrcaSlicer as a physical printer with host type
 **Octo/Klipper** and the printer's address (e.g. `192.168.1.56`). Moonraker
 answers on port 80 through nginx (and on 7125).
 
-Send G-code, not 3MF: turn **off** "Use 3MF instead of G-code" for this
-printer in OrcaSlicer. Kiln OS does not unpack a `.gcode.3mf` upload: Moonraker
-accepts it (the upload answers 201) and stores it as a plain file, which the
-printer does not print. Delete any such file in Fluidd's Files page.
+G-code and sliced 3MF both print. With "Use 3MF instead of G-code" on, Orca
+sends a `.gcode.3mf`; Kiln OS (since v0.0.45) unpacks the sliced plate's
+G-code to `<name>.gcode`, drops the `.3mf` and prints it. A `.3mf` with
+several sliced plates is unpacked to `<name>_plate<N>.gcode`, one file per
+plate, and none is started: start the one you want in Fluidd or on the
+screen. A project `.3mf` that was never sliced is refused with a message.
+
+When an upload asked to print and the print doesn't start (a print is
+already running or paused, Klipper isn't ready or refused the file), Fluidd's
+console shows `!! Upload <file>: print not started: <reason>`.
+
+Before v0.0.45 a `.gcode.3mf` upload was stored without printing (the upload
+still answered 201, issue #35). Delete such files in Fluidd's Files page and
+send them again.
 
 ## Recommended machine G-code
 

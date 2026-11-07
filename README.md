@@ -163,8 +163,10 @@ come back in line, see [docs/ifs-troubleshooting.md](docs/ifs-troubleshooting.md
 - **Recover**: [docs/recovery-os.md](docs/recovery-os.md). A failed start
   lands in the recovery OS, which has SSH, an update page on port 8080,
   backup and restore, and USB rescue.
-- **Back to stock**: the saved stock system goes back into its slot with
-  `ad5x-restore-stock` ([docs/install.md](docs/install.md)).
+- **Back to stock**: `ad5x-restore-stock` on the main OS checks the saved
+  stock system and reboots into the recovery OS, whose "Restore stock" puts
+  it back into its slot ([docs/install.md](docs/install.md), "Going back to
+  stock").
 
 ## Building
 

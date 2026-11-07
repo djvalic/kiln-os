@@ -1,0 +1,92 @@
+#!/bin/sh
+# Going back to stock from the main OS (issue #35). The restore itself runs
+# in the recovery OS (its own ad5x-restore-stock, docs/install.md "Going
+# back to stock"); this checks that it can and boots the recovery OS.
+#
+# usage: ad5x-restore-stock [--dry-run] [--yes]
+#   --dry-run  checks only: slot, no print running, the saved stock system
+#              in /data/ad5x/stock, what slot A holds
+#   --yes      don't ask before rebooting
+#
+# Then, on the recovery screen: Restore stock, Check, Restore stock
+# firmware (or over SSH: ad5x-restore-stock --reboot). Switch the printer
+# off and on once stock is up, so it writes its own board firmware back.
+# "Boot main OS" (ad5x-boot-main) returns here without changing anything.
+#
+# If slot A still holds stock (the recovery OS was never written,
+# S99ad5x-install-recovery gave up), the reboot starts stock directly.
+set -e
+LIB=${AD5X_LIB:-/usr/lib/ad5x}
+DATA=${AD5X_DATA:-/data}
+RUN=${AD5X_RUN:-/run}
+. $LIB/slot.sh
+
+die() { echo "ad5x-restore-stock: $*" >&2; exit 1; }
+say() { echo "ad5x-restore-stock: $*"; }
+usage() { sed -n '2,17p' "$0"; exit ${1:-2}; }
+
+dry= yes=
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--dry-run) dry=1 ;;
+	--yes|-y) yes=1 ;;
+	-h|--help) usage 0 ;;
+	*) usage ;;
+	esac
+	shift
+done
+
+[ "$SLOT" = A ] && die "this printer runs the main OS from slot A (root=/dev/mmcblk0p2): there is no recovery OS to restore from. See docs/recovery-os.md, section 'Main OS in slot A'."
+[ "$SLOT" = B ] || die "run from the main OS in slot B (this is slot '${SLOT:-?}')"
+
+st=$(wget -q -T 5 -O- 'http://127.0.0.1:7125/printer/objects/query?print_stats=state' 2>/dev/null |
+	sed -n 's/.*"state": *"\([a-z]*\)".*/\1/p')
+case $st in
+printing|paused) die "a print is $st: cancel it first" ;;
+esac
+
+S=$DATA/ad5x/stock
+[ -f $S/rootfs.squashfs ] && [ -f $S/kernel.img ] && [ -f $S/SHA256SUMS ] ||
+	die "no saved stock system in $S (rootfs.squashfs, kernel.img, SHA256SUMS)"
+say "checking the saved stock system in $S"
+( cd $S && sha256sum -c SHA256SUMS ) || die "the saved stock system in $S is damaged"
+
+# As ad5x-update: wait for a recovery OS write before looking at slot A
+WLOCK=$RUN/ad5x-recovery-write.pid
+n=0
+while [ -f $WLOCK ] && kill -0 "$(cat $WLOCK)" 2>/dev/null; do
+	[ $n = 0 ] && say "waiting for the recovery OS write to finish"
+	n=$((n + 1)); [ $n -le 90 ] || die "the recovery OS write didn't finish in 3 minutes"
+	sleep 2
+done
+
+AROOT=$(rootfs_of A) MNT=$RUN/ad5x-target holds=unknown
+mkdir -p $MNT
+if mount -t squashfs -o ro $AROOT $MNT 2>/dev/null; then
+	if [ -f $MNT/etc/ad5x-recovery ]; then holds=recovery
+	elif [ -f $MNT/etc/ad5x-release ]; then holds=main
+	elif [ -d $MNT/usr/prog ] || [ -f $MNT/etc/ota_bin/ota_local_method.sh ]; then holds=stock
+	fi
+	umount $MNT
+fi
+case $holds in
+recovery) say "slot A holds the recovery OS: the reboot starts it; there, tap Restore stock, then Check, then Restore stock firmware" ;;
+stock) say "slot A still holds stock (the recovery OS was never written there): the reboot starts stock directly" ;;
+*) die "slot A holds neither the recovery OS nor stock ($holds): not rebooting. See docs/recovery-os.md." ;;
+esac
+
+if [ -n "$dry" ]; then say "dry run: nothing changed"; exit 0; fi
+
+if [ -z "$yes" ]; then
+	printf 'Reboot into %s now? [y/N] ' "$( [ $holds = stock ] && echo stock || echo 'the recovery OS' )"
+	read a || a=
+	case $a in y|Y|yes) ;; *) say "not rebooting"; exit 1 ;; esac
+fi
+# Stock writes its own eboard firmware: Kiln OS's record of the last
+# eboard flash no longer holds (the recovery OS's restore drops it too)
+[ $holds = stock ] && rm -f $DATA/ad5x/mcu/eboard
+set_flag A
+say "boot flag on slot A ($(read_flag)); rebooting"
+[ $holds = stock ] && say "once stock is up, switch the printer off and on so it writes its own board firmware"
+sync
+reboot

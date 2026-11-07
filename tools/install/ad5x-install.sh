@@ -424,7 +424,7 @@ drop_caches
 [ "$(read_flag)" = "$FLAG" ] || fail "boot flag reads back '$(read_flag)', not '$FLAG'"
 echo "state=flag-set" > "$I/state"
 log "boot flag '$FLAG': the next start runs slot $IDLE"
-log "DONE. Going back to stock later: ad5x-restore-stock (recovery OS), see docs/install.md"
+log "DONE. Going back to stock later: ad5x-restore-stock (over SSH; it boots the recovery OS), see docs/install.md"
 show done
 if [ -n "$reboot_after" ]; then
 	log "rebooting"
