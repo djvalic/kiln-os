@@ -74,13 +74,18 @@ SHIPPED_DIR = "/usr/share/ad5x/plugins"
 USER_DIR = "/data/ad5x/plugins"
 CATALOG_FILE = "/usr/share/ad5x/plugin-catalog.json"
 IFS_KLIPPER_FILE = "/data/ad5x/ifs-klipper.enable"
+# The IFS as a Klipper MCU for the stock driver (S61klipper links it here)
+IFS_MCU_DIR = "/run/ad5x/ifs-mcu"
+IFS_MCU_CFG = "/usr/share/ad5x/config/generic-flashforge-ifs.cfg"
 
 def is_ifs_klipper(printer=None):
     if not os.path.isfile(IFS_KLIPPER_FILE):
         return False
     if printer is not None:
         ifs = printer.lookup_object('ifs', None)
-        if ifs is not None and getattr(ifs, 'connected', False) and not getattr(ifs, 'is_mcu_mode', False):
+        # ifs.py talking to Flashforge's firmware over its serial link
+        if (ifs is not None and getattr(ifs, 'fd', None) is not None
+                and not getattr(ifs, 'is_mcu_mode', False)):
             return False
     return True
 # Picked up by S68ad5x-update-agent (root), which restarts Moonraker
@@ -769,7 +774,27 @@ class AD5XPlugins:
                 out.append("[include %s/plugi[n].cfg]"
                            % (self.found[name]['dir'],))
         write_if_changed(self.plugins_file, "\n".join(out) + "\n")
-        return read_enabled(self.plugins_file)[0]
+        names = read_enabled(self.plugins_file)[0]
+        self._sync_ifs_mcu(names)
+        return names
+    def _sync_ifs_mcu(self, names):
+        """S61klipper's choice of the IFS config, for a plugin switch that
+        restarts Klipper without it: the generic [mcu ifs] config only while
+        no enabled plugin drives the IFS itself (requires_ifs_klipper), and
+        only when the IFS runs Klipper (this start has an [mcu ifs])."""
+        link = os.path.join(IFS_MCU_DIR, os.path.basename(IFS_MCU_CFG))
+        own = any((self.found.get(n) or {}).get('requires_ifs_klipper')
+                  for n in names)
+        want = (not own and os.path.isfile(IFS_KLIPPER_FILE)
+                and self.printer.lookup_object('mcu ifs', None) is not None)
+        try:
+            if want and not os.path.lexists(link):
+                os.symlink(IFS_MCU_CFG, link)
+            elif not want and os.path.lexists(link):
+                os.remove(link)
+        except OSError as e:
+            logging.warning("ad5x_plugins: can't update %s: %s",
+                            IFS_MCU_DIR, e)
     # Commands
     def _check_idle(self, gcmd):
         ps = self.printer.lookup_object('print_stats', None)

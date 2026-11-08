@@ -6,6 +6,30 @@ PID=/var/run/klipper.pid
 # The image's Klipper or a newer daily package (lib/apps.sh)
 . /usr/lib/ad5x/apps.sh
 KROOT=$(app_root klipper)
+
+# Enabled plugins (an [include] line in plugins.cfg that isn't commented
+# out) that drive the IFS themselves: plugin.json "requires_ifs_klipper"
+ifs_plugins() {
+	[ -f $PD/config/plugins.cfg ] || return 0
+	sed -n 's|^[[:space:]]*\[include[[:space:]]*\([^[:space:]]*\)/plugi.*|\1|p' \
+		$PD/config/plugins.cfg | while read -r d; do
+		grep -qE '"requires_(ifs_klipper|klipper_firmware)"[[:space:]]*:[[:space:]]*true' \
+			"$d/plugin.json" 2>/dev/null && echo "${d##*/}"
+	done
+}
+# Turn plugins off as DISABLE_PLUGIN does (comment out their include),
+# keeping the file itself: it is Klipper's user's
+disable_plugins() {	# NAME...
+	f=$PD/config/plugins.cfg
+	t=$(mktemp) || return 1
+	cp "$f" "$t"
+	for n; do
+		sed -i "s|^\([[:space:]]*\[include[^]]*/$n/plugi\)|#\1|" "$t"
+	done
+	cat "$t" > "$f"
+	rm -f "$t"
+}
+
 case "$1" in
 start)
 	if [ ! -f /data/ad5x/klipper.enable ]; then
@@ -17,20 +41,35 @@ start)
 	# The IFS as a Klipper MCU (ifs.cfg includes /run/ad5x/ifs-mcu/*.cfg).
 	# Only with /data/ad5x/ifs-klipper.enable, and only when its firmware
 	# answers as Klipper; otherwise ifs.py talks to Flashforge's firmware.
-	# /run is cleared at boot: removing the enable file takes a reboot.
-	if [ -f /data/ad5x/ifs-klipper.enable ]; then
-		mkdir -p /run/ad5x/ifs-mcu && chmod 755 /run/ad5x/ifs-mcu	# read by Klipper's user
-		rm -f /run/ad5x/ifs-mcu/*.cfg
-		if [ ! -f $PD/config/plugins.cfg ] || ! grep -q "happy-hare" $PD/config/plugins.cfg 2>/dev/null; then
-			if ad5x-mcu-version --port /dev/ttyS4 --baud 115200 --timeout 2 >/dev/null 2>&1; then
-				ln -s /usr/share/ad5x/config/generic-flashforge-ifs.cfg /run/ad5x/ifs-mcu/
-			fi
-		fi
-	else
-		if [ -f $PD/config/plugins.cfg ] && grep -q "happy-hare" $PD/config/plugins.cfg 2>/dev/null; then
-			logger -t klipper "happy-hare plugin requires /data/ad5x/ifs-klipper.enable; disabling"
-			sed -i '/happy-hare/d' $PD/config/plugins.cfg
-		fi
+	# A plugin that drives the IFS itself (plugin.json requires_ifs_klipper,
+	# Happy Hare) brings its own [mcu ifs]: then nothing goes here, and the
+	# plugin is turned off when the IFS doesn't run Klipper. The directory
+	# is Klipper's user's: ad5x_plugins keeps it right when a plugin is
+	# switched without this script running. /run is cleared at boot.
+	mkdir -p /run/ad5x/ifs-mcu && chown klipper /run/ad5x/ifs-mcu &&
+		chmod 755 /run/ad5x/ifs-mcu
+	rm -f /run/ad5x/ifs-mcu/*.cfg
+	ifs_klipper=
+	if [ -f /data/ad5x/ifs-klipper.enable ] &&
+	   ad5x-mcu-version --port /dev/ttyS4 --baud 115200 --timeout 2 >/dev/null 2>&1; then
+		ifs_klipper=1
+	fi
+	own=$(ifs_plugins)
+	if [ -n "$own" ] && [ -z "$ifs_klipper" ]; then
+		echo "klipper: the IFS doesn't run Klipper firmware (/data/ad5x/ifs-klipper.enable," \
+			"ad5x-mcu status): plugin" $own "off"
+		logger -t klipper "IFS not on Klipper firmware: plugin $own off"
+		disable_plugins $own
+	elif [ -z "$own" ] && [ -n "$ifs_klipper" ]; then
+		ln -s /usr/share/ad5x/config/generic-flashforge-ifs.cfg /run/ad5x/ifs-mcu/
+	fi
+	# A daily package without the Klipper modules the image adds (Happy
+	# Hare's extras): the image's Klipper instead
+	if [ "$KROOT" != /usr/lib/klipper ] && [ -n "$own" ] && [ -n "$ifs_klipper" ] &&
+	   [ -e /usr/lib/klipper/klippy/extras/mmu_machine.py ] &&
+	   [ ! -e $KROOT/klippy/extras/mmu_machine.py ]; then
+		echo "klipper: $KROOT lacks Happy Hare's modules, using /usr/lib/klipper"
+		KROOT=/usr/lib/klipper
 	fi
 	HOME=/home/klipper start-stop-daemon -S -b -m -p $PID -c klipper -N -10 \
 		-x /usr/bin/python3 -- $KROOT/klippy/klippy.py \
