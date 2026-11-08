@@ -787,6 +787,19 @@ class IFS:
         if ps is not None:
             self._note_print_state(ps.get_status(eventtime).get('state'))
         return eventtime + 1.
+    def _catch_print_start(self, eventtime):
+        # The file's first line runs after print_stats is "printing" and
+        # before the 1 s poll: a macro reading printer.ifs there (PRINT_START's
+        # first tool) gets this print's map, not the one from between prints
+        # (issue #33). The start only: a print's end, and a zMod-compat
+        # restore (it saves variables), stay with the poll.
+        if (not self.is_ready or self.zmod_prev is not None
+                or self.print_state in ("printing", "paused")):
+            return
+        ps = self.printer.lookup_object('print_stats', None)
+        if (ps is not None
+                and ps.get_status(eventtime).get('state') == "printing"):
+            self._note_print_state("printing")
     def _zmod_restore(self):
         """Put back the map mode from before a zMod-compat print (its
         START_PRINT set loaded). Not saved while shut down: the saved flag
@@ -959,6 +972,7 @@ class IFS:
             what, st['FFS_state'], st.get('stall_state', 0)))
     def get_status(self, eventtime):
         # Cached values only: never touches the serial link or the toolhead.
+        self._catch_print_start(eventtime)
         st = self.last_status
         inserted = st.get('ffs_channels_insert', 0)
         if self.is_mcu_mode:

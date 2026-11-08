@@ -7,8 +7,8 @@
 # Host Klipper. The boards' firmware may be older (klipper/mcu-dicts):
 # tools/test_image.sh checks this host against their data dictionaries.
 # tools/bump_upstream.py sets both lines (DESCRIBE: git describe of it).
-KLIPPER_VERSION = ee2c6fb6b00b2b5d097ef70d0868df7d74943b51
-KLIPPER_DESCRIBE = v0.13.0-816-gee2c6fb6b
+KLIPPER_VERSION = af81d23fec795ba64882d2206bc9cbc019e4501b
+KLIPPER_DESCRIBE = v0.13.0-821-gaf81d23fe
 KLIPPER_SITE = $(call github,Klipper3d,klipper,$(KLIPPER_VERSION))
 KLIPPER_LICENSE = GPL-3.0
 KLIPPER_LICENSE_FILES = COPYING

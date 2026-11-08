@@ -40,6 +40,10 @@ PATCH_TEMPS = {"PLA": (220., 60.), "PLA-CF": (220., 60.), "SILK": (230., 60.),
 # ad5x.cfg.
 TUNING_SECTIONS = ("extruder", "heater_bed", "input_shaper")
 
+# print_stats states during which no step starts: they home, heat, probe,
+# and finish restarts Klipper
+BUSY_STATES = ("printing", "paused")
+
 # Where successive test patches go (offsets from patch_center, mm)
 PATCH_SPOTS = ((0., 0.), (-40., 0.), (40., 0.), (0., -40.), (0., 40.))
 
@@ -265,6 +269,9 @@ class AD5XSetup:
         if action == 'abort':
             return self._abort()
         if action == 'wizard':
+            if self._printing():
+                raise error("SETUP_WIZARD_STEP: no setup wizard during a "
+                            "print")
             return self._request_wizard()
         if action in ('adjust', 'accept'):
             if self.state != "waiting_user" or self.step not in (
@@ -288,6 +295,10 @@ class AD5XSetup:
             self.z_deltas = self.z_deltas + [delta]
             return "AD5X setup: Z offset %+.3f" % (delta,)
         raise error("SETUP_WIZARD_STEP: unknown ACTION '%s'" % (action,))
+    def _printing(self):
+        ps = self.printer.lookup_object('print_stats', None)
+        return ps is not None and ps.get_status(
+            self.reactor.monotonic()).get('state') in BUSY_STATES
     def _start(self, step, params, inline):
         error = self.printer.command_error
         if step not in STEPS:
@@ -304,6 +315,8 @@ class AD5XSetup:
                 return
             raise error("SETUP_WIZARD_STEP: step '%s' is still running "
                         "(ACTION=abort first)" % (self.step,))
+        if self._printing():
+            raise error("SETUP_WIZARD_STEP: no setup step during a print")
         self.step = step
         self.state = "running"
         self.abort_requested = False

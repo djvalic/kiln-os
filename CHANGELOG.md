@@ -10,6 +10,14 @@ the issue: it is closed by hand after the release.
 
 ## Unreleased
 
+- **Klipper updated to v0.13.0-821** (from v0.13.0-816): upstream frees old pressure advance values instead of keeping them, which helps long prints that change pressure advance often (OrcaSlicer's adaptive pressure advance). The other upstream changes don't affect the AD5X: twist compensation is now off only for load cell and eddy current probes, and a homing event change. The board firmware stays as it is: no reflash.
+- **The setup wizard can't start during a print**: "Run Setup Wizard" and "Check Purge Box" in Settings, and `SETUP_WIZARD_STEP` from the console, are refused while a print runs or is paused. Before, a step started this way would home, heat and probe in the middle of the print.
+- **Touch screen controls that restart Klipper or move the printer stay off from the moment a print is started** (nozzle size, plugin switches and buttons, bed soak Calibrate), not only once the printer reports the print.
+- **IFS "loaded" map mode: the first tool comes from the right slot** (issue #33): a print's first tool could load from the slot of the map from before the print (T0 from slot 1) when T0's filament was in another slot, so the print started with the wrong colour, or stopped when that slot was empty. The print start now sees the map for the file being printed. Later tool changes were not affected.
+- **Wi-Fi no longer drops every few minutes** (issue #37): the Wi-Fi adapter started with power saving on, and with it the signal reading fell to about -95 dBm, so the printer lost the network and joined it again, over and over (SSH and Fluidd timing out, "Link lost" on the screen). Power saving is now off on wlan0 from the start and again at every join. `wifi.log` says so, and says if the adapter ever turns it back on.
+
+## v0.0.46
+
 - **Touch screen updated to HelixScreen v1.1.0-beta.17** (from beta.16): a tile removed in home screen edit mode can be brought back from the undo message, the edit buttons around small tiles no longer cover other tiles or take stray taps, the spool editor offers a close Spoolman filament before filing a new one, the spool picker marks only the spool linked to the slot, and a sleeping screen no longer wakes the processor every frame. Four Kiln OS screen patches were brought up to date for it (home layout, translations, chamber light at sleep, Print Status card).
 - **The chamber light controls stay on after a fresh install**: HelixScreen beta.17 hides an AD5X's light controls on first setup, because Z-Mod declares a light on AD5X printers that have none. Kiln OS sets up the AD5X's light itself, so the home screen's light tile, the light button and "Chamber light off when the screen sleeps" stay. Settings > Devices > "Chamber light fitted" turns them off.
 

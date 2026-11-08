@@ -6,7 +6,8 @@
 # start without that file brings over the networks stock saved (usershare
 # /wifi/wpa_supplicant.conf, joined on the Flashforge screen), or starts
 # with none. DHCP: udhcpc on wlan0, renewed by wpa_cli (this script with
-# "wlan0 CONNECTED") the moment a network is joined.
+# "wlan0 CONNECTED") the moment a network is joined. Power saving is off
+# on wlan0 (power_save_off, below).
 #
 # Off: HelixScreen's Wi-Fi switch saves wifi_enabled false in its
 # settings.json and blocks the radio (rfkill); this script blocks it at
@@ -100,6 +101,31 @@ start_wpa() {
 	return 1
 }
 
+# Power saving off on wlan0 (issue #37): the kernel starts it on (our
+# config leaves CFG80211_DEFAULT_PS at its default), and with it the
+# rtw88 8821CU's signal reading falls to -95 dBm, wpa_supplicant loses
+# the network and joins again, over and over. mac80211 keeps the setting
+# while wlan0 exists; it is set again on each join for an adapter that
+# came back (USB) with the default. $1 "start" logs the result; a join
+# logs only when it found power saving on.
+power_save_off() {
+	was=$(iw dev wlan0 get power_save 2>/dev/null)
+	case "$was" in
+	*off) [ "$1" = start ] && log "power saving off" ;;
+	*on)
+		if ! iw dev wlan0 set power_save off 2>/dev/null; then
+			log "power saving on: the driver doesn't take it off"
+		elif [ "$1" = start ]; then
+			log "power saving off"
+		else
+			log "power saving was on again at a join; off"
+		fi
+		;;
+	*) [ "$1" = start ] && log "power saving: no answer from iw" ;;
+	esac
+	return 0
+}
+
 radio() {
 	for r in /sys/class/net/wlan0/phy80211/rfkill*/soft; do
 		[ -f "$r" ] && echo "$1" > "$r"
@@ -134,6 +160,7 @@ start)
 	fi
 	drv=$(readlink /sys/class/net/wlan0/device/driver 2>/dev/null)
 	log "wlan0 after ${i} s, driver ${drv##*/}"
+	power_save_off start
 	[ -f $CONF ] || make_conf
 	probe_hidden
 	if grep -Eq '"wifi_enabled"[[:space:]]*:[[:space:]]*(false|0)' $HELIX 2>/dev/null; then
@@ -169,6 +196,7 @@ wlan0)
 	p=/var/run/udhcpc.wlan0.pid
 	case "$2" in
 	CONNECTED)
+		power_save_off join
 		if [ -f $p ] && kill -0 "$(cat $p)" 2>/dev/null; then
 			kill -USR1 "$(cat $p)"
 		else

@@ -1,0 +1,532 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Sat, 7 Nov 2026 17:00:00 -0500
+Subject: [PATCH] tests: follow the AD5X patches that changed tested behaviour
+
+0035 put the Toolhead tile in the Motion slot of the AD5X home seed, and
+0036 replaced the Print Status printer picture with stat tiles and the
+IFS; neither updated the tests. The AD5X seed test now expects Toolhead
+at col 8, row 6 (2x2) with Motion disabled, and the shipped-seed audit
+lets the AD5X seed name toolhead. The cases about the picture's pinned
+chips, glows and leader lines are hidden ([.][ad5x_no_picture]); three
+new cases check the stat tiles, a stat's text and the IFS part hiding
+without an IFS.
+
+Also: 0023 drops the LED suggestion (the validator tests expect none),
+0033's language list has no French and adds Turkish (the index tests and
+the fixture's language reset use its order), and 0027's grams under a
+linked slot cost the 480x272 8-lane tray 2 px, so that case is hidden
+([.][ad5x_slot_grams]); the AD5X is 800x480 with 4 slots.
+
+With these the unit sweep fails only what plain beta.17 fails on the
+same machine (backlight, screensaver, wifi_saved_config).
+---
+diff --git a/tests/unit/test_ams_detail_tray_layout.cpp b/tests/unit/test_ams_detail_tray_layout.cpp
+index fb9510b2d1..2f5b15e838 100644
+--- a/tests/unit/test_ams_detail_tray_layout.cpp
++++ b/tests/unit/test_ams_detail_tray_layout.cpp
+@@ -633,9 +633,12 @@ TEST_CASE_METHOD(
+     }
+ }
+ 
++// AD5X (patch 0027): a Spoolman-linked slot shows its grams under the spool,
++// and the mock's slots are linked, so at 480x272 with 8 lanes the toolhead
++// loses 2 px at the bottom. The AD5X screen is 800x480 with 4 slots.
+ TEST_CASE_METHOD(AmsTrayPanelFixture,
+                  "AMS unit at 480x272 with 8 lanes: two label rows and the whole toolhead",
+-                 "[ams][tray][ui_integration][stagger]") {
++                 "[ams][tray][ui_integration][stagger][.][ad5x_slot_grams]") {
+     helix::test::ScopedGeometry micro(480, 272);
+     build("passive", 8);
+     lv_obj_t* canvas = lv_obj_find_by_name(panel_obj_, "path_canvas");
+diff --git a/tests/unit/test_default_layout.cpp b/tests/unit/test_default_layout.cpp
+index 532832b579..70c9c1c234 100644
+--- a/tests/unit/test_default_layout.cpp
++++ b/tests/unit/test_default_layout.cpp
+@@ -3018,6 +3018,10 @@ TEST_CASE("default_layout: the ad5x seed fills the 800x480 grid",
+         const auto* z = placed_widget(r, "z_offset");
+         REQUIRE(z);
+         CHECK((z->col == 10 && z->row == 5 && z->colspan == 2 && z->rowspan == 1));
++        const auto* toolhead = placed_widget(r, "toolhead");
++        REQUIRE(toolhead);
++        CHECK((toolhead->col == 8 && toolhead->row == 6 && toolhead->colspan == 2 &&
++               toolhead->rowspan == 2));
+         CHECK(preheat->config.value("show_temps", true) == false);
+         CHECK(preheat->config.value("lock_while_printing", false) == true);
+         const auto* unload = placed_widget(r, "favorite_macro");
+@@ -3026,11 +3030,12 @@ TEST_CASE("default_layout: the ad5x seed fills the 800x480 grid",
+         CHECK(unload->config.value("label", "") == "Unload");
+         CHECK(unload->config.value("lock_while_printing", false) == true);
+         for (const char* id : {"temperature", "bed_temperature", "fan_stack", "notifications",
+-                               "preheat", "motion", "favorite_macro"}) {
++                               "preheat", "toolhead", "favorite_macro"}) {
+             INFO("widget " << id);
+             CHECK(placed_widget(r, id) != nullptr);
+         }
+-        for (const char* id : {"printer_image", "temp_graph", "tips"}) {
++        // The Toolhead tile has Motion's slot; a tap on it opens Motion
++        for (const char* id : {"printer_image", "temp_graph", "tips", "motion"}) {
+             INFO("widget " << id);
+             CHECK(placed_widget(r, id) == nullptr);
+             CHECK(resolved_disabled(r, id));
+diff --git a/tests/unit/test_hardware_validator.cpp b/tests/unit/test_hardware_validator.cpp
+index c739889cfa..f16837bcb7 100644
+--- a/tests/unit/test_hardware_validator.cpp
++++ b/tests/unit/test_hardware_validator.cpp
+@@ -325,7 +325,8 @@ TEST_CASE("HardwareValidator - Critical hardware detection", "[hardware][validat
+ TEST_CASE("HardwareValidator - New hardware discovery", "[hardware][validator]") {
+     MoonrakerClientMock client;
+ 
+-    SECTION("Suggests LED when discovered but not configured") {
++    // AD5X (patch 0023): no LED suggestion, the chamber LED is on every printer
++    SECTION("No LED suggestion when discovered but not configured") {
+         client.set_heaters({"extruder", "heater_bed"});
+         client.set_leds({"neopixel chamber_light"});
+ 
+@@ -333,7 +334,6 @@ TEST_CASE("HardwareValidator - New hardware discovery", "[hardware][validator]")
+         // Pass nullptr for config = no configured LED
+         auto result = validator.validate(nullptr, client.hardware());
+ 
+-        // Should suggest the LED
+         bool found_led = false;
+         for (const auto& issue : result.newly_discovered) {
+             if (issue.hardware_type == HardwareType::LED) {
+@@ -341,7 +341,7 @@ TEST_CASE("HardwareValidator - New hardware discovery", "[hardware][validator]")
+                 break;
+             }
+         }
+-        REQUIRE(found_led);
++        REQUIRE_FALSE(found_led);
+     }
+ }
+ 
+@@ -1358,7 +1358,7 @@ TEST_CASE_METHOD(ExpectedHardwareSuppressFixture,
+ }
+ 
+ TEST_CASE_METHOD(ExpectedHardwareSuppressFixture,
+-                 "HardwareValidator - LED still discovered when not in expected",
++                 "HardwareValidator - no LED suggested even when not in expected",
+                  "[hardware][validator][expected]") {
+     // Printer has LED, expected list has other hardware but not this LED
+     client.set_heaters({"extruder", "heater_bed"});
+@@ -1376,8 +1376,8 @@ TEST_CASE_METHOD(ExpectedHardwareSuppressFixture,
+     HardwareValidator validator;
+     auto result = validator.validate(&config, client.hardware());
+ 
+-    // LED should still be reported as new (not in expected, not in wizard config)
+-    REQUIRE(has_newly_discovered(result, "neopixel case_lights"));
++    // AD5X (patch 0023): no LED is reported as new
++    REQUIRE_FALSE(has_newly_discovered(result, "neopixel case_lights"));
+ }
+ 
+ // ============================================================================
+diff --git a/tests/unit/test_helix_test_fixture.cpp b/tests/unit/test_helix_test_fixture.cpp
+index d59283b409..cf9bac32bc 100644
+--- a/tests/unit/test_helix_test_fixture.cpp
++++ b/tests/unit/test_helix_test_fixture.cpp
+@@ -20,8 +20,9 @@ TEST_CASE_METHOD(HelixTestFixture,
+     REQUIRE(SystemSettingsManager::instance().get_language() == "en");
+ 
+     // Mutation observable.
+-    SystemSettingsManager::instance().set_language("fr");
+-    REQUIRE(SystemSettingsManager::instance().get_language() == "fr");
++    // AD5X (patch 0033): French is not in the list, German is
++    SystemSettingsManager::instance().set_language("de");
++    REQUIRE(SystemSettingsManager::instance().get_language() == "de");
+ 
+     // Manual reset restores default — proves reset_all() itself resets, not just ctor.
+     HelixTestFixture::reset_all();
+diff --git a/tests/unit/test_panel_widget_config.cpp b/tests/unit/test_panel_widget_config.cpp
+index 14f1e1fda3..2a5708cf72 100644
+--- a/tests/unit/test_panel_widget_config.cpp
++++ b/tests/unit/test_panel_widget_config.cpp
+@@ -2748,6 +2748,10 @@ TEST_CASE("preset seeds: shipped seeds are overlays that place no excluded widge
+     // does ship is held to the same audit as the fixtures above.
+     const SeedAudit audit = audit_seed_dir(root);
+     for (const auto& problem : audit.problems) {
++        // AD5X: its seed puts the Toolhead tile in the Motion slot on purpose
++        if (problem == "ad5x: names toolhead") {
++            continue;
++        }
+         FAIL_CHECK(problem);
+     }
+ }
+diff --git a/tests/unit/test_print_status_chip_look.cpp b/tests/unit/test_print_status_chip_look.cpp
+index 64a90da281..725aa7136d 100644
+--- a/tests/unit/test_print_status_chip_look.cpp
++++ b/tests/unit/test_print_status_chip_look.cpp
+@@ -5,6 +5,10 @@
+  * @brief What the printer tile's chips look like
+  */
+ 
++// AD5X (patch 0036): the printer tile shows stat tiles and the IFS instead of
++// the printer picture, so it has no pinned chips, glows or leader lines. The
++// cases about those are hidden with [.][ad5x_no_picture].
++
+ #include "ui_panel_print_status.h"
+ 
+ #include "../test_helpers/print_status_panel_fixture.h"
+@@ -15,7 +19,7 @@
+ using print_status_panel_test::PrintStatusPanelFixture;
+ 
+ TEST_CASE_METHOD(PrintStatusPanelFixture, "Print status chips pinned on the photo cover more of it",
+-                 "[print_status][print_status_chips]") {
++                 "[print_status][print_status_chips][.][ad5x_no_picture]") {
+     lv_obj_t* chip = lv_obj_find_by_name(root_, "ps_chip_speed_flow");
+     REQUIRE(chip != nullptr);
+     lv_subject_t* mode = lv_xml_get_subject(nullptr, "ps_callout_mode");
+@@ -30,7 +34,7 @@ TEST_CASE_METHOD(PrintStatusPanelFixture, "Print status chips pinned on the phot
+ 
+ TEST_CASE_METHOD(PrintStatusPanelFixture,
+                  "Print status speed chip shows the speed alone, no flow readout",
+-                 "[print_status][print_status_chips]") {
++                 "[print_status][print_status_chips][.][ad5x_no_picture]") {
+     lv_obj_t* chip = lv_obj_find_by_name(root_, "ps_chip_speed_flow");
+     REQUIRE(chip != nullptr);
+     CHECK(lv_obj_find_by_name(chip, "ps_chip_speed_text") == nullptr);
+diff --git a/tests/unit/test_print_status_redesign.cpp b/tests/unit/test_print_status_redesign.cpp
+index d2649ea3db..7841938947 100644
+--- a/tests/unit/test_print_status_redesign.cpp
++++ b/tests/unit/test_print_status_redesign.cpp
+@@ -5,6 +5,10 @@
+ // state: what each chip and checklist subject publishes, and how the callout
+ // layout drops, glows and relayouts across a phase switch.
+ 
++// AD5X (patch 0036): the printer tile shows stat tiles and the IFS instead of
++// the printer picture, so it has no pinned chips, glows or leader lines. The
++// cases about those are hidden with [.][ad5x_no_picture].
++
+ #include "ui_print_status_tiles.h"
+ #include "ui_update_queue.h"
+ 
+@@ -193,7 +197,7 @@ TEST_CASE_METHOD(Landscape800, "printing hides checklist and shows preview", "[p
+ }
+ 
+ TEST_CASE_METHOD(Landscape800, "phase switch relayouts and clears pre-print glows",
+-                 "[print_status]") {
++                 "[print_status][.][ad5x_no_picture]") {
+     auto& temps = state().temperature_state();
+     set_int(temps.get_active_extruder_temp_subject(), 1000);
+     set_int(temps.get_active_extruder_target_subject(), 2200);
+@@ -220,7 +224,7 @@ TEST_CASE_METHOD(Landscape800, "phase switch relayouts and clears pre-print glow
+ }
+ 
+ TEST_CASE_METHOD(Landscape800, "a heater chip paints every part from its heat state",
+-                 "[print_status]") {
++                 "[print_status][.][ad5x_no_picture]") {
+     using namespace helix::ui::temperature;
+     auto& temps = state().temperature_state();
+     lv_obj_t* chip = lv_obj_find_by_name(root_, "ps_chip_bed");
+@@ -288,7 +292,7 @@ TEST_CASE_METHOD(Landscape800, "a heater chip paints every part from its heat st
+ }
+ 
+ TEST_CASE_METHOD(Landscape800, "a heater off target mid-print keeps the amber of Warn",
+-                 "[print_status]") {
++                 "[print_status][.][ad5x_no_picture]") {
+     using namespace helix::ui::temperature;
+     auto& temps = state().temperature_state();
+     set_int(temps.get_bed_target_subject(), 600);
+@@ -307,7 +311,7 @@ TEST_CASE_METHOD(Landscape800, "a heater off target mid-print keeps the amber of
+         get_heating_state_color(HeatState::Heating)));
+ }
+ 
+-TEST_CASE_METHOD(Landscape800, "a heater at its target shows the check", "[print_status]") {
++TEST_CASE_METHOD(Landscape800, "a heater at its target shows the check", "[print_status][.][ad5x_no_picture]") {
+     auto& temps = state().temperature_state();
+     set_int(temps.get_bed_target_subject(), 600);
+     set_int(temps.get_bed_temp_subject(), 600);
+@@ -337,7 +341,7 @@ TEST_CASE_METHOD(Landscape800, "a heater at its target shows the check", "[print
+ }
+ 
+ TEST_CASE_METHOD(Landscape800, "the printer tile follows a change of printer image",
+-                 "[print_status]") {
++                 "[print_status][.][ad5x_no_picture]") {
+     auto& images = helix::PrinterImageManager::instance();
+     tiles().use_displayed_image();
+     settle();
+@@ -351,7 +355,7 @@ TEST_CASE_METHOD(Landscape800, "the printer tile follows a change of printer ima
+ }
+ 
+ TEST_CASE_METHOD(Landscape800, "chips lay out again when the printer tile resizes",
+-                 "[print_status]") {
++                 "[print_status][.][ad5x_no_picture]") {
+     settle();
+     const int before = tiles().layout_count();
+     lv_obj_set_height(tile_, lv_obj_get_height(tile_) - 30);
+@@ -389,7 +393,7 @@ void fans_part_spinning_aux_stopped(TileFixture& fx) {
+ } // namespace
+ 
+ TEST_CASE_METHOD(Portrait272, "the smallest tile keeps the unusual chips and dims a stopped fan",
+-                 "[print_status]") {
++                 "[print_status][.][ad5x_no_picture]") {
+     fans_part_spinning_aux_stopped(*this);
+ 
+     // Which expendable chip a tight tile drops first is the engine's rule
+@@ -404,7 +408,7 @@ TEST_CASE_METHOD(Portrait272, "the smallest tile keeps the unusual chips and dim
+ }
+ 
+ TEST_CASE_METHOD(Portrait320, "fan at 0 stays, dimmed, while the tile has room for it",
+-                 "[print_status]") {
++                 "[print_status][.][ad5x_no_picture]") {
+     fans_part_spinning_aux_stopped(*this);
+ 
+     REQUIRE(subject_int("ps_callout_mode") != static_cast<int>(CalloutMode::ImageOnly));
+@@ -614,7 +618,7 @@ TEST_CASE_METHOD(Portrait320, "a narrow strip stacks progress over a full row of
+     CHECK(lv_obj_get_height(buttons) == theme_manager_get_spacing("button_height"));
+ }
+ 
+-TEST_CASE_METHOD(Landscape800, "a tuned speed turns the speed/flow chip amber", "[print_status]") {
++TEST_CASE_METHOD(Landscape800, "a tuned speed turns the speed/flow chip amber", "[print_status][.][ad5x_no_picture]") {
+     set_int(state().motion_state().get_speed_factor_subject(), 104);
+     settle();
+     REQUIRE(subject_int("ps_chip_speed_flow_tone") == static_cast<int>(ChipTone::Warn));
+@@ -696,7 +700,7 @@ void check_chips_inside_and_apart(lv_obj_t* root) {
+ } // namespace
+ 
+ TEST_CASE_METHOD(Landscape800, "the two-line speed/flow chip lays out at its own height",
+-                 "[print_status]") {
++                 "[print_status][.][ad5x_no_picture]") {
+     settle();
+     lv_obj_update_layout(root_);
+     lv_obj_t* speed = lv_obj_find_by_name(root_, "ps_chip_speed_flow");
+@@ -717,7 +721,7 @@ TEST_CASE_METHOD(Landscape800, "the two-line speed/flow chip lays out at its own
+ }
+ 
+ TEST_CASE_METHOD(Landscape800, "every chip at once at 800x480: none clips or overlaps",
+-                 "[print_status]") {
++                 "[print_status][.][ad5x_no_picture]") {
+     all_eight_chips(*this);
+     REQUIRE(subject_int("ps_chip_chamber_shown") == 1);
+     CHECK(subject_int("ps_callout_mode") != static_cast<int>(CalloutMode::ImageOnly));
+@@ -839,7 +843,7 @@ TEST_CASE_METHOD(Landscape800, "a heater reading does not re-read the checklist"
+ }
+ 
+ TEST_CASE_METHOD(Landscape800, "a fan spinning up mid-print does not change the mode",
+-                 "[print_status]") {
++                 "[print_status][.][ad5x_no_picture]") {
+     size_printer_area(root_, 200, 280);
+     three_fans_stopped(*this);
+     const int mode = subject_int("ps_callout_mode");
+@@ -855,7 +859,7 @@ TEST_CASE_METHOD(Landscape800, "a fan spinning up mid-print does not change the
+     PrinterStateTestAccess::get_fan_state(state()).init_fans({});
+ }
+ 
+-TEST_CASE_METHOD(Landscape800, "a tuned speed does not change the mode", "[print_status]") {
++TEST_CASE_METHOD(Landscape800, "a tuned speed does not change the mode", "[print_status][.][ad5x_no_picture]") {
+     size_printer_area(root_, 200, 280);
+     three_fans_stopped(*this);
+     set_int(state().motion_state().get_speed_factor_subject(), 100);
+@@ -876,7 +880,7 @@ TEST_CASE_METHOD(Landscape800, "a tuned speed does not change the mode", "[print
+ }
+ 
+ TEST_CASE_METHOD(Landscape800, "a fan taking the part slot mid-print sheds nothing new",
+-                 "[print_status]") {
++                 "[print_status][.][ad5x_no_picture]") {
+     // At this size the one-side line mode fits the stopped aux fan only by
+     // shedding the hotend fan.
+     size_printer_area(root_, 320, 220);
+@@ -907,7 +911,7 @@ TEST_CASE_METHOD(Landscape800, "a fan taking the part slot mid-print sheds nothi
+ }
+ 
+ TEST_CASE_METHOD(Landscape800, "a rebuilt tree shows the exact-size copy as an exact copy",
+-                 "[print_status]") {
++                 "[print_status][.][ad5x_no_picture]") {
+     tiles().use_displayed_image();
+     settle();
+     const std::string source = helix::PrinterImageManager::instance().get_displayed_image_path(
+@@ -937,7 +941,7 @@ TEST_CASE_METHOD(Landscape800, "a rebuilt tree shows the exact-size copy as an e
+     CHECK(lv_image_get_inner_align(img) == LV_IMAGE_ALIGN_CENTER);
+ }
+ 
+-TEST_CASE_METHOD(Landscape800, "a phase-dropped chip that turns unusual docks", "[print_status]") {
++TEST_CASE_METHOD(Landscape800, "a phase-dropped chip that turns unusual docks", "[print_status][.][ad5x_no_picture]") {
+     size_printer_area(root_, 320, 208);
+     three_fans_stopped(*this);
+     const int mode = subject_int("ps_callout_mode");
+@@ -963,7 +967,7 @@ TEST_CASE_METHOD(Landscape800, "a phase-dropped chip that turns unusual docks",
+ }
+ 
+ TEST_CASE_METHOD(Landscape800, "a chip the phase sheds is never placed without room",
+-                 "[print_status]") {
++                 "[print_status][.][ad5x_no_picture]") {
+     all_eight_chips(*this);
+     // Measured: at this size the line mode sheds the hotend fan, the light and
+     // speed/flow, and leaves no free room for the spinning aux fan.
+@@ -987,7 +991,7 @@ TEST_CASE_METHOD(Landscape800, "a chip the phase sheds is never placed without r
+ }
+ 
+ TEST_CASE_METHOD(Landscape800, "each glow and leader line follows its own chip's subjects",
+-                 "[print_status]") {
++                 "[print_status][.][ad5x_no_picture]") {
+     const char* keys[] = {"nozzle",     "bed",     "chamber", "part_fan",
+                           "hotend_fan", "aux_fan", "light",   "speed_flow"};
+     const char* colors[] = {nullptr, nullptr, nullptr,   "info",
+@@ -1042,7 +1046,7 @@ TEST_CASE_METHOD(Landscape800, "each glow and leader line follows its own chip's
+ }
+ 
+ TEST_CASE_METHOD(Landscape800, "the printer tile shows the exact-size copy of its picture",
+-                 "[print_status]") {
++                 "[print_status][.][ad5x_no_picture]") {
+     tiles().use_displayed_image();
+     settle();
+     const std::string source = helix::PrinterImageManager::instance().get_displayed_image_path(
+@@ -1065,7 +1069,7 @@ TEST_CASE_METHOD(Landscape800, "the printer tile shows the exact-size copy of it
+ 
+ TEST_CASE_METHOD(Landscape800,
+                  "a new picture during a cache generation still gets its exact-size copy",
+-                 "[print_status]") {
++                 "[print_status][.][ad5x_no_picture]") {
+     auto& images = helix::PrinterImageManager::instance();
+     const int32_t screen_w = lv_display_get_horizontal_resolution(lv_display_get_default());
+     const std::string first = images.get_displayed_image_path(screen_w);
+@@ -1102,7 +1106,7 @@ TEST_CASE_METHOD(Landscape800,
+ }
+ 
+ TEST_CASE_METHOD(Landscape800, "a cache generation landing after deinit leaves the tile alone",
+-                 "[print_status]") {
++                 "[print_status][.][ad5x_no_picture]") {
+     const std::string source = helix::PrinterImageManager::instance().get_displayed_image_path(
+         lv_display_get_horizontal_resolution(lv_display_get_default()));
+     REQUIRE_FALSE(source.empty());
+@@ -1131,3 +1135,93 @@ TEST_CASE_METHOD(Landscape800, "a cache generation landing after deinit leaves t
+     CHECK(subject_str("ps_printer_image_src") == source);
+     std::filesystem::remove(cache_path, ec);
+ }
++
++// ============================================================================
++// AD5X (patch 0036): stat tiles and the IFS in the printer tile
++// ============================================================================
++
++namespace {
++
++/// The panel at 800x480 with the IFS slot subjects registered before the
++/// tree, so the IFS part's bindings resolve as in the app.
++struct Ad5xTile800 : PrintStatusPanelFixture {
++    Ad5xTile800()
++        : PrintStatusPanelFixture([]() -> std::shared_ptr<void> {
++              helix::led::LedController::instance().init(nullptr, nullptr);
++              ToolState::instance().init_subjects(false);
++              helix::PrinterImageManager::instance().init_subjects();
++              AmsState::instance().init_subjects(true);
++              return std::make_shared<helix::test::ScopedGeometry>(800, 480);
++          }) {
++        lv_obj_remove_flag(root_, LV_OBJ_FLAG_HIDDEN);
++        settle();
++    }
++
++    void settle() {
++        UpdateQueue::instance().drain();
++        lv_obj_update_layout(root_);
++        UpdateQueue::instance().drain();
++        lv_obj_update_layout(root_);
++        PrintStatusPanelTestAccess::tiles(panel()).update_now();
++        UpdateQueue::instance().drain();
++    }
++};
++
++/// Whether a label under @p obj shows exactly @p text.
++bool shows_text(lv_obj_t* obj, const std::string& text) {
++    if (lv_obj_check_type(obj, &lv_label_class)) {
++        const char* t = lv_label_get_text(obj);
++        if (t && text == t) {
++            return true;
++        }
++    }
++    for (uint32_t i = 0; i < lv_obj_get_child_count(obj); ++i) {
++        if (shows_text(lv_obj_get_child(obj, static_cast<int32_t>(i)), text)) {
++            return true;
++        }
++    }
++    return false;
++}
++
++} // namespace
++
++TEST_CASE_METHOD(Ad5xTile800, "ad5x: stat tiles stand where the printer picture was",
++                 "[print_status][ad5x]") {
++    CHECK(lv_obj_find_by_name(root_, "ps_printer_area") == nullptr);
++    CHECK(lv_obj_find_by_name(root_, "ps_printer_image") == nullptr);
++    REQUIRE(lv_obj_find_by_name(root_, "kiln_ps_stats") != nullptr);
++    for (const char* name :
++         {"kiln_ps_stat_nozzle", "kiln_ps_stat_bed", "kiln_ps_stat_fan", "kiln_ps_stat_speed"}) {
++        INFO(name);
++        CHECK(lv_obj_find_by_name(root_, name) != nullptr);
++    }
++}
++
++TEST_CASE_METHOD(Ad5xTile800, "ad5x: a stat shows its chip's text", "[print_status][ad5x]") {
++    auto& temps = state().temperature_state();
++    set_int(temps.get_bed_target_subject(), 600);
++    set_int(temps.get_bed_temp_subject(), 300);
++    settle();
++    lv_obj_t* bed = lv_obj_find_by_name(root_, "kiln_ps_stat_bed");
++    REQUIRE(bed != nullptr);
++    const std::string text = subject_str("ps_chip_bed_text");
++    REQUIRE_FALSE(text.empty());
++    CHECK(shows_text(bed, text));
++}
++
++TEST_CASE_METHOD(Ad5xTile800, "ad5x: the IFS part hides on a printer without one",
++                 "[print_status][ad5x]") {
++    lv_obj_t* ifs = lv_obj_find_by_name(root_, "kiln_ps_ifs");
++    REQUIRE(ifs != nullptr);
++    lv_subject_t* count = AmsState::instance().get_slot_count_subject();
++    lv_subject_set_int(count, 0);
++    settle();
++    CHECK(lv_obj_has_flag(ifs, LV_OBJ_FLAG_HIDDEN));
++    lv_subject_set_int(count, 4);
++    settle();
++    CHECK_FALSE(lv_obj_has_flag(ifs, LV_OBJ_FLAG_HIDDEN));
++    for (const char* name : {"kiln_ps_slot_1", "kiln_ps_slot_2", "kiln_ps_slot_3", "kiln_ps_slot_4"}) {
++        INFO(name);
++        CHECK(lv_obj_find_by_name(ifs, name) != nullptr);
++    }
++}
+diff --git a/tests/unit/test_system_settings_manager.cpp b/tests/unit/test_system_settings_manager.cpp
+index f4adc15ead..be77c6180b 100644
+--- a/tests/unit/test_system_settings_manager.cpp
++++ b/tests/unit/test_system_settings_manager.cpp
+@@ -39,16 +39,17 @@ TEST_CASE_METHOD(LVGLTestFixture, "SystemSettingsManager default values after in
+ 
+ TEST_CASE_METHOD(LVGLTestFixture, "SystemSettingsManager language index/code conversion",
+                  "[system_settings]") {
++    // AD5X (patch 0033): the picker's order, without French, with Turkish
+     SECTION("language_index_to_code valid indices") {
+         REQUIRE(SystemSettingsManager::language_index_to_code(0) == "en");
+-        REQUIRE(SystemSettingsManager::language_index_to_code(1) == "de");
+-        REQUIRE(SystemSettingsManager::language_index_to_code(2) == "fr");
+-        REQUIRE(SystemSettingsManager::language_index_to_code(3) == "es");
+-        REQUIRE(SystemSettingsManager::language_index_to_code(4) == "ru");
+-        REQUIRE(SystemSettingsManager::language_index_to_code(5) == "pt");
+-        REQUIRE(SystemSettingsManager::language_index_to_code(6) == "it");
+-        REQUIRE(SystemSettingsManager::language_index_to_code(7) == "zh");
+-        REQUIRE(SystemSettingsManager::language_index_to_code(8) == "ja");
++        REQUIRE(SystemSettingsManager::language_index_to_code(1) == "zh");
++        REQUIRE(SystemSettingsManager::language_index_to_code(2) == "ja");
++        REQUIRE(SystemSettingsManager::language_index_to_code(3) == "de");
++        REQUIRE(SystemSettingsManager::language_index_to_code(4) == "es");
++        REQUIRE(SystemSettingsManager::language_index_to_code(5) == "it");
++        REQUIRE(SystemSettingsManager::language_index_to_code(6) == "ru");
++        REQUIRE(SystemSettingsManager::language_index_to_code(7) == "pt");
++        REQUIRE(SystemSettingsManager::language_index_to_code(8) == "tr");
+     }
+ 
+     SECTION("language_index_to_code out-of-range defaults to en") {
+@@ -58,13 +59,14 @@ TEST_CASE_METHOD(LVGLTestFixture, "SystemSettingsManager language index/code con
+ 
+     SECTION("language_code_to_index valid codes") {
+         REQUIRE(SystemSettingsManager::language_code_to_index("en") == 0);
+-        REQUIRE(SystemSettingsManager::language_code_to_index("de") == 1);
+-        REQUIRE(SystemSettingsManager::language_code_to_index("fr") == 2);
+-        REQUIRE(SystemSettingsManager::language_code_to_index("ja") == 8);
++        REQUIRE(SystemSettingsManager::language_code_to_index("de") == 3);
++        REQUIRE(SystemSettingsManager::language_code_to_index("tr") == 8);
++        REQUIRE(SystemSettingsManager::language_code_to_index("ja") == 2);
+     }
+ 
+     SECTION("language_code_to_index unknown code defaults to 0") {
+         REQUIRE(SystemSettingsManager::language_code_to_index("xx") == 0);
++        REQUIRE(SystemSettingsManager::language_code_to_index("fr") == 0);
+         REQUIRE(SystemSettingsManager::language_code_to_index("") == 0);
+     }
+ }

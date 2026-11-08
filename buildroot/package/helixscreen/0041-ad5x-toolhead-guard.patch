@@ -1,0 +1,212 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Sat, 7 Nov 2026 17:00:00 -0500
+Subject: [PATCH] ad5x: our controls take the toolhead guard, setup refuses a print
+
+The nozzle size, the plugin switches and buttons, and the bed soak's
+Calibrate disabled themselves on print_active. That reads 0 until Klipper
+reports the print, so they were live in the moment between Print and the
+printer's answer. They now carry moves_machine="true" (upstream's guard,
+machine_motion_blocked), composed with their own busy subjects; the C++
+checks in the nozzle and soak code ask the same subject.
+
+Settings' "Run Setup Wizard" and "Check Purge Box" now refuse while a
+print holds the machine (Klipper's SETUP_WIZARD_STEP refuses too).
+
+The census in test_job_holds_machine.cpp lists our XML files: the four
+with guards and their counts, and the six that command nothing (the
+setup wizard pages run outside a print).
+---
+diff --git a/src/ui/ui_ad5x_nozzle.cpp b/src/ui/ui_ad5x_nozzle.cpp
+index e5385d1dc2..501a9b2e35 100644
+--- a/src/ui/ui_ad5x_nozzle.cpp
++++ b/src/ui/ui_ad5x_nozzle.cpp
+@@ -359,7 +359,8 @@ class NozzleChangeFollowUp {
+     void offer() const {
+         // Not over a wizard (it runs these steps itself) or a print
+         if (is_wizard_active() || !ad5x_setup::available() ||
+-            lv_subject_get_int(get_printer_state().print_state().get_print_active_subject()) != 0) {
++            lv_subject_get_int(
++                get_printer_state().print_state().get_machine_motion_blocked_subject()) != 0) {
+             return;
+         }
+         spdlog::info("[AD5X nozzle] Klipper runs with {}: offering the checks",
+@@ -434,7 +435,8 @@ void Ad5xNozzleModal::on_ok() {
+     if (!chosen || status.local || (status.size && ad5x_nozzle::same_size(*chosen, *status.size))) {
+         return;
+     }
+-    if (lv_subject_get_int(get_printer_state().print_state().get_print_active_subject()) != 0) {
++    if (lv_subject_get_int(
++            get_printer_state().print_state().get_machine_motion_blocked_subject()) != 0) {
+         NOTIFY_WARNING("{}", lv_tr("The nozzle size can't change during a print"));
+         return;
+     }
+diff --git a/src/ui/ui_panel_settings.cpp b/src/ui/ui_panel_settings.cpp
+index d13230fca2..34c12811ae 100644
+--- a/src/ui/ui_panel_settings.cpp
++++ b/src/ui/ui_panel_settings.cpp
+@@ -363,15 +363,26 @@ void SettingsPanel::handle_hardware_health_clicked() {
+     overlay.show(parent_screen_);
+ }
+ 
++// The setup steps home, heat and probe; Klipper refuses them during a print too
++static bool ad5x_setup_refused_now() {
++    if (lv_subject_get_int(
++            get_printer_state().print_state().get_machine_motion_blocked_subject()) != 0) {
++        ToastManager::instance().show(ToastSeverity::WARNING,
++                                      lv_tr("Cannot calibrate while printing"), 3000);
++        return true;
++    }
++    return false;
++}
++
+ void SettingsPanel::handle_ad5x_purge_clicked() {
+-    if (is_wizard_active()) {
++    if (is_wizard_active() || ad5x_setup_refused_now()) {
+         return;
+     }
+     helix::ad5x_setup::launch_purge_box(parent_screen_);
+ }
+ 
+ void SettingsPanel::handle_ad5x_setup_clicked() {
+-    if (is_wizard_active()) {
++    if (is_wizard_active() || ad5x_setup_refused_now()) {
+         return;
+     }
+     helix::ui::ConfirmOptions opts;
+diff --git a/src/ui/ui_settings_ad5x_soak.cpp b/src/ui/ui_settings_ad5x_soak.cpp
+index c0d81d2f4e..5b5a1d0e8d 100644
+--- a/src/ui/ui_settings_ad5x_soak.cpp
++++ b/src/ui/ui_settings_ad5x_soak.cpp
+@@ -685,7 +685,10 @@ void Ad5xSoakOverlay::handle_calibrate() {
+     if (soak.calibrating() || !soak.loaded() || !soak.klippy_ready()) {
+         return;
+     }
+-    if (lv_subject_get_int(get_printer_state().print_state().get_print_active_subject()) != 0) {
++    // machine_motion_blocked, not print_active: it also covers the start of a
++    // print, before Klipper reports it
++    if (lv_subject_get_int(
++            get_printer_state().print_state().get_machine_motion_blocked_subject()) != 0) {
+         helix::ui::modal_alert(lv_tr("Can't calibrate now"),
+                                lv_tr("The bed soak can't be calibrated during a print."),
+                                ModalSeverity::Warning);
+diff --git a/tests/unit/test_job_holds_machine.cpp b/tests/unit/test_job_holds_machine.cpp
+index d6c03a682f..23366ff4d2 100644
+--- a/tests/unit/test_job_holds_machine.cpp
++++ b/tests/unit/test_job_holds_machine.cpp
+@@ -359,6 +359,12 @@ constexpr GuardedFile kGuardedFiles[] = {
+     {"ui_xml/temp_graph_overlay.xml", 2},
+     {"ui_xml/components/tool_switcher_feeder_segment.xml", 1},
+     {"ui_xml/components/tool_switcher_park_segment.xml", 1},
++    // AD5X: the nozzle size and the plugins restart Klipper, the soak
++    // calibration homes and probes
++    {"ui_xml/ad5x_nozzle_modal.xml", 2},
++    {"ui_xml/components/ad5x_catalog_row.xml", 1},
++    {"ui_xml/components/ad5x_plugin_row.xml", 3},
++    {"ui_xml/settings_ad5x_soak_overlay.xml", 1},
+ };
+ 
+ /// Control-bearing files that command nothing on the printer. A guard appearing
+@@ -687,6 +693,14 @@ constexpr const char* kNoMachineControlFiles[] = {
+     "ui_xml/wizard_touch_calibration.xml",
+     "ui_xml/wizard_vendor_row.xml",
+     "ui_xml/wizard_wifi_setup.xml",
++    // AD5X: a notice, settings and sounds; the setup wizard runs outside a
++    // print (Settings refuses it during one)
++    "ui_xml/ad5x_refill_notice_modal.xml",
++    "ui_xml/components/ad5x_sound_event_row.xml",
++    "ui_xml/settings_ad5x_refill_overlay.xml",
++    "ui_xml/wizard_ad5x_nozzle.xml",
++    "ui_xml/wizard_ad5x_setup.xml",
++    "ui_xml/wizard_ad5x_timezone.xml",
+ };
+ 
+ std::string read_xml(const std::string& path) {
+diff --git a/ui_xml/ad5x_nozzle_modal.xml b/ui_xml/ad5x_nozzle_modal.xml
+index 11599c8cba..12ede774bc 100644
+--- a/ui_xml/ad5x_nozzle_modal.xml
++++ b/ui_xml/ad5x_nozzle_modal.xml
+@@ -28,8 +28,8 @@
+               height="content" style_pad_all="0" flex_flow="row" style_flex_main_place="space_between"
+               style_flex_cross_place="center" style_pad_gap="#space_sm" scrollable="false">
+         <text_body text="Nozzle" flex_grow="1"/>
+-        <lv_dropdown name="nozzle_dropdown" width="55%" style_radius="#border_radius">
+-          <bind_state_if cond="print_active or ad5x_nozzle_local" state="disabled"/>
++        <lv_dropdown name="nozzle_dropdown" width="55%" style_radius="#border_radius" moves_machine="true">
++          <bind_state_if_eq subject="ad5x_nozzle_local" state="disabled" ref_value="1"/>
+         </lv_dropdown>
+       </lv_obj>
+       <lv_obj width="100%"
+@@ -49,7 +49,7 @@
+         <text_small width="0" flex_grow="1" text="The nozzle size can't change during a print" long_mode="wrap"/>
+       </lv_obj>
+     </lv_obj>
+-    <modal_button_row primary_text="Apply" secondary_text="Cancel" primary_disable_subject="print_active"
++    <modal_button_row primary_text="Apply" secondary_text="Cancel" primary_moves_machine="true"
+                       primary_hide_subject="ad5x_nozzle_local"/>
+   </view>
+ </component>
+diff --git a/ui_xml/components/ad5x_catalog_row.xml b/ui_xml/components/ad5x_catalog_row.xml
+index 093eca3c5b..7a4b696de0 100644
+--- a/ui_xml/components/ad5x_catalog_row.xml
++++ b/ui_xml/components/ad5x_catalog_row.xml
+@@ -35,8 +35,8 @@
+     </lv_obj>
+     <ui_button name="install_btn"
+                width="content" height="#button_height_sm" style_min_width="96" text="Install" icon="download"
+-               variant="primary">
+-      <bind_state_if cond="print_active or ad5x_plugins_busy or ${blocked}" state="disabled"/>
++               variant="primary" moves_machine="true">
++      <bind_state_if cond="ad5x_plugins_busy or ${blocked}" state="disabled"/>
+       <event_cb trigger="clicked" callback="on_ad5x_plugin_install" user_data="$plugin"/>
+     </ui_button>
+   </view>
+diff --git a/ui_xml/components/ad5x_plugin_row.xml b/ui_xml/components/ad5x_plugin_row.xml
+index 77b15d3784..3ad02ec753 100644
+--- a/ui_xml/components/ad5x_plugin_row.xml
++++ b/ui_xml/components/ad5x_plugin_row.xml
+@@ -50,8 +50,8 @@
+         <text_small name="note"
+                     width="100%" text="$note" long_mode="wrap" style_text_color="#warning" hidden_if_empty="$note"/>
+       </lv_obj>
+-      <ui_switch name="toggle" size="small" checked="$checked">
+-        <bind_state_if cond="print_active or ad5x_plugins_busy or ${blocked}" state="disabled"/>
++      <ui_switch name="toggle" size="small" checked="$checked" moves_machine="true">
++        <bind_state_if cond="ad5x_plugins_busy or ${blocked}" state="disabled"/>
+         <event_cb trigger="value_changed" callback="on_ad5x_plugin_toggled" user_data="$plugin"/>
+       </ui_switch>
+     </lv_obj>
+@@ -62,14 +62,14 @@
+             scrollable="false" hidden_if_empty="$manage">
+       <ui_button name="update_btn"
+                  width="content" height="#button_height_sm" style_min_width="96" text="Update" icon="update"
+-                 variant="secondary">
+-        <bind_state_if cond="print_active or ad5x_plugins_busy" state="disabled"/>
++                 variant="secondary" moves_machine="true">
++        <bind_state_if_eq subject="ad5x_plugins_busy" state="disabled" ref_value="1"/>
+         <event_cb trigger="clicked" callback="on_ad5x_plugin_update" user_data="$plugin"/>
+       </ui_button>
+       <ui_button name="remove_btn"
+                  width="content" height="#button_height_sm" style_min_width="96" text="Remove" icon="delete"
+-                 variant="danger">
+-        <bind_state_if cond="print_active or ad5x_plugins_busy" state="disabled"/>
++                 variant="danger" moves_machine="true">
++        <bind_state_if_eq subject="ad5x_plugins_busy" state="disabled" ref_value="1"/>
+         <event_cb trigger="clicked" callback="on_ad5x_plugin_remove" user_data="$plugin"/>
+       </ui_button>
+     </lv_obj>
+diff --git a/ui_xml/settings_ad5x_soak_overlay.xml b/ui_xml/settings_ad5x_soak_overlay.xml
+index f5780e3c8b..4f7d8126f3 100644
+--- a/ui_xml/settings_ad5x_soak_overlay.xml
++++ b/ui_xml/settings_ad5x_soak_overlay.xml
+@@ -56,8 +56,8 @@
+                       text="Measures how long the bed keeps moving at that temperature. Takes 20-35 minutes; the bed must be empty and below 40 °C."/>
+           <ui_button name="btn_ad5x_soak_calibrate"
+                      width="content" height="#button_height_sm" style_min_width="120" text="Calibrate" icon="play"
+-                     variant="primary">
+-            <bind_state_if cond="print_active or ad5x_soak_busy" state="disabled"/>
++                     variant="primary" moves_machine="true">
++            <bind_state_if_eq subject="ad5x_soak_busy" state="disabled" ref_value="1"/>
+             <event_cb trigger="clicked" callback="on_ad5x_soak_calibrate"/>
+           </ui_button>
+         </lv_obj>
