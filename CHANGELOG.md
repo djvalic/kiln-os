@@ -8,7 +8,7 @@ When an entry fixes a reported issue, add its number as `(issue #N)` in the
 entry, so the GitHub release links to the issue. A release does not close
 the issue: it is closed by hand after the release.
 
-## Unreleased
+## v0.0.47
 
 - **Klipper updated to v0.13.0-821** (from v0.13.0-816): upstream frees old pressure advance values instead of keeping them, which helps long prints that change pressure advance often (OrcaSlicer's adaptive pressure advance). The other upstream changes don't affect the AD5X: twist compensation is now off only for load cell and eddy current probes, and a homing event change. The board firmware stays as it is: no reflash.
 - **The setup wizard can't start during a print**: "Run Setup Wizard" and "Check Purge Box" in Settings, and `SETUP_WIZARD_STEP` from the console, are refused while a print runs or is paused. Before, a step started this way would home, heat and probe in the middle of the print.
