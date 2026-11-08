@@ -39,6 +39,10 @@ define KLIPPER_INSTALL_TARGET_CMDS
 		> $(TARGET_DIR)/usr/lib/klipper/klippy/.version
 	$(INSTALL) -m 0644 -t $(TARGET_DIR)/usr/lib/klipper/klippy/extras \
 		$(KLIPPER_AD5X)/extras/*.py
+	# Happy Hare's modules live in klippy/extras too (happy-hare.mk, which
+	# installs after Klipper): back in when Klipper is reinstalled later
+	$(if $(BR2_PACKAGE_HAPPY_HARE),[ ! -f $(HAPPY_HARE_DIR)/.stamp_target_installed ] || \
+		cp -a $(HAPPY_HARE_DIR)/extras/mmu* $(TARGET_DIR)/usr/lib/klipper/klippy/extras/)
 	# Moonraker serves these read-only (config_examples, docs roots) and
 	# warns when they are missing. Docs without their images (~2 MB).
 	rm -rf $(TARGET_DIR)/usr/lib/klipper/config $(TARGET_DIR)/usr/lib/klipper/docs
