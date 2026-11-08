@@ -2,22 +2,49 @@
 # Kiln OS runs our own kernel (6.6, kernel-ingenic66/), started at every
 # boot from the printer's stock 5.10 kernel in the boot slots
 # (S00ad5x-kernel). If a start of ours doesn't complete (hang: power-cycle;
-# panic: reboots by itself), the printer runs on the stock kernel until an
-# update brings another release of ours, or until "retry".
+# panic: reboots by itself; two unfinished start-ups in a row), the printer
+# runs on the stock kernel until "retry" (an update does not clear it: the
+# release string is the same in every build).
 #   ad5x-kernel            the running kernel, ours in this image, failures
 #   ad5x-kernel retry      try ours again from the next boot
+# AD5X_LIB overrides /usr/lib/ad5x (tools/test_kernel_fallback.sh).
 D=/data/ad5x/kernel
-K=/usr/lib/ad5x/kernel66
+K=${AD5X_LIB:-/usr/lib/ad5x}/kernel66
 case "$1" in
 status|"")
 	echo "running: $(uname -r)"
 	echo "ours:    $(cat $K/release 2>/dev/null || echo 'not in this image')"
-	[ -f $D/failed ] && echo "failed:  $(cat $D/failed) (stock kernel until an update or ad5x-kernel retry)"
-	[ -f $D/history ] && echo "last failure: $(tail -1 $D/history)"
+	if [ -f $D/failed ]; then
+		echo "failed:  $(sed -n 1p $D/failed) (stock kernel until ad5x-kernel retry)"
+		w=$(sed -n 2p $D/failed)
+		[ -n "$w" ] && echo "why:     $w"
+	fi
+	[ -f $D/unfinished ] &&
+		echo "unfinished: $(cat $D/unfinished) in a row (tried again; the 2nd in a row falls back to the stock kernel)"
+	# history: "UPTIME slot S RELEASE failed|failed: WHY|unfinished: WHY|
+	# retried: WHY"
+	# (UPTIME: at the jump, not when it failed; records from before issue #42
+	# end in "failed" and say neither why nor when)
+	if [ -f $D/history ]; then
+		tail -1 $D/history | {
+			read -r _ _ slot r what
+			case "$what" in
+			unfinished:*) k="last unfinished start" ;;
+			retried:*) k="last retry" ;;
+			*) k="last failed start" ;;
+			esac
+			what=${what#*:}
+			[ "$what" = failed ] && what=" no stage or time recorded (an older record)"
+			echo "$k: $r on slot $slot:$what"
+		}
+	fi
+	if [ -f $D/last-ok ] && read -r _ _ slot r _ < $D/last-ok; then
+		echo "last ok: $r on slot $slot"
+	fi
 	;;
 retry)
 	[ -f $K/xImage ] || { echo "ad5x-kernel: this image has no kernel in $K"; exit 1; }
-	rm -f $D/failed $D/pending $D/use; sync
+	rm -f $D/failed $D/pending $D/started $D/unfinished $D/use; sync
 	echo "our kernel from the next boot (reboot now?)"
 	;;
 *) sed -n '2,9p' "$0"; exit 2 ;;

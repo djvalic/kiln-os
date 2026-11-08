@@ -127,9 +127,15 @@ The stock kernel is only the safety net: if a start of ours doesn't
 complete (a hang, then a power cycle; or a panic, which reboots by itself),
 the printer comes up on the stock kernel instead, with Flashforge's drivers
 (Klipper, the screen and the network still run; no speaker), and stays on
-it until an update brings another release of our kernel, which is tried
-at once. `ad5x-kernel` shows the running kernel and any failure;
-`ad5x-kernel retry` tries ours again from the next boot. Details:
+it until our kernel is tried again by hand (an update doesn't clear it:
+the kernel's release string is the same in every build). A start that
+reached our kernel but was cut off later in start-up (a power cut while
+the splash shows) ends in the recovery OS; after "Boot main OS" our kernel
+is tried again, and only a second such start in a row falls back. `ad5x-kernel` shows the running kernel and any failure
+(stage and time); `ad5x-kernel retry` tries ours again from the next boot.
+While the printer stays on the stock kernel for this reason, Fluidd shows
+a warning, and `POST /machine/kiln_os/kernel_retry` tries ours again and
+reboots ([docs/updates.md](docs/updates.md)). Details:
 [docs/deviations-from-stock.md](docs/deviations-from-stock.md) (last
 section).
 

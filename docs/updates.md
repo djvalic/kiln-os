@@ -94,7 +94,11 @@ is kept in the run's log folder (`update-<version>.zip`). It is never published,
   `kiln-os-VERSION-update.zip` to `/data/ad5x/kiln-update`, checks it
   against the release's `SHA256SUMS` and asks `ad5x-update-agent`
   (`S68ad5x-update-agent`, root) to install it. The agent refuses while a
-  print runs, stages it with `ad5x-update` (boot flag on the recovery OS)
+  print may run: Moonraker gives no answer at all ("no answer from
+  Moonraker"), or Klipper is ready and its print state is printing, paused
+  or unknown. A Klipper that is not ready (startup, shutdown, error,
+  disconnected) can't be printing, so a printer with a broken Klipper can
+  still be updated. It stages it with `ad5x-update` (boot flag on the recovery OS)
   and reboots. The recovery OS installs it into slot B, checks it and
   boots it (about 3 minutes). Log: `/data/ad5x/kiln-update/agent.log`.
   The update carries the release's recovery OS too: after the first
@@ -106,3 +110,27 @@ is kept in the run's log folder (`update-<version>.zip`). It is never published,
   changes nothing.
 - Fluidd itself also updates from Fluidd (its own entry, GitHub releases,
   `S61ad5x-web`).
+- The kernel (issue #42): when `/data/ad5x/kernel/failed` names the release
+  of our kernel in this image, the printer runs on the stock kernel
+  (`S00ad5x-kernel`, `ad5x-kernel`). `kiln_os` then adds a Moonraker
+  warning, which Fluidd shows: "Running the stock kernel: Kiln's kernel
+  failed to start (why and when). Sound and some drivers are unavailable."
+  Its endpoints:
+  - `GET /machine/kiln_os/kernel`: `running` (`uname -r`), `stock` (5.10
+    runs), `ours` (the release in this image, `""` if none), `failed`
+    (line 1 of `failed`), `failed_why` (line 2: stage and last saved
+    clock), `ours_failed` (`failed` names ours: the warning is up),
+    `unfinished` (unfinished start-ups in a row). The "Kiln OS" entry of
+    `/machine/update/status` has the same under `kernel`.
+  - `POST /machine/kiln_os/kernel_retry`: writes `kernel-retry` in
+    `/data/ad5x/kiln-update`; the agent runs `ad5x-kernel retry` and
+    reboots, so our kernel is tried at the next boot. A recorded failure
+    lasts until this (or `ad5x-kernel retry`): an update doesn't clear it,
+    the release string is the same in every build. Answers
+    `{"result": "rebooting"}`; an error while a print may run (the same
+    rule as installs: "refused: a print is running", "no answer from
+    Moonraker", "the print state is unknown"), before start-up has finished (the boot flag still
+    points at the recovery OS), when our kernel runs and nothing is
+    recorded as failed, or when the image has no kernel of its own. Example:
+    `curl -X POST http://PRINTER/machine/kiln_os/kernel_retry` (through
+    Fluidd's nginx) or port 7125.

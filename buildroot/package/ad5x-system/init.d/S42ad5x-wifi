@@ -6,19 +6,25 @@
 # start without that file brings over the networks stock saved (usershare
 # /wifi/wpa_supplicant.conf, joined on the Flashforge screen), or starts
 # with none. DHCP: udhcpc on wlan0, renewed by wpa_cli (this script with
-# "wlan0 CONNECTED") the moment a network is joined. Power saving is off
-# on wlan0 (power_save_off, below).
+# "wlan0 CONNECTED") the moment a network is joined. A disconnect doesn't
+# release the lease: the address and route stay on wlan0, so a short drop
+# doesn't cut connections. Power saving is off on wlan0 (power_save_off,
+# below).
 #
 # Off: HelixScreen's Wi-Fi switch saves wifi_enabled false in its
-# settings.json and blocks the radio (rfkill); this script blocks it at
-# boot too, so it never comes on. HelixScreen turns it back on by itself
-# when no Ethernet is up, so an off switch can't strand the printer.
+# settings.json and blocks the radio (rfkill). This script leaves that to
+# HelixScreen (issue #37): at its start it blocks the radio again only
+# when Ethernet is up, and leaves it on otherwise, so an off switch can't
+# strand the printer. A block here at boot could outlast that decision
+# (and the recovery OS, which runs this script, has no HelixScreen).
 # /data/ad5x/wifi.disable: no Wi-Fi at all (no wpa_supplicant, nothing
 # for the screen to switch on).
 #
 # What happened at start is in printer_data/logs/wifi.log (Fluidd shows
-# it): kernel, Wi-Fi driver, the number of saved networks (no names or
-# passwords), wpa_supplicant's own words if it didn't start. A config it
+# it): kernel, Wi-Fi driver and its settings, the number of saved networks
+# (no names or passwords), wpa_supplicant's own words if it didn't start.
+# The previous start's log is kept as wifi.log.1 (one generation), so a
+# Wi-Fi that died before a reboot still has its log. A config it
 # can't read is put aside (wpa_supplicant.conf.bad-*) and it starts with
 # a new one, so the screen can still join a network.
 CONF=/data/ad5x/wpa_supplicant.conf
@@ -126,6 +132,24 @@ power_save_off() {
 	return 0
 }
 
+# The rtw88 driver's settings and firmware version (issue #37), so a log
+# sent in shows what the driver ran with: its module parameters (built
+# in, but still in /sys/module and changeable at run time) and the
+# firmware line the kernel printed at probe.
+driver_info() {
+	p=/sys/module/rtw88_core/parameters
+	if [ -d $p ]; then
+		s=
+		for f in "$p"/*; do
+			[ -f "$f" ] && s="$s ${f##*/}=$(cat "$f" 2>/dev/null)"
+		done
+		log "rtw88_core:$s"
+	fi
+	fw=$(dmesg 2>/dev/null | grep -m 1 'rtw_.*: Firmware version')
+	[ -n "$fw" ] && log "firmware: ${fw#*Firmware version }"
+	return 0
+}
+
 radio() {
 	for r in /sys/class/net/wlan0/phy80211/rfkill*/soft; do
 		[ -f "$r" ] && echo "$1" > "$r"
@@ -140,6 +164,9 @@ start)
 		exit 0
 	fi
 	mkdir -p ${LOG%/*}
+	# keep the previous start's log (issue #37: the log of a Wi-Fi that
+	# died went with the reboot that followed); one generation
+	[ -s $LOG ] && mv -f $LOG $LOG.1 2>/dev/null
 	: > $LOG 2>/dev/null
 	log "start: kernel $(uname -r), $(head -1 /etc/ad5x-release 2>/dev/null)"
 	if [ -f $OFF ]; then
@@ -160,12 +187,12 @@ start)
 	fi
 	drv=$(readlink /sys/class/net/wlan0/device/driver 2>/dev/null)
 	log "wlan0 after ${i} s, driver ${drv##*/}"
+	driver_info
 	power_save_off start
 	[ -f $CONF ] || make_conf
 	probe_hidden
 	if grep -Eq '"wifi_enabled"[[:space:]]*:[[:space:]]*(false|0)' $HELIX 2>/dev/null; then
-		radio 1
-		log "switched off on the screen (radio blocked)"
+		log "switched off on the screen: radio not blocked at start (HelixScreen blocks it when Ethernet is up)"
 	else
 		radio 0
 	fi
@@ -196,6 +223,7 @@ wlan0)
 	p=/var/run/udhcpc.wlan0.pid
 	case "$2" in
 	CONNECTED)
+		log "joined; DHCP renew"
 		power_save_off join
 		if [ -f $p ] && kill -0 "$(cat $p)" 2>/dev/null; then
 			kill -USR1 "$(cat $p)"
@@ -204,7 +232,9 @@ wlan0)
 		fi
 		;;
 	DISCONNECTED)
-		[ -f $p ] && kill -USR2 "$(cat $p)" 2>/dev/null
+		# no release (issue #37): udhcpc keeps the lease, the address and
+		# route stay, and the next join renews it
+		log "disconnected; DHCP lease kept"
 		;;
 	esac
 	;;

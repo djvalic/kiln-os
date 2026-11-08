@@ -41,7 +41,7 @@ printer: it installs every Kiln OS update. Background on the slots and the boot 
 | `S07ad5x-board` | PC11 heartbeat (stock `cmd_gpio`, from `/data/ad5x/vendor` through the `/usr/bin` wrapper), framebuffer on, recovery logo (`/usr/share/ad5x/recovery-logo.jpg`, or `/data/ad5x/recovery/logo.jpg`), backlight |
 | `S10mdev` | The main image's (hotplug, so USB sticks appear) |
 | `S41ad5x-eth` | The main OS's script: stock MAC from usershare `/MAC`, then DHCP or static from `/data/ad5x/network.conf` (`/usr/lib/ad5x/network.sh`) |
-| `S42ad5x-wifi` | The main OS's script: Wi-Fi with the networks in `/data/ad5x/wpa_supplicant.conf` (made from stock's saved networks on the first start), unless `/data/ad5x/wifi.disable` exists or the Wi-Fi switch on the touch screen is off |
+| `S42ad5x-wifi` | The main OS's script: Wi-Fi with the networks in `/data/ad5x/wpa_supplicant.conf` (made from stock's saved networks on the first start), unless `/data/ad5x/wifi.disable` exists. The main OS's Wi-Fi switch (HelixScreen's `wifi_enabled`) is not applied here: recovery has no HelixScreen, so Wi-Fi stays on |
 | `S50dropbear` | SSH, root login (stock's password, or a key in `/data/ad5x/ssh/authorized_keys`) |
 | `S70swupdate` | SWUpdate daemon: web upload on **port 8080**, control socket `/tmp/sockinstctrl`, progress socket `/tmp/swupdateprog`, log `/run/ad5x/swupdate.log` |
 | `S80ad5x-recovery-ui` | Starts `/usr/bin/ad5x-recovery-ui` (the touch UI, a separate package) if it is installed, and restarts it if it exits. Log `/run/ad5x/ui.log` |

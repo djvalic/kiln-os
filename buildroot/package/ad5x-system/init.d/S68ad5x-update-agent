@@ -12,16 +12,66 @@
 # Also: "restart-moonraker" (written by Klipper's ad5x_plugins when a
 # plugin switch changes what Moonraker loads): Moonraker is restarted, so it
 # reads the plugins' parts again (not while printing).
+# Also: "kernel-retry" (POST /machine/kiln_os/kernel_retry, issue #42): runs
+# "ad5x-kernel retry" (our kernel is tried again from the next boot) and
+# reboots; status "rebooting", or "refused: ..." while a print runs or
+# before start-up has finished (the boot flag still on the other slot, see
+# S01ad5x-tryboot: a reboot then would start the recovery OS).
+# Installs and kernel-retry are refused while a print may run: Moonraker
+# gives no answer at all, or Klipper is ready and its print state is
+# printing, paused or unknown. A Klipper that is not ready (startup,
+# shutdown, error, disconnected) can't be printing: allowed, so a printer
+# with a broken Klipper can still be updated.
+# "S68ad5x-update-agent once": one round of the loop (tests); AD5X_LIB
+# overrides /usr/lib/ad5x (tools/test_kernel_fallback.sh).
 D=/data/ad5x/kiln-update
 PID=/run/ad5x-update-agent.pid
 LOG=$D/agent.log
-. /usr/lib/ad5x/apps.sh
+. ${AD5X_LIB:-/usr/lib/ad5x}/apps.sh
+. ${AD5X_LIB:-/usr/lib/ad5x}/slot.sh
 
 log() { echo "$(date '+%F %T') $*" >> $LOG; }
 
-printing() {
+# S99ad5x-booted has pointed the boot flag back at this slot
+started_up() { [ -z "$SLOT" ] || [ "$(read_flag)" = "$(flag_for $SLOT)" ]; }
+
+# Klipper's print_stats state through Moonraker; empty without an answer
+print_state() {
 	wget -q -T 5 -O- 'http://127.0.0.1:7125/printer/objects/query?print_stats=state' \
-		2>/dev/null | grep -q -E '"state": *"(printing|paused)"'
+		2>/dev/null | sed -n 's/.*"state": *"\([a-z_]*\)".*/\1/p' | head -n 1
+}
+
+printing() { case "$(print_state)" in printing|paused) return 0 ;; esac; return 1; }
+
+# Moonraker's klippy_state (ready, startup, shutdown, error, disconnected);
+# empty when Moonraker gives no answer
+klippy_state() {
+	wget -q -T 5 -O- 'http://127.0.0.1:7125/server/info' 2>/dev/null |
+		sed -n 's/.*"klippy_state": *"\([a-z_]*\)".*/\1/p' | head -n 1
+}
+
+# busy WHAT: true (and the refusal in status) while a print may run
+busy() {
+	ks=$(klippy_state)
+	case "$ks" in
+	'')
+		log "$1 refused: no answer from Moonraker"
+		echo "refused: no answer from Moonraker" > $D/status
+		return 0 ;;
+	ready) ;;
+	*) return 1 ;;	# Klipper not ready: no print can run
+	esac
+	st=$(print_state)
+	case "$st" in
+	standby|complete|cancelled|error) return 1 ;;
+	printing|paused)
+		log "$1 refused: printing"
+		echo "refused: a print is running" > $D/status ;;
+	*)
+		log "$1 refused: print state unknown (${st:-no answer})"
+		echo "refused: the print state is unknown, try again" > $D/status ;;
+	esac
+	return 0
 }
 
 # install_app FILE SHA256: a daily Klipper/Moonraker package
@@ -59,52 +109,69 @@ install_app() {
 	fi
 }
 
+agent_once() {
+	if [ -f $D/restart-moonraker ]; then
+		rm -f $D/restart-moonraker
+		if printing; then
+			log "Moonraker restart for plugins refused: printing"
+		else
+			log "restarting Moonraker (plugins changed)"
+			/etc/init.d/S62moonraker restart >> $LOG 2>&1
+		fi
+	fi
+	if [ -f $D/kernel-retry ]; then
+		rm -f $D/kernel-retry
+		if busy "kernel retry"; then
+			:
+		elif ! started_up; then
+			log "kernel retry refused: start-up not finished"
+			echo "refused: start-up has not finished yet, try again in a minute" > $D/status
+		elif out=$(ad5x-kernel retry 2>&1); then
+			log "kernel retry: $out; rebooting"
+			echo "rebooting" > $D/status
+			sync
+			sleep 2
+			reboot
+			exit 0
+		else
+			log "kernel retry failed: $out"
+			echo "failed: $out" > $D/status
+		fi
+	fi
+	if [ -f $D/install ]; then
+		f=$(sed -n 1p $D/install)
+		sum=$(sed -n 2p $D/install)
+		rm -f $D/install
+		case "$f" in
+		kiln-os-*-update.zip) ;;
+		klipper-*.tar.gz|moonraker-*.tar.gz)
+			busy "$f" || install_app "$f" "$sum"
+			f= ;;
+		*) log "ignored request for '$f'"; echo "failed: bad request" > $D/status; f= ;;
+		esac
+		if [ -n "$f" ] && busy "$f"; then
+			:
+		elif [ -n "$f" ]; then
+			log "staging $f"
+			if ad5x-update "$D/$f" "$sum" >> $LOG 2>&1; then
+				rm -f "$D/$f"
+				log "staged, rebooting"
+				echo "rebooting" > $D/status
+				sync
+				sleep 2
+				reboot
+				exit 0
+			fi
+			rm -f "$D/$f"
+			log "ad5x-update failed"
+			echo "failed: ad5x-update, see $LOG" > $D/status
+		fi
+	fi
+}
+
 agent() {
 	while :; do
-		if [ -f $D/restart-moonraker ]; then
-			rm -f $D/restart-moonraker
-			if printing; then
-				log "Moonraker restart for plugins refused: printing"
-			else
-				log "restarting Moonraker (plugins changed)"
-				/etc/init.d/S62moonraker restart >> $LOG 2>&1
-			fi
-		fi
-		if [ -f $D/install ]; then
-			f=$(sed -n 1p $D/install)
-			sum=$(sed -n 2p $D/install)
-			rm -f $D/install
-			case "$f" in
-			kiln-os-*-update.zip) ;;
-			klipper-*.tar.gz|moonraker-*.tar.gz)
-				if printing; then
-					log "refused $f: printing"
-					echo "refused: a print is running" > $D/status
-				else
-					install_app "$f" "$sum"
-				fi
-				f= ;;
-			*) log "ignored request for '$f'"; echo "failed: bad request" > $D/status; f= ;;
-			esac
-			if [ -n "$f" ] && printing; then
-				log "refused $f: printing"
-				echo "refused: a print is running" > $D/status
-			elif [ -n "$f" ]; then
-				log "staging $f"
-				if ad5x-update "$D/$f" "$sum" >> $LOG 2>&1; then
-					rm -f "$D/$f"
-					log "staged, rebooting"
-					echo "rebooting" > $D/status
-					sync
-					sleep 2
-					reboot
-					exit 0
-				fi
-				rm -f "$D/$f"
-				log "ad5x-update failed"
-				echo "failed: ad5x-update, see $LOG" > $D/status
-			fi
-		fi
+		agent_once
 		sleep 3
 	done
 }
@@ -119,11 +186,14 @@ start)
 	[ -f /data/ad5x/kiln-os.token ] &&
 		chown root:klipper /data/ad5x/kiln-os.token &&
 		chmod 640 /data/ad5x/kiln-os.token
-	rm -f $D/install $D/status
+	rm -f $D/install $D/kernel-retry $D/status
 	start-stop-daemon -S -b -m -p $PID -x /bin/sh -- $0 run
 	;;
 run)
 	agent
+	;;
+once)
+	agent_once
 	;;
 stop)
 	start-stop-daemon -K -p $PID

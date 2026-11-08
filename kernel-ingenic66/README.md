@@ -3,9 +3,10 @@
 Status: **the kernel Kiln OS runs** (always, since 2026-10-20), started
 from RAM at every boot by the stock kernel (`chainload/`,
 `S00ad5x-kernel`): Klipper, IFS, screen, touch and the speaker work.
-Nothing is written to the boot slots; a start that doesn't complete falls
-back to the stock kernel until an update brings another release of ours
-(`ad5x-kernel retry`).
+Nothing is written to the boot slots; a start that doesn't reach userspace,
+or two start-ups in a row that don't finish, fall back to the stock kernel
+until `ad5x-kernel retry` (an update doesn't clear it: `build.sh` pins the
+release string).
 
 ## Why this kernel
 
@@ -47,6 +48,8 @@ the 8 MiB slot. Kernel release `6.6.18-ad5x`.
 | `ad5x-display.dtsi` | DPU + KX070 panel (LVDS, 800x480) |
 | `panel-kx070.c` | Panel driver in the SDK's fbdev panel style; `patches/0001-*` hooks it into Kconfig/Makefile |
 | `patches/0002-*` | RS-485 transmit enable for the IFS UART |
+| `patches/0010-*` | rtw88 USB: receive starts only once mac80211 is registered (Wi-Fi oops at start) |
+| `patches/0011-0016` | rtw88 RTL8821CU fixes from linux-6.6.y stable (6.6.23, 6.6.24, 6.6.44, 6.6.95; the SDK is 6.6.18): firmware upload, connection failure, beacon loss and disconnects, 500 ms USB control timeout, false alarm count (issue #37). Each keeps its upstream header and commit id |
 | `ad5x.config` | Fragment on `x2600_halley7_linux_defconfig`: own DT, uinput, zram, UVC, rtw88 8821CU, tsc2007, gpio keys/backlight, watchdog |
 | `build.sh` | Copies the files into the SDK tree, merges the config, builds, wraps the uImage |
 
@@ -71,4 +74,5 @@ Flashforge code is used.
    4M@0xfc00000 is reserved in the DT. Read the real `mem=` from the printer.
 7. Userspace: stock's out-of-tree modules and `cmd_gpio` don't apply; the
    heartbeat (PC11) and backlight move to gpiod / the DT backlight. Wi-Fi
-   needs `rtw88/rtw8821c_fw.bin` in the rootfs.
+   needs `rtw88/rtw8821c_fw.bin`: built into the kernel, v24.11.0 from
+   linux-firmware commit 07338f9d3308 (pinned with its sha256 in `build.sh`).

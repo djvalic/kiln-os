@@ -1,8 +1,11 @@
 #!/bin/sh
 # Start-up finished (see S01ad5x-tryboot): boot this slot again next time,
 # if SSH is up (without it a broken system couldn't be fixed). Also marks
-# a start of our own kernel as successful (S00ad5x-kernel).
-. /usr/lib/ad5x/slot.sh
+# a start of our own kernel as successful (S00ad5x-kernel): "started"
+# becomes last-ok; pending and the count of unfinished starts go.
+# AD5X_LIB overrides /usr/lib/ad5x (tools/test_kernel_fallback.sh).
+. ${AD5X_LIB:-/usr/lib/ad5x}/slot.sh
+D=/data/ad5x/kernel
 case "$1" in
 start)
 	[ -n "$SLOT" ] || exit 0
@@ -10,9 +13,9 @@ start)
 		set_flag $SLOT
 		echo "booted: start-up complete, boot flag on slot $SLOT"
 		# our kernel started from the stock one (S00ad5x-kernel): done
-		if [ -f /data/ad5x/kernel/pending ]; then
-			echo "$(cat /data/ad5x/kernel/pending) ok" > /data/ad5x/kernel/last-ok
-			rm -f /data/ad5x/kernel/pending; sync
+		if [ -f $D/started ] || [ -f $D/pending ] || [ -f $D/unfinished ]; then
+			[ -f $D/started ] && echo "$(cat $D/started) ok" > $D/last-ok
+			rm -f $D/started $D/pending $D/unfinished; sync
 		fi
 	else
 		echo "booted: dropbear not running, boot flag left on slot $OTHER"

@@ -1,0 +1,286 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Sun, 8 Nov 2026 12:00:00 -0500
+Subject: [PATCH] wifi: wpa_ctrl replies no longer lag one command behind (issue #37)
+
+A request wpa_ctrl_request() gave up on (no reply within its 10 s, a
+daemon stopped or busy) could still be answered later, on the same
+control socket. That late reply was read as the answer to the next
+command, and from then on every command got the reply to the one
+before it (Network Settings showing stale or wrong state). Before each
+command, replies already waiting are read and dropped; after a request
+that timed out (-2) or failed (-1), the control connection is closed
+and opened again on the same socket path (kept as a member), so a late
+reply has nowhere to land. init_wpa() opens conn under cmd_mutex_ and
+cleanup_wpa() clears the path, so a stopped backend never reopens.
+Tests: a late reply after a timeout, a stale reply already queued
+(wpa fake supplicant: hold a command, send to its sender).
+---
+
+diff --git a/include/wifi_backend_wpa_supplicant.h b/include/wifi_backend_wpa_supplicant.h
+index bbdc749..31f998c 100644
+--- a/include/wifi_backend_wpa_supplicant.h
++++ b/include/wifi_backend_wpa_supplicant.h
+@@ -413,6 +413,22 @@ class WifiBackendWpaSupplicant : public WifiBackend, private hv::EventLoopThread
+     // Thread safety
+     std::mutex cmd_mutex_; ///< Protects conn from concurrent send_command() calls
+ 
++    /// Control socket path and client dir `conn` was opened with (cmd_mutex_),
++    /// so send_command() can open a fresh `conn` after a request that failed.
++    /// Cleared by cleanup_wpa(): an empty path means no reopen.
++    std::string ctrl_path_;
++    std::string ctrl_cli_dir_; ///< empty: wpa_ctrl's own /tmp default
++
++    /// cmd_mutex_ held. Reads and drops replies already waiting on `conn`, so
++    /// one that arrived after its request gave up is not taken as the answer
++    /// to the next command.
++    void drain_stale_replies_locked();
++
++    /// cmd_mutex_ held. Closes `conn` and opens a new one on ctrl_path_. After
++    /// a timed-out request the old socket may still get its reply; a new
++    /// socket can't, so the next command reads its own reply.
++    void reopen_ctrl_locked();
++
+     // Change detection for status logging (reduces log noise)
+     ConnectionStatus last_logged_status_; ///< Previous status for change detection
+ 
+diff --git a/src/api/wifi_backend_wpa_supplicant.cpp b/src/api/wifi_backend_wpa_supplicant.cpp
+index b2221e2..0710c6a 100644
+--- a/src/api/wifi_backend_wpa_supplicant.cpp
++++ b/src/api/wifi_backend_wpa_supplicant.cpp
+@@ -980,16 +980,28 @@ void WifiBackendWpaSupplicant::init_wpa() {
+         spdlog::debug("[WifiBackend] Using client socket dir: {}", cli_dir);
+     }
+ 
+-    // Open control connection (for sending commands)
+-    if (conn == nullptr) {
+-        conn = wpa_ctrl_open2(wpa_socket.c_str(), cli_dir);
++    // Open control connection (for sending commands). Under cmd_mutex_:
++    // send_command() can replace conn from another thread (reopen after a
++    // failed request). A re-init keeps an open conn and the path it has.
++    bool ctrl_open_failed = false;
++    {
++        std::lock_guard<std::mutex> lock(cmd_mutex_);
+         if (conn == nullptr) {
+-            LOG_ERROR_INTERNAL("Failed to open control connection to {}", wpa_socket);
+-            dispatch_event("INIT_FAILED", "Failed to connect to wpa_supplicant");
+-            signal_init_complete();
+-            return;
++            conn = wpa_ctrl_open2(wpa_socket.c_str(), cli_dir);
++            if (conn == nullptr) {
++                ctrl_open_failed = true;
++            } else {
++                ctrl_path_ = wpa_socket;
++                ctrl_cli_dir_ = cli_dir ? cli_dir : "";
++                spdlog::debug("[WifiBackend] Opened control connection");
++            }
+         }
+-        spdlog::debug("[WifiBackend] Opened control connection");
++    }
++    if (ctrl_open_failed) {
++        LOG_ERROR_INTERNAL("Failed to open control connection to {}", wpa_socket);
++        dispatch_event("INIT_FAILED", "Failed to connect to wpa_supplicant");
++        signal_init_complete();
++        return;
+     }
+ 
+     // Check for shutdown before opening monitor connection
+@@ -1231,6 +1243,9 @@ void WifiBackendWpaSupplicant::cleanup_wpa() {
+             wpa_ctrl_close(conn);
+             conn = nullptr;
+         }
++        // Stopped: send_command() must not reopen it.
++        ctrl_path_.clear();
++        ctrl_cli_dir_.clear();
+     }
+ 
+     spdlog::debug("[WifiBackend] wpa_supplicant connections cleaned up");
+@@ -1317,11 +1332,47 @@ static std::string sanitize_command_for_log(const std::string& cmd) {
+     return cmd;
+ }
+ 
++void WifiBackendWpaSupplicant::drain_stale_replies_locked() {
++    // `conn` is never ATTACHed, so anything waiting on it is a reply whose
++    // request already gave up. Bounded: a daemon cannot keep this loop busy.
++    for (int i = 0; conn != nullptr && i < 16 && wpa_ctrl_pending(conn) > 0; ++i) {
++        char stale[4096];
++        size_t len = sizeof(stale);
++        if (wpa_ctrl_recv(conn, stale, &len) != 0) {
++            break;
++        }
++        spdlog::warn("[WifiBackend] Dropped a late wpa_supplicant reply ({} bytes)", len);
++    }
++}
++
++void WifiBackendWpaSupplicant::reopen_ctrl_locked() {
++    if (conn != nullptr) {
++        wpa_ctrl_close(conn);
++        conn = nullptr;
++    }
++    if (ctrl_path_.empty()) {
++        return;
++    }
++    conn = wpa_ctrl_open2(ctrl_path_.c_str(),
++                          ctrl_cli_dir_.empty() ? nullptr : ctrl_cli_dir_.c_str());
++    if (conn != nullptr) {
++        spdlog::info("[WifiBackend] Reopened the wpa_supplicant control connection");
++    } else {
++        spdlog::warn("[WifiBackend] Could not reopen the wpa_supplicant control connection "
++                     "({}); the next command tries again",
++                     strerror(errno));
++    }
++}
++
+ std::string WifiBackendWpaSupplicant::send_command(const std::string& cmd) {
+     // Lock to prevent concurrent access from LVGL thread (get_status) and
+     // event loop thread (get_scan_results) — wpa_ctrl is not thread-safe.
+     std::lock_guard<std::mutex> lock(cmd_mutex_);
+ 
++    if (conn == nullptr && !ctrl_path_.empty()) {
++        // A reopen after a failed request did not succeed; try again.
++        reopen_ctrl_locked();
++    }
+     if (conn == nullptr) {
+         // Normal during the brief window between start_async() dispatch and
+         // init_wpa() opening the control connection — UI callers (e.g. the
+@@ -1339,9 +1390,20 @@ std::string WifiBackendWpaSupplicant::send_command(const std::string& cmd) {
+     std::string safe_cmd = sanitize_command_for_log(cmd);
+     spdlog::trace("[WifiBackend] Sending command: {}", safe_cmd);
+ 
++    // A reply wpa_ctrl_request() stopped waiting for can still arrive; on
++    // this socket it would be read as the reply to this command, and every
++    // later command would get the one before it.
++    drain_stale_replies_locked();
++
+     int result = wpa_ctrl_request(conn, cmd.c_str(), cmd.length(), resp, &len, nullptr);
+     if (result != 0) {
+         LOG_ERROR_INTERNAL("Command failed: {} (error code: {})", safe_cmd, result);
++        // -2: no reply within wpa_ctrl's 10 s; -1: the send or the receive
++        // failed (a restarted daemon refuses the old socket). Either way this
++        // socket can't be trusted for the next command: open a new one.
++        if (result == -2 || result == -1) {
++            reopen_ctrl_locked();
++        }
+         return "";
+     }
+ 
+diff --git a/tests/test_helpers/wpa_fake_supplicant.h b/tests/test_helpers/wpa_fake_supplicant.h
+index b4f7457..32222ec 100644
+--- a/tests/test_helpers/wpa_fake_supplicant.h
++++ b/tests/test_helpers/wpa_fake_supplicant.h
+@@ -20,6 +20,7 @@
+  * bound-but-silent socket, which can only pin the failure path.
+  */
+ 
++#include <algorithm>
+ #include <atomic>
+ #include <cstdlib>
+ #include <cstring>
+@@ -90,6 +91,26 @@ class WpaFakeSupplicant {
+         replies_[cmd] = reply;
+     }
+ 
++    /// Leave @p cmd unanswered from now on, the way a stopped daemon leaves
++    /// a request: the client's wpa_ctrl_request() gives up after its 10 s.
++    void hold(const std::string& cmd) {
++        std::lock_guard<std::mutex> lock(mutex_);
++        held_.push_back(cmd);
++    }
++
++    /// Send @p msg to the client that last sent @p cmd, as the daemon does
++    /// with a reply it got to late. False when no client sent @p cmd or the
++    /// client's socket is gone.
++    bool send_to_sender_of(const std::string& cmd, const std::string& msg) {
++        std::lock_guard<std::mutex> lock(mutex_);
++        const auto it = senders_.find(cmd);
++        if (it == senders_.end())
++            return false;
++        return ::sendto(fd_, msg.data(), msg.size(), 0,
++                        reinterpret_cast<const sockaddr*>(&it->second.addr),
++                        it->second.len) == static_cast<ssize_t>(msg.size());
++    }
++
+     /// Commands received so far, in order (SCAN, ATTACH, PING, ...).
+     std::vector<std::string> commands() const {
+         std::lock_guard<std::mutex> lock(mutex_);
+@@ -115,17 +136,21 @@ class WpaFakeSupplicant {
+                 continue;
+             }
+             const std::string cmd(buf, static_cast<size_t>(n));
++            bool held = false;
+             {
+                 std::lock_guard<std::mutex> lock(mutex_);
+                 commands_.push_back(cmd);
++                Peer p;
++                p.addr = peer;
++                p.len = peer_len;
+                 if (cmd == "ATTACH") {
+-                    Peer p;
+-                    p.addr = peer;
+-                    p.len = peer_len;
+                     monitors_.push_back(p);
+                 }
++                senders_[cmd] = p;
++                held = std::find(held_.begin(), held_.end(), cmd) != held_.end();
+             }
+-            reply(peer, peer_len, answer_to(cmd));
++            if (!held)
++                reply(peer, peer_len, answer_to(cmd));
+         }
+     }
+ 
+@@ -163,6 +188,8 @@ class WpaFakeSupplicant {
+     std::vector<Peer> monitors_;
+     std::vector<std::string> commands_;
+     std::map<std::string, std::string> replies_;
++    std::vector<std::string> held_;
++    std::map<std::string, Peer> senders_;
+ };
+ 
+ /// RAII HELIX_WPA_SOCKET_DIR pin, so a failing assertion cannot leak the env
+diff --git a/tests/unit/test_wifi_backend_wpa.cpp b/tests/unit/test_wifi_backend_wpa.cpp
+index ad6dd9f..8626fb0 100644
+--- a/tests/unit/test_wifi_backend_wpa.cpp
++++ b/tests/unit/test_wifi_backend_wpa.cpp
+@@ -546,4 +546,41 @@ TEST_CASE("wpa status reads the kernel's address when STATUS carries none",
+     }
+ }
+ 
++// Kiln OS (issue #37): a request wpa_ctrl gives up on (10 s with no reply, a
++// daemon stopped or busy) can still be answered later. On the same control
++// socket that reply was read as the answer to the next command, and from then
++// on every command got the reply to the one before it.
++TEST_CASE("wpa a late reply after a timeout is not read as the next command's reply",
++          "[network][wpa][wpa_ctrl_lag][slow]") {
++    WpaFakeFixture fx;
++    WifiBackendWpaSupplicant backend(kWatchdogMs);
++    REQUIRE(backend.start().success());
++
++    fx.fake->hold("SIGNAL_POLL");
++    CHECK(backend.send_command("SIGNAL_POLL").empty()); // ~10 s: wpa_ctrl's own timeout
++
++    // The daemon gets to it after all: its reply goes to the socket that asked.
++    // That socket is gone (the connection was reopened), so the reply can't
++    // land on the next command even when it comes while that one waits.
++    CHECK_FALSE(fx.fake->send_to_sender_of("SIGNAL_POLL", "RSSI=-60\nLINKSPEED=72\n"));
++    fx.fake->set_reply("STATUS", "wpa_state=COMPLETED\n");
++    CHECK(backend.send_command("STATUS") == "wpa_state=COMPLETED\n");
++    CHECK(backend.send_command("PING") == "PONG");
++}
++
++TEST_CASE("wpa a stale reply already waiting is dropped before the next command",
++          "[network][wpa][wpa_ctrl_lag]") {
++    WpaFakeFixture fx;
++    WifiBackendWpaSupplicant backend(kWatchdogMs);
++    REQUIRE(backend.start().success());
++
++    REQUIRE(backend.send_command("PING") == "PONG");
++    // A second datagram for the PING asker, already queued on its socket.
++    REQUIRE(fx.fake->send_to_sender_of("PING", "OK\n"));
++    std::this_thread::sleep_for(std::chrono::milliseconds(50));
++    fx.fake->set_reply("STATUS", "wpa_state=COMPLETED\n");
++    CHECK(backend.send_command("STATUS") == "wpa_state=COMPLETED\n");
++    CHECK(backend.send_command("PING") == "PONG");
++}
++
+ #endif // !__APPLE__

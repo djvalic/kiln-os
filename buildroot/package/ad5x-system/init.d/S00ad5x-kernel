@@ -4,64 +4,154 @@
 # starts with it, and this runs first thing on it and starts our kernel
 # from RAM (chainload.ko, kernel-ingenic66/chainload): same command line,
 # same root, plus ad5x.kernel=own panic=10. The boot flag and the eMMC are
-# not written, only markers on /data/ad5x/kernel:
-#   pending   written before the jump, removed by S99ad5x-booted once our
-#             kernel has started
-#   failed    the release of ours that didn't finish starting
-#   history   one line per failed start
-# If our kernel hangs, a power cycle comes back here with "pending" still
-# there (a panic reboots after 10 s with the same result): this boot stays
-# on the stock kernel and that release is recorded as failed. Boots stay on
-# the stock kernel (Klipper, the screen and the network still run, with
-# Flashforge's drivers) until an update brings another release of ours,
-# which is tried at once, or "ad5x-kernel retry". There is no setting to
-# choose the stock kernel: this OS is made and tested for ours.
-. /usr/lib/ad5x/kernel.sh
-. /usr/lib/ad5x/slot.sh
-K=/usr/lib/ad5x/kernel66
+# not written, only markers on /data/ad5x/kernel (issue #42):
+#   pending     written (and synced) before the jump: "UPTIME slot S RELEASE"
+#   started     pending renamed by this script on our kernel, first thing in
+#               its userspace: our kernel booted, start-up not finished yet
+#   unfinished  how many starts in a row reached userspace but not
+#               S99ad5x-booted
+#   failed      release of ours that didn't finish starting (line 1), why
+#               and when (line 2)
+#   history     one line per failed or unfinished start
+#   last-ok     the last start of ours that reached S99ad5x-booted
+# S99ad5x-booted removes pending, started and unfinished. On the next boot
+# on the stock kernel:
+#   pending   our kernel never reached userspace (a hang, then a power
+#             cycle; a panic reboots after 10 s): that release is recorded
+#             as failed, this boot stays on the stock kernel
+#   started   it did, but start-up didn't finish (a power cut, a reboot
+#             before S99): our kernel is tried again; the second unfinished
+#             start in a row is recorded as failed. Not on the first start
+#             after an install from stock (/data/ad5x/install/
+#             recovery.squashfs still there: slot A still holds stock, which
+#             an unfinished start boots and which can flash Flashforge's
+#             board firmware back): recorded as failed at once.
+# Boots stay on the stock kernel (Klipper, the screen and the network still
+# run, with Flashforge's drivers) until "ad5x-kernel retry" (or
+# POST /machine/kiln_os/kernel_retry). An update does not clear it: the
+# release string is the same in every build (kernel-ingenic66/build.sh,
+# EXPECT_RELEASE); only a failed record naming another release is dropped.
+# There is no setting to choose the stock kernel: this OS is made and
+# tested for ours.
+# AD5X_LIB overrides /usr/lib/ad5x (tools/test_kernel_fallback.sh).
+LIB=${AD5X_LIB:-/usr/lib/ad5x}
+. $LIB/kernel.sh
+. $LIB/slot.sh
+K=$LIB/kernel66
+M=/tmp/kdata
+d=$M/ad5x/kernel
+
+mount_data() {
+	dev=$(part userdata) || return 1
+	mkdir -p $M
+	mount -t ext4 -o noatime $dev $M 2>/dev/null || return 1
+	mkdir -p $d || { umount $M; return 1; }
+	# Moonraker (kiln_os, as klipper) reads the records
+	chmod 755 $M/ad5x $d 2>/dev/null
+	return 0
+}
+
+# "; after 2026-11-08 10:15 UTC (last saved clock)": the clock is still at
+# 1970 here (ad5x-clock restore runs in S05); the saved one is the last time
+# the system ran, so the start in question was at that time or later.
+saved_clock() {
+	s=$(cat $M/ad5x/clock 2>/dev/null)
+	case "$s" in ''|*[!0-9]*) return 0 ;; esac
+	[ "$s" -ge 1767225600 ] || return 0
+	echo "; after $(date -u -d "@$s" '+%Y-%m-%d %H:%M') UTC (last saved clock)"
+}
+
+# give_up MARKER WHY: record that release as failed, stay on the stock kernel
+give_up() {
+	m=$(cat $d/$1 2>/dev/null)
+	r=$(echo "$m" | cut -d' ' -f4)
+	[ -n "$r" ] || r=$rel
+	why="$2$(saved_clock)"
+	echo "ad5x-kernel: our kernel ($r) did not finish starting: $why; stock kernel until ad5x-kernel retry"
+	echo "${m:-? slot $SLOT $r} failed: $why" >> $d/history
+	printf '%s\n%s\n' "$r" "$why" > $d/failed
+	rm -f $d/pending $d/started $d/unfinished
+	sync; umount $M
+	ad5x-bootlog "  own kernel failed ($2): stock kernel"
+	exit 0
+}
+
 case "$1" in
 start)
-	[ $KERNEL = stock ] && [ -n "$SLOT" ] || exit 0
+	[ -n "$SLOT" ] || exit 0
+	if [ $KERNEL = own ]; then
+		# Our kernel, started by this script: it reached userspace
+		case " $(cat /proc/cmdline) " in *" ad5x.kernel=own "*) ;; *) exit 0 ;; esac
+		mount_data || exit 0
+		if [ -f $d/pending ]; then
+			mv $d/pending $d/started
+			sync
+		fi
+		umount $M
+		echo "$(cut -d' ' -f1 /proc/uptime)   own kernel reached userspace" >> /run/ad5x-boot.log 2>/dev/null
+		exit 0
+	fi
 	[ -f $K/xImage ] && [ -f $K/chainload.ko ] || exit 0
-	dev=$(part userdata) || exit 0
-	mkdir -p /tmp/kdata
-	mount -t ext4 -o noatime $dev /tmp/kdata 2>/dev/null || exit 0
-	d=/tmp/kdata/ad5x/kernel
-	mkdir -p $d
+	mount_data || exit 0
 	# Before 2026-10-20 a choice file said which kernel: gone, ours always
 	rm -f $d/use
 	rel=$(cat $K/release 2>/dev/null)
-	if [ -f $d/pending ]; then
-		echo "ad5x-kernel: our kernel ($rel) did not finish starting last time; stock kernel until an update brings another (ad5x-kernel retry)"
-		echo "$(cat $d/pending) failed" >> $d/history
-		echo "$rel" > $d/failed
-		rm -f $d/pending
-		sync; umount /tmp/kdata
-		exit 0
+	[ -f $d/pending ] && give_up pending "before userspace"
+	if [ -f $d/started ]; then
+		[ -f $M/ad5x/install/recovery.squashfs ] &&
+			give_up started "start-up unfinished, first start after the install"
+		n=$(cat $d/unfinished 2>/dev/null)
+		case "$n" in ''|*[!0-9]*) n=0 ;; esac
+		n=${n#"${n%%[!0]*}"}	# no leading zeros (08 is not octal here)
+		n=$((${n:-0} + 1))
+		[ $n -ge 2 ] && give_up started "start-up unfinished, $n in a row"
+		why="start-up unfinished, $n in a row$(saved_clock)"
+		echo "ad5x-kernel: our kernel's last start didn't finish ($why); trying it again"
+		echo "$(cat $d/started) unfinished: $why; tried again" >> $d/history
+		echo $n > $d/unfinished
+		rm -f $d/started
+		ad5x-bootlog "  own kernel: start-up unfinished, $n in a row; trying again"
 	fi
-	if [ -f $d/failed ] && [ "$(cat $d/failed)" = "$rel" ]; then
+	# A record from before issue #42 (one line, no stage): it may have been
+	# an unfinished start-up only, so try once more. New records have two
+	# lines, so this happens at most once.
+	if [ -f $d/failed ] && [ "$(sed -n 1p $d/failed)" = "$rel" ] &&
+	   [ -z "$(sed -n 2p $d/failed)" ]; then
+		echo "ad5x-kernel: failure record of $rel from before issue #42; trying our kernel once more"
+		echo "? slot $SLOT $rel retried: record from before #42, retried once" >> $d/history
+		rm -f $d/failed
+		ad5x-bootlog "  own kernel: record from before #42, retried once"
+	fi
+	if [ -f $d/failed ] && [ "$(sed -n 1p $d/failed)" = "$rel" ]; then
 		echo "ad5x-kernel: our kernel $rel failed to start before; stock kernel (ad5x-kernel retry)"
-		umount /tmp/kdata; exit 0
+		umount $M; exit 0
 	fi
 	rm -f $d/failed
 	krp=$(sed -n 's/^\([0-9a-f]*\) T kernel_restart_prepare$/\1/p' /proc/kallsyms)
 	if [ -z "$krp" ]; then
 		echo "ad5x-kernel: no kernel_restart_prepare in kallsyms; stock kernel"
-		umount /tmp/kdata; exit 0
+		umount $M; exit 0
 	fi
-	echo "ad5x-kernel: starting our kernel ($(cat $K/release 2>/dev/null))"
+	echo "ad5x-kernel: starting our kernel ($rel)"
 	ad5x-bootlog "  chainload own kernel"
 	# /data/ad5x/kernel/cmdline-extra: more kernel options (tests)
 	cmdline="$(cat /proc/cmdline) ad5x.kernel=own panic=10 $(cat $d/cmdline-extra 2>/dev/null)"
 	if ! insmod $K/chainload.ko image=$K/xImage krp=0x$krp cmdline="\"$cmdline\""; then
 		echo "ad5x-kernel: staging failed; stock kernel"
-		umount /tmp/kdata; exit 0
+		umount $M; exit 0
 	fi
 	# Our kernel starts the display itself (kernel-ingenic66 patches
 	# 0004-0007); the stock kernel only loads it. Until 2026-10-17 this
 	# script started the panel with stock's display drivers first.
-	echo "$(cat /proc/uptime | cut -d' ' -f1)s slot $SLOT $(cat $K/release 2>/dev/null)" > $d/pending
-	sync; umount /tmp/kdata
+	# pending is on the eMMC before the jump: a start that never comes back
+	# is found by the next boot.
+	if ! { echo "$(cut -d' ' -f1 /proc/uptime)s slot $SLOT $rel" > $d/pending &&
+	       sync && [ -s $d/pending ]; }; then
+		echo "ad5x-kernel: can't write the start marker; stock kernel"
+		rm -f $d/pending
+		rmmod chainload 2>/dev/null; umount $M; exit 0
+	fi
+	umount $M
 	# Nothing else runs yet; USB is the only bus master doing DMA
 	for x in 13500000.otg 13540000.usb; do
 		[ -e /sys/bus/platform/drivers/dwc2/$x ] &&

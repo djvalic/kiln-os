@@ -60,13 +60,25 @@ if [ -n "${DIAG:-}" ]; then
 	done
 fi
 
-# Wi-Fi firmware for the built-in rtw88 (linux-firmware, redistributable)
+# Wi-Fi firmware for the built-in rtw88 (linux-firmware, redistributable).
+# Pinned to the linux-firmware commit that added v24.11.0 ("rtw88: 8821c: Update
+# normal firmware to v24.11.00", 2022-04-07); the file is unchanged since then,
+# so this is the same firmware earlier builds fetched from master.
 FW=$SDK/firmware
 FW_URL=https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain
-if [ ! -s "$FW/rtw88/rtw8821c_fw.bin" ]; then
-	log "fetch rtw88/rtw8821c_fw.bin (linux-firmware)"
+FW_COMMIT=07338f9d33089aba6853cb7b3a1d9a8676c83580
+FW_SHA256=2ef409bc418549fcf294061dd0cae1fc22fd9da79b60524950b25de18732f3f0
+fw_bin=$FW/rtw88/rtw8821c_fw.bin
+if ! echo "$FW_SHA256  $fw_bin" | sha256sum -c --status 2>/dev/null; then
+	log "fetch rtw88/rtw8821c_fw.bin (linux-firmware ${FW_COMMIT:0:12})"
 	mkdir -p "$FW/rtw88"
-	curl -fsSL -o "$FW/rtw88/rtw8821c_fw.bin" "$FW_URL/rtw88/rtw8821c_fw.bin"
+	curl -fsSL -o "$fw_bin.tmp" "$FW_URL/rtw88/rtw8821c_fw.bin?id=$FW_COMMIT"
+	if ! echo "$FW_SHA256  $fw_bin.tmp" | sha256sum -c --status; then
+		echo "ERROR: rtw8821c_fw.bin sha256 mismatch: $(sha256sum "$fw_bin.tmp")"
+		rm -f "$fw_bin.tmp"
+		exit 1
+	fi
+	mv "$fw_bin.tmp" "$fw_bin"
 fi
 
 # regulatory.db for cfg80211 (built in: see ad5x.config). The buildroot package

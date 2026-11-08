@@ -17,6 +17,13 @@
 # agent unpacks it into /data/ad5x/apps/NAME and restarts the service. The
 # image's copy runs again when it is newer (after a Kiln OS update) or the
 # package is deleted (lib/apps.sh has the same rules).
+# The kernel (issue #42): when /data/ad5x/kernel/failed names the release of
+# our kernel in this image (S00ad5x-kernel), the printer runs on the stock
+# kernel: a Moonraker warning says so (Fluidd shows it). Endpoints:
+#   GET  /machine/kiln_os/kernel        running, ours, failed, why, ...
+#   POST /machine/kiln_os/kernel_retry  the agent runs "ad5x-kernel retry"
+#                                       and reboots (refused while printing)
+# The "Kiln OS" update entry's status has the same under "kernel".
 #
 # [kiln_os]
 # server: https://github.com    # or a Gitea server, e.g. http://HOST:3000
@@ -29,6 +36,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import os
 import pathlib
 import re
 import time
@@ -36,9 +44,11 @@ import urllib.request
 from typing import (TYPE_CHECKING, Any, Callable, Dict, List, Optional,
                     Tuple)
 
+from ..common import RequestType
 from .update_manager.base_deploy import BaseDeploy
 
 if TYPE_CHECKING:
+    from ..common import WebRequest
     from ..confighelper import ConfigHelper
     from .http_client import HttpClient
 
@@ -46,8 +56,12 @@ VERSION_FILE = pathlib.Path("/etc/kiln-version")
 WORK_DIR = pathlib.Path("/data/ad5x/kiln-update")
 AGENT_REQUEST = WORK_DIR / "install"
 AGENT_STATUS = WORK_DIR / "status"
+AGENT_KERNEL_RETRY = WORK_DIR / "kernel-retry"
 APPS_DIR = pathlib.Path("/data/ad5x/apps")
 APP_SUB = {"klipper": "klippy", "moonraker": "moonraker"}
+KERNEL_DIR = pathlib.Path("/data/ad5x/kernel")
+OUR_KERNEL = pathlib.Path("/usr/lib/ad5x/kernel66/release")
+KERNEL_WARNING = "kiln_os_kernel"
 
 
 def read_kiln_version() -> Dict[str, str]:
@@ -113,8 +127,97 @@ def app_root(name: str) -> pathlib.Path:
 def read_text(path: pathlib.Path) -> str:
     try:
         return path.read_text().strip()
-    except OSError:
+    except (OSError, ValueError):   # ValueError: not UTF-8
         return "?"
+
+
+def read_record(path: pathlib.Path) -> str:
+    """A kernel record file, "" when missing or unreadable"""
+    try:
+        return path.read_text()
+    except FileNotFoundError:
+        return ""
+    except PermissionError as e:
+        logging.info(f"kiln_os: can't read {path}: {e}")
+        return ""
+    except (OSError, ValueError) as e:
+        logging.info(f"kiln_os: {path} unreadable: {e}")
+        return ""
+
+
+def kernel_status() -> Dict[str, Any]:
+    """The running kernel, ours in this image and S00ad5x-kernel's record
+    (failed: the release on line 1, why and when on line 2)."""
+    ours = read_text(OUR_KERNEL)
+    failed = read_record(KERNEL_DIR / "failed").splitlines()
+    try:
+        unfinished = int(read_record(KERNEL_DIR / "unfinished").strip())
+    except ValueError:
+        unfinished = 0
+    running = os.uname().release
+    failed_rel = failed[0].strip() if failed else ""
+    return {
+        "running": running,
+        "stock": running.startswith("5.10."),
+        "ours": "" if ours == "?" else ours,
+        "failed": failed_rel,
+        "failed_why": failed[1].strip() if len(failed) > 1 else "",
+        "ours_failed": ours != "?" and failed_rel == ours,
+        "unfinished": unfinished,
+    }
+
+
+def safe_kernel_status() -> Dict[str, Any]:
+    """kernel_status(), or {"error": ...}: a broken record must never stop
+    the component or the update status"""
+    try:
+        return kernel_status()
+    except Exception as e:
+        logging.exception("kiln_os: kernel status")
+        return {"error": str(e)}
+
+
+def kernel_notice(st: Dict[str, Any]) -> str:
+    """The warning while our kernel is recorded as failed, else ''."""
+    if not st.get("ours_failed"):
+        return ""
+    why = f" ({st['failed_why']})" if st["failed_why"] else ""
+    return (
+        "Running the stock kernel: Kiln's kernel failed to start"
+        f"{why}. Sound and some drivers are unavailable. To try it again: "
+        "POST /machine/kiln_os/kernel_retry (the printer reboots), or "
+        "'ad5x-kernel retry' over SSH, then reboot.")
+
+
+# One request at a time: the agent answers every request in one status file
+AGENT_LOCK = asyncio.Lock()
+
+
+async def ask_agent(server, request: pathlib.Path, content: str,
+                    done: Tuple[str, ...], timeout: int = 120) -> str:
+    """Write a request for S68ad5x-update-agent (root) and wait for its
+    status: one starting with DONE, or an error for failed/refused."""
+    async with AGENT_LOCK:
+        return await _ask_agent(server, request, content, done, timeout)
+
+
+async def _ask_agent(server, request: pathlib.Path, content: str,
+                     done: Tuple[str, ...], timeout: int) -> str:
+    AGENT_STATUS.unlink(missing_ok=True)
+    tmp = request.with_name(request.name + ".tmp")
+    tmp.write_text(content)
+    tmp.rename(request)
+    for _ in range(timeout):
+        await asyncio.sleep(1.)
+        status = read_text(AGENT_STATUS)
+        if status.startswith(done):
+            return status
+        if status.startswith(("failed", "refused")):
+            raise server.error(f"Update agent: {status}")
+    # Not picked up later by surprise (an agent without this request)
+    request.unlink(missing_ok=True)
+    raise server.error(
+        "Update agent didn't answer (is S68ad5x-update-agent running?)")
 
 
 class Source:
@@ -212,19 +315,8 @@ class Source:
     async def hand_over(self, name: str, sha: str, done: Tuple[str, ...],
                         timeout: int = 120) -> str:
         """Ask S68ad5x-update-agent (root) to install WORK_DIR/NAME."""
-        AGENT_STATUS.unlink(missing_ok=True)
-        tmp = AGENT_REQUEST.with_suffix(".tmp")
-        tmp.write_text(f"{name}\n{sha}\n")
-        tmp.rename(AGENT_REQUEST)
-        for _ in range(timeout):
-            await asyncio.sleep(1.)
-            status = read_text(AGENT_STATUS)
-            if status.startswith(done):
-                return status
-            if status.startswith(("failed", "refused")):
-                raise self.server.error(f"Update agent: {status}")
-        raise self.server.error(
-            "Update agent didn't answer (is S68ad5x-update-agent running?)")
+        return await ask_agent(self.server, AGENT_REQUEST,
+                               f"{name}\n{sha}\n", done, timeout)
 
 
 def sha256_file(path: pathlib.Path) -> str:
@@ -341,6 +433,7 @@ class KilnDeploy(BaseDeploy):
             "info_tags": [],
             "warnings": self.warnings,
             "anomalies": [],
+            "kernel": safe_kernel_status(),
         }
 
 
@@ -476,6 +569,18 @@ class AppUpdates:
 class KilnOS:
     def __init__(self, config: ConfigHelper) -> None:
         self.server = config.get_server()
+        self.server.register_endpoint(
+            "/machine/kiln_os/kernel", RequestType.GET, self._handle_kernel)
+        self.server.register_endpoint(
+            "/machine/kiln_os/kernel_retry", RequestType.POST,
+            self._handle_kernel_retry)
+        st = safe_kernel_status()
+        notice = kernel_notice(st)
+        if notice:
+            self.server.add_warning(notice, KERNEL_WARNING)
+        logging.info(f"kiln_os: kernel {st.get('running', '?')}, ours "
+                     f"{st.get('ours') or 'none'}, "
+                     f"failed {st.get('failed') or 'no'}")
         server_url = config.get("server")
         repo = config.get("repo")
         token_file = pathlib.Path(
@@ -494,6 +599,24 @@ class KilnOS:
             if upd is not None and type(upd) is BaseDeploy:
                 self.apps.append(AppUpdates(upd, name, src))
         logging.info(f"kiln_os: updates from {server_url}/{repo}")
+
+    async def _handle_kernel(self, web_request: WebRequest) -> Dict[str, Any]:
+        return kernel_status()
+
+    async def _handle_kernel_retry(self, web_request: WebRequest
+                                   ) -> Dict[str, Any]:
+        st = kernel_status()
+        if not st["ours"]:
+            raise self.server.error("This image has no kernel of its own")
+        if not st["stock"] and not st["failed"]:
+            raise self.server.error(
+                "Kiln's kernel is running: nothing to retry")
+        # The agent refuses while printing, runs "ad5x-kernel retry" and
+        # reboots
+        status = await ask_agent(self.server, AGENT_KERNEL_RETRY, "retry\n",
+                                 ("rebooting",), timeout=30)
+        self.server.remove_warning(KERNEL_WARNING)
+        return {"result": status}
 
 
 def load_component(config: ConfigHelper) -> KilnOS:
