@@ -1,0 +1,133 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sun, 8 Nov 2026 15:42:18 -0700
+Subject: [PATCH 27/33] MIPS: dts: ingenic: x2600: Add the DMA controller
+
+Describe the X2600's DMA controller, with channels 0 and 1 reserved
+for the controller's own MCU as Ingenic's SDK keeps them, and give the
+UARTs their DMA request lines, which the UART binding requires.
+---
+ arch/mips/boot/dts/ingenic/x2600.dtsi | 48 +++++++++++++++++++++++++++
+ 1 file changed, 48 insertions(+)
+
+diff --git a/arch/mips/boot/dts/ingenic/x2600.dtsi b/arch/mips/boot/dts/ingenic/x2600.dtsi
+index b633d3e81..dededc83b 100644
+--- a/arch/mips/boot/dts/ingenic/x2600.dtsi
++++ b/arch/mips/boot/dts/ingenic/x2600.dtsi
+@@ -1,5 +1,6 @@
+ // SPDX-License-Identifier: GPL-2.0
+ #include <dt-bindings/clock/ingenic,x2600-cgu.h>
++#include <dt-bindings/dma/ingenic,x2600-dma.h>
+ 
+ / {
+ 	#address-cells = <1>;
+@@ -164,6 +165,21 @@ gpe: gpio@4 {
+ 		};
+ 	};
+ 
++	pdma: dma-controller@13420000 {
++		compatible = "ingenic,x2600-dma", "ingenic,x1830-dma";
++		reg = <0x13420000 0x400>, <0x13421000 0x40>;
++
++		#dma-cells = <2>;
++
++		interrupt-parent = <&intc>;
++		interrupts = <3>;
++
++		clocks = <&cgu X2600_CLK_PDMA>;
++
++		/* Channels 0 and 1 can be run by the PDMA's own MCU */
++		ingenic,reserved-channels = <0x3>;
++	};
++
+ 	uart0: serial@10030000 {
+ 		compatible = "ingenic,x2600-uart", "ingenic,x1000-uart";
+ 		reg = <0x10030000 0x100>;
+@@ -174,6 +190,10 @@ uart0: serial@10030000 {
+ 		clocks = <&exclk>, <&cgu X2600_CLK_UART0>;
+ 		clock-names = "baud", "module";
+ 
++		dmas = <&pdma X2600_DMA_UART0_RX 0xffffffff>,
++		       <&pdma X2600_DMA_UART0_TX 0xffffffff>;
++		dma-names = "rx", "tx";
++
+ 		status = "disabled";
+ 	};
+ 
+@@ -187,6 +207,10 @@ uart1: serial@10031000 {
+ 		clocks = <&exclk>, <&cgu X2600_CLK_UART1>;
+ 		clock-names = "baud", "module";
+ 
++		dmas = <&pdma X2600_DMA_UART1_RX 0xffffffff>,
++		       <&pdma X2600_DMA_UART1_TX 0xffffffff>;
++		dma-names = "rx", "tx";
++
+ 		status = "disabled";
+ 	};
+ 
+@@ -200,6 +224,10 @@ uart2: serial@10032000 {
+ 		clocks = <&exclk>, <&cgu X2600_CLK_UART2>;
+ 		clock-names = "baud", "module";
+ 
++		dmas = <&pdma X2600_DMA_UART2_RX 0xffffffff>,
++		       <&pdma X2600_DMA_UART2_TX 0xffffffff>;
++		dma-names = "rx", "tx";
++
+ 		status = "disabled";
+ 	};
+ 
+@@ -213,6 +241,10 @@ uart3: serial@10033000 {
+ 		clocks = <&exclk>, <&cgu X2600_CLK_UART3>;
+ 		clock-names = "baud", "module";
+ 
++		dmas = <&pdma X2600_DMA_UART3_RX 0xffffffff>,
++		       <&pdma X2600_DMA_UART3_TX 0xffffffff>;
++		dma-names = "rx", "tx";
++
+ 		status = "disabled";
+ 	};
+ 
+@@ -226,6 +258,10 @@ uart4: serial@10034000 {
+ 		clocks = <&exclk>, <&cgu X2600_CLK_UART4>;
+ 		clock-names = "baud", "module";
+ 
++		dmas = <&pdma X2600_DMA_UART4_RX 0xffffffff>,
++		       <&pdma X2600_DMA_UART4_TX 0xffffffff>;
++		dma-names = "rx", "tx";
++
+ 		status = "disabled";
+ 	};
+ 
+@@ -239,6 +275,10 @@ uart5: serial@10035000 {
+ 		clocks = <&exclk>, <&cgu X2600_CLK_UART5>;
+ 		clock-names = "baud", "module";
+ 
++		dmas = <&pdma X2600_DMA_UART5_RX 0xffffffff>,
++		       <&pdma X2600_DMA_UART5_TX 0xffffffff>;
++		dma-names = "rx", "tx";
++
+ 		status = "disabled";
+ 	};
+ 
+@@ -252,6 +292,10 @@ uart6: serial@10036000 {
+ 		clocks = <&exclk>, <&cgu X2600_CLK_UART6>;
+ 		clock-names = "baud", "module";
+ 
++		dmas = <&pdma X2600_DMA_UART6_RX 0xffffffff>,
++		       <&pdma X2600_DMA_UART6_TX 0xffffffff>;
++		dma-names = "rx", "tx";
++
+ 		status = "disabled";
+ 	};
+ 
+@@ -265,6 +309,10 @@ uart7: serial@10037000 {
+ 		clocks = <&exclk>, <&cgu X2600_CLK_UART7>;
+ 		clock-names = "baud", "module";
+ 
++		dmas = <&pdma X2600_DMA_UART7_RX 0xffffffff>,
++		       <&pdma X2600_DMA_UART7_TX 0xffffffff>;
++		dma-names = "rx", "tx";
++
+ 		status = "disabled";
+ 	};
+ };

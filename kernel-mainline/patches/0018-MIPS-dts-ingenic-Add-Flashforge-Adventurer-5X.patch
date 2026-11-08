@@ -1,7 +1,7 @@
-From 26ed9832b97809cd55c5c1e80fbb044dcf45cbd5 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 11:37:01 -0700
-Subject: [PATCH 17/24] MIPS: dts: ingenic: Add Flashforge Adventurer 5X
+Subject: [PATCH 18/33] MIPS: dts: ingenic: Add Flashforge Adventurer 5X
 
 Add the device tree of the Flashforge Adventurer 5X 3D printer, built
 around the Ingenic X2600 with 512 MiB of DDR (256 MiB at 0 and 256 MiB
@@ -90,6 +90,3 @@ index 000000000..75362aec7
 +
 +	status = "okay";
 +};
--- 
-2.43.0
-

@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sun, 8 Nov 2026 16:17:42 -0700
+Subject: [PATCH 31/33] MIPS: dts: ingenic: x2600: Add the MSC controllers
+
+Add the two DesignWare MSHC SD/MMC controllers, disabled.
+---
+ arch/mips/boot/dts/ingenic/x2600.dtsi | 26 ++++++++++++++++++++++++++
+ 1 file changed, 26 insertions(+)
+
+diff --git a/arch/mips/boot/dts/ingenic/x2600.dtsi b/arch/mips/boot/dts/ingenic/x2600.dtsi
+index dededc83b..48c0e8f33 100644
+--- a/arch/mips/boot/dts/ingenic/x2600.dtsi
++++ b/arch/mips/boot/dts/ingenic/x2600.dtsi
+@@ -180,6 +180,32 @@ pdma: dma-controller@13420000 {
+ 		ingenic,reserved-channels = <0x3>;
+ 	};
+ 
++	msc0: mmc@13450000 {
++		compatible = "ingenic,x2600-dwcmshc";
++		reg = <0x13450000 0x10000>;
++
++		interrupt-parent = <&intc>;
++		interrupts = <37>;
++
++		clocks = <&cgu X2600_CLK_MSC0>;
++		clock-names = "core";
++
++		status = "disabled";
++	};
++
++	msc1: mmc@13460000 {
++		compatible = "ingenic,x2600-dwcmshc";
++		reg = <0x13460000 0x10000>;
++
++		interrupt-parent = <&intc>;
++		interrupts = <36>;
++
++		clocks = <&cgu X2600_CLK_MSC1>;
++		clock-names = "core";
++
++		status = "disabled";
++	};
++
+ 	uart0: serial@10030000 {
+ 		compatible = "ingenic,x2600-uart", "ingenic,x1000-uart";
+ 		reg = <0x10030000 0x100>;

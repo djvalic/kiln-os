@@ -1,7 +1,7 @@
-From 8891174bad4ab52519baa008a121103f5c2f68c5 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 14:23:55 -0700
-Subject: [PATCH 21/24] serial: 8250_ingenic: Support RS-485
+Subject: [PATCH 22/33] serial: 8250_ingenic: Support RS-485
 
 Ingenic boards put half-duplex RS-485 transceivers on their UARTs, the
 Flashforge Adventurer 5X its filament changer, with the transceiver's
@@ -34,6 +34,3 @@ index fbde19d31..7e37f21ee 100644
  
  	err = uart_read_port_properties(&uart.port);
  	if (err)
--- 
-2.43.0
-

@@ -1,7 +1,7 @@
-From ec48f99f9c71b4b1d15abba3b10d18d833bcc7b0 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 11:21:04 -0700
-Subject: [PATCH 03/24] dt-bindings: vendor-prefixes: Add Flashforge
+Subject: [PATCH 03/33] dt-bindings: vendor-prefixes: Add Flashforge
 
 Flashforge (Zhejiang Flashforge 3D Technology Co., Ltd.) makes 3D
 printers, among them the Adventurer 5X built around the Ingenic X2600
@@ -23,6 +23,3 @@ index ba2002969..df29e47a7 100644
    "^flipkart,.*":
      description: Flipkart Inc.
    "^focaltech,.*":
--- 
-2.43.0
-

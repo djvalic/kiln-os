@@ -45,9 +45,8 @@ Each patch must be acceptable to a mainline reviewer:
 
 ## Status
 
-**On the printer** (2026-11-08): 24 patches, checkpatch `--strict` clean,
-every commit builds with `W=1`, `dt_binding_check` clean on every binding
-the series touches, `dtbs_check` clean but for the UART `dmas` below.
+**On the printer** (2026-11-08): 33 patches, checkpatch `--strict` clean,
+every commit builds with `W=1`, `dt_binding_check` and `dtbs_check` clean.
 
 - **Boot to a serial console:** the kernel reaches `Waiting for root
   device`: XBurst II CPU (PRId 0x00132000), early console, 490 MB RAM with
@@ -62,8 +61,21 @@ the series touches, `dtbs_check` clean but for the UART `dmas` below.
   230400 through the fractional divider (DLL 8, UMR 13: 230769 baud),
   v0.13.0-803-g4cd711119; the IFS (`ttyS4`) over RS-485 with the driver
   enable on PC3, v0.13.0-806-g131fffdc4. With RS-485 off the IFS stays
-  silent. Klipper itself has not run on this kernel yet: that needs the
-  root file system, so eMMC (step 2).
+  silent.
+- **DMA:** the PDMA runs on the X1830 driver (`dma-jz4780`); dmatest passed
+  50 transfers on each of 4 channels at once, no failures. The UART nodes
+  list their DMA channels (`8250_ingenic` does not use DMA yet).
+- **eMMC** (`tools/emmc-test.c`, every eMMC block device set read-only
+  first): HS200, 8 bits, 1.8 V signalling at 25 MHz, the settings the stock
+  kernel uses. The GPT and all 7 partitions are found; a full read of the
+  stock root partition (100 MiB, 23.6 MB/s) has the same CRC-32 as a copy
+  taken on stock, it mounts as squashfs, and the device counts no writes.
+  The controller is a DesignWare MSHC 1.40a, so it is a variant of
+  `sdhci-of-dwcmshc`; its card clock comes from the CGU, which now switches
+  the MSC clock to the crystal for card identification (400 kHz is out of
+  MPLL's reach).
+- Klipper itself has not run on this kernel yet: Kiln's userspace needs
+  networking (not in the defconfig yet), Ethernet and USB (Wi-Fi).
 
 Generic fixes this SoC needed, in the series:
 
@@ -82,9 +94,8 @@ Generic fixes this SoC needed, in the series:
 Open points:
 
 - **sparse** has not run on the series (it could not be installed here).
-- **UART DMA.** The UART nodes have no `dmas`, the one `dtbs_check`
-  warning left (mainline's X1830 has the same), until the X2600 PDMA is
-  supported.
+- **eMMC above 25 MHz.** HS200 at its full rate needs the sample clock
+  tuning; the stock kernel runs at 25 MHz too, so it stays there for now.
 - **From Ingenic's SDK, not documentation:** the PLL VCO range (672-2400
   MHz, the range of Ingenic's PLL table; the boot loader's settings are
   inside it), which pins have pull resistors (all allowed), and the X2600
@@ -107,6 +118,10 @@ directory first).
 ## Test on the printer
 
 Nothing below writes the flash; a hung test kernel costs a power cycle.
+A test kernel must carry its initramfs (`CONFIG_BLK_DEV_INITRD`) and get
+`root=/dev/null` on its command line: the chainload passes on stock's
+command line, so a kernel without one boots Kiln OS from the eMMC, which
+mounts `/data` read-write (the boot flag is safe: `ad5x.noslot`).
 
 - **Serial console:** the debug header (3.3 V, 115200 8N1) is wired to PE9
   and PE10. The stock kernel routes UART0 to PE11/PE12 only, so before a

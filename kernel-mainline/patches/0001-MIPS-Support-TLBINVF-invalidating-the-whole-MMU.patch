@@ -1,7 +1,7 @@
-From 5ec12152d96eb5fa3aaf44f72aa5d9e7621388f1 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 14:06:57 -0700
-Subject: [PATCH 01/24] MIPS: Support TLBINVF invalidating the whole MMU
+Subject: [PATCH 01/33] MIPS: Support TLBINVF invalidating the whole MMU
 
 Config4.IE = 3 says that the TLBINV and TLBINVF instructions are
 implemented and that a single TLBINVF invalidates the whole MMU, the
@@ -124,6 +124,3 @@ index 24fe85fa1..5770369cc 100644
  		}
  	} else {
  		while (entry < current_cpu_data.tlbsize) {
--- 
-2.43.0
-

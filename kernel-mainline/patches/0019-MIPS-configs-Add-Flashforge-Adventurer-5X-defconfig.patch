@@ -1,7 +1,7 @@
-From cc726aee241fb159bbd9ab023ef2b92d680de74b Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 11:37:10 -0700
-Subject: [PATCH 18/24] MIPS: configs: Add Flashforge Adventurer 5X defconfig
+Subject: [PATCH 19/33] MIPS: configs: Add Flashforge Adventurer 5X defconfig
 
 A configuration for the Flashforge Adventurer 5X with what mainline
 supports of its Ingenic X2600 so far: the timer, clocks, pins and the
@@ -63,6 +63,3 @@ index 000000000..fa800ee46
 +# CONFIG_FTRACE is not set
 +CONFIG_CMDLINE_BOOL=y
 +CONFIG_CMDLINE="earlycon"
--- 
-2.43.0
-

@@ -1,7 +1,7 @@
-From abbce9d60411cf588ee4626486c30a9b7bdca6c5 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 15:06:24 -0700
-Subject: [PATCH 22/24] serial: 8250_ingenic: Count the X2600 TX FIFO for
+Subject: [PATCH 23/33] serial: 8250_ingenic: Count the X2600 TX FIFO for
  RS-485
 
 LSR.THRE on Ingenic UARTs is set when the TX FIFO is half empty or
@@ -77,6 +77,3 @@ index 7e37f21ee..f9b3dc590 100644
  };
  
  static const struct of_device_id of_match[] = {
--- 
-2.43.0
-

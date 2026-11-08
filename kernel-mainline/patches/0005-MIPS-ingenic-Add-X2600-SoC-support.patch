@@ -1,7 +1,7 @@
-From 6e17d91037d3673c2db343dfa7d3694943c6c869 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 11:21:35 -0700
-Subject: [PATCH 05/24] MIPS: ingenic: Add X2600 SoC support
+Subject: [PATCH 05/33] MIPS: ingenic: Add X2600 SoC support
 
 The Ingenic X2600 has two XBurst2 cores. Its interrupt controller and
 UART follow earlier Ingenic SoCs, while its GPIO, clock and timer units
@@ -86,6 +86,3 @@ index f595b339a..bb07c598e 100644
 +	select MIPS_CPU_SCACHE
 +	select SYS_HAS_CPU_MIPS32_R2
 +	select SYS_SUPPORTS_HIGHMEM
--- 
-2.43.0
-

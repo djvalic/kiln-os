@@ -1,0 +1,23 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sun, 8 Nov 2026 15:42:23 -0700
+Subject: [PATCH 28/33] MIPS: configs: ad5x: Enable the DMA controller
+
+The X2600's DMA controller is now described; build its driver.
+---
+ arch/mips/configs/ad5x_defconfig | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/arch/mips/configs/ad5x_defconfig b/arch/mips/configs/ad5x_defconfig
+index fa800ee46..2501dc26f 100644
+--- a/arch/mips/configs/ad5x_defconfig
++++ b/arch/mips/configs/ad5x_defconfig
+@@ -31,6 +31,8 @@ CONFIG_GPIO_SYSFS=y
+ # CONFIG_HWMON is not set
+ # CONFIG_HID is not set
+ # CONFIG_USB_SUPPORT is not set
++CONFIG_DMADEVICES=y
++CONFIG_DMA_JZ4780=y
+ # CONFIG_INGENIC_TIMER is not set
+ CONFIG_INGENIC_X2600_OST=y
+ # CONFIG_IOMMU_SUPPORT is not set

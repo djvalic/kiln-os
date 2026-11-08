@@ -1,7 +1,7 @@
-From 29cddba2f6388d3e84ebf01a71c9d9be0e448ba0 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 15:21:37 -0700
-Subject: [PATCH 24/24] MIPS: dts: ingenic: ad5x: Add the motion and toolhead
+Subject: [PATCH 25/33] MIPS: dts: ingenic: ad5x: Add the motion and toolhead
  board ports
 
 The Adventurer 5X runs its motion controller and its toolhead board as
@@ -74,6 +74,3 @@ index cde599392..a2364864f 100644
 +
 +	status = "okay";
 +};
--- 
-2.43.0
-
