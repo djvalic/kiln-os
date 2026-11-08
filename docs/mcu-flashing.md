@@ -93,6 +93,43 @@ a minute), and an eboard re-flash at power-on (IAPCommand success, started,
 Klipper ready). Not yet tested on hardware: the round trip through stock
 (stock writing its own images back, then a fresh install).
 
+### IFS firmware: Flashforge's or Klipper's (Settings › Devices)
+
+The IFS runs Flashforge's firmware (driven by `ifs.py` over `ttyS4`) or
+Klipper's (`[mcu ifs]`, needed by Happy Hare). Settings › Devices › **IFS
+firmware** switches between them without a magic file or a reboot:
+
+1. The screen asks Moonraker: `POST /server/kiln/ifs_firmware`
+   `{"target": "stock"|"klipper"}` (JSON-RPC `server.kiln.post_ifs_firmware`).
+   Refused while a print runs or is paused, or while a switch is requested
+   or runs. There is no G-code command for it: the switch stops Klipper and
+   the IFS MCU, and no macro or print file may start one.
+2. Moonraker writes `/data/ad5x/kiln-update/ifs-firmware`; the root agent
+   (`S68ad5x-update-agent`) stops Klipper and runs `ad5x-mcu ifs-firmware
+   stock|klipper`, which checks the flasher first, then writes:
+   - **stock**: Flashforge's own `ifs.hex`, read from this printer's
+     usershare backup (`PROGRAM/control/<newest>/ifs.hex`, checked against
+     its `md5sum.list`). Nothing from Flashforge is in the image.
+   - **klipper**: `/usr/share/ad5x/mcu/ifs.hex` (`FLASHED_IFS`).
+3. It asks the IFS which firmware answers (Klipper identify, then F19), for
+   up to 30 s while the bootloader starts it, and sets
+   `/data/ad5x/ifs-klipper.enable` from the answer. On stock, plugins that
+   drive the IFS themselves (`plugin.json` `owns_ifs`, plugin API 1.5;
+   Happy Hare) are turned off; on Klipper they stay as they were (turn
+   Happy Hare on in Plugins).
+4. Klipper is started again whatever the outcome. If the IFS's bootloader
+   doesn't answer, the screen says to unplug the IFS cable and plug it back
+   in; the write carries on.
+
+Progress and result: `/data/ad5x/kiln-status/ifs-firmware.status`
+(`target`, `state`, `phase`, `message`, `version`), served by
+`GET /server/kiln/ifs_firmware`; Klipper's `printer.ifs_firmware` says
+which firmware runs (`stock`, `klipper`, `unknown`). From SSH the same
+switch is `ad5x-mcu ifs-firmware stock|klipper` with Klipper stopped.
+
+Tested on the developer's printer (2026-11-08): stock to Klipper and back
+from the screen, Happy Hare turned off on stock and on again afterwards.
+
 ## 1. How stock updates each MCU
 
 ### Trigger

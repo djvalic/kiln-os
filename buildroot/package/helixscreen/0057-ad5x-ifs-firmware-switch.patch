@@ -1,0 +1,1665 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Sun, 8 Nov 2026 12:00:00 -0500
+Subject: [PATCH] settings: IFS firmware switch in Settings > Devices
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Settings > Devices gets an "IFS firmware" row on printers whose Klipper
+publishes the `ifs_firmware` object. Its value is the firmware the IFS
+runs now (Stock, Klipper or Unknown, from printer.ifs_firmware.firmware).
+
+The row opens an overlay with the switch to the other firmware (both
+when the IFS answers neither, e.g. after a failed switch), greyed with
+the reason during a print (print_stats printing or paused). A confirm
+dialog says what the switch does; then the screen asks Moonraker for it
+(POST /server/kiln/ifs_firmware {"target": ...}, JSON-RPC
+server.kiln.post_ifs_firmware). No G-code starts a switch. A refusal
+(not while printing, a switch already running, bad target) is shown as
+the result.
+
+The root agent stops Klipper while it flashes, so the progress view
+polls Moonraker's status of the switch (server.kiln.get_ifs_firmware)
+once a second while it runs or Klipper is not back: the phase
+("Writing…", the replug hint "Unplug the IFS cable and plug it back
+in") and "Don't switch the printer off.". The recovery dialog ("Printer
+shutdown", "Klipper disconnected") is held off from the request until
+Klipper is back: the agent stops Klipper before the first poll. Once Klipper is ready the
+result shows the version the IFS answers, or the agent's message. After
+180 s without Klipper (or without the agent picking the request up) it
+stops waiting and says where to look. The poll timer stops whenever the
+overlay closes or the screen sleeps; a switch is followed again on
+reopen. Klipper comes back with or without `mcu ifs` and the plugin's
+objects: for 10 minutes after a request the hardware check doesn't
+notify that change ("present in previous session"); it still saves the
+new set for the next session.
+
+The texts come from a pure function (ad5x_ifs_firmware_view.h) with
+unit tests ([ad5x_ifs_firmware]). English strings only; other languages
+fall back to English.
+
+Upstream: not applicable (AD5X OS specific)
+---
+ include/ad5x_ifs_firmware_view.h              |  79 +++
+ include/ui_panel_settings.h                   |   2 +
+ include/ui_settings_ad5x_ifs_firmware.h       | 197 +++++++
+ src/api/moonraker_discovery_sequence.cpp      |   9 +
+ src/application/discovery_steps.cpp           |   5 +
+ src/ui/ad5x_ifs_firmware_view.cpp             | 179 ++++++
+ src/ui/ui_panel_settings.cpp                  |  11 +
+ src/ui/ui_settings_ad5x_ifs_firmware.cpp      | 523 ++++++++++++++++++
+ tests/unit/test_ad5x_ifs_firmware.cpp         | 211 +++++++
+ ui_xml/settings_ad5x_ifs_firmware_overlay.xml |  73 +++
+ ui_xml/settings_hardware_overlay.xml          |   6 +
+ ui_xml/translations/en.xml                    |  35 ++
+ 12 files changed, 1330 insertions(+)
+ create mode 100644 include/ad5x_ifs_firmware_view.h
+ create mode 100644 include/ui_settings_ad5x_ifs_firmware.h
+ create mode 100644 src/ui/ad5x_ifs_firmware_view.cpp
+ create mode 100644 src/ui/ui_settings_ad5x_ifs_firmware.cpp
+ create mode 100644 tests/unit/test_ad5x_ifs_firmware.cpp
+ create mode 100644 ui_xml/settings_ad5x_ifs_firmware_overlay.xml
+
+diff --git a/include/ad5x_ifs_firmware_view.h b/include/ad5x_ifs_firmware_view.h
+new file mode 100644
+index 0000000..9ac3a53
+--- /dev/null
++++ b/include/ad5x_ifs_firmware_view.h
+@@ -0,0 +1,79 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++#pragma once
++
++/**
++ * @file ad5x_ifs_firmware_view.h
++ * @brief What Settings > Devices > IFS firmware shows, from the switch's status
++ *
++ * Kiln OS switches the AD5X IFS (filament unit) between Flashforge's stock
++ * firmware and Klipper firmware: POST /server/kiln/ifs_firmware with a target
++ * asks Moonraker's kiln component, and through it the root agent, which stops
++ * Klipper, flashes, and starts Klipper again; GET serves the agent's status
++ * file, also while Klipper is down. Klipper publishes `printer.ifs_firmware`
++ * (firmware, switching, last). These functions turn that into the screen's
++ * text and buttons; they need neither LVGL nor a printer.
++ *
++ * @threading Pure functions; the translator hook is set once from the main thread
++ */
++
++#include <string>
++
++namespace helix::ad5x_ifs_firmware {
++
++/// The switch as the screen knows it.
++struct IfsFirmwareStatus {
++    std::string firmware;    ///< printer.ifs_firmware.firmware: stock, klipper, unknown
++    bool switching = false;  ///< printer.ifs_firmware.switching
++    std::string print_state; ///< print_stats.state
++    /// A switch was requested from this screen and its result not dismissed yet
++    bool following = false;
++    // The status file (Moonraker, or printer.ifs_firmware.last)
++    std::string target;  ///< stock, klipper
++    std::string state;   ///< running, done, failed, refused; none without a file
++    std::string phase;   ///< checking, stopping, writing, replug, verifying, starting, finished
++    std::string message; ///< One line for people
++    std::string version; ///< What the IFS answered; may be empty
++};
++
++enum class IfsFirmwareViewKind {
++    Choose = 0,   ///< The firmware now and the switch to the other one
++    Progress = 1, ///< A switch runs, or Klipper is starting after it
++    Done = 2,     ///< The switch worked
++    Failed = 3,   ///< Failed, refused, or Klipper did not come back
++};
++
++struct IfsFirmwareView {
++    IfsFirmwareViewKind kind = IfsFirmwareViewKind::Choose;
++    std::string title;
++    std::string body;            ///< May hold several lines
++    bool offer_stock = false;    ///< "Switch to Stock" shows
++    bool offer_klipper = false;  ///< "Switch to Klipper" shows
++    bool choice_enabled = false; ///< The offered switch can be tapped (not during a print)
++    bool ok = false;             ///< OK shows: back to the choice
++};
++
++/// How long Klipper (or the agent) may stay silent after a request.
++inline constexpr int kWaitLimitSeconds = 180;
++
++/// The screen for @p status. @p seconds_waiting counts from the request, or
++/// from the last answer saying the switch runs; past kWaitLimitSeconds the
++/// screen stops waiting.
++IfsFirmwareView ifs_firmware_view(const IfsFirmwareStatus& status, bool klipper_ready,
++                                  int seconds_waiting);
++
++/// The confirm dialog before a switch to @p target (stock, klipper).
++struct IfsFirmwareConfirm {
++    std::string title;
++    std::string body;
++    std::string button;
++};
++IfsFirmwareConfirm ifs_firmware_confirm(const std::string& target);
++
++/// The Devices row's value: "Stock", "Klipper", else "Unknown".
++std::string ifs_firmware_label(const std::string& firmware);
++
++/// Translates the English texts above (lv_tr on the screen); none: English.
++using Translator = const char* (*)(const char*);
++void set_translator(Translator tr);
++
++} // namespace helix::ad5x_ifs_firmware
+diff --git a/include/ui_panel_settings.h b/include/ui_panel_settings.h
+index 992b633..f3284f7 100644
+--- a/include/ui_panel_settings.h
++++ b/include/ui_panel_settings.h
+@@ -145,6 +145,8 @@ class SettingsPanel : public PanelBase {
+     lv_subject_t show_ad5x_soak_subject_{};
+     // 1 when the printer has the IFS (`ifs` object): unhides "Filament Auto-Refill"
+     lv_subject_t show_ad5x_refill_subject_{};
++    // 1 when the printer has the `ifs_firmware` object: unhides Devices > "IFS firmware"
++    lv_subject_t show_ad5x_ifs_firmware_subject_{};
+ 
+     // Live status line shown under each stateful root row (settings_panel.xml),
+     // refreshed by refresh_status_lines().
+diff --git a/include/ui_settings_ad5x_ifs_firmware.h b/include/ui_settings_ad5x_ifs_firmware.h
+new file mode 100644
+index 0000000..cc65f36
+--- /dev/null
++++ b/include/ui_settings_ad5x_ifs_firmware.h
+@@ -0,0 +1,197 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++/**
++ * @file ui_settings_ad5x_ifs_firmware.h
++ * @brief Settings > Devices > IFS firmware on the AD5X: Stock or Klipper firmware on the IFS
++ *
++ * Ad5xIfsFirmwareModel follows Klipper's `ifs_firmware` object (firmware,
++ * switching, last) for the Devices row's value. Ad5xIfsFirmwareOverlay shows
++ * the choice, asks first, asks Moonraker for the switch (POST
++ * /server/kiln/ifs_firmware {"target": "stock"|"klipper"}, JSON-RPC
++ * `server.kiln.post_ifs_firmware`; no G-code) and follows it. The root agent
++ * stops Klipper for about a minute while it flashes, so the overlay polls
++ * Moonraker's `server.kiln.get_ifs_firmware` (the agent's status file) once a
++ * second while the switch runs or Klipper is not back, and shows the result
++ * once Klipper is ready again. What it shows comes
++ * from ad5x_ifs_firmware_view.h.
++ *
++ * @pattern Overlay (lazy init) over a process-wide model
++ * @threading Main thread only; Moonraker callbacks hop over via lifetime tokens
++ */
++
++#pragma once
++
++#include "ui_observer_guard.h"
++#include "ui_subscription_guard.h"
++#include "ui_timer_guard.h"
++
++#include "ad5x_ifs_firmware_view.h"
++#include "async_lifetime_guard.h"
++#include "json_fwd.h"
++#include "lvgl/lvgl.h"
++#include "overlay_base.h"
++#include "static_panel_registry.h"
++#include "subject_managed_panel.h"
++
++#include <chrono>
++#include <functional>
++#include <string>
++
++namespace helix::ad5x_ifs_firmware {
++
++/// Whether the printer publishes the `ifs_firmware` object.
++bool available();
++
++/// A switch takes Klipper's `mcu ifs` (and Happy Hare's objects) away or brings them back:
++/// for a while after a request the hardware check doesn't report the change as missing or
++/// new hardware (it still records the new set as the next session's baseline).
++void expect_hardware_change(uint32_t ms);
++void clear_expected_hardware_change();
++bool hardware_change_expected();
++
++/// The `ifs_firmware` object and the Devices row's value.
++///
++/// Subject: `ad5x_ifs_firmware_text` ("Stock", "Klipper", "Unknown"; empty
++/// until the object answered).
++class Ad5xIfsFirmwareModel {
++  public:
++    Ad5xIfsFirmwareModel() = default;
++    ~Ad5xIfsFirmwareModel();
++    Ad5xIfsFirmwareModel(const Ad5xIfsFirmwareModel&) = delete;
++    Ad5xIfsFirmwareModel& operator=(const Ad5xIfsFirmwareModel&) = delete;
++
++    void init_subjects();
++
++    /// Follow the object (status updates, Klipper restarts) from now on, and
++    /// query it. Safe to call again; later calls only query.
++    void start();
++
++    /// Ask Klipper for the whole object.
++    void query();
++
++    /// firmware, switching and the `last` fields; print_state and following unset.
++    const IfsFirmwareStatus& status() const {
++        return status_;
++    }
++    bool klippy_ready() const {
++        return klippy_ready_;
++    }
++
++    /// Runs on the main thread after status() or klippy_ready() changed.
++    /// One listener (the overlay on screen); nullptr clears it.
++    void set_listener(std::function<void()> listener);
++
++  private:
++    void merge(const json& obj);
++    void notify();
++
++    SubjectManager subjects_;
++    lv_subject_t text_{};
++    char text_buf_[32] = "";
++    bool subjects_initialized_ = false;
++
++    IfsFirmwareStatus status_;
++    bool loaded_ = false;
++    bool klippy_ready_ = true;
++    bool started_ = false;
++    std::function<void()> listener_;
++
++    SubscriptionGuard subscription_;
++    ObserverGuard klippy_observer_;
++    AsyncLifetimeGuard lifetime_;
++};
++
++Ad5xIfsFirmwareModel& model();
++
++} // namespace helix::ad5x_ifs_firmware
++
++namespace helix::settings {
++
++class Ad5xIfsFirmwareOverlay : public OverlayBase {
++  public:
++    ~Ad5xIfsFirmwareOverlay() override;
++
++    const char* get_name() const override {
++        return "AD5X IFS Firmware";
++    }
++    const char* xml_component() const override {
++        return "settings_ad5x_ifs_firmware_overlay";
++    }
++    /// Freed on close; the next open rebuilds it. A switch being followed
++    /// stays followed: reopening shows it again.
++    bool destroy_on_close() const override {
++        return true;
++    }
++
++    void init_subjects() override;
++    void deinit_subjects();
++    void register_callbacks() override;
++
++    /// Follow the model and, while a switch runs, poll Moonraker.
++    void on_activate() override;
++
++    /// Confirm, then ask Moonraker to switch to @p target.
++    void handle_switch(const std::string& target);
++    /// Result read: back to the choice.
++    void handle_ok();
++
++  protected:
++    void on_deactivating(DeactivateReason reason) override;
++
++  private:
++    /// The status the view is computed from: the model's, with Moonraker's
++    /// newer status-file fields and the request this screen sent.
++    helix::ad5x_ifs_firmware::IfsFirmwareStatus effective_status() const;
++    int seconds_waiting() const;
++    /// Subjects from the view; starts or stops polling.
++    void refresh();
++    void send(const std::string& target);
++    /// Moonraker refused the request: shown as a refused result.
++    void refused(const std::string& message);
++    void poll();
++    void apply_poll(const json& result);
++    void start_polling();
++    void stop_polling();
++    /// The model's `last` or a Moonraker answer: the status file moved on
++    /// from the one seen when the request was sent.
++    void note_file(const std::string& state, const std::string& phase, const std::string& message,
++                   const std::string& target, const std::string& version);
++    void mark_alive();
++
++    SubjectManager subjects_;
++    lv_subject_t kind_subject_{};
++    lv_subject_t title_subject_{};
++    lv_subject_t body_subject_{};
++    lv_subject_t offer_stock_subject_{};
++    lv_subject_t offer_klipper_subject_{};
++    lv_subject_t choice_enabled_subject_{};
++    lv_subject_t ok_subject_{};
++    char title_buf_[128] = "";
++    char body_buf_[512] = "";
++
++    /// A request went out from here; cleared by OK
++    bool following_ = false;
++    /// The request is out but the status file still shows the switch before it
++    bool pending_ = false;
++    bool command_in_flight_ = false;
++    /// Moonraker's refusal of the request; shown as the result until OK
++    std::string refusal_;
++    std::string requested_target_;
++    /// Status-file fields when the request was sent
++    std::string sent_state_, sent_message_, sent_target_, sent_version_;
++    /// Moonraker's answer, newer than the model's `last` while Klipper is away
++    bool have_file_ = false;
++    std::string file_state_, file_phase_, file_message_, file_target_, file_version_;
++    /// The request, or the last answer saying the switch runs
++    std::chrono::steady_clock::time_point alive_at_{};
++    bool poll_in_flight_ = false;
++
++    helix::ui::LvglTimerGuard poll_timer_;
++    ObserverGuard print_observer_;
++};
++
++inline Ad5xIfsFirmwareOverlay& get_ad5x_ifs_firmware_overlay() {
++    return lazy_global<Ad5xIfsFirmwareOverlay>("Ad5xIfsFirmwareOverlay");
++}
++
++} // namespace helix::settings
+diff --git a/src/api/moonraker_discovery_sequence.cpp b/src/api/moonraker_discovery_sequence.cpp
+index e710bb9..00d442f 100644
+--- a/src/api/moonraker_discovery_sequence.cpp
++++ b/src/api/moonraker_discovery_sequence.cpp
+@@ -1558,6 +1558,15 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
+         }
+     }
+ 
++    // AD5X IFS firmware switch (ui_settings_ad5x_ifs_firmware.cpp): the firmware the
++    // IFS runs, whether a switch runs and the last result; small, so the whole object.
++    {
++        const auto& objects = hw.printer_objects();
++        if (std::find(objects.begin(), objects.end(), "ifs_firmware") != objects.end()) {
++            subscription_objects["ifs_firmware"] = nullptr;
++        }
++    }
++
+     // AD5X filament auto-refill (ui_settings_ad5x_refill.cpp): `ifs` carries
+     // auto_refill, refill_match, refill_backups and refill_notice, which the
+     // Settings screen and the "No backup spool" pop-up read; `ifs_materials`
+diff --git a/src/application/discovery_steps.cpp b/src/application/discovery_steps.cpp
+index 78b1432..412b1dc 100644
+--- a/src/application/discovery_steps.cpp
++++ b/src/application/discovery_steps.cpp
+@@ -10,6 +10,7 @@
+ 
+ #include "ui_panel_calibration_zoffset.h"
+ #include "ui_settings_about.h"
++#include "ui_settings_ad5x_ifs_firmware.h"
+ #include "ui_settings_ad5x_log.h"
+ #include "ui_settings_ad5x_refill.h"
+ #include "ui_update_queue.h"
+@@ -89,6 +90,10 @@ void validate_hardware_step(DiscoveryContext& ctx) {
+     get_printer_state().hardware_validation_state().set_hardware_validation_result(
+         validation_result);
+     if (validation_result.has_issues() && ctx.hw_changed &&
++        helix::ad5x_ifs_firmware::hardware_change_expected()) {
++        // An IFS firmware switch adds or removes `mcu ifs` and its plugin's objects
++        spdlog::info("[Discovery] hardware change after an IFS firmware switch: not notified");
++    } else if (validation_result.has_issues() && ctx.hw_changed &&
+         !Config::get_instance()->is_wizard_required() && !is_wizard_active()) {
+         ctx.validator->notify_user(validation_result);
+     }
+diff --git a/src/ui/ad5x_ifs_firmware_view.cpp b/src/ui/ad5x_ifs_firmware_view.cpp
+new file mode 100644
+index 0000000..dd78cbd
+--- /dev/null
++++ b/src/ui/ad5x_ifs_firmware_view.cpp
+@@ -0,0 +1,179 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include "ad5x_ifs_firmware_view.h"
++
++#include <spdlog/fmt/fmt.h>
++
++namespace helix::ad5x_ifs_firmware {
++
++namespace {
++
++Translator g_translator = nullptr;
++
++const char* tr(const char* english) {
++    return g_translator ? g_translator(english) : english;
++}
++
++bool printing(const std::string& print_state) {
++    // The same test as Moonraker's switch request and the root agent
++    return print_state == "printing" || print_state == "paused";
++}
++
++const char* phase_line(const std::string& phase) {
++    if (phase == "stopping") {
++        return tr("Stopping Klipper…");
++    }
++    if (phase == "writing") {
++        return tr("Writing…");
++    }
++    if (phase == "replug") {
++        return tr("Unplug the IFS cable and plug it back in");
++    }
++    if (phase == "verifying") {
++        return tr("Checking the IFS…");
++    }
++    if (phase == "starting" || phase == "finished") {
++        return tr("Starting Klipper…");
++    }
++    return tr("Checking…");
++}
++
++/// "v3.0.7" from "3.0.7" or "v3.0.7"
++std::string version_text(const std::string& version) {
++    if (version.empty() || version[0] == 'v' || version[0] == 'V') {
++        return version;
++    }
++    return "v" + version;
++}
++
++std::string done_body(const IfsFirmwareStatus& s) {
++    const bool stock = s.target == "stock";
++    std::string line;
++    if (s.version.empty()) {
++        line = stock ? tr("IFS on stock firmware.") : tr("IFS on Klipper firmware.");
++    } else {
++        line = fmt::format(fmt::runtime(stock ? tr("IFS on stock firmware: {} answers.")
++                                              : tr("IFS on Klipper firmware: {} answers.")),
++                           version_text(s.version));
++    }
++    line += ' ';
++    line += stock ? tr("The built-in IFS driver runs it; plugins that need Klipper firmware on "
++                       "the IFS are off.")
++                  : tr("Plugins are as they were.");
++    return line;
++}
++
++IfsFirmwareView result_view(const IfsFirmwareStatus& s) {
++    IfsFirmwareView v;
++    v.ok = true;
++    if (s.state == "done") {
++        v.kind = IfsFirmwareViewKind::Done;
++        v.title = tr("IFS firmware switched");
++        v.body = done_body(s);
++        return v;
++    }
++    v.kind = IfsFirmwareViewKind::Failed;
++    v.title = s.state == "refused" ? tr("IFS firmware switch refused")
++                                   : tr("IFS firmware switch failed");
++    v.body = s.message.empty() ? std::string(tr("No result (ad5x-mcu status)")) : s.message;
++    return v;
++}
++
++IfsFirmwareView choose_view(const IfsFirmwareStatus& s, bool klipper_ready) {
++    IfsFirmwareView v;
++    v.kind = IfsFirmwareViewKind::Choose;
++    const std::string label = ifs_firmware_label(s.firmware);
++    v.title = fmt::format("{}: {}", tr("IFS firmware"), tr(label.c_str()));
++    if (!klipper_ready) {
++        // Nothing to show the firmware from, and the agent would refuse a busy Klipper anyway
++        v.body = tr("Waiting for Klipper…");
++        return v;
++    }
++    if (s.firmware == "klipper") {
++        v.body = tr("The IFS runs Klipper firmware.");
++        v.offer_stock = true;
++    } else if (s.firmware == "stock") {
++        v.body = tr("The IFS runs Flashforge's firmware.");
++        v.offer_klipper = true;
++    } else {
++        v.body = tr("The IFS doesn't answer as either firmware. Switch it to one of them.");
++        v.offer_stock = true;
++        v.offer_klipper = true;
++    }
++    if (s.state == "failed" && !s.message.empty()) {
++        v.body += '\n';
++        v.body += fmt::format(fmt::runtime(tr("Last switch: {}")), s.message);
++    }
++    v.choice_enabled = !printing(s.print_state);
++    if (!v.choice_enabled) {
++        v.body += '\n';
++        v.body += tr("Can't switch during a print.");
++    }
++    return v;
++}
++
++} // namespace
++
++void set_translator(Translator tr) {
++    g_translator = tr;
++}
++
++std::string ifs_firmware_label(const std::string& firmware) {
++    if (firmware == "stock") {
++        return "Stock";
++    }
++    if (firmware == "klipper") {
++        return "Klipper";
++    }
++    return "Unknown";
++}
++
++IfsFirmwareConfirm ifs_firmware_confirm(const std::string& target) {
++    IfsFirmwareConfirm c;
++    c.button = tr("Switch");
++    if (target == "stock") {
++        c.title = tr("Switch the IFS to stock firmware?");
++        c.body = tr("Flashes Flashforge's firmware from this printer's backup (about a minute). "
++                    "Plugins that need Klipper firmware on the IFS (Happy Hare) will be turned "
++                    "off. Klipper restarts.");
++    } else {
++        c.title = tr("Switch the IFS to Klipper firmware?");
++        c.body = tr("Flashes the Klipper firmware that comes with this image (about a minute). "
++                    "Plugins stay as they are; ones that are off stay off. Klipper restarts.");
++    }
++    return c;
++}
++
++IfsFirmwareView ifs_firmware_view(const IfsFirmwareStatus& s, bool klipper_ready,
++                                  int seconds_waiting) {
++    const bool running = s.state == "running" || s.switching;
++
++    if ((running || s.following) && seconds_waiting > kWaitLimitSeconds &&
++        (!klipper_ready || running)) {
++        IfsFirmwareView v;
++        v.kind = IfsFirmwareViewKind::Failed;
++        v.title = tr("IFS firmware switch");
++        v.body = !klipper_ready
++                     ? tr("Klipper did not start again (ad5x-mcu status, klippy.log)")
++                     : tr("The switch did not start (/data/ad5x/kiln-update/agent.log)");
++        v.ok = true;
++        return v;
++    }
++
++    if (running || (s.following && !klipper_ready)) {
++        IfsFirmwareView v;
++        v.kind = IfsFirmwareViewKind::Progress;
++        v.title = tr("Switching IFS firmware…");
++        // A finished switch while Klipper is still away: Klipper is starting
++        const std::string phase = running ? s.phase : std::string("starting");
++        v.body = fmt::format("{}\n{}", phase_line(phase), tr("Don't switch the printer off."));
++        return v;
++    }
++
++    if (s.following) {
++        return result_view(s);
++    }
++    return choose_view(s, klipper_ready);
++}
++
++} // namespace helix::ad5x_ifs_firmware
+diff --git a/src/ui/ui_panel_settings.cpp b/src/ui/ui_panel_settings.cpp
+index 34c1281..2be0698 100644
+--- a/src/ui/ui_panel_settings.cpp
++++ b/src/ui/ui_panel_settings.cpp
+@@ -14,6 +14,7 @@
+ #include "ui_nav.h"
+ #include "ui_panel_memory_stats.h"
+ #include "ui_printer_manager_overlay.h"
++#include "ui_settings_ad5x_ifs_firmware.h"
+ #include "ui_settings_ad5x_plugins.h"
+ #include "ui_settings_ad5x_refill.h"
+ #include "ui_settings_ad5x_soak.h"
+@@ -151,6 +152,10 @@ void SettingsPanel::init_subjects() {
+     UI_MANAGED_SUBJECT_INT(show_ad5x_refill_subject_, 0, "settings_show_ad5x_refill", subjects_);
+     // The Filament Auto-Refill row's line (ad5x_refill_summary) follows the `ifs` object
+     helix::ad5x_refill::model().init_subjects();
++    UI_MANAGED_SUBJECT_INT(show_ad5x_ifs_firmware_subject_, 0, "settings_show_ad5x_ifs_firmware",
++                           subjects_);
++    // The Devices > IFS firmware row's value (ad5x_ifs_firmware_text) follows `ifs_firmware`
++    helix::ad5x_ifs_firmware::model().init_subjects();
+ 
+     // Live status line under each stateful root row; refresh_status_lines()
+     // fills these in, first from setup() and then on every return to the root.
+@@ -251,6 +256,11 @@ void SettingsPanel::refresh_status_lines() {
+     if (has_refill) {
+         helix::ad5x_refill::model().start();
+     }
++    const bool has_ifs_firmware = helix::ad5x_ifs_firmware::available();
++    lv_subject_set_int(&show_ad5x_ifs_firmware_subject_, has_ifs_firmware ? 1 : 0);
++    if (has_ifs_firmware) {
++        helix::ad5x_ifs_firmware::model().start();
++    }
+ 
+     // Formatted here rather than once at init, so it is in the language of the
+     // latest return to the settings root.
+@@ -460,6 +470,7 @@ void register_settings_panel_callbacks() {
+         {"on_ad5x_nozzle_clicked", [](lv_event_t*) { helix::ui::Ad5xNozzleModal::show_owned(); }},
+         {"on_ad5x_purge_clicked",
+          [](lv_event_t*) { get_global_settings_panel().handle_ad5x_purge_clicked(); }},
++        {"on_ad5x_ifs_firmware_clicked", nav_row<get_ad5x_ifs_firmware_overlay>()},
+ 
+         // Restart prompt and the shared header back button
+         {"on_restart_later_clicked",
+diff --git a/src/ui/ui_settings_ad5x_ifs_firmware.cpp b/src/ui/ui_settings_ad5x_ifs_firmware.cpp
+new file mode 100644
+index 0000000..e7de37c
+--- /dev/null
++++ b/src/ui/ui_settings_ad5x_ifs_firmware.cpp
+@@ -0,0 +1,523 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include "ui_settings_ad5x_ifs_firmware.h"
++
++#include "ui_callback_helpers.h"
++#include "ui_emergency_stop.h"
++#include "ui_modal.h"
++#include "ui_update_queue.h"
++
++#include "app_globals.h"
++#include "i_moonraker_api.h"
++#include "i_moonraker_client.h"
++#include "json_utils.h"
++#include "lvgl/src/others/translation/lv_translation.h"
++#include "observer_factory.h"
++#include "printer_state.h"
++
++#include <spdlog/spdlog.h>
++
++#include <algorithm>
++
++namespace helix::ad5x_ifs_firmware {
++
++namespace {
++
++constexpr const char* kObject = "ifs_firmware";
++// /server/kiln/ifs_firmware takes GET and POST, so Moonraker names its JSON-RPC
++// methods after the request type: the agent's status file, and the switch request
++constexpr const char* kStatusMethod = "server.kiln.get_ifs_firmware";
++constexpr const char* kSwitchMethod = "server.kiln.post_ifs_firmware";
++constexpr uint32_t kPollMs = 1000;
++constexpr uint32_t kPollTimeoutMs = 5000;
++
++const char* translate(const char* english) {
++    return lv_tr(english);
++}
++
++} // namespace
++
++namespace {
++// lv_tick: the validator and the overlay both run on the LVGL main thread
++uint32_t g_expect_since = 0;
++uint32_t g_expect_for = 0;
++} // namespace
++
++void expect_hardware_change(uint32_t ms) {
++    g_expect_since = lv_tick_get();
++    g_expect_for = ms;
++}
++
++void clear_expected_hardware_change() {
++    g_expect_for = 0;
++}
++
++bool hardware_change_expected() {
++    return g_expect_for != 0 && lv_tick_elaps(g_expect_since) < g_expect_for;
++}
++
++bool available() {
++    IMoonrakerAPI* api = get_moonraker_api();
++    if (!api) {
++        return false;
++    }
++    const auto& objects = api->hardware().printer_objects();
++    return std::find(objects.begin(), objects.end(), kObject) != objects.end();
++}
++
++// ============================================================================
++// MODEL
++// ============================================================================
++
++Ad5xIfsFirmwareModel::~Ad5xIfsFirmwareModel() {
++    lifetime_.invalidate();
++    subscription_.reset();
++    klippy_observer_.reset();
++    subjects_.deinit_all();
++}
++
++void Ad5xIfsFirmwareModel::init_subjects() {
++    if (subjects_initialized_) {
++        return;
++    }
++    // The Devices row's value: "Stock", "Klipper", "Unknown"; empty until the object answered
++    UI_MANAGED_SUBJECT_STRING(text_, text_buf_, "", "ad5x_ifs_firmware_text", subjects_);
++    subjects_initialized_ = true;
++}
++
++void Ad5xIfsFirmwareModel::start() {
++    if (!started_) {
++        IMoonrakerAPI* api = get_moonraker_api();
++        if (api) {
++            started_ = true;
++            const auto token = lifetime_.token();
++            // Runs on the WebSocket thread: copy the object out, apply it on the main thread.
++            const SubscriptionId id = api->subscribe_notifications([this, token](const json& note) {
++                const json* params = json_util::find_member(note, "params");
++                if (!params || !params->is_array() || params->empty()) {
++                    return;
++                }
++                const json* obj = json_util::find_member((*params)[0], kObject);
++                if (!obj || !obj->is_object()) {
++                    return;
++                }
++                json delta = *obj;
++                token.defer("Ad5xIfsFirmwareModel::status_update", [this, delta]() {
++                    // Deltas only patch a full object; the query in flight brings one
++                    if (loaded_) {
++                        merge(delta);
++                    }
++                });
++            });
++            subscription_ = SubscriptionGuard(api, id);
++
++            // A switch stops and starts Klipper: the object comes back with the result.
++            klippy_observer_ = ui::observe<int>(
++                get_printer_state().network_state().get_klippy_state_subject(), this,
++                [](Ad5xIfsFirmwareModel* self, int state) {
++                    const bool ready = static_cast<KlippyState>(state) == KlippyState::READY;
++                    if (ready == self->klippy_ready_) {
++                        return;
++                    }
++                    self->klippy_ready_ = ready;
++                    if (ready) {
++                        self->query();
++                    } else {
++                        self->loaded_ = false;
++                    }
++                    self->notify();
++                },
++                get_printer_state().get_subjects_lifetime());
++        }
++    }
++    query();
++}
++
++void Ad5xIfsFirmwareModel::query() {
++    IMoonrakerClient* client = get_moonraker_client();
++    if (!client || client->get_connection_state() != ConnectionState::CONNECTED) {
++        return;
++    }
++    const auto token = lifetime_.token();
++    json params = {{"objects", {{kObject, nullptr}}}};
++    client->send_jsonrpc(
++        "printer.objects.query", params,
++        [this, token](const json& response) {
++            const json* result = json_util::find_member(response, "result");
++            const json* status = result ? json_util::find_member(*result, "status") : nullptr;
++            const json* obj = status ? json_util::find_member(*status, kObject) : nullptr;
++            if (!obj || !obj->is_object()) {
++                return;
++            }
++            json full = *obj;
++            token.defer("Ad5xIfsFirmwareModel::status_query", [this, full]() {
++                loaded_ = true;
++                merge(full);
++            });
++        },
++        [](const MoonrakerError& err) {
++            spdlog::debug("[AD5X IFS firmware] {} query failed: {}", kObject, err.message);
++        },
++        0, /*silent=*/true);
++}
++
++void Ad5xIfsFirmwareModel::merge(const json& obj) {
++    if (const json* fw = json_util::find_member(obj, "firmware")) {
++        status_.firmware = json_util::as_string(*fw);
++    }
++    if (const json* sw = json_util::find_member(obj, "switching")) {
++        status_.switching = json_util::as_bool(*sw);
++    }
++    if (const json* last = json_util::find_member(obj, "last"); last && last->is_object()) {
++        // Klipper sends the whole `last` dict whenever one of its fields changes
++        status_.target = json_util::safe_string(*last, "target");
++        status_.state = json_util::safe_string(*last, "state");
++        status_.phase = json_util::safe_string(*last, "phase");
++        status_.message = json_util::safe_string(*last, "message");
++        status_.version = json_util::safe_string(*last, "version");
++    }
++    if (subjects_initialized_) {
++        const std::string label = ifs_firmware_label(status_.firmware);
++        lv_subject_copy_string(&text_, lv_tr(label.c_str()));
++    }
++    notify();
++}
++
++void Ad5xIfsFirmwareModel::set_listener(std::function<void()> listener) {
++    listener_ = std::move(listener);
++}
++
++void Ad5xIfsFirmwareModel::notify() {
++    // A copy: the listener may replace itself
++    if (auto listener = listener_) {
++        listener();
++    }
++}
++
++Ad5xIfsFirmwareModel& model() {
++    return helix::lazy_global<Ad5xIfsFirmwareModel>("Ad5xIfsFirmwareModel");
++}
++
++} // namespace helix::ad5x_ifs_firmware
++
++// ============================================================================
++// OVERLAY
++// ============================================================================
++
++namespace helix::settings {
++
++namespace fw = helix::ad5x_ifs_firmware;
++
++Ad5xIfsFirmwareOverlay::~Ad5xIfsFirmwareOverlay() {
++    stop_polling();
++    deinit_subjects();
++}
++
++void Ad5xIfsFirmwareOverlay::init_subjects() {
++    init_subjects_guarded([this]() {
++        fw::set_translator(&fw::translate);
++        // fw::IfsFirmwareViewKind: the spinner, the colours
++        UI_MANAGED_SUBJECT_INT(kind_subject_, 0, "ad5x_ifs_fw_kind", subjects_);
++        UI_MANAGED_SUBJECT_STRING(title_subject_, title_buf_, "", "ad5x_ifs_fw_title", subjects_);
++        UI_MANAGED_SUBJECT_STRING(body_subject_, body_buf_, "", "ad5x_ifs_fw_body", subjects_);
++        UI_MANAGED_SUBJECT_INT(offer_stock_subject_, 0, "ad5x_ifs_fw_offer_stock", subjects_);
++        UI_MANAGED_SUBJECT_INT(offer_klipper_subject_, 0, "ad5x_ifs_fw_offer_klipper", subjects_);
++        UI_MANAGED_SUBJECT_INT(choice_enabled_subject_, 0, "ad5x_ifs_fw_choice_enabled",
++                               subjects_);
++        UI_MANAGED_SUBJECT_INT(ok_subject_, 0, "ad5x_ifs_fw_ok", subjects_);
++    });
++}
++
++void Ad5xIfsFirmwareOverlay::deinit_subjects() {
++    deinit_subjects_base(subjects_);
++}
++
++void Ad5xIfsFirmwareOverlay::register_callbacks() {
++    register_xml_callbacks({
++        {"on_ad5x_ifs_fw_stock",
++         [](lv_event_t*) { get_ad5x_ifs_firmware_overlay().handle_switch("stock"); }},
++        {"on_ad5x_ifs_fw_klipper",
++         [](lv_event_t*) { get_ad5x_ifs_firmware_overlay().handle_switch("klipper"); }},
++        {"on_ad5x_ifs_fw_ok", [](lv_event_t*) { get_ad5x_ifs_firmware_overlay().handle_ok(); }},
++    });
++}
++
++void Ad5xIfsFirmwareOverlay::on_activate() {
++    OverlayBase::on_activate();
++
++    auto& m = fw::model();
++    m.start();
++    m.set_listener([this]() {
++        const auto& s = fw::model().status();
++        if (!s.state.empty()) {
++            note_file(s.state, s.phase, s.message, s.target, s.version);
++        }
++        refresh();
++    });
++
++    print_observer_ = ui::observe<const char*>(
++        get_printer_state().print_state().get_print_state_subject(), this,
++        [](Ad5xIfsFirmwareOverlay* self, const char*) { self->refresh(); },
++        get_printer_state().print_state().get_static_subjects_lifetime());
++
++    refresh();
++}
++
++void Ad5xIfsFirmwareOverlay::on_deactivating(DeactivateReason /*reason*/) {
++    // A switch keeps running without the screen; reopening (or waking) follows it again
++    fw::model().set_listener(nullptr);
++    print_observer_.reset();
++    stop_polling();
++    poll_in_flight_ = false;
++}
++
++// ============================================================================
++// STATUS
++// ============================================================================
++
++fw::IfsFirmwareStatus Ad5xIfsFirmwareOverlay::effective_status() const {
++    fw::IfsFirmwareStatus s = fw::model().status();
++    if (have_file_) {
++        s.state = file_state_;
++        s.phase = file_phase_;
++        s.message = file_message_;
++        s.target = file_target_;
++        s.version = file_version_;
++    }
++    // RAW_PRINT_STATE_OK: print_stats.state as Moonraker's request and the agent test it
++    s.print_state =
++        lv_subject_get_string(get_printer_state().print_state().get_print_state_subject());
++    s.following = following_;
++    if (!refusal_.empty()) {
++        s.state = "refused";
++        s.phase = "finished";
++        s.message = refusal_;
++        s.target = requested_target_;
++        s.version.clear();
++    } else if (pending_ || command_in_flight_) {
++        // The file still shows the switch before this one
++        s.state = "running";
++        s.phase = "checking";
++        s.target = requested_target_;
++        s.message.clear();
++        s.version.clear();
++    }
++    return s;
++}
++
++int Ad5xIfsFirmwareOverlay::seconds_waiting() const {
++    if (alive_at_ == std::chrono::steady_clock::time_point{}) {
++        return 0;
++    }
++    return static_cast<int>(std::chrono::duration_cast<std::chrono::seconds>(
++                                std::chrono::steady_clock::now() - alive_at_)
++                                .count());
++}
++
++void Ad5xIfsFirmwareOverlay::mark_alive() {
++    alive_at_ = std::chrono::steady_clock::now();
++}
++
++void Ad5xIfsFirmwareOverlay::note_file(const std::string& state, const std::string& phase,
++                                       const std::string& message, const std::string& target,
++                                       const std::string& version) {
++    have_file_ = true;
++    file_state_ = state;
++    file_phase_ = phase;
++    file_message_ = message;
++    file_target_ = target;
++    file_version_ = version;
++    if (pending_ && (state == "running" || state != sent_state_ || message != sent_message_ ||
++                     target != sent_target_ || version != sent_version_)) {
++        pending_ = false;
++    }
++    if (state == "running") {
++        mark_alive();
++        // Klipper is stopped on purpose for the switch: no "Klipper disconnected" dialog
++        // while the agent says it runs. Klipper's own start after it is still covered for
++        // the LONG window; a Klipper that stays away is reported by the view.
++        EmergencyStopOverlay::instance().suppress_recovery_dialog(
++            helix::recovery_suppression::LONG);
++    }
++}
++
++void Ad5xIfsFirmwareOverlay::refresh() {
++    if (!subjects_initialized_) {
++        return;
++    }
++    const fw::IfsFirmwareView v =
++        fw::ifs_firmware_view(effective_status(), fw::model().klippy_ready(), seconds_waiting());
++    lv_subject_set_int(&kind_subject_, static_cast<int>(v.kind));
++    lv_subject_copy_string(&title_subject_, v.title.c_str());
++    lv_subject_copy_string(&body_subject_, v.body.c_str());
++    lv_subject_set_int(&offer_stock_subject_, v.offer_stock ? 1 : 0);
++    lv_subject_set_int(&offer_klipper_subject_, v.offer_klipper ? 1 : 0);
++    lv_subject_set_int(&choice_enabled_subject_,
++                       v.choice_enabled && !command_in_flight_ && !following_ ? 1 : 0);
++    lv_subject_set_int(&ok_subject_, v.ok ? 1 : 0);
++
++    if (v.kind == fw::IfsFirmwareViewKind::Progress && visible_) {
++        start_polling();
++    } else {
++        stop_polling();
++    }
++}
++
++// ============================================================================
++// POLLING
++// ============================================================================
++
++void Ad5xIfsFirmwareOverlay::start_polling() {
++    if (poll_timer_) {
++        return;
++    }
++    poll_timer_.reset(lv_timer_create(
++        [](lv_timer_t* t) {
++            auto* self = static_cast<Ad5xIfsFirmwareOverlay*>(lv_timer_get_user_data(t));
++            // Klipper is stopped and started on purpose: no recovery dialog while this
++            // screen follows the switch, until Klipper is back (the view stops polling
++            // then) or the wait limit gives up
++            if (self->following_) {
++                EmergencyStopOverlay::instance().suppress_recovery_dialog(
++                    helix::recovery_suppression::LONG);
++            }
++            self->poll();
++            // Also the clock for the wait limit when no answer comes
++            self->refresh();
++        },
++        fw::kPollMs, this));
++    poll();
++}
++
++void Ad5xIfsFirmwareOverlay::stop_polling() {
++    poll_timer_.reset();
++}
++
++void Ad5xIfsFirmwareOverlay::poll() {
++    IMoonrakerClient* client = get_moonraker_client();
++    if (poll_in_flight_ || !client ||
++        client->get_connection_state() != ConnectionState::CONNECTED) {
++        return;
++    }
++    poll_in_flight_ = true;
++    const auto token = lifetime_.token();
++    client->send_jsonrpc(
++        fw::kStatusMethod, json::object(),
++        [this, token](const json& response) {
++            const json* result = json_util::find_member(response, "result");
++            json copy = result && result->is_object() ? *result : json::object();
++            token.defer("Ad5xIfsFirmwareOverlay::poll_done", [this, copy]() {
++                poll_in_flight_ = false;
++                apply_poll(copy);
++                refresh();
++            });
++        },
++        [this, token](const MoonrakerError& err) {
++            spdlog::debug("[AD5X IFS firmware] {} failed: {}", fw::kStatusMethod, err.message);
++            token.defer("Ad5xIfsFirmwareOverlay::poll_error",
++                        [this]() { poll_in_flight_ = false; });
++        },
++        fw::kPollTimeoutMs, /*silent=*/true);
++}
++
++void Ad5xIfsFirmwareOverlay::apply_poll(const json& result) {
++    const std::string state = json_util::safe_string(result, "state");
++    if (state.empty()) {
++        return;
++    }
++    note_file(state, json_util::safe_string(result, "phase"),
++              json_util::safe_string(result, "message"), json_util::safe_string(result, "target"),
++              json_util::safe_string(result, "version"));
++}
++
++// ============================================================================
++// COMMANDS
++// ============================================================================
++
++void Ad5xIfsFirmwareOverlay::handle_switch(const std::string& target) {
++    if ((target != "stock" && target != "klipper") || command_in_flight_ || following_) {
++        return;
++    }
++    const fw::IfsFirmwareView v =
++        fw::ifs_firmware_view(effective_status(), fw::model().klippy_ready(), seconds_waiting());
++    const bool offered = target == "stock" ? v.offer_stock : v.offer_klipper;
++    if (v.kind != fw::IfsFirmwareViewKind::Choose || !offered || !v.choice_enabled) {
++        return;
++    }
++    const fw::IfsFirmwareConfirm c = fw::ifs_firmware_confirm(target);
++    helix::ui::ConfirmOptions opts;
++    opts.owner_token = object_lifetime_.token();
++    helix::ui::modal_confirm(c.title.c_str(), c.body.c_str(), ModalSeverity::Warning,
++                             c.button.c_str(), [this, target]() { send(target); }, opts);
++}
++
++void Ad5xIfsFirmwareOverlay::send(const std::string& target) {
++    IMoonrakerClient* client = get_moonraker_client();
++    requested_target_ = target;
++    following_ = true;
++    refusal_.clear();
++    if (!client || client->get_connection_state() != ConnectionState::CONNECTED) {
++        refused(lv_tr("Not connected to the printer"));
++        return;
++    }
++    // What the file says now: the request has started once it says anything else
++    const fw::IfsFirmwareStatus before = effective_status();
++    sent_state_ = before.state;
++    sent_message_ = before.message;
++    sent_target_ = before.target;
++    sent_version_ = before.version;
++    pending_ = true;
++    command_in_flight_ = true;
++    mark_alive();
++    spdlog::info("[AD5X IFS firmware] {} target={}", fw::kSwitchMethod, target);
++    refresh();
++
++    // The agent stops Klipper about a second after the request, before the first
++    // poll can say the switch runs: suppress the recovery dialog from here on
++    EmergencyStopOverlay::instance().suppress_recovery_dialog(helix::recovery_suppression::LONG);
++    // Klipper comes back with or without `mcu ifs` and Happy Hare's objects: not a
++    // "hardware missing" notice (10 minutes also cover turning Happy Hare on after)
++    fw::expect_hardware_change(10 * 60 * 1000);
++
++    // The object's lifetime, not the screen's: a refusal is still shown after a reopen
++    const auto token = object_lifetime_.token();
++    client->send_jsonrpc(
++        fw::kSwitchMethod, json{{"target", target}},
++        [this, token](const json& response) {
++            const json* result = json_util::find_member(response, "result");
++            json copy = result && result->is_object() ? *result : json::object();
++            token.defer("Ad5xIfsFirmwareOverlay::request_done", [this, copy]() {
++                command_in_flight_ = false;
++                mark_alive();
++                apply_poll(copy);
++                refresh();
++            });
++        },
++        [this, token](const MoonrakerError& err) {
++            // "not while printing", "a switch is already running", ...
++            std::string message = err.message.empty() ? "request failed" : err.message;
++            token.defer("Ad5xIfsFirmwareOverlay::request_error",
++                        [this, message]() { refused(message); });
++        },
++        0, /*silent=*/true);
++}
++
++void Ad5xIfsFirmwareOverlay::refused(const std::string& message) {
++    spdlog::info("[AD5X IFS firmware] request refused: {}", message);
++    command_in_flight_ = false;
++    pending_ = false;
++    refusal_ = message;
++    fw::clear_expected_hardware_change();
++    refresh();
++}
++
++void Ad5xIfsFirmwareOverlay::handle_ok() {
++    following_ = false;
++    pending_ = false;
++    refusal_.clear();
++    alive_at_ = {};
++    fw::model().query();
++    refresh();
++}
++
++} // namespace helix::settings
+diff --git a/tests/unit/test_ad5x_ifs_firmware.cpp b/tests/unit/test_ad5x_ifs_firmware.cpp
+new file mode 100644
+index 0000000..0b2f818
+--- /dev/null
++++ b/tests/unit/test_ad5x_ifs_firmware.cpp
+@@ -0,0 +1,211 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include "ad5x_ifs_firmware_view.h"
++
++#include "../catch_amalgamated.hpp"
++
++using namespace helix::ad5x_ifs_firmware;
++
++namespace {
++
++/// A switch from this screen whose status file says @p state / @p phase.
++IfsFirmwareStatus followed(const std::string& state, const std::string& phase) {
++    IfsFirmwareStatus s;
++    s.firmware = "klipper";
++    s.switching = state == "running";
++    s.print_state = "standby";
++    s.following = true;
++    s.target = "stock";
++    s.state = state;
++    s.phase = phase;
++    return s;
++}
++
++IfsFirmwareStatus idle_on(const std::string& firmware) {
++    IfsFirmwareStatus s;
++    s.firmware = firmware;
++    s.print_state = "standby";
++    s.state = "none";
++    return s;
++}
++
++} // namespace
++
++TEST_CASE("the confirm dialog says what each switch does", "[ad5x_ifs_firmware]") {
++    const IfsFirmwareConfirm stock = ifs_firmware_confirm("stock");
++    CHECK(stock.title == "Switch the IFS to stock firmware?");
++    CHECK(stock.body == "Flashes Flashforge's firmware from this printer's backup (about a "
++                        "minute). Plugins that need Klipper firmware on the IFS (Happy Hare) "
++                        "will be turned off. Klipper restarts.");
++    CHECK(stock.button == "Switch");
++
++    const IfsFirmwareConfirm klipper = ifs_firmware_confirm("klipper");
++    CHECK(klipper.title == "Switch the IFS to Klipper firmware?");
++    CHECK(klipper.body == "Flashes the Klipper firmware that comes with this image (about a "
++                          "minute). Plugins stay as they are; ones that are off stay off. "
++                          "Klipper restarts.");
++    CHECK(klipper.button == "Switch");
++}
++
++TEST_CASE("writing shows the progress view without buttons", "[ad5x_ifs_firmware]") {
++    const IfsFirmwareView v = ifs_firmware_view(followed("running", "writing"), false, 20);
++    CHECK(v.kind == IfsFirmwareViewKind::Progress);
++    CHECK(v.title == "Switching IFS firmware…");
++    CHECK(v.body == "Writing…\nDon't switch the printer off.");
++    CHECK_FALSE(v.offer_stock);
++    CHECK_FALSE(v.offer_klipper);
++    CHECK_FALSE(v.ok);
++}
++
++TEST_CASE("a bootloader that doesn't answer asks for a replug", "[ad5x_ifs_firmware]") {
++    const IfsFirmwareView v = ifs_firmware_view(followed("running", "replug"), false, 0);
++    CHECK(v.kind == IfsFirmwareViewKind::Progress);
++    CHECK(v.title == "Switching IFS firmware…");
++    CHECK(v.body == "Unplug the IFS cable and plug it back in\nDon't switch the printer off.");
++}
++
++TEST_CASE("a running switch waits for Klipper after it finished", "[ad5x_ifs_firmware]") {
++    IfsFirmwareStatus s = followed("done", "finished");
++    s.version = "3.0.7";
++    const IfsFirmwareView v = ifs_firmware_view(s, false, 30);
++    CHECK(v.kind == IfsFirmwareViewKind::Progress);
++    CHECK(v.body == "Starting Klipper…\nDon't switch the printer off.");
++    CHECK_FALSE(v.ok);
++}
++
++TEST_CASE("a switch to stock reports the version the IFS answers", "[ad5x_ifs_firmware]") {
++    IfsFirmwareStatus s = followed("done", "finished");
++    s.firmware = "stock";
++    s.version = "3.0.7";
++    s.message = "IFS firmware: stock";
++    const IfsFirmwareView v = ifs_firmware_view(s, true, 0);
++    CHECK(v.kind == IfsFirmwareViewKind::Done);
++    CHECK(v.title == "IFS firmware switched");
++    CHECK(v.body == "IFS on stock firmware: v3.0.7 answers. The built-in IFS driver runs it; "
++                    "plugins that need Klipper firmware on the IFS are off.");
++    CHECK(v.ok);
++    CHECK_FALSE(v.offer_stock);
++    CHECK_FALSE(v.offer_klipper);
++}
++
++TEST_CASE("a switch to Klipper reports its version", "[ad5x_ifs_firmware]") {
++    IfsFirmwareStatus s = followed("done", "finished");
++    s.target = "klipper";
++    s.version = "v0.13.0-806";
++    const IfsFirmwareView v = ifs_firmware_view(s, true, 0);
++    CHECK(v.kind == IfsFirmwareViewKind::Done);
++    CHECK(v.body == "IFS on Klipper firmware: v0.13.0-806 answers. Plugins are as they were.");
++}
++
++TEST_CASE("a failed switch shows the agent's message", "[ad5x_ifs_firmware]") {
++    IfsFirmwareStatus s = followed("failed", "finished");
++    s.firmware = "unknown";
++    s.message = "stock 1.2.3: ifs.hex doesn't match md5sum.list";
++    const IfsFirmwareView v = ifs_firmware_view(s, true, 0);
++    CHECK(v.kind == IfsFirmwareViewKind::Failed);
++    CHECK(v.title == "IFS firmware switch failed");
++    CHECK(v.body == "stock 1.2.3: ifs.hex doesn't match md5sum.list");
++    CHECK(v.ok);
++}
++
++TEST_CASE("a refused switch says why", "[ad5x_ifs_firmware]") {
++    IfsFirmwareStatus s = followed("refused", "finished");
++    s.message = "a print is running";
++    const IfsFirmwareView v = ifs_firmware_view(s, true, 0);
++    CHECK(v.kind == IfsFirmwareViewKind::Failed);
++    CHECK(v.title == "IFS firmware switch refused");
++    CHECK(v.body == "a print is running");
++    CHECK(v.ok);
++}
++
++TEST_CASE("the choice offers the other firmware", "[ad5x_ifs_firmware]") {
++    const IfsFirmwareView on_klipper = ifs_firmware_view(idle_on("klipper"), true, 0);
++    CHECK(on_klipper.kind == IfsFirmwareViewKind::Choose);
++    CHECK(on_klipper.title == "IFS firmware: Klipper");
++    CHECK(on_klipper.body == "The IFS runs Klipper firmware.");
++    CHECK(on_klipper.offer_stock);
++    CHECK_FALSE(on_klipper.offer_klipper);
++    CHECK(on_klipper.choice_enabled);
++    CHECK_FALSE(on_klipper.ok);
++
++    const IfsFirmwareView on_stock = ifs_firmware_view(idle_on("stock"), true, 0);
++    CHECK(on_stock.title == "IFS firmware: Stock");
++    CHECK(on_stock.body == "The IFS runs Flashforge's firmware.");
++    CHECK_FALSE(on_stock.offer_stock);
++    CHECK(on_stock.offer_klipper);
++    CHECK(on_stock.choice_enabled);
++}
++
++TEST_CASE("an IFS that answers nothing after a failed switch offers both", "[ad5x_ifs_firmware]") {
++    IfsFirmwareStatus s = idle_on("unknown");
++    s.target = "stock";
++    s.state = "failed";
++    s.phase = "finished";
++    s.message = "the IFS doesn't answer";
++    const IfsFirmwareView v = ifs_firmware_view(s, true, 0);
++    CHECK(v.kind == IfsFirmwareViewKind::Choose);
++    CHECK(v.title == "IFS firmware: Unknown");
++    CHECK(v.body == "The IFS doesn't answer as either firmware. Switch it to one of them.\n"
++                    "Last switch: the IFS doesn't answer");
++    CHECK(v.offer_stock);
++    CHECK(v.offer_klipper);
++    CHECK(v.choice_enabled);
++}
++
++TEST_CASE("no switch during a print", "[ad5x_ifs_firmware]") {
++    for (const char* state : {"printing", "paused"}) {
++        IfsFirmwareStatus s = idle_on("klipper");
++        s.print_state = state;
++        const IfsFirmwareView v = ifs_firmware_view(s, true, 0);
++        CHECK(v.kind == IfsFirmwareViewKind::Choose);
++        CHECK(v.offer_stock);
++        CHECK_FALSE(v.choice_enabled);
++        CHECK(v.body == "The IFS runs Klipper firmware.\nCan't switch during a print.");
++    }
++}
++
++TEST_CASE("no choice while Klipper is not ready", "[ad5x_ifs_firmware]") {
++    const IfsFirmwareView v = ifs_firmware_view(idle_on("klipper"), false, 0);
++    CHECK(v.kind == IfsFirmwareViewKind::Choose);
++    CHECK(v.body == "Waiting for Klipper…");
++    CHECK_FALSE(v.offer_stock);
++    CHECK_FALSE(v.offer_klipper);
++}
++
++TEST_CASE("a switch someone else started shows its progress", "[ad5x_ifs_firmware]") {
++    IfsFirmwareStatus s = idle_on("klipper");
++    s.switching = true;
++    s.state = "running";
++    s.phase = "verifying";
++    const IfsFirmwareView v = ifs_firmware_view(s, true, 0);
++    CHECK(v.kind == IfsFirmwareViewKind::Progress);
++    CHECK(v.body == "Checking the IFS…\nDon't switch the printer off.");
++}
++
++TEST_CASE("the screen stops waiting for a Klipper that does not come back",
++          "[ad5x_ifs_firmware]") {
++    IfsFirmwareStatus s = followed("done", "starting");
++    CHECK(ifs_firmware_view(s, false, 180).kind == IfsFirmwareViewKind::Progress);
++
++    const IfsFirmwareView v = ifs_firmware_view(s, false, 181);
++    CHECK(v.kind == IfsFirmwareViewKind::Failed);
++    CHECK(v.body == "Klipper did not start again (ad5x-mcu status, klippy.log)");
++    CHECK(v.ok);
++    CHECK_FALSE(v.offer_stock);
++    CHECK_FALSE(v.offer_klipper);
++}
++
++TEST_CASE("a request nobody picks up stops the wait too", "[ad5x_ifs_firmware]") {
++    IfsFirmwareStatus s = followed("running", "checking");
++    const IfsFirmwareView v = ifs_firmware_view(s, true, 181);
++    CHECK(v.kind == IfsFirmwareViewKind::Failed);
++    CHECK(v.body == "The switch did not start (/data/ad5x/kiln-update/agent.log)");
++    CHECK(v.ok);
++}
++
++TEST_CASE("the row's value names the firmware", "[ad5x_ifs_firmware]") {
++    CHECK(ifs_firmware_label("stock") == "Stock");
++    CHECK(ifs_firmware_label("klipper") == "Klipper");
++    CHECK(ifs_firmware_label("unknown") == "Unknown");
++    CHECK(ifs_firmware_label("") == "Unknown");
++}
+diff --git a/ui_xml/settings_ad5x_ifs_firmware_overlay.xml b/ui_xml/settings_ad5x_ifs_firmware_overlay.xml
+new file mode 100644
+index 0000000..4c0d7e8
+--- /dev/null
++++ b/ui_xml/settings_ad5x_ifs_firmware_overlay.xml
+@@ -0,0 +1,73 @@
++<?xml version="1.0"?>
++<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
++<!-- Settings > Devices > IFS firmware on the AD5X: Stock or Klipper firmware on the IFS -->
++<!-- Ad5xIfsFirmwareOverlay sets every ad5x_ifs_fw_* subject from ifs_firmware_view(): -->
++<!-- the choice, the progress while the switch runs (Klipper is away), the result. -->
++<component>
++  <styles>
++    <style name="pad_standard" pad_left="#space_lg" pad_right="#space_lg" pad_top="#space_md" pad_bottom="#space_md"/>
++    <style name="pad_micro" pad_left="#space_md" pad_right="#space_md" pad_top="#space_sm" pad_bottom="#space_sm"/>
++    <style name="text_failed" text_color="#danger"/>
++  </styles>
++  <view name="settings_ad5x_ifs_firmware_overlay" extends="overlay_panel" title="IFS firmware" bg_color="#screen_bg">
++    <!-- Content Area - no padding, rows handle their own -->
++    <lv_obj name="overlay_content"
++            width="100%" flex_grow="1" style_pad_top="0" style_pad_left="0" style_pad_right="0"
++            style_pad_bottom="#space_lg" scrollable="true" flex_flow="column">
++      <setting_group name="ad5x_ifs_fw_group">
++        <!-- Title, with a spinner while the switch runs (kind 1) -->
++        <lv_obj name="ad5x_ifs_fw_title_row"
++                width="100%" height="content" flex_flow="row" style_flex_cross_place="center" style_pad_gap="#space_sm"
++                style_bg_opa="0" style_border_width="0" scrollable="false">
++          <bind_style_if_eq name="pad_micro" subject="ui_breakpoint" ref_value="0"/>
++          <bind_style_if_ge name="pad_standard" subject="ui_breakpoint" ref_value="1"/>
++          <spinner size="sm">
++            <bind_flag_if_not_eq subject="ad5x_ifs_fw_kind" flag="hidden" ref_value="1"/>
++          </spinner>
++          <icon src="check_circle" size="xs" variant="success">
++            <bind_flag_if_not_eq subject="ad5x_ifs_fw_kind" flag="hidden" ref_value="2"/>
++          </icon>
++          <icon src="alert" size="xs" variant="warning">
++            <bind_flag_if_not_eq subject="ad5x_ifs_fw_kind" flag="hidden" ref_value="3"/>
++          </icon>
++          <text_body name="ad5x_ifs_fw_title" width="0" flex_grow="1" bind_text="ad5x_ifs_fw_title" long_mode="wrap"/>
++        </lv_obj>
++        <!-- What the IFS runs, the phase, the result or why the switch is off -->
++        <lv_obj name="ad5x_ifs_fw_body_row"
++                width="100%" height="content" style_bg_opa="0" style_border_width="0" scrollable="false">
++          <bind_style_if_eq name="pad_micro" subject="ui_breakpoint" ref_value="0"/>
++          <bind_style_if_ge name="pad_standard" subject="ui_breakpoint" ref_value="1"/>
++          <text_small name="ad5x_ifs_fw_body" width="100%" bind_text="ad5x_ifs_fw_body" long_mode="wrap">
++            <bind_style_if_eq name="text_failed" subject="ad5x_ifs_fw_kind" ref_value="3"/>
++          </text_small>
++        </lv_obj>
++        <!-- The switch to the other firmware (both when the IFS answers neither), or OK after the result -->
++        <lv_obj name="ad5x_ifs_fw_buttons_row"
++                width="100%" height="content" flex_flow="row_wrap" style_flex_main_place="end" style_pad_gap="#space_md"
++                style_bg_opa="0" style_border_width="0" scrollable="false">
++          <bind_style_if_eq name="pad_micro" subject="ui_breakpoint" ref_value="0"/>
++          <bind_style_if_ge name="pad_standard" subject="ui_breakpoint" ref_value="1"/>
++          <bind_flag_if cond="ad5x_ifs_fw_offer_stock eq 0 and ad5x_ifs_fw_offer_klipper eq 0 and ad5x_ifs_fw_ok eq 0"
++                        flag="hidden"/>
++          <ui_button name="btn_ad5x_ifs_fw_stock"
++                     width="content" height="#button_height_sm" style_min_width="160" text="Switch to Stock" variant="primary">
++            <bind_flag_if_eq subject="ad5x_ifs_fw_offer_stock" flag="hidden" ref_value="0"/>
++            <bind_state_if_eq subject="ad5x_ifs_fw_choice_enabled" state="disabled" ref_value="0"/>
++            <event_cb trigger="clicked" callback="on_ad5x_ifs_fw_stock"/>
++          </ui_button>
++          <ui_button name="btn_ad5x_ifs_fw_klipper"
++                     width="content" height="#button_height_sm" style_min_width="160" text="Switch to Klipper" variant="primary">
++            <bind_flag_if_eq subject="ad5x_ifs_fw_offer_klipper" flag="hidden" ref_value="0"/>
++            <bind_state_if_eq subject="ad5x_ifs_fw_choice_enabled" state="disabled" ref_value="0"/>
++            <event_cb trigger="clicked" callback="on_ad5x_ifs_fw_klipper"/>
++          </ui_button>
++          <ui_button name="btn_ad5x_ifs_fw_ok"
++                     width="content" height="#button_height_sm" style_min_width="120" text="OK" variant="primary">
++            <bind_flag_if_eq subject="ad5x_ifs_fw_ok" flag="hidden" ref_value="0"/>
++            <event_cb trigger="clicked" callback="on_ad5x_ifs_fw_ok"/>
++          </ui_button>
++        </lv_obj>
++      </setting_group>
++    </lv_obj>
++  </view>
++</component>
+diff --git a/ui_xml/settings_hardware_overlay.xml b/ui_xml/settings_hardware_overlay.xml
+index e9991e1..911397b 100644
+--- a/ui_xml/settings_hardware_overlay.xml
++++ b/ui_xml/settings_hardware_overlay.xml
+@@ -75,6 +75,12 @@
+                             subject="printer_has_led" callback="on_chamber_light_fitted_toggled">
+           <bind_flag_if_eq subject="printer_has_led_object" flag="hidden" ref_value="0"/>
+         </setting_toggle_row>
++        <!-- AD5X: Flashforge's stock firmware or Klipper firmware on the IFS (ifs_firmware object) -->
++        <setting_action_row name="row_ad5x_ifs_firmware"
++                            label="IFS firmware" icon="swap_horizontal" callback="on_ad5x_ifs_firmware_clicked"
++                            bind_description="ad5x_ifs_firmware_text" description_min_bp="0">
++          <bind_flag_if_eq subject="settings_show_ad5x_ifs_firmware" flag="hidden" ref_value="0"/>
++        </setting_action_row>
+         <!-- ================================================================== -->
+         <!-- POWER DEVICES (hidden when no power devices discovered) -->
+         <!-- ================================================================== -->
+diff --git a/ui_xml/translations/en.xml b/ui_xml/translations/en.xml
+index ecc109e..667b3a4 100644
+--- a/ui_xml/translations/en.xml
++++ b/ui_xml/translations/en.xml
+@@ -587,6 +587,7 @@
+   <translation tag="Can&apos;t move filament while the print is paused" en="Can&apos;t move filament while the print is paused"/>
+   <translation tag="Can&apos;t reach this printer. Save anyway?" en="Can&apos;t reach this printer. Save anyway?"/>
+   <translation tag="Can&apos;t read filament RFID tag" en="Can&apos;t read filament RFID tag"/>
++  <translation tag="Can&apos;t switch during a print." en="Can&apos;t switch during a print."/>
+   <translation tag="Cancel" en="Cancel"/>
+   <translation tag="Cancel Escalation" en="Cancel Escalation"/>
+   <translation tag="Cancel Print" en="Cancel Print"/>
+@@ -700,6 +701,7 @@
+   <translation tag="Checking for webcam..." en="Checking for webcam..."/>
+   <translation tag="Checking plugin" en="Checking plugin"/>
+   <translation tag="Checking slots..." en="Checking slots..."/>
++  <translation tag="Checking the IFS…" en="Checking the IFS…"/>
+   <translation tag="Checking the PEI sheet is off..." en="Checking the PEI sheet is off..."/>
+   <translation tag="Checking the printer..." en="Checking the printer..."/>
+   <translation tag="Checking timelapse plugin..." en="Checking timelapse plugin..."/>
+@@ -1087,6 +1089,7 @@
+   <translation tag="Docking tool" en="Docking tool"/>
+   <translation tag="Don&apos;t Save" en="Don&apos;t Save"/>
+   <translation tag="Don&apos;t ask again" en="Don&apos;t ask again"/>
++  <translation tag="Don&apos;t switch the printer off." en="Don&apos;t switch the printer off."/>
+   <translation tag="Done" en="Done"/>
+   <translation tag="Door" en="Door"/>
+   <translation tag="Door Open" en="Door Open"/>
+@@ -1544,6 +1547,8 @@
+   <translation tag="FlashForge Creator 5" en="FlashForge Creator 5"/>
+   <translation tag="FlashForge Creator 5 Pro" en="FlashForge Creator 5 Pro"/>
+   <translation tag="FlashForge IFS" en="FlashForge IFS"/>
++  <translation tag="Flashes Flashforge&apos;s firmware from this printer&apos;s backup (about a minute). Plugins that need Klipper firmware on the IFS (Happy Hare) will be turned off. Klipper restarts." en="Flashes Flashforge&apos;s firmware from this printer&apos;s backup (about a minute). Plugins that need Klipper firmware on the IFS (Happy Hare) will be turned off. Klipper restarts."/>
++  <translation tag="Flashes the Klipper firmware that comes with this image (about a minute). Plugins stay as they are; ones that are off stay off. Klipper restarts." en="Flashes the Klipper firmware that comes with this image (about a minute). Plugins stay as they are; ones that are off stay off. Klipper restarts."/>
+   <translation tag="Flip" en="Flip"/>
+   <translation tag="Flip Clock" en="Flip Clock"/>
+   <translation tag="Flip the spools" en="Flip the spools"/>
+@@ -1786,6 +1791,15 @@
+   <translation tag="Hyperspace" en="Hyperspace"/>
+   <translation tag="I understand" en="I understand"/>
+   <translation tag="ID (optional)" en="ID (optional)"/>
++  <translation tag="IFS firmware" en="IFS firmware"/>
++  <translation tag="IFS firmware switch" en="IFS firmware switch"/>
++  <translation tag="IFS firmware switch failed" en="IFS firmware switch failed"/>
++  <translation tag="IFS firmware switch refused" en="IFS firmware switch refused"/>
++  <translation tag="IFS firmware switched" en="IFS firmware switched"/>
++  <translation tag="IFS on Klipper firmware." en="IFS on Klipper firmware."/>
++  <translation tag="IFS on Klipper firmware: {} answers." en="IFS on Klipper firmware: {} answers."/>
++  <translation tag="IFS on stock firmware." en="IFS on stock firmware."/>
++  <translation tag="IFS on stock firmware: {} answers." en="IFS on stock firmware: {} answers."/>
+   <translation tag="IFS updates without polling" en="IFS updates without polling"/>
+   <translation tag="IMPORT FROM USB" en="IMPORT FROM USB"/>
+   <translation tag="INDX dock positions are not calibrated" en="INDX dock positions are not calibrated"/>
+@@ -1927,6 +1941,7 @@
+   <translation tag="Klipper Error" en="Klipper Error"/>
+   <translation tag="Klipper already reports the ACE slots." en="Klipper already reports the ACE slots."/>
+   <translation tag="Klipper could not load its configuration. Fix the setting below in the printer&apos;s config files, then restart Klipper." en="Klipper could not load its configuration. Fix the setting below in the printer&apos;s config files, then restart Klipper."/>
++  <translation tag="Klipper did not start again (ad5x-mcu status, klippy.log)" en="Klipper did not start again (ad5x-mcu status, klippy.log)"/>
+   <translation tag="Klipper disconnected" en="Klipper disconnected"/>
+   <translation tag="Klipper failed to start with the skip macros, so they were removed" en="Klipper failed to start with the skip macros, so they were removed"/>
+   <translation tag="Klipper failed to start. Remove the helix_skips.cfg include from printer.cfg." en="Klipper failed to start. Remove the helix_skips.cfg include from printer.cfg."/>
+@@ -1982,6 +1997,7 @@
+   <translation tag="Last measured" en="Last measured"/>
+   <translation tag="Last print canceled" en="Last print canceled"/>
+   <translation tag="Last print failed" en="Last print failed"/>
++  <translation tag="Last switch: {}" en="Last switch: {}"/>
+   <translation tag="Later" en="Later"/>
+   <translation tag="Layer" en="Layer"/>
+   <translation tag="Layer 2" en="Layer 2"/>
+@@ -2421,6 +2437,7 @@
+   <translation tag="No prints this week" en="No prints this week"/>
+   <translation tag="No prints yet" en="No prints yet"/>
+   <translation tag="No profiles available" en="No profiles available"/>
++  <translation tag="No result (ad5x-mcu status)" en="No result (ad5x-mcu status)"/>
+   <translation tag="No sensor fitted for this distance" en="No sensor fitted for this distance"/>
+   <translation tag="No sensors detected" en="No sensors detected"/>
+   <translation tag="No shared peaks" en="No shared peaks"/>
+@@ -2710,6 +2727,7 @@
+   <translation tag="Plugin removed. A config file needs attention - check the HelixScreen log for details." en="Plugin removed. A config file needs attention - check the HelixScreen log for details."/>
+   <translation tag="Plugin uninstalled successfully." en="Plugin uninstalled successfully."/>
+   <translation tag="Plugins" en="Plugins"/>
++  <translation tag="Plugins are as they were." en="Plugins are as they were."/>
+   <translation tag="Point camera at QR code on spool" en="Point camera at QR code on spool"/>
+   <translation tag="Polymaker" en="Polymaker"/>
+   <translation tag="Poor Accuracy" en="Poor Accuracy"/>
+@@ -3588,6 +3606,7 @@
+   <translation tag="Start print anyway?" en="Start print anyway?"/>
+   <translation tag="Start the calibration again" en="Start the calibration again"/>
+   <translation tag="Started" en="Started"/>
++  <translation tag="Starting Klipper…" en="Starting Klipper…"/>
+   <translation tag="Starting Print..." en="Starting Print..."/>
+   <translation tag="Starting download..." en="Starting download..."/>
+   <translation tag="Starting nozzle clean..." en="Starting nozzle clean..."/>
+@@ -3611,6 +3630,7 @@
+   <translation tag="Still reading the printer&apos;s lane record. Try again in a moment." en="Still reading the printer&apos;s lane record. Try again in a moment."/>
+   <translation tag="Still saving this spool…" en="Still saving this spool…"/>
+   <translation tag="Still working... taking longer than usual" en="Still working... taking longer than usual"/>
++  <translation tag="Stock" en="Stock"/>
+   <translation tag="Stop" en="Stop"/>
+   <translation tag="Stop Drying" en="Stop Drying"/>
+   <translation tag="Stop Print?" en="Stop Print?"/>
+@@ -3627,6 +3647,7 @@
+   <translation tag="Stopped between Spool and Lane" en="Stopped between Spool and Lane"/>
+   <translation tag="Stopped drying %s" en="Stopped drying %s"/>
+   <translation tag="Stopped. Restart Moonraker to start it again." en="Stopped. Restart Moonraker to start it again."/>
++  <translation tag="Stopping Klipper…" en="Stopping Klipper…"/>
+   <translation tag="Stops all motion. Requires firmware restart." en="Stops all motion. Requires firmware restart."/>
+   <translation tag="Storage" en="Storage"/>
+   <translation tag="Storage report" en="Storage report"/>
+@@ -3642,12 +3663,17 @@
+   <translation tag="Surfaces inherit app background tokens for light and dark modes." en="Surfaces inherit app background tokens for light and dark modes."/>
+   <translation tag="Swap to another slot automatically when one runs out" en="Swap to another slot automatically when one runs out"/>
+   <translation tag="Sweep" en="Sweep"/>
++  <translation tag="Switch" en="Switch"/>
+   <translation tag="Switch Printer" en="Switch Printer"/>
+   <translation tag="Switch Sensors" en="Switch Sensors"/>
+   <translation tag="Switch a power device on or off" en="Switch a power device on or off"/>
+   <translation tag="Switch between light and dark themes" en="Switch between light and dark themes"/>
+   <translation tag="Switch spools at each tool change" en="Switch spools at each tool change"/>
++  <translation tag="Switch the IFS to Klipper firmware?" en="Switch the IFS to Klipper firmware?"/>
++  <translation tag="Switch the IFS to stock firmware?" en="Switch the IFS to stock firmware?"/>
+   <translation tag="Switch the active tool or extruder" en="Switch the active tool or extruder"/>
++  <translation tag="Switch to Klipper" en="Switch to Klipper"/>
++  <translation tag="Switch to Stock" en="Switch to Stock"/>
+   <translation tag="Switch to a backup slot on runout" en="Switch to a backup slot on runout"/>
+   <translation tag="Switch to a matching slot on runout" en="Switch to a matching slot on runout"/>
+   <translation tag="Switch to a matching spool when one runs out" en="Switch to a matching spool when one runs out"/>
+@@ -3655,6 +3681,7 @@
+   <translation tag="Switch to {}?" en="Switch to {}?"/>
+   <translation tag="Switched to {}" en="Switched to {}"/>
+   <translation tag="Switches to another spool on runout" en="Switches to another spool on runout"/>
++  <translation tag="Switching IFS firmware…" en="Switching IFS firmware…"/>
+   <translation tag="Switching back to PID changes how this heater is controlled, then calibrates it. That takes several minutes at temperature." en="Switching back to PID changes how this heater is controlled, then calibrates it. That takes several minutes at temperature."/>
+   <translation tag="Switching back to PID requires a config change and Klipper restart." en="Switching back to PID requires a config change and Klipper restart."/>
+   <translation tag="Switching heater control to MPC. Klipper will restart." en="Switching heater control to MPC. Klipper will restart."/>
+@@ -3763,6 +3790,9 @@
+   <translation tag="The CFS ran out of filament in {}. Printing continues on what is left in the tube." en="The CFS ran out of filament in {}. Printing continues on what is left in the tube."/>
+   <translation tag="The CFS ran out of filament. Printing continues on what is left in the tube." en="The CFS ran out of filament. Printing continues on what is left in the tube."/>
+   <translation tag="The HelixPrint plugin enables fast G-code modifications directly on your printer—like skipping bed mesh for quick reprints." en="The HelixPrint plugin enables fast G-code modifications directly on your printer—like skipping bed mesh for quick reprints."/>
++  <translation tag="The IFS doesn&apos;t answer as either firmware. Switch it to one of them." en="The IFS doesn&apos;t answer as either firmware. Switch it to one of them."/>
++  <translation tag="The IFS runs Flashforge&apos;s firmware." en="The IFS runs Flashforge&apos;s firmware."/>
++  <translation tag="The IFS runs Klipper firmware." en="The IFS runs Klipper firmware."/>
+   <translation tag="The IFS state file can&apos;t be read." en="The IFS state file can&apos;t be read."/>
+   <translation tag="The Moonraker timelapse plugin is installed. Set how it records in the timelapse settings." en="The Moonraker timelapse plugin is installed. Set how it records in the timelapse settings."/>
+   <translation tag="The PEI sheet is still on the bed. Take it off, then tap Next." en="The PEI sheet is still on the bed. Take it off, then tap Next."/>
+@@ -3777,6 +3807,7 @@
+   <translation tag="The bed was reported dirty, so this print cannot resume." en="The bed was reported dirty, so this print cannot resume."/>
+   <translation tag="The buffer may be disconnected, stuck, or faulty. Check it before retrying" en="The buffer may be disconnected, stuck, or faulty. Check it before retrying"/>
+   <translation tag="The buffer saw no movement for 16 seconds. Check for a blockage between the CFS and the extruder, or a stuck buffer" en="The buffer saw no movement for 16 seconds. Check for a blockage between the CFS and the extruder, or a stuck buffer"/>
++  <translation tag="The built-in IFS driver runs it; plugins that need Klipper firmware on the IFS are off." en="The built-in IFS driver runs it; plugins that need Klipper firmware on the IFS are off."/>
+   <translation tag="The camera thought it saw something on the bed, so the printer stopped before printing. If the bed is clear, it was a false alarm." en="The camera thought it saw something on the bed, so the printer stopped before printing. If the bed is clear, it was a false alarm."/>
+   <translation tag="The carriage was not put back: check which tool is mounted" en="The carriage was not put back: check which tool is mounted"/>
+   <translation tag="The chamber heater can run a filament drying cycle. Start one from the drying dialog." en="The chamber heater can run a filament drying cycle. Start one from the drying dialog."/>
+@@ -3889,6 +3920,7 @@
+   <translation tag="The screen will lose its connection to the printer for a few seconds." en="The screen will lose its connection to the printer for a few seconds."/>
+   <translation tag="The sensor in this CFS unit cannot be read. Check its connection, or the unit may need service" en="The sensor in this CFS unit cannot be read. Check its connection, or the unit may need service"/>
+   <translation tag="The speed of one fan you choose" en="The speed of one fan you choose"/>
++  <translation tag="The switch did not start (/data/ad5x/kiln-update/agent.log)" en="The switch did not start (/data/ad5x/kiln-update/agent.log)"/>
+   <translation tag="The time, date, and system uptime" en="The time, date, and system uptime"/>
+   <translation tag="The timelapse or logs folder overlaps a protected folder, so cleanup is off." en="The timelapse or logs folder overlaps a protected folder, so cleanup is off."/>
+   <translation tag="The timelapse plugin is installed. Making videos also needs ffmpeg, which is not installed on this printer." en="The timelapse plugin is installed. Making videos also needs ffmpeg, which is not installed on this printer."/>
+@@ -4194,6 +4226,7 @@
+   <translation tag="Unlock" en="Unlock"/>
+   <translation tag="Unmapped" en="Unmapped"/>
+   <translation tag="Unmount" en="Unmount"/>
++  <translation tag="Unplug the IFS cable and plug it back in" en="Unplug the IFS cable and plug it back in"/>
+   <translation tag="Unretract Extra" en="Unretract Extra"/>
+   <translation tag="Unretract Speed" en="Unretract Speed"/>
+   <translation tag="Unsaved changes" en="Unsaved changes"/>
+@@ -4293,6 +4326,7 @@
+   <translation tag="Wait for the running INDX operation to finish" en="Wait for the running INDX operation to finish"/>
+   <translation tag="Wait until the print finishes" en="Wait until the print finishes"/>
+   <translation tag="Waiting for %s to finish. One heater at a time." en="Waiting for %s to finish. One heater at a time."/>
++  <translation tag="Waiting for Klipper…" en="Waiting for Klipper…"/>
+   <translation tag="Waiting for Moonraker..." en="Waiting for Moonraker..."/>
+   <translation tag="Waiting for another box to finish." en="Waiting for another box to finish."/>
+   <translation tag="Waiting for bed temperature..." en="Waiting for bed temperature..."/>
+@@ -4376,6 +4410,7 @@
+   <translation tag="Wizard Error" en="Wizard Error"/>
+   <translation tag="Working..." en="Working..."/>
+   <translation tag="Write failed at chunk {}" en="Write failed at chunk {}"/>
++  <translation tag="Writing…" en="Writing…"/>
+   <translation tag="Wrong PIN" en="Wrong PIN"/>
+   <translation tag="Wrong State" en="Wrong State"/>
+   <translation tag="Wrong media" en="Wrong media"/>
+-- 
+2.43.0
+

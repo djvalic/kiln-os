@@ -24,6 +24,8 @@ define AD5X_SYSTEM_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/usr/bin/ad5x-unit-cfg
 	$(INSTALL) -D -m 0755 $(AD5X_SYSTEM_TOOLS)/mcu_version.py \
 		$(TARGET_DIR)/usr/bin/ad5x-mcu-version
+	$(INSTALL) -D -m 0755 $(AD5X_SYSTEM_TOOLS)/ifs_f19.py \
+		$(TARGET_DIR)/usr/bin/ad5x-ifs-f19
 	$(INSTALL) -D -m 0755 $(AD5X_SYSTEM_TOOLS)/flash_iap.py \
 		$(TARGET_DIR)/usr/bin/ad5x-flash-iap
 	ln -sf ad5x-flash-iap $(TARGET_DIR)/usr/bin/ad5x-flash-ifs
@@ -40,6 +42,8 @@ define AD5X_SYSTEM_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/usr/lib/ad5x/kernel.sh
 	$(INSTALL) -D -m 0644 $(@D)/lib/apps.sh \
 		$(TARGET_DIR)/usr/lib/ad5x/apps.sh
+	$(INSTALL) -D -m 0644 $(@D)/lib/ifs-plugins.sh \
+		$(TARGET_DIR)/usr/lib/ad5x/ifs-plugins.sh
 	$(INSTALL) -D -m 0644 $(@D)/lib/dev-root.sh \
 		$(TARGET_DIR)/usr/lib/ad5x/dev-root.sh
 	$(INSTALL) -D -m 0644 $(@D)/lib/logs.sh \

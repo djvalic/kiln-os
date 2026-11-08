@@ -35,20 +35,30 @@
 # $STAGE and used only when it is a plain file there (regular, not a link,
 # one name), so a link or a FIFO klipper puts in $D can't make root read
 # another file or wait forever. Only checked names reach the log.
+# Also: "ifs-firmware" (stock|klipper, written by Klipper's ad5x_ifs): stops
+# Klipper, runs "ad5x-mcu ifs-firmware", starts Klipper again whatever came
+# out (not while printing). The request is staged like an install's.
+# Progress in $IFSD/ifs-firmware.status, written only through
+# "ad5x-mcu ifs-status": root's own folder, readable by all, so klipper
+# can't put a link or a FIFO where root writes or reads it.
 # "S68ad5x-update-agent once": one round of the loop (tests); AD5X_LIB
 # overrides /usr/lib/ad5x (tools/test_kernel_fallback.sh).
+# Test overrides: AD5X_DATA, AD5X_LIB, AD5X_KLIPPER_INIT, AD5X_PRINT_STATE.
 
 # Files this creates are readable by klipper and www-data, whoever started
 # it (a root SSH session may run with umask 077; issue #31)
 umask 022
 
-D=/data/ad5x/kiln-update
+D=${AD5X_DATA:-/data}/ad5x/kiln-update
 PID=/run/ad5x-update-agent.pid
 LOG=$D/agent.log
 # Root-only (0700), on the same file system as $D (a move is a rename)
-STAGE=/data/ad5x/kiln-stage
+STAGE=${AD5X_DATA:-/data}/ad5x/kiln-stage
+# Root's (0755): the IFS firmware switch's status
+IFSD=${AD5X_DATA:-/data}/ad5x/kiln-status
 . ${AD5X_LIB:-/usr/lib/ad5x}/apps.sh
 . ${AD5X_LIB:-/usr/lib/ad5x}/slot.sh
+KINIT=${AD5X_KLIPPER_INIT:-/etc/init.d/S61klipper}
 
 log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >> $LOG; }
 
@@ -57,6 +67,8 @@ started_up() { [ -z "$SLOT" ] || [ "$(read_flag)" = "$(flag_for $SLOT)" ]; }
 
 # Klipper's print_stats state through Moonraker; empty without an answer
 print_state() {
+	# tests: AD5X_PRINT_STATE stands in for Moonraker
+	if [ -n "$AD5X_PRINT_STATE" ]; then echo "$AD5X_PRINT_STATE"; return; fi
 	wget -q -T 5 -O- 'http://127.0.0.1:7125/printer/objects/query?print_stats=state' \
 		2>/dev/null | sed -n 's/.*"state": *"\([a-z_]*\)".*/\1/p' | head -n 1
 }
@@ -66,6 +78,7 @@ printing() { case "$(print_state)" in printing|paused) return 0 ;; esac; return 
 # Moonraker's klippy_state (ready, startup, shutdown, error, disconnected);
 # empty when Moonraker gives no answer
 klippy_state() {
+	if [ -n "$AD5X_PRINT_STATE" ]; then echo ready; return; fi	# tests
 	wget -q -T 5 -O- 'http://127.0.0.1:7125/server/info' 2>/dev/null |
 		sed -n 's/.*"klippy_state": *"\([a-z_]*\)".*/\1/p' | head -n 1
 }
@@ -201,6 +214,9 @@ agent_once() {
 			/etc/init.d/S62moonraker restart >> $LOG 2>&1
 		fi
 	fi
+	if [ -e $D/ifs-firmware ] || [ -L $D/ifs-firmware ]; then
+		handle_ifs_firmware
+	fi
 	if [ -f $D/kernel-retry ]; then
 		rm -f $D/kernel-retry
 		if busy "kernel retry"; then
@@ -299,6 +315,45 @@ install_request() {
 	fi
 }
 
+ifs_state() { sed -n 's/^state=//p' $IFSD/ifs-firmware.status 2>/dev/null; }
+
+# handle_ifs_firmware: the "ifs-firmware" request, once
+handle_ifs_firmware() {
+	local req t
+	if ! req=$(stage ifs-firmware); then
+		log "ignored an IFS firmware request that is not a plain file"
+		ad5x-mcu ifs-status state=failed phase=finished message="bad request"; return
+	fi
+	t=$(head -c 16 "$req" | sed -n 1p)
+	unstage "$req"
+	case "$t" in
+	stock|klipper) ;;
+	*) log "ignored an IFS firmware request that is neither stock nor klipper"
+		ad5x-mcu ifs-status state=failed phase=finished message="bad request"; return ;;
+	esac
+	if [ "$(ifs_state)" = running ]; then
+		# Only logged: a poller still follows the first switch's status
+		log "IFS firmware $t refused: a switch is already running"; return
+	fi
+	# refused while a print may run, as installs are (busy logs why)
+	if busy "IFS firmware $t"; then
+		ad5x-mcu ifs-status target="$t" state=refused phase=finished \
+			message="$(sed 's/^refused: //' $D/status)"; return
+	fi
+	log "IFS firmware: $t"
+	ad5x-mcu ifs-status target="$t" state=running phase=stopping message="Stopping Klipper" version=
+	$KINIT stop >> $LOG 2>&1
+	ad5x-mcu ifs-firmware "$t" >> $LOG 2>&1
+	[ "$(ifs_state)" != running ] ||
+		ad5x-mcu ifs-status state=failed phase=finished message="the switch stopped unexpectedly"
+	ad5x-mcu ifs-status phase=starting
+	$KINIT start >> $LOG 2>&1
+	# A request written during the switch (double tap) is not a new switch
+	if [ -e $D/ifs-firmware ] || [ -L $D/ifs-firmware ]; then
+		rm -f $D/ifs-firmware; log "dropped an ifs-firmware request sent during a switch"
+	fi
+}
+
 agent() {
 	while :; do
 		agent_once
@@ -322,6 +377,10 @@ start)
 	mkdir -p $STAGE && chown root:root $STAGE && chmod 700 $STAGE
 	rm -rf $STAGE/r.*/klipper $STAGE/r.*/moonraker
 	rm -f $STAGE/r.*/* 2>/dev/null; rmdir $STAGE/r.* 2>/dev/null
+	mkdir -p $IFSD && chown root:root $IFSD && chmod 755 $IFSD
+	# A reboot or power loss in the middle of a switch
+	[ "$(ifs_state)" != running ] ||
+		ad5x-mcu ifs-status state=failed phase=finished message="interrupted (restart)"
 	start-stop-daemon -S -b -m -p $PID -x /bin/sh -- $0 run
 	;;
 run)
@@ -329,6 +388,9 @@ run)
 	;;
 once)
 	agent_once
+	;;
+handle-ifs-firmware)
+	handle_ifs_firmware
 	;;
 stop)
 	start-stop-daemon -K -p $PID

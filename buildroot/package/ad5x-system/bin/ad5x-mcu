@@ -46,11 +46,21 @@
 #                                      request (nothing is sent when the
 #                                      bootloader already waits; refused
 #                                      while Klipper runs)
-#        ad5x-mcu flash-ifs [HEX]      flash the IFS now: this version, or
-#                                      HEX (refused while Klipper runs). If its
+#        ad5x-mcu flash-ifs [HEX|stock] flash the IFS now: this version, HEX, or
+#                                      stock's own firmware from this printer's
+#                                      usershare backup (refused while
+#                                      Klipper runs). If its
 #                                      bootloader doesn't answer, it keeps
 #                                      trying for 2 minutes: unplug the IFS
 #                                      cable and plug it back in
+#        ad5x-mcu ifs-firmware stock|klipper
+#                                      switch the IFS between Flashforge's
+#                                      firmware and this version; progress in
+#                                      $IFS_FW_STATUS (refused while Klipper
+#                                      runs)
+#        ad5x-mcu ifs-status KEY=VALUE...
+#                                      change lines of $IFS_FW_STATUS (the
+#                                      root update agent's way to write it)
 #        ad5x-mcu arm-stock            arm stock's own board update
 #        ad5x-mcu tools                check the flashing tools are installed
 # /data/ad5x/mcu.disable: "boot" only starts the eboard, flashes nothing.
@@ -61,7 +71,9 @@
 # AD5X_RUN (/run/ad5x), AD5X_MCU_FW (/usr/share/ad5x/mcu),
 # AD5X_USERSHARE (a directory holding stock's PROGRAM/ instead of mounting
 # the usershare partition), AD5X_SCREENS (/usr/share/ad5x/screens),
-# AD5X_KERNEL (stock|own), AD5X_BOOTED (/etc/init.d/S99ad5x-booted).
+# AD5X_KERNEL (stock|own), AD5X_BOOTED (/etc/init.d/S99ad5x-booted),
+# AD5X_PD (/home/klipper/printer_data), AD5X_LIB (/usr/lib/ad5x),
+# IFS_FW_STATUS (/data/ad5x/kiln-status/ifs-firmware.status).
 : "${AD5X_DATA:=/data}" "${AD5X_SYS:=/sys}" "${AD5X_DEV:=/dev}" "${AD5X_RUN:=/run/ad5x}"
 : "${AD5X_MCU_FW:=/usr/share/ad5x/mcu}" "${AD5X_SCREENS:=/usr/share/ad5x/screens}"
 ST=$AD5X_DATA/ad5x/mcu
@@ -69,6 +81,8 @@ LOG=$ST/log
 MB=$AD5X_DEV/ttyS2
 EB=$AD5X_DEV/ttyS5
 IFS_PORT=$AD5X_DEV/ttyS4
+: "${AD5X_PD:=/home/klipper/printer_data}" "${AD5X_LIB:=/usr/lib/ad5x}"
+: "${IFS_FW_STATUS:=$AD5X_DATA/ad5x/kiln-status/ifs-firmware.status}"
 WANT=$(cat "$AD5X_MCU_FW/VERSION" 2>/dev/null)
 # The IFS's own version (IFS_VERSION); an image without it uses VERSION
 IFS_WANT=$(cat "$AD5X_MCU_FW/IFS_VERSION" 2>/dev/null)
@@ -267,30 +281,32 @@ limit() {	# SECONDS CMD...: run CMD, killed after SECONDS
 	return $lrc
 }
 
-ifs_f19() {	# the version Flashforge's firmware on the IFS reports, empty if none answers
-	python3 - "$IFS_PORT" 2>/dev/null <<'EOF'
-import os, sys, termios, time
-fd = os.open(sys.argv[1], os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
-a = termios.tcgetattr(fd)
-a[0] = a[1] = a[3] = 0
-a[2] = termios.CS8 | termios.CREAD | termios.CLOCAL
-a[4] = a[5] = termios.B115200
-termios.tcsetattr(fd, termios.TCSANOW, a)
-termios.tcflush(fd, termios.TCIOFLUSH)
-os.write(fd, b"F19\r\n")
-time.sleep(1)
-try:
-    r = os.read(fd, 256).decode("ascii", "replace")
-except OSError:
-    r = ""
-if "version:" in r:
-    print(r.split("version:")[-1].strip(" ."))
-EOF
+ifs_status() {	# KEY=VALUE...: change those lines of the status file, replace it atomically
+	for k in target state phase message version; do
+		eval "st_$k=\$(sed -n \"s/^$k=//p\" \"\$IFS_FW_STATUS\" 2>/dev/null)"
+	done
+	for kv; do
+		case $kv in
+		target=*) st_target=${kv#*=} ;;
+		state=*) st_state=${kv#*=} ;;
+		phase=*) st_phase=${kv#*=} ;;
+		message=*) st_message=${kv#*=} ;;
+		version=*) st_version=${kv#*=} ;;
+		esac
+	done
+	mkdir -p "${IFS_FW_STATUS%/*}"
+	printf 'target=%s\nstate=%s\nphase=%s\nmessage=%s\nversion=%s\n' "$st_target" "$st_state" \
+		"$st_phase" "$st_message" "$st_version" > "$IFS_FW_STATUS.tmp" &&
+		mv "$IFS_FW_STATUS.tmp" "$IFS_FW_STATUS"
+}
+ifs_progress() {	# PHASE MESSAGE: only while ifs_firmware runs (IFS_FW_TARGET)
+	[ -z "$IFS_FW_TARGET" ] || ifs_status phase="$1" message="$2"
 }
 
 flash_ifs() {	# HEX WHAT: write HEX to the IFS (WHAT for the log)
 	command -v ad5x-flash-ifs >/dev/null 2>&1 || { say "ifs: ad5x-flash-ifs missing (reinstall the image)"; return 1; }
 	say "ifs: flashing $2 (ad5x-flash-ifs)"
+	ifs_progress writing "Switching IFS firmware..."
 	end=$(( $(secs) + ${IFS_WAIT:-0} )) told= f37_arg="--f37"
 	while :; do
 		# ad5x-flash-ifs (= ad5x-flash-iap) sends F37 itself, then writes the IFS.
@@ -304,7 +320,10 @@ flash_ifs() {	# HEX WHAT: write HEX to the IFS (WHAT for the log)
 			return 0
 		fi
 		if grep -q "Can not connect" "$ST/ifs.log" && [ "$(secs)" -lt $end ]; then
-			[ -n "$told" ] || say "ifs: no bootloader answers: unplug the IFS cable and plug it back in"
+			if [ -z "$told" ]; then
+				say "ifs: no bootloader answers: unplug the IFS cable and plug it back in"
+				ifs_progress replug "Unplug the IFS cable and plug it back in"
+			fi
 			told=1; continue
 		fi
 		say "ifs: flashing failed (exit $rc, $ST/ifs.log)"
@@ -322,6 +341,141 @@ flash_ifs_klipper() {	# HEX [WANT]: Klipper firmware; WANT empty: any version
 	fi
 	echo "$v" > "$ST/ifs"
 	say "ifs: $v"
+}
+
+stock_check() {	# stock's ifs.hex in $SH, its md5 checked; mounted. Else STOCK_ERR, unmounted
+	SH=
+	us_mount ro || { STOCK_ERR="can't read the usershare partition"; return 1; }
+	c=$(control_dir)
+	if [ -z "$c" ]; then
+		STOCK_ERR="no control directory on the usershare partition"
+		us_umount; return 1
+	fi
+	want=$(sed -n 's|^\([0-9a-fA-F]*\)[ *]*\(\./\)\{0,1\}ifs\.hex$|\1|p' "$c/md5sum.list" 2>/dev/null | head -1)
+	if [ -z "$want" ] || [ ! -f "$c/ifs.hex" ]; then
+		STOCK_ERR="stock ${c##*/} has no ifs.hex with an md5sum.list entry"
+		us_umount; return 1
+	fi
+	if [ "$(md5sum < "$c/ifs.hex" | cut -d' ' -f1)" != "$want" ]; then
+		STOCK_ERR="stock ${c##*/}: ifs.hex doesn't match md5sum.list"
+		us_umount; return 1
+	fi
+	SH=$c/ifs.hex
+}
+
+# After a write the IFS takes a while to start either firmware (no 'A' is
+# sent: its bootloader starts it on its own): ask both ways until one
+# answers or IFS_VERIFY_WAIT (30) seconds are up. now=klipper|stock|none,
+# the version in v.
+ifs_answers() {
+	now=none v=
+	end=$(( $(date +%s) + ${IFS_VERIFY_WAIT:-30} ))
+	while :; do
+		v=$(ifs_ver 2)
+		[ -z "$v" ] || { now=klipper; return 0; }
+		v=$(ad5x-ifs-f19 --port "$IFS_PORT" --timeout 2 2>/dev/null)
+		[ -z "$v" ] || { now=stock; return 0; }
+		[ "$(date +%s)" -lt "$end" ] || return 1
+		sleep 1
+	done
+}
+
+stock_answers() {	# Flashforge's firmware answers F19: its version in v
+	ifs_answers
+	[ "$now" = stock ] || v=
+	[ -n "$v" ] || { say "ifs: flashed, but Flashforge's firmware doesn't answer"; return 1; }
+	rm -f "$ST/ifs"
+	say "ifs: Flashforge's firmware $v"
+}
+
+flash_ifs_stock() {	# Flashforge's firmware from stock's own copy, kept nowhere else
+	stock_check || { say "ifs: $STOCK_ERR"; return 1; }
+	flash_ifs "$SH" "Flashforge's firmware (stock ${c##*/})"
+	rc=$?
+	us_umount
+	[ $rc = 0 ] && stock_answers
+}
+
+ifs_end() {	# STATE MESSAGE [VERSION]
+	say "ifs-firmware $IFS_FW_TARGET: $1: $2"
+	ifs_status state="$1" phase=finished message="$2" version="$3"
+	IFS_FW_TARGET=
+}
+
+# ifs_firmware stock|klipper: checks first, then the enable file, then the
+# write; what the IFS answers decides the plugins. Progress in IFS_FW_STATUS.
+ifs_firmware() {
+	t=$1
+	case $t in stock|klipper) ;; *) echo "ad5x-mcu: ifs-firmware stock|klipper" >&2; return 2 ;; esac
+	if klippy_running; then
+		echo "ad5x-mcu: Klipper runs: /etc/init.d/S61klipper stop first" >&2; return 1
+	fi
+	mkdir -p "$ST"
+	IFS_FW_TARGET=$t v=
+	ifs_status target="$t" state=running phase=checking message="Checking" version=
+	if ! command -v ad5x-flash-ifs >/dev/null 2>&1; then
+		ifs_end failed "ad5x-flash-ifs missing (reinstall the image)"; return 1
+	fi
+	if [ "$t" = stock ]; then
+		stock_check || { ifs_end failed "$STOCK_ERR"; return 1; }
+		hex=$SH
+		what="Flashforge's firmware (stock ${c##*/})"
+	else
+		hex=$AD5X_MCU_FW/ifs.hex
+		what=$hex
+		[ -f "$hex" ] || { ifs_end failed "no $hex in this image"; return 1; }
+	fi
+	# the enable file first: boot would flash the other firmware back
+	if [ "$t" = stock ]; then
+		rm -f "$AD5X_DATA/ad5x/ifs-klipper.enable"
+	else
+		touch "$AD5X_DATA/ad5x/ifs-klipper.enable"; arm_stock
+	fi
+	IFS_WAIT=${IFS_WAIT:-120} flash_ifs "$hex" "$what"
+	rc=$?
+	[ "$t" != stock ] || us_umount
+	ifs_status phase=verifying message="Checking the IFS"
+	# whatever the write did, the enable file and the plugins follow what
+	# the IFS answers; no answer: as for the target
+	ifs_answers
+	case $now in
+	klipper) touch "$AD5X_DATA/ad5x/ifs-klipper.enable"; echo "$v" > "$ST/ifs" ;;
+	stock) rm -f "$AD5X_DATA/ad5x/ifs-klipper.enable" "$ST/ifs" ;;
+	none) rm -f "$ST/ifs"; v=
+		[ "$t" = stock ] && rm -f "$AD5X_DATA/ad5x/ifs-klipper.enable" ;;
+	esac
+	if [ "$now" = stock ] || { [ "$now" = none ] && [ "$t" = stock ]; }; then
+		pl=1
+		if . "$AD5X_LIB/ifs-plugins.sh"; then
+			own=$(ifs_plugins "$AD5X_PD")
+			if [ -n "$own" ]; then
+				if disable_plugins "$AD5X_PD" $own; then
+					say "ifs: plugin $own off (needs Klipper firmware on the IFS)"
+				else
+					pl=
+				fi
+			fi
+		fi
+		if [ -z "$pl" ]; then
+			ifs_end failed "couldn't turn the IFS plugins off ($AD5X_PD/config/plugins.cfg)" "$v"
+			return 1
+		fi
+	fi
+	if [ "$t" = klipper ]; then way="ad5x-mcu flash-ifs"; else way="ad5x-mcu flash-ifs stock"; fi
+	if [ "$now" = none ]; then
+		ifs_end failed "the IFS doesn't answer: unplug the IFS cable and plug it back in, then run $way (or try again from the screen)"
+		return 1
+	fi
+	if [ "$now" != "$t" ]; then
+		ifs_end failed "still on $now firmware, not $t ($([ $rc = 0 ] || echo "writing failed, ")$ST/ifs.log): run $way or try again from the screen" "$v"
+		return 1
+	fi
+	if [ "$now" = klipper ] && [ -n "$IFS_WANT" ] && [ "$v" != "$IFS_WANT" ]; then
+		ifs_end failed "the IFS reports $v, want $IFS_WANT: run $way or try again from the screen" "$v"
+		return 1
+	fi
+	say "ifs: $now firmware $v"
+	ifs_end done "IFS firmware: $t" "$v"
 }
 
 boot() {
@@ -441,7 +595,7 @@ status() {
 			echo "ifs=(in use by Klipper)"
 		else
 			v=$(ifs_ver 2)
-			[ -n "$v" ] || v=$(ifs_f19 | sed 's/^/flashforge /')
+			[ -n "$v" ] || v=$(ad5x-ifs-f19 --port "$IFS_PORT" 2>/dev/null | sed 's/^/flashforge /')
 			echo "ifs=$v"
 		fi
 		echo "ifs_flashed=$(cat "$ST/ifs" 2>/dev/null)"
@@ -471,14 +625,17 @@ flash-eboard)
 		eboard_soft_flash
 	fi ;;
 flash-ifs)
-	[ -f "$AD5X_DATA/ad5x/ifs-klipper.enable" ] || { echo "ad5x-mcu: no IFS flashing without $AD5X_DATA/ad5x/ifs-klipper.enable" >&2; exit 1; }
+	[ "$2" = stock ] || [ -f "$AD5X_DATA/ad5x/ifs-klipper.enable" ] || { echo "ad5x-mcu: no IFS flashing without $AD5X_DATA/ad5x/ifs-klipper.enable" >&2; exit 1; }
 	klippy_running && { echo "ad5x-mcu: Klipper runs: /etc/init.d/S61klipper stop first" >&2; exit 1; }
 	mkdir -p "$ST"; arm_stock
 	export IFS_WAIT=120
 	case "$2" in
+	stock) flash_ifs_stock ;;
 	"") [ -n "$IFS_WANT" ] && flash_ifs_klipper "$AD5X_MCU_FW/ifs.hex" "$IFS_WANT" ;;
 	*) flash_ifs_klipper "$2" ;;
 	esac ;;
+ifs-firmware) ifs_firmware "$2" ;;
+ifs-status) shift; ifs_status "$@" ;;
 arm-stock) mkdir -p "$ST"; arm_stock ;;
 tools) mkdir -p "$ST"; tools ;;
 *) sed -n '2,/^# Log:/p' "$0"; exit 2 ;;
