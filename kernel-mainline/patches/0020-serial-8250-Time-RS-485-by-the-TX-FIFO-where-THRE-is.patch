@@ -1,0 +1,67 @@
+From 49b0e76a32b57c3c44559779bd365ae71bc008d9 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sun, 8 Nov 2026 15:06:23 -0700
+Subject: [PATCH 20/23] serial: 8250: Time RS-485 by the TX FIFO where THRE is
+ set early
+
+With UART_CAP_NOTEMT, __stop_tx() releases RTS one frame after LSR.THRE
+reports the transmit FIFO empty. Some UARTs set THRE earlier: on Ingenic
+SoCs it means the FIFO is half empty or less, so RTS dropped with most
+of a short message still queued, and an RS-485 receiver got only its
+first byte or two.
+
+Let such drivers report the bytes waiting in the TX FIFO through an
+optional tx_fifo_count() callback, and wait for them as well before
+releasing RTS. Ports without the callback are unchanged.
+---
+ drivers/tty/serial/8250/8250_core.c | 1 +
+ drivers/tty/serial/8250/8250_port.c | 3 +++
+ include/linux/serial_8250.h         | 6 ++++++
+ 3 files changed, 10 insertions(+)
+
+diff --git a/drivers/tty/serial/8250/8250_core.c b/drivers/tty/serial/8250/8250_core.c
+index b875d3947..5ea23eb23 100644
+--- a/drivers/tty/serial/8250/8250_core.c
++++ b/drivers/tty/serial/8250/8250_core.c
+@@ -790,6 +790,7 @@ int serial8250_register_8250_port(const struct uart_8250_port *up)
+ 	uart->port.rs485	= up->port.rs485;
+ 	uart->rs485_start_tx	= up->rs485_start_tx;
+ 	uart->rs485_stop_tx	= up->rs485_stop_tx;
++	uart->tx_fifo_count	= up->tx_fifo_count;
+ 	uart->lsr_save_mask	= up->lsr_save_mask;
+ 	uart->dma		= up->dma;
+ 
+diff --git a/drivers/tty/serial/8250/8250_port.c b/drivers/tty/serial/8250/8250_port.c
+index b01baff71..af20ca830 100644
+--- a/drivers/tty/serial/8250/8250_port.c
++++ b/drivers/tty/serial/8250/8250_port.c
+@@ -1412,6 +1412,9 @@ static inline void __stop_tx(struct uart_8250_port *p)
+ 			 * Roughly estimate 1 extra bit here with / 7.
+ 			 */
+ 			stop_delay = p->port.frame_time + DIV_ROUND_UP(p->port.frame_time, 7);
++			/* Frames still in the FIFO where THRE is set early */
++			if (p->tx_fifo_count)
++				stop_delay += (u64)p->port.frame_time * p->tx_fifo_count(p);
+ 		}
+ 
+ 		__stop_tx_rs485(p, stop_delay);
+diff --git a/include/linux/serial_8250.h b/include/linux/serial_8250.h
+index eeb868e93..7844051ca 100644
+--- a/include/linux/serial_8250.h
++++ b/include/linux/serial_8250.h
+@@ -175,6 +175,12 @@ struct uart_8250_port {
+ 	struct uart_8250_em485 *em485;
+ 	void			(*rs485_start_tx)(struct uart_8250_port *up, bool toggle_ier);
+ 	void			(*rs485_stop_tx)(struct uart_8250_port *up, bool toggle_ier);
++	/*
++	 * Optional: the bytes waiting in the TX FIFO, for UARTs whose LSR.THRE
++	 * is set before the FIFO is empty. Used to time the end of an RS-485
++	 * transmission.
++	 */
++	unsigned int		(*tx_fifo_count)(struct uart_8250_port *up);
+ 
+ 	/* Serial port overrun backoff */
+ 	struct delayed_work overrun_backoff;
+-- 
+2.43.0
+

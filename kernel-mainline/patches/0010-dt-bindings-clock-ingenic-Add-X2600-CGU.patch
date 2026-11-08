@@ -1,0 +1,126 @@
+From dea78ed083ebdd9d4abd04b63cf50c6bfb34f927 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sun, 8 Nov 2026 11:24:32 -0700
+Subject: [PATCH 10/23] dt-bindings: clock: ingenic: Add X2600 CGU
+
+Document the clock generation unit of the Ingenic X2600 and add the
+clock numbers its consumers use.
+---
+ .../bindings/clock/ingenic,cgu.yaml           |  2 +
+ include/dt-bindings/clock/ingenic,x2600-cgu.h | 84 +++++++++++++++++++
+ 2 files changed, 86 insertions(+)
+ create mode 100644 include/dt-bindings/clock/ingenic,x2600-cgu.h
+
+diff --git a/Documentation/devicetree/bindings/clock/ingenic,cgu.yaml b/Documentation/devicetree/bindings/clock/ingenic,cgu.yaml
+index 509df06b9..626ff0f66 100644
+--- a/Documentation/devicetree/bindings/clock/ingenic,cgu.yaml
++++ b/Documentation/devicetree/bindings/clock/ingenic,cgu.yaml
+@@ -29,6 +29,7 @@ select:
+           - ingenic,jz4780-cgu
+           - ingenic,x1000-cgu
+           - ingenic,x1830-cgu
++          - ingenic,x2600-cgu
+   required:
+     - compatible
+ 
+@@ -59,6 +60,7 @@ properties:
+           - ingenic,jz4780-cgu
+           - ingenic,x1000-cgu
+           - ingenic,x1830-cgu
++          - ingenic,x2600-cgu
+       - const: simple-mfd
+     minItems: 1
+ 
+diff --git a/include/dt-bindings/clock/ingenic,x2600-cgu.h b/include/dt-bindings/clock/ingenic,x2600-cgu.h
+new file mode 100644
+index 000000000..64d641518
+--- /dev/null
++++ b/include/dt-bindings/clock/ingenic,x2600-cgu.h
+@@ -0,0 +1,84 @@
++/* SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause) */
++/*
++ * This header provides clock numbers for the ingenic,x2600-cgu DT binding.
++ *
++ * They are roughly ordered as:
++ *   - external clocks
++ *   - PLLs
++ *   - muxes/dividers in the order of their CPM registers
++ *   - gates in order of their bit in the CLKGR* registers
++ */
++
++#ifndef __DT_BINDINGS_CLOCK_INGENIC_X2600_CGU_H__
++#define __DT_BINDINGS_CLOCK_INGENIC_X2600_CGU_H__
++
++#define X2600_CLK_EXCLK			0
++#define X2600_CLK_RTCLK			1
++#define X2600_CLK_APLL			2
++#define X2600_CLK_MPLL			3
++#define X2600_CLK_EPLL			4
++#define X2600_CLK_SCLKA			5
++#define X2600_CLK_CPUMUX		6
++#define X2600_CLK_CPU			7
++#define X2600_CLK_L2CACHE		8
++#define X2600_CLK_AHB0			9
++#define X2600_CLK_AHB2PMUX		10
++#define X2600_CLK_AHB2			11
++#define X2600_CLK_PCLK			12
++#define X2600_CLK_DDR			13
++#define X2600_CLK_MAC			14
++#define X2600_CLK_LCD			15
++#define X2600_CLK_MSC0			16
++#define X2600_CLK_MSC1			17
++#define X2600_CLK_SFC			18
++#define X2600_CLK_SSIPLL		19
++#define X2600_CLK_CIM			20
++#define X2600_CLK_TPC			21
++#define X2600_CLK_G2D			22
++#define X2600_CLK_PWM			23
++#define X2600_CLK_CAN0			24
++#define X2600_CLK_CAN1			25
++#define X2600_CLK_SADC			26
++#define X2600_CLK_EXCLK_DIV512		27
++#define X2600_CLK_RTC			28
++#define X2600_CLK_NEMC			29
++#define X2600_CLK_INTC			30
++#define X2600_CLK_OST			31
++#define X2600_CLK_DTRNG			32
++#define X2600_CLK_AIC			33
++#define X2600_CLK_DSI			34
++#define X2600_CLK_SSISLV		35
++#define X2600_CLK_SSI1			36
++#define X2600_CLK_SSI0			37
++#define X2600_CLK_UART7			38
++#define X2600_CLK_UART6			39
++#define X2600_CLK_UART5			40
++#define X2600_CLK_UART4			41
++#define X2600_CLK_UART3			42
++#define X2600_CLK_UART2			43
++#define X2600_CLK_UART1			44
++#define X2600_CLK_UART0			45
++#define X2600_CLK_I2C3			46
++#define X2600_CLK_I2C2			47
++#define X2600_CLK_I2C1			48
++#define X2600_CLK_I2C0			49
++#define X2600_CLK_GMAC			50
++#define X2600_CLK_USB			51
++#define X2600_CLK_OTG			52
++#define X2600_CLK_EFUSE			53
++#define X2600_CLK_APB0			54
++#define X2600_CLK_ARB			55
++#define X2600_CLK_BUS_MON		56
++#define X2600_CLK_JPEGE			57
++#define X2600_CLK_JPEGD			58
++#define X2600_CLK_FELIX			59
++#define X2600_CLK_ROT			60
++#define X2600_CLK_TCSM			61
++#define X2600_CLK_TCU1			62
++#define X2600_CLK_TCU0			63
++#define X2600_CLK_HASH			64
++#define X2600_CLK_AES			65
++#define X2600_CLK_PDMA1			66
++#define X2600_CLK_PDMA			67
++
++#endif /* __DT_BINDINGS_CLOCK_INGENIC_X2600_CGU_H__ */
+-- 
+2.43.0
+

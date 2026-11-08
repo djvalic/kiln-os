@@ -1,0 +1,93 @@
+From 53853d9ac8db25f90b764d1a8de0e3e5d0267563 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sun, 8 Nov 2026 14:07:44 -0700
+Subject: [PATCH 02/23] MIPS: zboot: Write back and invalidate the L1 caches
+ before the kernel
+
+The decompressor writes the kernel through the data cache and jumps to
+it without cache maintenance ("FIXME: should we flush cache here?").
+Instruction fetches then miss the lines still dirty in the L1 data
+cache and run whatever was at those addresses before: code of a boot
+loader, or of the previous kernel when one kernel starts another.
+
+On the Ingenic X2600, started from its vendor kernel, this ran stale
+code in the kernel's init text, written last by the decompressor, and
+the boot stopped at a different point each time, before the console was
+up.
+
+On MIPS32/MIPS64 Release 1 and later, write back the whole L1 data
+cache and invalidate the whole L1 instruction cache with index
+operations, their geometry read from Config1, before starting the
+kernel. Octeon, which has its own cache architecture, and older CPUs,
+without Config1, are left as they are.
+---
+ arch/mips/boot/compressed/decompress.c | 47 +++++++++++++++++++++++++-
+ 1 file changed, 46 insertions(+), 1 deletion(-)
+
+diff --git a/arch/mips/boot/compressed/decompress.c b/arch/mips/boot/compressed/decompress.c
+index 90021c6a8..df1a9ed76 100644
+--- a/arch/mips/boot/compressed/decompress.c
++++ b/arch/mips/boot/compressed/decompress.c
+@@ -28,6 +28,51 @@
+ unsigned long free_mem_ptr;
+ unsigned long free_mem_end_ptr;
+ 
++#if (defined(CONFIG_CPU_MIPSR1) || defined(CONFIG_CPU_MIPSR2) ||	\
++	defined(CONFIG_CPU_MIPSR5) || defined(CONFIG_CPU_MIPSR6)) &&	\
++	!defined(CONFIG_CPU_CAVIUM_OCTEON)
++#define CONF_M		BIT(31)		/* Config1 is implemented */
++
++/* Index operations over a whole L1 cache, its geometry from Config1 */
++#define CACHE_BLAST(op, sets_shift, line_shift, ways_shift)		\
++do {									\
++	unsigned int line = (config1 >> (line_shift)) & 7;		\
++	unsigned long addr, end;					\
++									\
++	if (line) {							\
++		line = 2 << line;					\
++		end = CKSEG0 + (64 << ((config1 >> (sets_shift)) & 7)) *	\
++		      line * (((config1 >> (ways_shift)) & 7) + 1);	\
++		for (addr = CKSEG0; addr < end; addr += line)		\
++			__asm__ __volatile__("cache %0, 0(%1)"		\
++					     : : "i" (op), "r" (addr));	\
++	}								\
++} while (0)
++
++/*
++ * The kernel was just written through the data cache, and the instruction
++ * cache may hold whatever code was at its addresses before, from a boot
++ * loader or a previous kernel. Write back the L1 data cache and invalidate
++ * the L1 instruction cache so that the kernel runs the code just written.
++ */
++static void flush_l1_caches(void)
++{
++	unsigned int config, config1;
++
++	__asm__ __volatile__("mfc0 %0, $16, 0" : "=r" (config));
++	if (!(config & CONF_M))
++		return;
++	__asm__ __volatile__("mfc0 %0, $16, 1" : "=r" (config1));
++
++	CACHE_BLAST(0x01, 13, 10, 7);	/* Index_Writeback_Inv_D */
++	__asm__ __volatile__("sync" : : : "memory");
++	CACHE_BLAST(0x00, 22, 19, 16);	/* Index_Invalidate_I */
++	__asm__ __volatile__("ehb" : : : "memory");
++}
++#else
++static inline void flush_l1_caches(void) { }
++#endif
++
+ void error(char *x)
+ {
+ 	puts("\n\n");
+@@ -124,6 +169,6 @@ void decompress_kernel(unsigned long boot_heap_start)
+ 		       __appended_dtb, dtb_size);
+ 	}
+ 
+-	/* FIXME: should we flush cache here? */
++	flush_l1_caches();
+ 	puts("Now, booting the kernel...\n");
+ }
+-- 
+2.43.0
+

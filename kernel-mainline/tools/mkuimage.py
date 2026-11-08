@@ -59,7 +59,12 @@ def main():
     src, dst = a.files
     load = int(a.load, 0)
     entry = int(a.entry, 0) if a.entry else load
-    open(dst, "wb").write(build(open(src, "rb").read(), load, entry, a.name))
+    data = open(src, "rb").read()
+    if data[:4] == b"\x7fELF":
+        # The SPL and chainload jump to the first byte: an ELF header there
+        # is executed as code (vmlinuz instead of vmlinuz.bin)
+        sys.exit("%s is an ELF file; give the raw image (objcopy -O binary)" % src)
+    open(dst, "wb").write(build(data, load, entry, a.name))
     return show(dst)
 
 

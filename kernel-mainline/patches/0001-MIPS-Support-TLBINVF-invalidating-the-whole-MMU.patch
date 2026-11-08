@@ -1,0 +1,129 @@
+From 5ec12152d96eb5fa3aaf44f72aa5d9e7621388f1 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sun, 8 Nov 2026 14:06:57 -0700
+Subject: [PATCH 01/23] MIPS: Support TLBINVF invalidating the whole MMU
+
+Config4.IE = 3 says that the TLBINV and TLBINVF instructions are
+implemented and that a single TLBINVF invalidates the whole MMU, the
+VTLB and every set of the FTLB. Only IE = 2, where a TLBINVF invalidates
+the TLB set selected by Index, was recognised: a CPU reporting 3 was
+treated as having no TLB invalidate instructions at all.
+
+The XBurst2 cores of the Ingenic X2600 report IE = 3 and have an FTLB
+(32 VTLB entries, 64 sets of 4 FTLB entries). Without TLBINV,
+r4k_tlb_configure() runs r4k_tlb_uniquify(), which writes user VPNs into
+FTLB entries, and the boot hangs there before the exception handlers are
+in place.
+
+Recognise IE = 3 as TLBINV support and invalidate the whole TLB with one
+TLBINVF on such CPUs.
+---
+ arch/mips/include/asm/cpu-features.h |  3 +++
+ arch/mips/include/asm/cpu.h          |  1 +
+ arch/mips/include/asm/mipsregs.h     |  1 +
+ arch/mips/kernel/cpu-probe.c         |  8 +++++++-
+ arch/mips/mm/tlb-r4k.c               | 28 +++++++++++++++++-----------
+ 5 files changed, 29 insertions(+), 12 deletions(-)
+
+diff --git a/arch/mips/include/asm/cpu-features.h b/arch/mips/include/asm/cpu-features.h
+index 3f11e5218..f94fb20c8 100644
+--- a/arch/mips/include/asm/cpu-features.h
++++ b/arch/mips/include/asm/cpu-features.h
+@@ -80,6 +80,9 @@
+ #ifndef cpu_has_tlbinv
+ #define cpu_has_tlbinv		__opt(MIPS_CPU_TLBINV)
+ #endif
++#ifndef cpu_has_tlbinvf_mmu
++#define cpu_has_tlbinvf_mmu	__opt(MIPS_CPU_TLBINVF_MMU)
++#endif
+ #ifndef cpu_has_segments
+ #define cpu_has_segments	__opt(MIPS_CPU_SEGMENTS)
+ #endif
+diff --git a/arch/mips/include/asm/cpu.h b/arch/mips/include/asm/cpu.h
+index 0fd9f9bbd..62aa581d6 100644
+--- a/arch/mips/include/asm/cpu.h
++++ b/arch/mips/include/asm/cpu.h
+@@ -420,6 +420,7 @@ enum cpu_type_enum {
+ #define MIPS_CPU_MAC_2008_ONLY	BIT_ULL(60)	/* CPU Only support MAC2008 Fused multiply-add instruction */
+ #define MIPS_CPU_FTLBPAREX	BIT_ULL(61)	/* CPU has FTLB parity exception */
+ #define MIPS_CPU_GSEXCEX	BIT_ULL(62)	/* CPU has GSExc exception */
++#define MIPS_CPU_TLBINVF_MMU	BIT_ULL(63)	/* One TLBINVF invalidates the whole MMU */
+ 
+ /*
+  * CPU ASE encodings
+diff --git a/arch/mips/include/asm/mipsregs.h b/arch/mips/include/asm/mipsregs.h
+index 12a095dbf..ba2ff442e 100644
+--- a/arch/mips/include/asm/mipsregs.h
++++ b/arch/mips/include/asm/mipsregs.h
+@@ -809,6 +809,7 @@
+ #define MIPS_CONF4_AE		(_ULCAST_(1) << 28)
+ #define MIPS_CONF4_IE		(_ULCAST_(3) << 29)
+ #define MIPS_CONF4_TLBINV	(_ULCAST_(2) << 29)
++#define MIPS_CONF4_TLBINV_MMU	(_ULCAST_(3) << 29)
+ 
+ #define MIPS_CONF5_NF		(_ULCAST_(1) << 0)
+ #define MIPS_CONF5_UFR		(_ULCAST_(1) << 2)
+diff --git a/arch/mips/kernel/cpu-probe.c b/arch/mips/kernel/cpu-probe.c
+index 489612ed9..b976ef5cc 100644
+--- a/arch/mips/kernel/cpu-probe.c
++++ b/arch/mips/kernel/cpu-probe.c
+@@ -569,8 +569,14 @@ static inline unsigned int decode_config4(struct cpuinfo_mips *c)
+ 	config4 = read_c0_config4();
+ 
+ 	if (cpu_has_tlb) {
+-		if (((config4 & MIPS_CONF4_IE) >> 29) == 2)
++		switch (config4 & MIPS_CONF4_IE) {
++		case MIPS_CONF4_TLBINV_MMU:
++			c->options |= MIPS_CPU_TLBINVF_MMU;
++			fallthrough;
++		case MIPS_CONF4_TLBINV:
+ 			c->options |= MIPS_CPU_TLBINV;
++			break;
++		}
+ 
+ 		/*
+ 		 * R6 has dropped the MMUExtDef field from config4.
+diff --git a/arch/mips/mm/tlb-r4k.c b/arch/mips/mm/tlb-r4k.c
+index 24fe85fa1..5770369cc 100644
+--- a/arch/mips/mm/tlb-r4k.c
++++ b/arch/mips/mm/tlb-r4k.c
+@@ -75,19 +75,25 @@ void local_flush_tlb_all(void)
+ 	 * If there are any wired entries, fall back to iterating
+ 	 */
+ 	if (cpu_has_tlbinv && !entry) {
+-		if (current_cpu_data.tlbsizevtlb) {
++		if (cpu_has_tlbinvf_mmu) {
+ 			write_c0_index(0);
+ 			mtc0_tlbw_hazard();
+-			tlbinvf();  /* invalidate VTLB */
+-		}
+-		ftlbhighset = current_cpu_data.tlbsizevtlb +
+-			current_cpu_data.tlbsizeftlbsets;
+-		for (entry = current_cpu_data.tlbsizevtlb;
+-		     entry < ftlbhighset;
+-		     entry++) {
+-			write_c0_index(entry);
+-			mtc0_tlbw_hazard();
+-			tlbinvf();  /* invalidate one FTLB set */
++			tlbinvf();  /* invalidate the VTLB and every FTLB set */
++		} else {
++			if (current_cpu_data.tlbsizevtlb) {
++				write_c0_index(0);
++				mtc0_tlbw_hazard();
++				tlbinvf();  /* invalidate VTLB */
++			}
++			ftlbhighset = current_cpu_data.tlbsizevtlb +
++				current_cpu_data.tlbsizeftlbsets;
++			for (entry = current_cpu_data.tlbsizevtlb;
++			     entry < ftlbhighset;
++			     entry++) {
++				write_c0_index(entry);
++				mtc0_tlbw_hazard();
++				tlbinvf();  /* invalidate one FTLB set */
++			}
+ 		}
+ 	} else {
+ 		while (entry < current_cpu_data.tlbsize) {
+-- 
+2.43.0
+

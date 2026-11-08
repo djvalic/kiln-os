@@ -1,0 +1,259 @@
+From 3f28a9b27577a8d9eb7668c4faaf8ff91df7bb85 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sun, 8 Nov 2026 12:07:07 -0700
+Subject: [PATCH 08/23] serial: 8250_ingenic: Support the X2600 fractional baud
+ rate
+
+From the 24 MHz crystal the plain 16550 divisor cannot produce many
+common baud rates: 230400 comes out as 250000 or 214286 baud, 8% off,
+too far for the receiver at the other end. The UART of the Ingenic X2600
+has two registers for this: UMR sets the clock cycles per bit (4 to 31
+instead of 16), and each set bit n of UACR makes bit n of a frame one
+cycle longer.
+
+Compute the divisor, UMR and UACR in the get_divisor() and
+set_divisor() hooks of the 8250 core. For each UMR the divisors around
+clk / (baud * UMR) are tried, with the cycles UACR adds chosen so that
+no bit edge of a 12-bit frame is more than half a cycle late. Of the
+settings within 1% of a bit of the smallest worst-case error, the one
+with the fewest added cycles, then the least error, then the UMR
+closest to 16 wins. Rates the plain divisor hits exactly keep it.
+
+At 24 MHz this gives 230400 baud with a divisor of 8 and UMR 13
+(0.16% fast, as Ingenic's SDK does), and keeps every rate up to
+1.5 Mbaud within 4% of a bit at the end of a frame.
+
+Earlier Ingenic UARTs are documented with the same registers but are
+left as they are until tested.
+---
+ drivers/tty/serial/8250/8250_ingenic.c | 165 ++++++++++++++++++++++++-
+ 1 file changed, 164 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/tty/serial/8250/8250_ingenic.c b/drivers/tty/serial/8250/8250_ingenic.c
+index 94542fc14..fbde19d31 100644
+--- a/drivers/tty/serial/8250/8250_ingenic.c
++++ b/drivers/tty/serial/8250/8250_ingenic.c
+@@ -6,10 +6,12 @@
+  * Ingenic SoC UART support
+  */
+ 
++#include <linux/bitops.h>
+ #include <linux/clk.h>
+ #include <linux/console.h>
+ #include <linux/io.h>
+ #include <linux/libfdt.h>
++#include <linux/math64.h>
+ #include <linux/module.h>
+ #include <linux/of.h>
+ #include <linux/of_fdt.h>
+@@ -20,10 +22,16 @@
+ 
+ #include "8250.h"
+ 
+-/** ingenic_uart_config: SOC specific config data. */
++/**
++ * struct ingenic_uart_config - SoC specific config data
++ * @tx_loadsz: transmit FIFO load size
++ * @fifosize: FIFO size
++ * @fractional: whether the baud rate uses the UMR and UACR registers
++ */
+ struct ingenic_uart_config {
+ 	int tx_loadsz;
+ 	int fifosize;
++	bool fractional;
+ };
+ 
+ struct ingenic_uart_data {
+@@ -39,6 +47,23 @@ static const struct of_device_id of_match[];
+ #define UART_MCR_MDCE	BIT(7)
+ #define UART_MCR_FCM	BIT(6)
+ 
++/*
++ * Fractional baud rate: a bit lasts UMR (4 to 31) cycles of the divided
++ * clock instead of 16, and bit n of a frame one cycle more when bit n of
++ * UACR is set.
++ */
++#define UART_UMR	9
++#define UART_UACR	10
++
++#define UART_UMR_MIN	4
++#define UART_UMR_MAX	31
++#define UART_UMR_DEFAULT	16
++#define UART_UACR_BITS	12
++
++/* The fractional part passed from get_divisor() to set_divisor() */
++#define INGENIC_FRAC_UMR_SHIFT	16
++#define INGENIC_FRAC_UACR_MASK	GENMASK(UART_UACR_BITS - 1, 0)
++
+ static struct earlycon_device *early_device;
+ 
+ static uint8_t early_in(struct uart_port *port, int offset)
+@@ -168,6 +193,132 @@ OF_EARLYCON_DECLARE(jz4780_uart, "ingenic,jz4780-uart",
+ OF_EARLYCON_DECLARE(x1000_uart, "ingenic,x1000-uart",
+ 		    ingenic_early_console_setup);
+ 
++/*
++ * Pick the bit cycles to add for a divisor and UMR so that no bit edge of
++ * a 12-bit frame is late by more than half a cycle, and return the worst
++ * edge error, in units of 1 / (clk * baud) seconds.
++ */
++static u64 ingenic_uart_frame_error(unsigned int clk, unsigned int baud,
++				    unsigned int div, unsigned int umr,
++				    unsigned int *uacr)
++{
++	u64 worst = 0, ideal, actual;
++	unsigned int bit, cycles = 0;
++
++	*uacr = 0;
++
++	for (bit = 0; bit < UART_UACR_BITS; bit++) {
++		cycles += umr;
++		ideal = 2ULL * (bit + 1) * clk;
++		actual = (2ULL * cycles + 1) * div * baud;
++		if (ideal > actual) {
++			cycles++;
++			*uacr |= BIT(bit);
++		}
++
++		ideal = (u64)(bit + 1) * clk;
++		actual = (u64)cycles * div * baud;
++		worst = max(worst, ideal > actual ? ideal - actual : actual - ideal);
++	}
++
++	return worst;
++}
++
++static bool ingenic_uart_better(unsigned int ones, u64 err, unsigned int umr,
++				unsigned int best_ones, u64 best_err,
++				unsigned int best_umr)
++{
++	if (ones != best_ones)
++		return ones < best_ones;
++	if (err != best_err)
++		return err < best_err;
++	if (abs((int)umr - UART_UMR_DEFAULT) !=
++	    abs((int)best_umr - UART_UMR_DEFAULT))
++		return abs((int)umr - UART_UMR_DEFAULT) <
++		       abs((int)best_umr - UART_UMR_DEFAULT);
++	/* More samples per bit make the receiver more robust */
++	return umr > best_umr;
++}
++
++static unsigned int ingenic_uart_get_divisor(struct uart_port *port,
++					     unsigned int baud,
++					     unsigned int *frac)
++{
++	unsigned int clk = port->uartclk;
++	unsigned int best_div = 0, best_umr = 0, best_uacr = 0, best_ones = 0;
++	unsigned int pass, umr, base, div, uacr, ones;
++	u64 err, least = U64_MAX, best_err = U64_MAX;
++
++	if (!baud || clk / baud < UART_UMR_MIN)
++		goto standard;
++
++	if (clk % (UART_UMR_DEFAULT * baud) == 0 &&
++	    clk / (UART_UMR_DEFAULT * baud) <= 0xffff) {
++		*frac = UART_UMR_DEFAULT << INGENIC_FRAC_UMR_SHIFT;
++		return clk / (UART_UMR_DEFAULT * baud);
++	}
++
++	/*
++	 * The candidates: for each UMR, the divisors around clk / (baud * UMR)
++	 * that give it. The first pass finds the smallest worst-case error;
++	 * the second takes, within 1% of a bit of it, the fewest added cycles,
++	 * then the least error, then the UMR closest to 16, then the higher.
++	 */
++	for (pass = 0; pass < 2; pass++) {
++		for (umr = UART_UMR_MIN; umr <= UART_UMR_MAX; umr++) {
++			base = clk / (baud * umr);
++			for (div = max(base, 3U) - 2; div <= base + 2; div++) {
++				if (div > 0xffff || clk / (baud * div) != umr)
++					continue;
++
++				err = ingenic_uart_frame_error(clk, baud, div,
++							       umr, &uacr);
++				if (!pass) {
++					least = min(least, err);
++					continue;
++				}
++
++				if (err > least + clk / 100)
++					continue;
++
++				ones = hweight16(uacr);
++				if (best_div &&
++				    !ingenic_uart_better(ones, err, umr, best_ones,
++							 best_err, best_umr))
++					continue;
++
++				best_div = div;
++				best_umr = umr;
++				best_uacr = uacr;
++				best_ones = ones;
++				best_err = err;
++			}
++		}
++
++		if (least == U64_MAX)
++			goto standard;
++	}
++
++	*frac = best_umr << INGENIC_FRAC_UMR_SHIFT | best_uacr;
++	return best_div;
++
++standard:
++	*frac = UART_UMR_DEFAULT << INGENIC_FRAC_UMR_SHIFT;
++	return clamp(DIV_ROUND_CLOSEST(clk, UART_UMR_DEFAULT * baud), 1U, 0xffffU);
++}
++
++static void ingenic_uart_set_divisor(struct uart_port *port, unsigned int baud,
++				     unsigned int quot, unsigned int quot_frac)
++{
++	serial8250_do_set_divisor(port, baud, quot);
++
++	/* UMR and UACR are not behind DLAB; UACR is wider than a byte */
++	writel(quot_frac >> INGENIC_FRAC_UMR_SHIFT,
++	       port->membase + (UART_UMR << port->regshift));
++	writel(quot_frac & INGENIC_FRAC_UACR_MASK,
++	       port->membase + (UART_UACR << port->regshift));
++}
++
+ static void ingenic_uart_serial_out(struct uart_port *p, unsigned int offset, u32 value)
+ {
+ 	u32 ier;
+@@ -269,6 +420,11 @@ static int ingenic_uart_probe(struct platform_device *pdev)
+ 	uart.port.regshift = 2;
+ 	uart.port.fifosize = cdata->fifosize;
+ 
++	if (cdata->fractional) {
++		uart.port.get_divisor = ingenic_uart_get_divisor;
++		uart.port.set_divisor = ingenic_uart_set_divisor;
++	}
++
+ 	uart.port.membase = devm_ioremap(&pdev->dev, regs->start,
+ 					 resource_size(regs));
+ 	if (!uart.port.membase)
+@@ -343,6 +499,12 @@ static const struct ingenic_uart_config x1000_uart_config = {
+ 	.fifosize = 64,
+ };
+ 
++static const struct ingenic_uart_config x2600_uart_config = {
++	.tx_loadsz = 32,
++	.fifosize = 64,
++	.fractional = true,
++};
++
+ static const struct of_device_id of_match[] = {
+ 	{ .compatible = "ingenic,jz4740-uart", .data = &jz4740_uart_config },
+ 	{ .compatible = "ingenic,jz4750-uart", .data = &jz4760_uart_config },
+@@ -351,6 +513,7 @@ static const struct of_device_id of_match[] = {
+ 	{ .compatible = "ingenic,jz4775-uart", .data = &jz4760_uart_config },
+ 	{ .compatible = "ingenic,jz4780-uart", .data = &jz4780_uart_config },
+ 	{ .compatible = "ingenic,x1000-uart", .data = &x1000_uart_config },
++	{ .compatible = "ingenic,x2600-uart", .data = &x2600_uart_config },
+ 	{ /* sentinel */ }
+ };
+ MODULE_DEVICE_TABLE(of, of_match);
+-- 
+2.43.0
+
