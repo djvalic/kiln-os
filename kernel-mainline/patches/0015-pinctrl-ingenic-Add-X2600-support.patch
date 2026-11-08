@@ -1,7 +1,7 @@
 From ecea1a7f7519c263a8abb39b44604a53aedbcbc2 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 11:33:35 -0700
-Subject: [PATCH 15/23] pinctrl: ingenic: Add X2600 support
+Subject: [PATCH 15/24] pinctrl: ingenic: Add X2600 support
 
 The X2600 GPIO and pin controller follows the X2000 one: the same
 function, interrupt, pull-up/pull-down, edge and Schmitt trigger

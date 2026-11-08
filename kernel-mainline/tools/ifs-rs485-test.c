@@ -9,6 +9,11 @@
  * hex between "DICT BEGIN" and "DICT END" for checking on a PC (zlib, JSON).
  * Then the same request with RS-485 switched off, which must go unanswered.
  *
+ * Also fetches the dictionaries of the motion controller (ttyS2) and the
+ * toolhead board (ttyS5), Klipper MCUs at 230400 baud, a rate the X2600
+ * reaches only with its fractional divider; each port's divisor registers
+ * are printed.
+ *
  * Needs the IFS running Klipper firmware (115200 baud).
  *
  *   mipsel-linux-gcc -static -O2 -o init ifs-rs485-test.c
@@ -480,6 +485,75 @@ static int manual_round(int fd, int level)
 	return good;
 }
 
+/* Divisor latch, UMR and UACR of the UART at phys, through /dev/mem */
+static void show_divisor_at(const char *name, off_t phys)
+{
+	volatile uint32_t *u;
+	uint32_t lcr, dll, dlm, umr, uacr, div;
+	int fd = open("/dev/mem", O_RDWR | O_SYNC);
+
+	if (fd < 0)
+		return;
+	u = mmap(NULL, 0x1000, PROT_READ | PROT_WRITE, MAP_SHARED, fd, phys);
+	close(fd);
+	if (u == MAP_FAILED)
+		return;
+	lcr = u[3];
+	u[3] = lcr | 0x80;
+	dll = u[0] & 0xff;
+	dlm = u[1] & 0xff;
+	u[3] = lcr;
+	umr = u[9] & 0x1f;
+	uacr = u[10] & 0xfff;
+	div = dlm << 8 | dll;
+	printf("%s divisor: dll %u dlm %u umr %u uacr %03x: %u baud from 24 MHz\n",
+	       name, dll, dlm, umr, uacr,
+	       div && umr ? 24000000 / (div * umr) : 0);
+	munmap((void *)u, 0x1000);
+}
+
+static int open_port(const char *path, speed_t speed)
+{
+	struct termios tio;
+	int fd = open(path, O_RDWR | O_NOCTTY);
+
+	if (fd < 0) {
+		printf("open %s: %s\n", path, strerror(errno));
+		return -1;
+	}
+	tcgetattr(fd, &tio);
+	cfmakeraw(&tio);
+	tio.c_cflag |= CLOCAL | CREAD;
+	tio.c_cflag &= ~(CRTSCTS | CSTOPB | PARENB);
+	cfsetispeed(&tio, speed);
+	cfsetospeed(&tio, speed);
+	tcsetattr(fd, TCSANOW, &tio);
+	return fd;
+}
+
+/* Fetch an MCU's dictionary and print it as DICT BEGIN name ... DICT END */
+static void mcu_dictionary(const char *name, const char *path, speed_t speed,
+			   off_t phys)
+{
+	static uint8_t dict[65536];
+	int fd, i, n;
+
+	printf("=== %s (%s)\n", name, path);
+	fd = open_port(path, speed);
+	if (fd < 0)
+		return;
+	show_divisor_at(name, phys);
+	n = fetch_dictionary(fd, dict, sizeof(dict));
+	printf("%s dictionary: %d bytes%s\n", name, n, n > 0 ? "" : " (FAILED)");
+	if (n > 0) {
+		printf("DICT BEGIN %s\n", name);
+		for (i = 0; i < n; i++)
+			printf("%02x%s", dict[i], (i % 32 == 31) ? "\n" : "");
+		printf("\nDICT END\n");
+	}
+	close(fd);
+}
+
 int main(void)
 {
 	struct termios tio;
@@ -490,6 +564,24 @@ int main(void)
 	mkdir("/proc", 0755);
 	mount("proc", "/proc", "proc", 0, NULL);
 	setvbuf(stdout, NULL, _IONBF, 0);
+
+	{
+		/* The clock tree as the CGU driver computes it */
+		char line[256];
+		FILE *f;
+
+		mkdir("/sys", 0755);
+		mount("sysfs", "/sys", "sysfs", 0, NULL);
+		mount("debugfs", "/sys/kernel/debug", "debugfs", 0, NULL);
+		f = fopen("/sys/kernel/debug/clk/clk_summary", "r");
+		printf("=== clock tree\n");
+		while (f && fgets(line, sizeof(line), f))
+			printf("%s", line);
+		if (f)
+			fclose(f);
+	}
+	mcu_dictionary("mcu", "/dev/ttyS2", B230400, 0x10032000);
+	mcu_dictionary("eboard", "/dev/ttyS5", B230400, 0x10035000);
 
 	printf("\n=== ifs-rs485-test on %s\n", PORT);
 	fd = open(PORT, O_RDWR | O_NOCTTY);
@@ -521,7 +613,7 @@ int main(void)
 		n = fetch_dictionary(fd, dict, sizeof(dict));
 		printf("dictionary: %d bytes%s\n", n, n > 0 ? "" : " (FAILED)");
 		if (n > 0) {
-			printf("DICT BEGIN\n");
+			printf("DICT BEGIN ifs\n");
 			for (i = 0; i < n; i++)
 				printf("%02x%s", dict[i], (i % 32 == 31) ? "\n" : "");
 			printf("\nDICT END\n");

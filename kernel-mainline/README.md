@@ -45,20 +45,25 @@ Each patch must be acceptable to a mainline reviewer:
 
 ## Status
 
-**On the printer** (2026-11-08): 23 patches, checkpatch `--strict` clean,
-every commit builds with `W=1`.
+**On the printer** (2026-11-08): 24 patches, checkpatch `--strict` clean,
+every commit builds with `W=1`, `dt_binding_check` clean on every binding
+the series touches, `dtbs_check` clean but for the UART `dmas` below.
 
-- **Milestone 1, boot to a serial console:** the kernel reaches `Waiting
-  for root device`: XBurst II CPU (PRId 0x00132000), early console, 490 MB
-  RAM with highmem, the OST as clocksource, the five GPIO ports, `ttyS0`.
-- **IFS over RS-485 (part of step 4):** `ttyS4` with RS-485 from the device
-  tree (driver enable on PC3 through `rts-gpios`). With the port as the
-  kernel sets it up at boot, as Klipper finds it, the test initramfs
-  (`tools/ifs-rs485-test.c`) fetched the IFS's whole Klipper data
-  dictionary (3875 bytes, every frame CRC-checked): version
-  v0.13.0-806-g131fffdc4, stm32f103xe, as the stock kernel reports. With
-  RS-485 off the IFS stays silent. Klipper itself has not run on this kernel
-  yet: that needs the root file system, so eMMC (step 2).
+- **Boot to a serial console:** the kernel reaches `Waiting for root
+  device`: XBurst II CPU (PRId 0x00132000), early console, 490 MB RAM with
+  highmem, the OST as clocksource, the five GPIO ports, `ttyS0`.
+- **Clocks:** the CGU driver's rates match the boot loader's PLL settings:
+  APLL 1152 MHz (CPU 1152, L2 576), MPLL 1800 MHz (AHB0 360, AHB2 300,
+  PCLK 150, DDR 900), EPLL 434 MHz (LCD 31 MHz, through OD0 = 4).
+- **The three Klipper MCUs:** the test initramfs (`tools/ifs-rs485-test.c`)
+  fetched each one's whole data dictionary, every frame CRC-checked, with
+  the ports as the kernel sets them up at boot (as Klipper finds them):
+  the motion controller (`ttyS2`) and the toolhead board (`ttyS5`) at
+  230400 through the fractional divider (DLL 8, UMR 13: 230769 baud),
+  v0.13.0-803-g4cd711119; the IFS (`ttyS4`) over RS-485 with the driver
+  enable on PC3, v0.13.0-806-g131fffdc4. With RS-485 off the IFS stays
+  silent. Klipper itself has not run on this kernel yet: that needs the
+  root file system, so eMMC (step 2).
 
 Generic fixes this SoC needed, in the series:
 
@@ -76,15 +81,14 @@ Generic fixes this SoC needed, in the series:
 
 Open points:
 
-- **UART DMA.** The UART nodes have no `dmas` (as mainline's X1830), the
-  one known `dtbs_check` exception, until the X2600 PDMA is supported.
-- **PLL rates** are computed within the VCO range of Ingenic's PLL table
-  (672-2400 MHz); the documented range is not available.
-- **Baud rates.** `8250_ingenic` programs the X2600's fractional divider
-  (UMR/UACR): 230400 (motion MCU, eboard) is 0.16 % fast, as in Ingenic's
-  SDK, and every rate up to 1.5 Mbaud stays within 4 % of a bit at the end
-  of a frame (`tools/test_ingenic_uart_divisor.py`). Not yet tried on the
-  MCU links.
+- **sparse** has not run on the series (it could not be installed here).
+- **UART DMA.** The UART nodes have no `dmas`, the one `dtbs_check`
+  warning left (mainline's X1830 has the same), until the X2600 PDMA is
+  supported.
+- **From Ingenic's SDK, not documentation:** the PLL VCO range (672-2400
+  MHz, the range of Ingenic's PLL table; the boot loader's settings are
+  inside it), which pins have pull resistors (all allowed), and the X2600
+  cores using the X2000 CPU compatible (the same PRId).
 - **Sign-off.** The patches carry no `Signed-off-by`; only you can certify
   them (`git rebase --signoff v7.3.3` in the development tree).
 

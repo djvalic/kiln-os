@@ -1,7 +1,7 @@
-From 246f1db77ffe146a384df5e02f977c13081dffcf Mon Sep 17 00:00:00 2001
+From 93903aa74c50b2a2341621d64c6a7888dc162e9c Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 14:23:53 -0700
-Subject: [PATCH 19/23] dt-bindings: serial: ingenic: Allow RS-485 properties
+Subject: [PATCH 19/24] dt-bindings: serial: ingenic: Allow RS-485 properties
 
 The UARTs of Ingenic SoCs can drive a half-duplex RS-485 transceiver,
 its driver enable on a GPIO given as rts-gpios. Reference rs485.yaml so

@@ -1,7 +1,7 @@
 From e72e6785c7009843973544af2397ee1e74ab5c50 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 11:27:21 -0700
-Subject: [PATCH 11/23] clk: ingenic: Add X2600 CGU driver
+Subject: [PATCH 11/24] clk: ingenic: Add X2600 CGU driver
 
 Add support for the clock generation unit of the Ingenic X2600: the
 APLL, MPLL and EPLL, the CPU, L2 cache, AHB, APB and DDR clocks, the

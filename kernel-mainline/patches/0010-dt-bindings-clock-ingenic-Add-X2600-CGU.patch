@@ -1,7 +1,7 @@
 From dea78ed083ebdd9d4abd04b63cf50c6bfb34f927 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 11:24:32 -0700
-Subject: [PATCH 10/23] dt-bindings: clock: ingenic: Add X2600 CGU
+Subject: [PATCH 10/24] dt-bindings: clock: ingenic: Add X2600 CGU
 
 Document the clock generation unit of the Ingenic X2600 and add the
 clock numbers its consumers use.

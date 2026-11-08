@@ -1,7 +1,7 @@
 From 53853d9ac8db25f90b764d1a8de0e3e5d0267563 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 14:07:44 -0700
-Subject: [PATCH 02/23] MIPS: zboot: Write back and invalidate the L1 caches
+Subject: [PATCH 02/24] MIPS: zboot: Write back and invalidate the L1 caches
  before the kernel
 
 The decompressor writes the kernel through the data cache and jumps to

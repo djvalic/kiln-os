@@ -1,7 +1,7 @@
-From dfcc4258996d4f427b37357b267d1c4a89061a97 Mon Sep 17 00:00:00 2001
+From 44856ead32a6ed8c2c72f59dc045f5523470a6aa Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 14:24:07 -0700
-Subject: [PATCH 23/23] MIPS: dts: ingenic: ad5x: Add the filament changer port
+Subject: [PATCH 23/24] MIPS: dts: ingenic: ad5x: Add the filament changer port
 
 The Adventurer 5X talks to its filament changer (IFS) over a half-duplex
 RS-485 link on UART4 (PB24, PB25), the transceiver's driver enable on

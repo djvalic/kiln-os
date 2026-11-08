@@ -1,7 +1,7 @@
-From 4034719e11b2c6bb4b4ad7ed9aa3bdbeaebaddc5 Mon Sep 17 00:00:00 2001
+From e472974978b1b8fef36afe79a38efaad9221833a Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 11:37:01 -0700
-Subject: [PATCH 16/23] MIPS: dts: ingenic: Add X2600 SoC
+Subject: [PATCH 16/24] MIPS: dts: ingenic: Add X2600 SoC
 
 Describe the parts of the Ingenic X2600 that mainline supports: the two
 XBurst2 cores, the CPU interrupt controller with the per-core JZ4780
@@ -11,16 +11,16 @@ controller and the eight UARTs.
 The UARTs have no DMA properties yet: the X2600 PDMA is not supported,
 and 8250_ingenic does not use DMA.
 ---
- arch/mips/boot/dts/ingenic/x2600.dtsi | 272 ++++++++++++++++++++++++++
- 1 file changed, 272 insertions(+)
+ arch/mips/boot/dts/ingenic/x2600.dtsi | 270 ++++++++++++++++++++++++++
+ 1 file changed, 270 insertions(+)
  create mode 100644 arch/mips/boot/dts/ingenic/x2600.dtsi
 
 diff --git a/arch/mips/boot/dts/ingenic/x2600.dtsi b/arch/mips/boot/dts/ingenic/x2600.dtsi
 new file mode 100644
-index 000000000..8d454044e
+index 000000000..b633d3e81
 --- /dev/null
 +++ b/arch/mips/boot/dts/ingenic/x2600.dtsi
-@@ -0,0 +1,272 @@
+@@ -0,0 +1,270 @@
 +// SPDX-License-Identifier: GPL-2.0
 +#include <dt-bindings/clock/ingenic,x2600-cgu.h>
 +
@@ -39,7 +39,6 @@ index 000000000..8d454044e
 +			reg = <0>;
 +
 +			clocks = <&cgu X2600_CLK_CPU>;
-+			clock-names = "cpu";
 +		};
 +
 +		cpu1: cpu@1 {
@@ -48,7 +47,6 @@ index 000000000..8d454044e
 +			reg = <1>;
 +
 +			clocks = <&cgu X2600_CLK_CPU>;
-+			clock-names = "cpu";
 +		};
 +	};
 +
@@ -107,7 +105,7 @@ index 000000000..8d454044e
 +		interrupts = <4>;
 +	};
 +
-+	pinctrl: pin-controller@13601000 {
++	pinctrl: pinctrl@13601000 {
 +		compatible = "ingenic,x2600-pinctrl";
 +		reg = <0x13601000 0x5000>;
 +		#address-cells = <1>;
