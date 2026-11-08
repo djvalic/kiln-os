@@ -12,11 +12,14 @@
 #   - mainboard: Klipper "identify" on ttyS2; any other answer (or none):
 #     ad5x-flash-n32 through the chip's ROM bootloader (BOOT0/NRST over GPIO),
 #     verified, then identified again;
-#   - eboard: only its bootloader can write it, and that waits only right
-#     after power-on ("Ready" on ttyS5). If it waits and the last eboard
-#     flash on record isn't this version: ad5x-flash-iap, then start it ('A').
-#     If its application already runs (a warm restart) with another
-#     version: the screen asks for a power-cycle; the next start flashes it;
+#   - eboard: only its bootloader can write it, and that waits after
+#     power-on and after a reset ("Ready" on ttyS5). If it waits and the
+#     last eboard flash on record isn't this version: ad5x-flash-iap, then
+#     start it ('A'). If its application already runs (a warm restart) with
+#     another version, it is asked for the bootloader (Klipper's serial
+#     bootloader request: it resets into it), then flashed the same way.
+#     Only when that fails (Flashforge's application, no answer) the
+#     screen asks for a power-cycle; the next start flashes it;
 #   - IFS (filament unit), only with /data/ad5x/ifs-klipper.enable: Klipper
 #     "identify" on ttyS4 (115200); any other answer: ad5x-flash-ifs (F37
 #     entry, then the write; the F37 step erases the bootloader's flag page
@@ -37,6 +40,10 @@
 #                                      while Klipper runs: it holds the ports)
 #        ad5x-mcu flash-mainboard      flash the mainboard now (refused while
 #                                      Klipper runs)
+#        ad5x-mcu flash-eboard         flash the eboard now, without a
+#                                      power-cycle: its Klipper application
+#                                      restarts into the bootloader on
+#                                      request (refused while Klipper runs)
 #        ad5x-mcu flash-ifs [HEX]      flash the IFS now: this version, or
 #                                      HEX (refused while Klipper runs). If its
 #                                      bootloader doesn't answer, it keeps
@@ -80,6 +87,33 @@ eboard_runs() {	# [SECONDS] the eboard application answers with WANT within SECO
 		[ "$(ver "$EB" 5)" = "$WANT" ] && { say "eboard: answers $WANT after $(( $(secs) - t0 )) s"; return 0; }
 		[ "$(secs)" -lt $end ] || return 1
 	done
+}
+eboard_to_bootloader() {	# the eboard's Klipper application into its bootloader; 0 when it waits
+	# Klipper restarts into the bootloader when it gets the 32-byte serial
+	# request (patch 0002: a plain reset, after which the bootloader waits,
+	# as after power-on). Flashforge's application may not know it.
+	python3 - "$EB" 2>/dev/null <<'EOF' || return 1
+import os, sys, termios, tty
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_NOCTTY)
+tty.setraw(fd)
+a = termios.tcgetattr(fd)
+a[4] = a[5] = termios.B230400
+termios.tcsetattr(fd, termios.TCSANOW, a)
+# A SYNC to end any half-sent block, then the request
+os.write(fd, b"\x7e \x1c Request Serial Bootloader!! ~")
+termios.tcdrain(fd)
+os.close(fd)
+EOF
+	boot_eboard --port "$EB" --listen 2>/dev/null
+}
+eboard_soft_flash() {	# its application runs another version: flash it, no power-cycle; 0 when it runs WANT
+	say "eboard: asking its application for the bootloader"
+	eboard_to_bootloader || { say "eboard: no bootloader after the request"; return 1; }
+	flash_eboard || return 1
+	# flash_eboard may have started it already (a start reply other than ACK)
+	eboard_runs 5 && return 0
+	boot_eboard --port "$EB" 2>/dev/null || say "eboard: no start after 'A'"
+	eboard_runs 30
 }
 ifs_ver() {	# [TIMEOUT] -> the version the IFS reports as Klipper, empty if none answers
 	ad5x-mcu-version --port "$IFS_PORT" --baud 115200 --timeout "${1:-3}" 2>/dev/null
@@ -320,6 +354,16 @@ boot() {
 		boot_eboard --port "$EB" || say "eboard: no start after 'A'"
 	fi
 	eboard_runs && ev=$WANT || ev=$(ver "$EB")
+	# Its application runs, another version: try the bootloader on
+	# request first; the power-cycle only when that doesn't work
+	if [ -n "$ev" ] && [ "$ev" != "$WANT" ]; then
+		say "eboard runs '$ev', want $WANT"
+		if arm && eboard_soft_flash; then
+			ev=$WANT
+		else
+			ev=$(ver "$EB")
+		fi
+	fi
 	if [ "$ev" = "$WANT" ]; then
 		echo "$WANT" > "$ST/eboard"
 	else
@@ -402,6 +446,9 @@ status) status ;;
 flash-mainboard)
 	klippy_running && { echo "ad5x-mcu: Klipper runs: /etc/init.d/S61klipper stop first" >&2; exit 1; }
 	mkdir -p "$ST"; [ -n "$WANT" ] && tools && arm_stock && flash_mainboard ;;
+flash-eboard)
+	klippy_running && { echo "ad5x-mcu: Klipper runs: /etc/init.d/S61klipper stop first" >&2; exit 1; }
+	mkdir -p "$ST"; [ -n "$WANT" ] && tools && arm_stock && eboard_soft_flash ;;
 flash-ifs)
 	[ -f "$AD5X_DATA/ad5x/ifs-klipper.enable" ] || { echo "ad5x-mcu: no IFS flashing without $AD5X_DATA/ad5x/ifs-klipper.enable" >&2; exit 1; }
 	klippy_running && { echo "ad5x-mcu: Klipper runs: /etc/init.d/S61klipper stop first" >&2; exit 1; }
@@ -413,5 +460,5 @@ flash-ifs)
 	esac ;;
 arm-stock) mkdir -p "$ST"; arm_stock ;;
 tools) mkdir -p "$ST"; tools ;;
-*) sed -n '2,49p' "$0"; exit 2 ;;
+*) sed -n '2,56p' "$0"; exit 2 ;;
 esac
