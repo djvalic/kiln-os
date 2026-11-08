@@ -376,7 +376,7 @@ index ab21d6c..2c45e43 100644
  # Compound endstop wrapper. Allows homing against multiple virtual endstops and an optional
  # MCU endstop, triggering on the first to activate while recording the source of the trigger.
 diff --git a/extras/mmu/unit/mmu_buffer.py b/extras/mmu/unit/mmu_buffer.py
-index c49df7b..989cd84 100644
+index c49df7b..88e8658 100644
 --- a/extras/mmu/unit/mmu_buffer.py
 +++ b/extras/mmu/unit/mmu_buffer.py
 @@ -84,10 +84,11 @@ class MmuBuffer:
@@ -393,7 +393,7 @@ index c49df7b..989cd84 100644
              self.proportional_sensor = MmuProportionalSensor(
                  config,
                  f"{self.name}:{SENSOR_PROPORTIONAL}",
-@@ -187,7 +188,16 @@ class MmuProportionalSensor:
+@@ -187,7 +188,15 @@ class MmuProportionalSensor:
          self.tension_vsensor = None
  
          # Config
@@ -407,11 +407,10 @@ index c49df7b..989cd84 100644
 +            self._pins  = [self._pin]
 +        self.active_gate = 0
 +        self.printer.register_event_handler("mmu:gate_selected", self._handle_gate_selected)
-+        self.printer.register_event_handler("mmu:tool_selected", self._handle_tool_selected)
          max_tension     = config.getfloat('analog_max_tension', 1)
          max_compression = config.getfloat('analog_max_compression', 0)
  
-@@ -218,6 +228,8 @@ class MmuProportionalSensor:
+@@ -218,6 +227,8 @@ class MmuProportionalSensor:
          # State
          self.value_raw = 0.0 # Raw ADC value
          self.value = 0.0     # In [-1.0, 1.0]
@@ -420,7 +419,7 @@ index c49df7b..989cd84 100644
  
          # Virtual sensor setup
          threshold = self.analog_sensor_threshold
-@@ -233,15 +245,15 @@ class MmuProportionalSensor:
+@@ -233,15 +244,15 @@ class MmuProportionalSensor:
  
          # Setup ADC
          ppins = self.printer.lookup_object('pins')
@@ -445,7 +444,7 @@ index c49df7b..989cd84 100644
  
          self.runout_helper = MmuRunoutHelper(
              self.printer,
-@@ -260,11 +272,30 @@ class MmuProportionalSensor:
+@@ -260,11 +271,24 @@ class MmuProportionalSensor:
          # Create virtual tension sensor?
          if virtual_tension_sensor:
              self.tension_vsensor = MmuVirtualEndstopSensor(config, virtual_tension_sensor, None, register=register)
@@ -461,12 +460,6 @@ index c49df7b..989cd84 100644
 +            self.value_raw = self.values_raw[gate]
 +            self.value = self.values[gate]
 +
-+    def _handle_tool_selected(self, tool):
-+        if tool is not None and 0 <= tool < len(self._pins):
-+            self.active_gate = tool
-+            self.value_raw = self.values_raw[tool]
-+            self.value = self.values[tool]
-+
 +    def _multi_adc_callback(self, gate_idx, *args):
 +        read_time, read_value = MmuAdcHelper.unpack_adc_callback(*args)
 +        self.values_raw[gate_idx] = float(read_value)
@@ -477,7 +470,7 @@ index c49df7b..989cd84 100644
  
      def _map_reading(self, v_raw):
          n = self._neutral_point
-@@ -355,4 +386,7 @@ class MmuProportionalSensor:
+@@ -355,4 +379,7 @@ class MmuProportionalSensor:
              "enabled":          bool(self.runout_helper.sensor_enabled),
              "value":            self.value,             # in [-1.0, 1.0] (mapped)
              "value_raw":        self.value_raw,         # raw
