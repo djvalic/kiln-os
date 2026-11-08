@@ -18,12 +18,18 @@ start)
 	# Only with /data/ad5x/ifs-klipper.enable, and only when its firmware
 	# answers as Klipper; otherwise ifs.py talks to Flashforge's firmware.
 	# /run is cleared at boot: removing the enable file takes a reboot.
-	if [ -f /data/ad5x/ifs-klipper.enable ]; then
-		mkdir -p /run/ad5x/ifs-mcu && chmod 755 /run/ad5x/ifs-mcu	# read by Klipper's user
-		rm -f /run/ad5x/ifs-mcu/*.cfg
-		if ad5x-mcu-version --port /dev/ttyS4 --baud 115200 --timeout 2 >/dev/null 2>&1; then
-			ln -s /usr/share/ad5x/config/generic-flashforge-ifs.cfg /run/ad5x/ifs-mcu/
-		fi
+	# /run/ad5x/ifs-klipper records that it answered. A plugin that drives
+	# the IFS itself (plugin.json owns_ifs) brings its own pins: then Kiln's
+	# are left out. ad5x_plugins.py sets the link, here and (as Klipper's
+	# user, who owns the directory) whenever plugins change.
+	mkdir -p /run/ad5x/ifs-mcu && chown klipper:klipper /run/ad5x/ifs-mcu \
+		&& chmod 755 /run/ad5x/ifs-mcu
+	rm -f /run/ad5x/ifs-mcu/*.cfg /run/ad5x/ifs-klipper
+	if [ -f /data/ad5x/ifs-klipper.enable ] &&
+			ad5x-mcu-version --port /dev/ttyS4 --baud 115200 --timeout 2 >/dev/null 2>&1; then
+		: > /run/ad5x/ifs-klipper
+		/usr/bin/python3 $KROOT/klippy/extras/ad5x_plugins.py ifs-mcu \
+			$PD/config/plugins.cfg
 	fi
 	HOME=/home/klipper start-stop-daemon -S -b -m -p $PID -c klipper -N -10 \
 		-x /usr/bin/python3 -- $KROOT/klippy/klippy.py \

@@ -88,6 +88,14 @@ it starts its old firmware as before. Nothing is switched before every check
 has passed, and the boot flag is the very last thing written. Read
 `ad5x-install.log` on the stick for the reason.
 
+If the printer starts its old firmware as usual with the stick in, no
+"Installing" screen and no `ad5x-install.log` on the stick, stock didn't
+find the stick: its startup only looks at the first USB storage device
+(`sda`), and with other USB storage attached the stick can come up as
+`sdb` (issue #27). Unplug the other USB storage so the stick is the only
+one, then power-cycle with the stick in. Once Kiln OS is installed, its
+updates and the recovery OS don't depend on the device name.
+
 Markers you can put next to `flashforge_init.sh` on the stick:
 
 | File | Effect |

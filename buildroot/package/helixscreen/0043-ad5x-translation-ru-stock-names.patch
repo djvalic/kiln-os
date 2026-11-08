@@ -1,0 +1,883 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Sat, 7 Nov 2026 23:45:00 -0500
+Subject: [PATCH] translations: Russian stock Flashforge names, Kiln screens in Russian (issue #23)
+
+Russian uses the stock Flashforge names where they share a term (Смещение
+по Z, Wi-Fi, Компенсация вибраций), fixes four values patch 0030 left
+with doubled text and a slot counter that showed {0}, and adds the
+strings of the Kiln screens (plugins, sounds, nozzle size, bed soak, IFS
+activity, auto-refill, the AD5X setup wizard) to en.yml and ru.yml.
+Other languages show those in English.
+---
+
+diff --git a/translations/en.yml b/translations/en.yml
+index eefa58f..7865cc8 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -4931,3 +4931,210 @@ translations:
+   'Basic': 'Basic'
+   'Recycled': 'Recycled'
+   ~{:.1f} Hz / turn: ~{:.1f} Hz / turn
++  # Kiln OS (AD5X) strings from the Kiln HelixScreen patches
++  ', corners {:+.3f} to {:+.3f}': ', corners {:+.3f} to {:+.3f}'
++  ', not fully settled': ', not fully settled'
++  'Ad5xFinish': 'Ad5xFinish'
++  'Ad5xIfs': 'Ad5xIfs'
++  'Ad5xMesh': 'Ad5xMesh'
++  'Ad5xNozzle': 'Ad5xNozzle'
++  'Ad5xPid': 'Ad5xPid'
++  'Ad5xSelfcheck': 'Ad5xSelfcheck'
++  'Ad5xShaper': 'Ad5xShaper'
++  'Ad5xSoak': 'Ad5xSoak'
++  'Ad5xSummary': 'Ad5xSummary'
++  'Ad5xTimezone': 'Ad5xTimezone'
++  'Ad5xTrash': 'Ad5xTrash'
++  'Ad5xZoffset': 'Ad5xZoffset'
++  'After a cold start the bed keeps moving for minutes after it reaches its temperature. The print start waits this long before it checks Z; the purge counts toward it.': 'After a cold start the bed keeps moving for minutes after it reaches its temperature. The print start waits this long before it checks Z; the purge counts toward it.'
++  'All catalog plugins are installed': 'All catalog plugins are installed'
++  'Any colour': 'Any colour'
++  'Applying {}... Klipper restarts.': 'Applying {}... Klipper restarts.'
++  'Asks for the time zone and the nozzle size, then runs the self-check and the tuning steps again (PID, bed mesh, vibration, IFS, Z offset). Every step can be skipped. Results are saved at the end and Klipper restarts.': 'Asks for the time zone and the nozzle size, then runs the self-check and the tuning steps again (PID, bed mesh, vibration, IFS, Z offset). Every step can be skipped. Results are saved at the end and Klipper restarts.'
++  'Auto colour': 'Auto colour'
++  'Auto-refill': 'Auto-refill'
++  'Auto-refill is off, so no backup spool takes over.': 'Auto-refill is off, so no backup spool takes over.'
++  'Auto-refill is on and {} is a backup, but it did not take over.': 'Auto-refill is on and {} is a backup, but it did not take over.'
++  'Auto-refill is on, but no slot holds a backup for this spool.': 'Auto-refill is on, but no slot holds a backup for this spool.'
++  'Auto-refill to {}': 'Auto-refill to {}'
++  'AVAILABLE': 'AVAILABLE'
++  'Away 0.01': 'Away 0.01'
++  'Away 0.05': 'Away 0.05'
++  'BACKUPS': 'BACKUPS'
++  'backups for slot {}': 'backups for slot {}'
++  'Bed Heat Soak': 'Bed Heat Soak'
++  'Bed heat soak before the Z check': 'Bed heat soak before the Z check'
++  'Bed heat soak calibration (optional)': 'Bed heat soak calibration (optional)'
++  'Bed soak at {} °C calibrated.': 'Bed soak at {} °C calibrated.'
++  'Bed temperature': 'Bed temperature'
++  'Built-in': 'Built-in'
++  'CALIBRATE': 'CALIBRATE'
++  'Calibrate the bed soak at {} °C?': 'Calibrate the bed soak at {} °C?'
++  'CALIBRATED': 'CALIBRATED'
++  'CALIBRATING': 'CALIBRATING'
++  'Calibration stopped. Heaters off, nothing saved.': 'Calibration stopped. Heaters off, nothing saved.'
++  'Can''t calibrate now': 'Can''t calibrate now'
++  'Change the nozzle size to {}?': 'Change the nozzle size to {}?'
++  'Check that every part of the printer answers': 'Check that every part of the printer answers'
++  'Check the nozzle is over the trash bin': 'Check the nozzle is over the trash bin'
++  'Closer 0.01': 'Closer 0.01'
++  'Closer 0.05': 'Closer 0.05'
++  'Colour match': 'Colour match'
++  'Cutting filament': 'Cutting filament'
++  'Deletes the plugin from the printer.': 'Deletes the plugin from the printer.'
++  'Downloads the plugin and turns it on. Klipper restarts when it is installed.': 'Downloads the plugin and turns it on. Klipper restarts when it is installed.'
++  'Ejecting filament': 'Ejecting filament'
++  'Ejecting {}': 'Ejecting {}'
++  'Estimate first': 'Estimate first'
++  'Exact': 'Exact'
++  'Exact colour': 'Exact colour'
++  'Exact: the same colour code. Similar: close shades. Any colour: the same material is enough.': 'Exact: the same colour code. Similar: close shades. Any colour: the same material is enough.'
++  'Factory': 'Factory'
++  'FAIL': 'FAIL'
++  'Faster, reliable filament swaps': 'Faster, reliable filament swaps'
++  'Feed a spool up to the toolhead in advance': 'Feed a spool up to the toolhead in advance'
++  'Feed speed': 'Feed speed'
++  'Feeding filament': 'Feeding filament'
++  'Feeding {}': 'Feeding {}'
++  'Feeds the spool up to the toolhead sensor and backs it off, so a swap to it is quick': 'Feeds the spool up to the toolhead sensor and backs it off, so a swap to it is quick'
++  'Filament Auto-Refill': 'Filament Auto-Refill'
++  'Filament slots': 'Filament slots'
++  'Finds the fastest reliable feed speed and each slot''s distance to the toolhead sensor. Cuts and loads filament; takes several minutes.': 'Finds the fastest reliable feed speed and each slot''s distance to the toolhead sensor. Cuts and loads filament; takes several minutes.'
++  'First-layer test print with live adjustment': 'First-layer test print with live adjustment'
++  'Heating nozzle to {}°C': 'Heating nozzle to {}°C'
++  'Heating nozzle to {}°C ({}°C)': 'Heating nozzle to {}°C ({}°C)'
++  'Homing and heating...': 'Homing and heating...'
++  'Homing the IFS': 'Homing the IFS'
++  'IFS driver error': 'IFS driver error'
++  'Input shaping against ringing': 'Input shaping against ringing'
++  'Install {}?': 'Install {}?'
++  'INSTALLED': 'INSTALLED'
++  'Installing {}...': 'Installing {}...'
++  'Klipper did not come back with {} within a minute.': 'Klipper did not come back with {} within a minute.'
++  'Klipper restarts to apply this. Continue?': 'Klipper restarts to apply this. Continue?'
++  'Last tune': 'Last tune'
++  'Let the bed cool below {} °C (now {} °C). The calibration measures from a cold bed.': 'Let the bed cool below {} °C (now {} °C). The calibration measures from a cold bed.'
++  'Load distance': 'Load distance'
++  'Loaded in the toolhead': 'Loaded in the toolhead'
++  'Loading filament': 'Loading filament'
++  'Loading {}': 'Loading {}'
++  'Local time for this screen': 'Local time for this screen'
++  'local.cfg sets the nozzle size; edit it there': 'local.cfg sets the nozzle size; edit it there'
++  'material not set': 'material not set'
++  'Measure the shape of the bed': 'Measure the shape of the bed'
++  'Measures how long the bed keeps moving at that temperature. Takes 20-35 minutes; the bed must be empty and below 40 °C.': 'Measures how long the bed keeps moving at that temperature. Takes 20-35 minutes; the bed must be empty and below 40 °C.'
++  'Move the trash bin the nozzle purges into': 'Move the trash bin the nozzle purges into'
++  'Needs a newer Kiln OS': 'Needs a newer Kiln OS'
++  'New Patch': 'New Patch'
++  'no backup': 'no backup'
++  'No backup spool': 'No backup spool'
++  'no backup spools': 'no backup spools'
++  'No backups: put the same filament in another slot and set its material and colour on the Filament screen.': 'No backups: put the same filament in another slot and set its material and colour on the Filament screen.'
++  'No calibration during a print': 'No calibration during a print'
++  'No filament in the IFS': 'No filament in the IFS'
++  'No filament in this slot': 'No filament in this slot'
++  'No readings yet: the first comes once the bed is hot.': 'No readings yet: the first comes once the bed is hot.'
++  'Not available while printing': 'Not available while printing'
++  'not calibrated': 'not calibrated'
++  'Not calibrated yet: 3 s per degree the bed heats, at most 10 minutes': 'Not calibrated yet: 3 s per degree the bed heats, at most 10 minutes'
++  'Not tuned': 'Not tuned'
++  'Nozzle changed to {}': 'Nozzle changed to {}'
++  'Nozzle Size': 'Nozzle Size'
++  'PID tuning for the nozzle and the bed': 'PID tuning for the nozzle and the bed'
++  'Plugins can''t be changed during a print': 'Plugins can''t be changed during a print'
++  'Power On': 'Power On'
++  'Pre-feed slot 1': 'Pre-feed slot 1'
++  'Pre-feed slot 2': 'Pre-feed slot 2'
++  'Pre-feed slot 3': 'Pre-feed slot 3'
++  'Pre-feed slot 4': 'Pre-feed slot 4'
++  'Pre-feeding filament': 'Pre-feeding filament'
++  'Pre-feeding {}': 'Pre-feeding {}'
++  'Priming the nozzle': 'Priming the nozzle'
++  'Print Cancelled': 'Print Cancelled'
++  'Print Finished': 'Print Finished'
++  'Print Started': 'Print Started'
++  'Printer add-ons: switch on or off, install, update': 'Printer add-ons: switch on or off, install, update'
++  'Printer Setup: Bed Mesh': 'Printer Setup: Bed Mesh'
++  'Printer Setup: Bed Soak': 'Printer Setup: Bed Soak'
++  'Printer Setup: Heater Tuning': 'Printer Setup: Heater Tuning'
++  'Printer Setup: IFS Tuning': 'Printer Setup: IFS Tuning'
++  'Printer Setup: Purge Box': 'Printer Setup: Purge Box'
++  'Printer Setup: Save': 'Printer Setup: Save'
++  'Printer Setup: Self-Check': 'Printer Setup: Self-Check'
++  'Printer Setup: Summary': 'Printer Setup: Summary'
++  'Printer Setup: Vibration Compensation': 'Printer Setup: Vibration Compensation'
++  'Printer Setup: Z Offset': 'Printer Setup: Z Offset'
++  'PRINTER SOUNDS': 'PRINTER SOUNDS'
++  'Printer Sounds': 'Printer Sounds'
++  'Printer Volume': 'Printer Volume'
++  'Purge Box': 'Purge Box'
++  'Remove {}?': 'Remove {}?'
++  'Retracting filament': 'Retracting filament'
++  'Retracting {}': 'Retracting {}'
++  'Run Again': 'Run Again'
++  'Run Setup Wizard': 'Run Setup Wizard'
++  'Run the hotend PID tune and the first-layer Z offset test now? (The bed doesn''t need retuning.)': 'Run the hotend PID tune and the first-layer Z offset test now? (The bed doesn''t need retuning.)'
++  'Save the results to the printer configuration': 'Save the results to the printer configuration'
++  'Saving... Klipper is restarting.': 'Saving... Klipper is restarting.'
++  'Selecting a slot': 'Selecting a slot'
++  'Selecting the slot': 'Selecting the slot'
++  'Selecting {}': 'Selecting {}'
++  'Self-check, PID, bed mesh, vibration, IFS, Z offset': 'Self-check, PID, bed mesh, vibration, IFS, Z offset'
++  'Similar': 'Similar'
++  'Similar colour': 'Similar colour'
++  'Since the bed was hot, one round a minute:': 'Since the bed was hot, one round a minute:'
++  'Skip keeps the nozzle size Klipper runs with now.': 'Skip keeps the nozzle size Klipper runs with now.'
++  'Skip leaves this step out; you can run it later from Settings.': 'Skip leaves this step out; you can run it later from Settings.'
++  'Slot per file': 'Slot per file'
++  'Slot per file: the file''s own slot for each tool. Auto colour: each tool uses the loaded slot with the same material and the nearest colour, so a file made before can still print.': 'Slot per file: the file''s own slot for each tool. Auto colour: each tool uses the loaded slot with the same material and the nearest colour, so a file made before can still print.'
++  'Slot {}': 'Slot {}'
++  'Slot {} · {} → {}': 'Slot {} · {} → {}'
++  'Slots {}': 'Slots {}'
++  'Sounds the printer plays on print events': 'Sounds the printer plays on print events'
++  'STATUS': 'STATUS'
++  'Stop the calibration?': 'Stop the calibration?'
++  'Stopping: heaters off...': 'Stopping: heaters off...'
++  'Swap to {}': 'Swap to {}'
++  'Swapping filament': 'Swapping filament'
++  'The bed is still warm': 'The bed is still warm'
++  'The bed must be empty. The printer homes, heats the nozzle and bed and probes the bed every minute; this takes 20-35 minutes. Continue?': 'The bed must be empty. The printer homes, heats the nozzle and bed and probes the bed every minute; this takes 20-35 minutes. Continue?'
++  'The bed soak can''t be calibrated during a print.': 'The bed soak can''t be calibrated during a print.'
++  'The calibration ended; the list shows what was saved.': 'The calibration ended; the list shows what was saved.'
++  'The filament slots aren''t available yet': 'The filament slots aren''t available yet'
++  'The heaters switch off and nothing is saved.': 'The heaters switch off and nothing is saved.'
++  'The IFS is busy': 'The IFS is busy'
++  'The nozzle fitted to the printer': 'The nozzle fitted to the printer'
++  'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it.': 'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it.'
++  'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.': 'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.'
++  'The nozzle size can''t change during a print': 'The nozzle size can''t change during a print'
++  'The results so far, before Save': 'The results so far, before Save'
++  'The temperature to measure, from a cold bed': 'The temperature to measure, from a cold bed'
++  'This printer can''t stop the calibration from the screen; use the emergency stop.': 'This printer can''t stop the calibration from the screen; use the emergency stop.'
++  'Time Zone': 'Time Zone'
++  'To add one, put the same filament in a free slot and set its material and colour; it is fed in when it''s needed.': 'To add one, put the same filament in a free slot and set its material and colour; it is fed in when it''s needed.'
++  'Tool to slot': 'Tool to slot'
++  'Tune IFS': 'Tune IFS'
++  'Tune the IFS feed speed and load distances': 'Tune the IFS feed speed and load distances'
++  'Tuning': 'Tuning'
++  'Tuning is running': 'Tuning is running'
++  'Tuning the IFS': 'Tuning the IFS'
++  'Tuning {}': 'Tuning {}'
++  'Turn off auto-refill': 'Turn off auto-refill'
++  'Turn off {}?': 'Turn off {}?'
++  'Turn on {}?': 'Turn on {}?'
++  'Turns the plugin off and deletes it from the printer. Klipper restarts.': 'Turns the plugin off and deletes it from the printer. Klipper restarts.'
++  'Unload distance': 'Unload distance'
++  'Unloading {}': 'Unloading {}'
++  'Update {}?': 'Update {}?'
++  'Updating {}...': 'Updating {}...'
++  'Used by the screen''s clock and screensaver. You can change it later in Settings > Language & Time.': 'Used by the screen''s clock and screensaver. You can change it later in Settings > Language & Time.'
++  'Waiting for Klipper...': 'Waiting for Klipper...'
++  'WARN': 'WARN'
++  'When a spool runs out mid-print, the printer switches to a slot with the same material and colour and carries on.': 'When a spool runs out mid-print, the printer switches to a slot with the same material and colour and carries on.'
++  'When there is a new version, Klipper restarts to load it.': 'When there is a new version, Klipper restarts to load it.'
++  'Which slot each tool of a print uses': 'Which slot each tool of a print uses'
++  'Which spool auto-refill takes over with': 'Which spool auto-refill takes over with'
++  'Working on {}...': 'Working on {}...'
++  '{}  centre {:+.3f} mm': '{}  centre {:+.3f} mm'
++  '{} °C — {} (centre moved {:.2f} mm)': '{} °C — {} (centre moved {:.2f} mm)'
++  '{}, set in local.cfg': '{}, set in local.cfg'
+diff --git a/translations/ru.yml b/translations/ru.yml
+index edc3f47..2ea74d1 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -124,7 +124,7 @@ translations:
+   /wk: '/нед.'
+   0 = computed: 0 = вычислено
+   0 events queued: 0 событий в очереди
+-  0 slots: '{0} Слотов'
++  0 slots: '0 слотов'
+   '0.4-2mm direct drive, 4-6mm bowden': '0.4-2мм для директа, 4-6мм для боудена'
+   '0°': '0°'
+   1 Hardware Issue: '1 проблема с оборудованием'
+@@ -226,7 +226,7 @@ translations:
+   A restart is already in progress: Перезапуск уже выполняется
+   A right, B left: "A справа, B слева"
+   ? A sensor that measures the distance to the bed. HelixScreen uses it for Z offset calibration and probe tests on the Probe screen.
+-  : 'Датчик, измеряющий расстояние до стола. HelixScreen использует его для калибровки Z-смещения и тестов зонда на экране «Зонд».'
++  : 'Датчик, измеряющий расстояние до стола. HelixScreen использует его для калибровки смещения по Z и тестов зонда на экране «Зонд».'
+   A sensor that reads the air temperature inside the enclosure. Watch it on the chamber temperature screen.: 'Датчик, измеряющий температуру воздуха внутри камеры. Следите за ней на экране температуры камеры.'
+   A spool may be tangled or the drive gear is jammed: Катушка может быть запутана или заклинило приводную шестерню
+   ? A system that feeds several filaments to the toolhead, shown with its slot count. Manage the slots on the filament system screen.
+@@ -715,8 +715,7 @@ translations:
+   'Capabilities: ': 'Возможности: '
+   Carriage empty: Каретка пуста
+   Carriage empty · tap a head: 'Каретка пуста · выберите головку'
+-  Cartographer scan calibrate sent — use Z-Offset panel to adjust: Cartographer сканирующая калибровка отправлена — используйте панель Z-смещения для настройки
+-    калибровка отправлена — используйте панель Z-Offset для настройки
++  Cartographer scan calibrate sent — use Z-Offset panel to adjust: Cartographer сканирующая калибровка отправлена — используйте панель смещения по Z для настройки
+   Cartographer touch calibrate sent: Cartographer тактильная калибровка отправлена
+   Category: Категория
+   Center: 'Центр'
+@@ -913,7 +912,7 @@ translations:
+   Configure Moonraker: Настроить Moonraker
+   Configure Spoolman integration and weight sync settings.: Настройте интеграцию со
+     Spoolman и синхронизацию веса.
+-  Configure WiFi for this device, or skip if you're using Ethernet: Настройте WiFi
++  Configure WiFi for this device, or skip if you're using Ethernet: Настройте Wi-Fi
+     для этого устройства или пропустите, если используете Ethernet
+   Configure devices in Moonraker: Настроить устройства в Moonraker
+   Configure label printer and auto-discovery: Настройка принтера этикеток и автообнаружение
+@@ -1043,11 +1042,11 @@ translations:
+   Could not confirm cancel: Не удалось подтвердить отмену
+   Could not copy the printer's layout: "Не удалось скопировать раскладку принтера"
+   'Could not copy {} from USB: {}': 'Не удалось скопировать {} с USB: {}'
+-  Could not disconnect from WiFi: Не удалось отключиться от WiFi
++  Could not disconnect from WiFi: Не удалось отключиться от Wi-Fi
+   'Could not extract plate {} of {}: {}': 'Не удалось извлечь пластину {} из {}: {}'
+   Could not forget device: Не удалось забыть устройство
+   Could not free space: 'Не удалось освободить место'
+-  Could not initialize WiFi hardware. Check system configuration.: Не удалось инициализировать оборудование WiFi. Проверьте конфигурацию системы.
++  Could not initialize WiFi hardware. Check system configuration.: Не удалось инициализировать оборудование Wi-Fi. Проверьте конфигурацию системы.
+   Could not load printer database: Не удалось загрузить базу данных принтеров
+   Could not move the plate: Не удалось переместить стол
+ 
+@@ -1066,7 +1065,7 @@ translations:
+ 
+   "Could not save the mesh as '{}': {}": "Не удалось сохранить сетку как '{}': {}"
+   Could not save the printer image tags: Не удалось сохранить отметки изображения
+-  Could not set the WiFi country: Не удалось задать страну WiFi
++  Could not set the WiFi country: Не удалось задать страну Wi-Fi
+   'Could not set the material: {}': 'Не удалось задать материал: {}'
+   Could not skip {}: 'Не удалось пропустить {}'
+   Could not start Bluetooth discovery: Не удалось запустить поиск Bluetooth
+@@ -1263,7 +1262,7 @@ translations:
+   Duration: Длительность
+   E-Stop (M112): Авар. стоп (M112)
+   E-Stop Confirmation: Подтверждение аварийной остановки
+-  EDDY CURRENT: EDDY CURRENT
++  EDDY CURRENT: ВИХРЕТОКОВЫЙ ДАТЧИК
+   EEPROM error on CFS unit: Ошибка EEPROM в блоке CFS
+   ELECTRONICS & ACCESSORIES: 'ЭЛЕКТРОНИКА И АКСЕССУАРЫ'
+   EMERGENCY STOP: АВАРИЙНАЯ ОСТАНОВКА
+@@ -1311,8 +1310,8 @@ translations:
+   Enable Retraction: Включить аппаратный ретракт
+   Enable Timelapse: Включить таймлапс
+   Enable UI motion effects: Включить эффекты движения интерфейса
+-  Enable WiFi to scan: Включите WiFi для сканирования
+-  Enable WiFi to scan for networks: Включите WiFi для поиска сетей
++  Enable WiFi to scan: Включите Wi-Fi для сканирования
++  Enable WiFi to scan for networks: Включите Wi-Fi для поиска сетей
+   Enable anonymous statistics: Включить анонимную статистику
+   Enable assisted retraction at hub: 'Включить ретракцию с поддержкой на хабе'
+   Enable audio feedback: Включить звуковую обратную связь
+@@ -1348,7 +1347,7 @@ translations:
+   Enter G-code command...: Введите команду G-code...
+   Enter New PIN: Введите новый PIN
+   Enter PIN: Введите PIN
+-  Enter WiFi Password: Введите пароль WiFi
++  Enter WiFi Password: Введите пароль Wi-Fi
+   Enter a length between 100 and {:.0f}mm: 'Введите длину от 100 до {:.0f}мм'
+   Enter a multiplier between 0.5 and 2.0: 'Введите множитель от 0,5 до 2,0'
+   Enter a name for this profile: "Введите имя для этого профиля"
+@@ -1467,7 +1466,7 @@ translations:
+   Failed to connect to '{}': Не удалось подключиться к '{}'
+   Failed to connect to '{}'. Check password.: Не удалось подключиться к '{}'. Проверьте пароль.
+   'Failed to connect to ''{}'': {}': 'Не удалось подключиться к ''{}'': {}'
+-  'Failed to connect to WiFi network ''{}'': {}': 'Не удалось подключиться к сети WiFi ''{}'': {}'
++  'Failed to connect to WiFi network ''{}'': {}': 'Не удалось подключиться к сети Wi-Fi ''{}'': {}'
+   'Failed to connect: %s': 'Не удалось подключиться: %s'
+   'Failed to cool down: {}': 'Не удалось охладить: {}'
+   'Failed to create filament:': 'Не удалось создать филамент:'
+@@ -1476,7 +1475,7 @@ translations:
+   Failed to delete file: Не удалось удалить файл
+   Failed to delete profile: Не удалось удалить профиль
+   Failed to delete spool: Не удалось удалить катушку
+-  'Failed to disable WiFi: {}': 'Не удалось выключить WiFi: {}'
++  'Failed to disable WiFi: {}': 'Не удалось выключить Wi-Fi: {}'
+   'Failed to discard recovery data: {}': 'Не удалось удалить данные восстановления: {}'
+   'Failed to download G-code for Filament Mapping: {}': 'Не удалось скачать G-code для сопоставления филамента: {}'
+   'Failed to download G-code for modification: {}': 'Не удалось скачать G-code для
+@@ -1487,10 +1486,10 @@ translations:
+   : "Не удалось скачать moonraker.conf.\nПроверьте подключение принтера."
+   'Failed to download the .3mf for printing: {}': 'Не удалось загрузить .3mf для печати: {}'
+   Failed to duplicate spool: Не удалось дублировать катушку
+-  'Failed to enable WiFi: {}': 'Не удалось включить WiFi: {}'
++  'Failed to enable WiFi: {}': 'Не удалось включить Wi-Fi: {}'
+   Failed to enable tuning tower: Не удалось включить башню настройки
+   'Failed to exclude ''{}'': {}': 'Не удалось исключить ''{}'': {}'
+-  Failed to forget WiFi network '{}': Не удалось забыть сеть WiFi '{}'
++  Failed to forget WiFi network '{}': Не удалось забыть сеть Wi-Fi '{}'
+   Failed to get limits: Не удалось получить ограничения
+   Failed to initialize Bluetooth: Не удалось инициализировать Bluetooth
+   Failed to initialize Bluetooth context: Не удалось инициализировать контекст Bluetooth
+@@ -1531,7 +1530,7 @@ translations:
+   'Failed to resume: {}': 'Не удалось возобновить: {}'
+   'Failed to rewrite G-code for Filament Mapping: {}': 'Не удалось переписать G-code для сопоставления филамента: {}'
+   Failed to save LED configuration: Не удалось сохранить настройки LED
+-  Failed to save WiFi network: Не удалось сохранить сеть WiFi
++  Failed to save WiFi network: Не удалось сохранить сеть Wi-Fi
+   Failed to save config.: Не удалось сохранить конфигурацию.
+   Failed to save configuration: Не удалось сохранить конфигурацию
+   Failed to save fan configuration: Не удалось сохранить настройки вентилятора
+@@ -1545,7 +1544,7 @@ translations:
+   'Failed to send command: {}': 'Не удалось отправить команду: {}'
+   Failed to send print data: Не удалось отправить данные печати
+   Failed to send status request: Не удалось отправить запрос статуса
+-  Failed to set Z-offset: 'Не удалось установить Z-смещение'
++  Failed to set Z-offset: 'Не удалось установить смещение по Z'
+   Failed to set active spool: Не удалось установить активную катушку
+   'Failed to set flow rate: {}': 'Не удалось задать поток: {}'
+   'Failed to set pressure advance: {}': 'Не удалось задать Pressure Advance: {}'
+@@ -1553,7 +1552,7 @@ translations:
+   'Failed to set temperature: {}': 'Не удалось задать температуру: {}'
+   'Failed to set {} temp: {}': 'Не удалось задать темп. {}: {}'
+   Failed to show confirmation dialog: Не удалось показать диалог подтверждения
+-  Failed to start Z offset calibration: 'Не удалось запустить калибровку Z-смещения'
++  Failed to start Z offset calibration: 'Не удалось запустить калибровку смещения по Z'
+   Failed to start bed heating: 'Не удалось запустить нагрев стола'
+   'Failed to start installer: ': 'Не удалось запустить установщик: '
+   'Failed to start print: {}': 'Не удалось начать печать: {}'
+@@ -1772,7 +1771,7 @@ translations:
+   Get help and share feedback: Получить помощь и поделиться отзывом
+   Glass Effects: Эффекты стекла
+   Global: Общий
+-  Global Z offset: Общее Z-смещение
++  Global Z offset: Общее смещение по Z
+   Good: Хорошо
+   Good Accuracy: Хорошая точность
+   Good Enough: "Достаточно"
+@@ -2011,18 +2010,18 @@ translations:
+   Initializing...: Инициализация...
+   Initiate blade change procedure: 'Начать процедуру замены лезвия'
+   Input: Ввод
+-  Input Shaper: Input Shaper
+-  Input Shaper Calibration: 'Калибровка Input Shaper''а'
+-  Input Shaper Help: Справка по Input Shaper
++  Input Shaper: Компенсация вибраций
++  Input Shaper Calibration: 'Калибровка компенсации вибраций'
++  Input Shaper Help: 'Справка: компенсация вибраций'
+   Input Shaping: Компенсация вибраций
+-  Input shaper calibration sensors: Датчики калибровки Input Shaper'а
+-  Input shaper calibration...: Калибровка Input Shaper'а...
++  Input shaper calibration sensors: Датчики калибровки компенсации вибраций
++  Input shaper calibration...: Калибровка компенсации вибраций...
+   Input shaper settings applied!: Настройки компенсатора вибраций применены!
+   Input shaping reduces ringing and ghosting artifacts caused by printer vibrations during fast movements.: Компенсация
+     вибраций уменьшает артефакты звона и двоения, вызванные вибрациями принтера при
+     быстрых перемещениях.
+-  Input shaping reduces vibration artifacts (ringing) in your prints.: Input Shaper
+-    уменьшает артефакты вибрации (эхо) в ваших отпечатках.
++  Input shaping reduces vibration artifacts (ringing) in your prints.: Компенсация
++    вибраций уменьшает артефакты вибрации (эхо) в ваших отпечатках.
+   'Input: ': 'Вход: '
+   InputShaper: InputShaper
+   Insert filament: 'Вставить филамент'
+@@ -2242,7 +2241,7 @@ translations:
+   Link a slot to the Spoolman spool its tag names: 'Привязывать слот к катушке Spoolman, указанной в его метке'
+   List the shared screen with this printer's webcams: 'Показывать общий экран среди веб-камер этого принтера'
+   Listen to all theme sounds: Прослушать все звуки темы
+-  Live Z-offset, with baby steps and Save: Z-смещение в реальном времени, с подстройкой и сохранением
++  Live Z-offset, with baby steps and Save: Смещение по Z в реальном времени, с подстройкой и сохранением
+   Live view from your webcam: Прямая трансляция с веб-камеры
+   Load: Загрузить
+   Load Cell: 'Тензодатчик'
+@@ -2362,7 +2361,7 @@ translations:
+   Macros installed - restart pending: 'Макросы установлены - ожидается перезапуск'
+   Macros installed. Restart Klipper after the print to activate them.: 'Макросы установлены. Перезапустите Klipper после печати, чтобы активировать их.'
+   Macros updated. Restart Klipper after the print to activate them.: 'Макросы обновлены. Перезапустите Klipper после печати, чтобы активировать их.'
+-  'Macros, G-code console, calibration tools (PID, input shaper, z-offset), firmware updates, and developer utilities.': 'Макросы, консоль G-code, инструменты калибровки (PID, Input Shaper, Z-смещение), обновления прошивки и утилиты для разработчиков.'
++  'Macros, G-code console, calibration tools (PID, input shaper, z-offset), firmware updates, and developer utilities.': 'Макросы, консоль G-code, инструменты калибровки (PID, компенсация вибраций, смещение по Z), обновления прошивки и утилиты для разработчиков.'
+   Main LED Strip: Основная LED-лента
+   Maintaining: Поддержание
+   Maintenance: 'Обслуживание'
+@@ -2430,7 +2429,7 @@ translations:
+   Measurement incomplete. Try again.: Измерение не завершено. Повторите попытку.
+   Measures each toolhead's X, Y and Z offset so every head prints in the same place. Takes about 20 minutes.: Измеряет смещение X, Y и Z каждой головки, чтобы все печатали в одной точке. Занимает около 20 минут.
+   Measures the bed at each adjustment screw and says how far to turn it. Run it on the Screws Tilt screen.: 'Измеряет стол у каждого регулировочного винта и показывает, насколько его повернуть. Запускается на экране «Наклон винтов».'
+-  Measures vibration for input shaping. Run resonance tests on the Input Shaper screen.: 'Измеряет вибрацию для input shaping. Тесты резонанса запускаются на экране Input Shaper.'
++  Measures vibration for input shaping. Run resonance tests on the Input Shaper screen.: 'Измеряет вибрации для их компенсации. Тесты резонанса запускаются на экране «Компенсация вибраций».'
+   Measuring: 'Измерение'
+   Measuring accelerometer noise...: 'Измерение шума акселерометра...'
+   Measuring vibrations... {}%: 'Измерение вибраций... {}%'
+@@ -2780,7 +2779,7 @@ translations:
+   'Off': Выкл
+   'Off:': 'Выкл:'
+   'Off: runs with these values without asking': 'Выкл.: запуск с этими значениями без запроса'
+-  Offer to save Z-offset changes to the printer config: 'Предлагать сохранить изменения Z-смещения в конфигурации принтера'
++  Offer to save Z-offset changes to the printer config: 'Предлагать сохранить изменения смещения по Z в конфигурации принтера'
+   Offset: Смещение
+   Offsets Saved: Смещения сохранены
+   Offsets saved: Смещения сохранены
+@@ -3514,7 +3513,7 @@ translations:
+   Runs the printer's tool offset calibration for every tool.: Запускает калибровку смещений инструментов принтера для всех инструментов.
+   'SAVE_CONFIG failed: {}. Tool offsets were applied but not saved. Run SAVE_CONFIG manually or they will be lost on restart.': 'Ошибка SAVE_CONFIG: {}. Смещения инструментов применены, но не сохранены. Выполните SAVE_CONFIG вручную, иначе они будут потеряны при перезапуске.'
+   ? 'SAVE_CONFIG failed: {}. Z-offset was applied but not saved. Run SAVE_CONFIG manually or the offset will be lost on restart.'
+-  : 'Ошибка SAVE_CONFIG: {}. Z-смещение применено, но не сохранено. Выполните SAVE_CONFIG вручную, иначе смещение будет потеряно при перезапуске.'
++  : 'Ошибка SAVE_CONFIG: {}. Смещение по Z применено, но не сохранено. Выполните SAVE_CONFIG вручную, иначе смещение будет потеряно при перезапуске.'
+   SCREEN: ЭКРАН
+   SETTINGS: НАСТРОЙКИ
+   SHIPPED IMAGES: ВСТРОЕННЫЕ ИЗОБРАЖЕНИЯ
+@@ -3544,9 +3543,9 @@ translations:
+   Save Hardware: Сохранить оборудование
+   Save Printer Configuration: Сохранить конфигурацию принтера
+   Save Theme As: Сохранить тему как
+-  Save Z-Offset: Сохранить Z-смещение
+-  Save Z-Offset Buttons: 'Кнопки сохранения Z-смещения'
+-  Save Z-Offset?: Сохранить Z-смещение?
++  Save Z-Offset: Сохранить смещение по Z
++  Save Z-Offset Buttons: 'Кнопки сохранения смещения по Z'
++  Save Z-Offset?: Сохранить смещение по Z?
+   Save calibration: Сохранить калибровку
+   Save changes to persist them across restarts?: Сохранить изменения, чтобы они сохранились
+     после перезапуска?
+@@ -3556,7 +3555,7 @@ translations:
+   Save the new heater values to printer.cfg? Klipper restarts.: Сохранить новые значения нагревателя в printer.cfg? Klipper перезапустится.
+   Save to Spool: Сохранить на катушку
+   Save to Spoolman: Сохранить в Spoolman
+-  Saved Z-Offset: Сохранённое Z-смещение
++  Saved Z-Offset: Сохранённое смещение по Z
+   Saved to Spoolman, but the spool's price, location, lot and notes didn't save.: 'Сохранено в Spoolman, но цена, расположение, партия и заметки катушки не сохранились.'
+   Saved to crash_report.txt (QR not available): Сохранено в crash_report.txt (QR недоступен)
+   Saved to printer configuration.: Сохранено в конфигурацию принтера.
+@@ -3568,7 +3567,7 @@ translations:
+   Saves to Klipper config and restarts firmware.: Сохраняет в конфигурацию Klipper
+     и перезапускает прошивку.
+   Saving Configuration...: Сохранение конфигурации...
+-  Saving Z-offset...: Сохранение Z-смещения...
++  Saving Z-offset...: Сохранение смещения по Z...
+   Saving and finishing...: Сохранение и завершение...
+   Saving calibration: Сохранение калибровки
+   Saving calibration...: Сохранение калибровки...
+@@ -4300,13 +4299,13 @@ translations:
+   This Moonraker version can't hold uploads. Update Moonraker.: "Эта версия Moonraker не умеет задерживать загрузки. Обновите Moonraker."
+   This button controls: Эта кнопка управляет
+   This calibration uses the paper friction method to set your Z-offset.: Эта калибровка
+-    использует метод трения бумаги об сопло для установки Z-смещения.
++    использует метод трения бумаги об сопло для установки смещения по Z.
+   This cannot be undone.: Это действие нельзя отменить.
+   This channel offers v{}, older than the installed v{}. Anything added since then will be removed.: 'Этот канал предлагает v{}, старее установленной v{}. Всё добавленное с тех пор будет удалено.'
+   ? "This check runs Klipper's resonance test along each belt path and compares the two responses. Balanced belts give curves of the same shape, with peaks at the same frequencies.\n\nEach sweep takes a few minutes and moves the toolhead; keep clear of the printer while it runs."
+   : "Эта проверка запускает резонансный тест Klipper по каждому пути ремня и сравнивает два отклика. Сбалансированные ремни дают кривые одинаковой формы с пиками на одних и тех же частотах.\n\nКаждый свип занимает несколько минут и перемещает печатающую головку; держитесь подальше от принтера во время работы."
+   This clears every Endless Spool backup. The print will stop on runout until you set up Endless Spool again.: Это очистит все резервы бесконечной катушки. Печать будет останавливаться при окончании филамента, пока вы снова не настроите бесконечную катушку.
+-  This device has no wired network connection. If you turn WiFi off, it can only be turned back on from this screen.: У этого устройства нет проводного подключения к сети. Если выключить WiFi, включить его обратно можно будет только с этого экрана.
++  This device has no wired network connection. If you turn WiFi off, it can only be turned back on from this screen.: У этого устройства нет проводного подключения к сети. Если выключить Wi-Fi, включить его обратно можно будет только с этого экрана.
+   ? This device has only {} MB of RAM. Resonance calibration is memory-intensive and can make the printer firmware report a "Timer Too Close" error or restart mid-test. Continue anyway?
+   : На этом устройстве всего {} МБ ОЗУ. Калибровка резонансов требует много памяти и может привести к тому, что прошивка принтера сообщит об ошибке "Timer Too Close" или перезапустится во время теста. Всё равно продолжить?
+   ? This device has very little RAM. Resonance calibration is memory-intensive and may cause a "Timer Too Close" error. Continue anyway?
+@@ -4351,8 +4350,8 @@ translations:
+   "This printer's INDX macros are missing: {}": "В макросах INDX этого принтера отсутствует: {}"
+   This printer's Moonraker rejected its API key. Check the key in Settings > Connection.: 'Moonraker этого принтера отклонил его API-ключ. Проверьте ключ в Настройки > Соединение.'
+   This printer's Moonraker requires a login. Add its API key in Settings > Connection.: 'Moonraker этого принтера требует входа. Добавьте его API-ключ в Настройки > Соединение.'
+-  This printer's network service controls the WiFi radio: WiFi-модулем управляет сетевая служба этого принтера
+-  This printer's network service manages saved WiFi networks: Сохранёнными сетями WiFi управляет сетевая служба этого принтера
++  This printer's network service controls the WiFi radio: Wi-Fi-модулем управляет сетевая служба этого принтера
++  This printer's network service manages saved WiFi networks: Сохранёнными сетями Wi-Fi управляет сетевая служба этого принтера
+   This printer's screen has not shared a layout: "Экран этого принтера не поделился раскладкой"
+   ? This removes the plugin's Moonraker component and restarts Moonraker. The printer will briefly disconnect. If old phase-tracking lines are still in PRINT_START, they are removed too, with backups kept. A Klipper restart applies that.
+   : Это удаляет компонент Moonraker плагина и перезапускает Moonraker. Принтер ненадолго отключится. Если в PRINT_START всё ещё остались старые строки отслеживания фаз, они также удаляются, при этом резервные копии сохраняются. Перезапуск Klipper применяет эти изменения.
+@@ -4370,12 +4369,10 @@ translations:
+   'This wait ends only at its temperature: canceling takes an emergency stop and a firmware restart.': 'Это ожидание заканчивается только по достижении температуры: для отмены нужны аварийная остановка и перезапуск прошивки.'
+   ? This will apply the Z-offset to your endstop and restart Klipper to save the configuration.
+     The printer will briefly disconnect.
+-  : Z-смещение будет применено к вашему концевику, и Klipper перезапустится для сохранения конфигурации. Принтер ненадолго отключится.
+-    конфигурации. Принтер ненадолго отключится.
++  : Смещение по Z будет применено к вашему концевику, и Klipper перезапустится для сохранения конфигурации. Принтер ненадолго отключится.
+   ? This will apply the Z-offset to your probe and restart Klipper to save the configuration.
+     The printer will briefly disconnect.
+-  : Z-смещение будет применено к вашему зонду, и Klipper перезапустится для сохранения конфигурации. Принтер ненадолго отключится.
+-    конфигурации. Принтер ненадолго отключится.
++  : Смещение по Z будет применено к вашему зонду, и Klipper перезапустится для сохранения конфигурации. Принтер ненадолго отключится.
+   ? This will collect system info, logs, settings, and printer data to help diagnose
+     issues. No passwords or sensitive data will be included.
+   : Будут собраны системная информация, логи, настройки и данные принтера для диагностики.
+@@ -4393,7 +4390,7 @@ translations:
+     Klipper будет перезапущена. Активные операции будут прерваны.
+   This will restart Klipper.: Это перезапустит Klipper.
+   This will restore the default jog step distances for all three modes.: Это восстановит шаги перемещения по умолчанию для всех трёх режимов.
+-  This will save the Z-offset and restart Klipper to write the configuration. The printer will briefly disconnect.: Z-смещение будет сохранено, и Klipper перезапустится для записи конфигурации. Принтер ненадолго отключится.
++  This will save the Z-offset and restart Klipper to write the configuration. The printer will briefly disconnect.: Смещение по Z будет сохранено, и Klipper перезапустится для записи конфигурации. Принтер ненадолго отключится.
+   ? This writes the tool offsets to the printer's config and restarts Klipper, which takes a few seconds. Until then they apply only to this session.
+   : Смещения инструментов будут записаны в конфигурацию принтера, и Klipper перезапустится, это займёт несколько секунд. До этого они действуют только в текущем сеансе.
+   ? This {0} is set up for {1}, but it looks stock ({2}% confidence). A wrong profile applies incorrect pre-print options and presets.
+@@ -4519,7 +4516,7 @@ translations:
+   Turn Off: Выключить
+   Turn Off LEDs: "Выключить LED"
+   Turn Off Toolhead LED: "Выключить LED печатающей головки"
+-  Turn Off WiFi?: Выключить WiFi?
++  Turn Off WiFi?: Выключить Wi-Fi?
+   Turn On: Включить
+   Turn On LEDs: 'Включить LED'
+   Turn On Toolhead LED: "Включить LED печатающей головки"
+@@ -4739,35 +4736,35 @@ translations:
+   White: Белый
+   Why the curves differ: "Почему кривые различаются"
+   Why?: "Почему?"
+-  Wi-Fi: WiFi
++  Wi-Fi: Wi-Fi
+   Wi-Fi or ethernet connection status: Статус подключения Wi-Fi или Ethernet
+-  Wi-Fi {}: WiFi {}
+-  WiFi: WiFi
+-  WiFi Disabled: WiFi отключён
+-  WiFi Enabled: WiFi включён
+-  WiFi Network: Сеть WiFi
+-  WiFi Permission Denied: Нет доступа к WiFi
+-  WiFi Service Not Running: Служба WiFi не запущена
+-  WiFi Unavailable: WiFi недоступен
+-  WiFi and Ethernet configuration: Настройка WiFi и Ethernet
+-  WiFi control unavailable: Управление WiFi недоступно
+-  WiFi hardware unavailable: Оборудование WiFi недоступно
+-  'WiFi initialization failed: {}': 'Ошибка инициализации WiFi: {}'
+-  WiFi isn't responding: WiFi не отвечает
+-  WiFi radio did not change state: Состояние модуля WiFi не изменилось
+-  WiFi scan failed. Try again.: Поиск сетей WiFi не удался. Повторите попытку.
+-  WiFi unavailable: WiFi недоступен
+-  WiFi unavailable. Cannot connect to network.: WiFi недоступен. Невозможно подключиться к сети.
+-  WiFi unavailable. Cannot forget network.: WiFi недоступен. Невозможно забыть сеть.
+-  WiFi unavailable. Cannot scan for networks.: WiFi недоступен. Невозможно выполнить поиск сетей.
+-  WiFi was configured but hardware is not available. Check system configuration.: WiFi
++  Wi-Fi {}: Wi-Fi {}
++  WiFi: Wi-Fi
++  WiFi Disabled: Wi-Fi отключён
++  WiFi Enabled: Wi-Fi включён
++  WiFi Network: Сеть Wi-Fi
++  WiFi Permission Denied: Нет доступа к Wi-Fi
++  WiFi Service Not Running: Служба Wi-Fi не запущена
++  WiFi Unavailable: Wi-Fi недоступен
++  WiFi and Ethernet configuration: Настройка Wi-Fi и Ethernet
++  WiFi control unavailable: Управление Wi-Fi недоступно
++  WiFi hardware unavailable: Оборудование Wi-Fi недоступно
++  'WiFi initialization failed: {}': 'Ошибка инициализации Wi-Fi: {}'
++  WiFi isn't responding: Wi-Fi не отвечает
++  WiFi radio did not change state: Состояние модуля Wi-Fi не изменилось
++  WiFi scan failed. Try again.: Поиск сетей Wi-Fi не удался. Повторите попытку.
++  WiFi unavailable: Wi-Fi недоступен
++  WiFi unavailable. Cannot connect to network.: Wi-Fi недоступен. Невозможно подключиться к сети.
++  WiFi unavailable. Cannot forget network.: Wi-Fi недоступен. Невозможно забыть сеть.
++  WiFi unavailable. Cannot scan for networks.: Wi-Fi недоступен. Невозможно выполнить поиск сетей.
++  WiFi was configured but hardware is not available. Check system configuration.: Wi-Fi
+     был настроен, но оборудование недоступно. Проверьте конфигурацию системы.
+   Widget Labels: Подписи виджетов
+   Widget removed: 'Виджет удалён'
+   Width: Ширина
+   Width Sensor: 'Датчик диаметра'
+   Width Sensors: Датчики ширины
+-  Wifi: WiFi
++  Wifi: Wi-Fi
+   Will not switch spools on runout: При обрыве катушка не переключится
+   Wipe nozzle on silicone cleaning strip: 'Очистить сопло о силиконовую полоску'
+   With exhaust cooling on, the recirculation fan cannot be turned on: 'При охлаждении вытяжкой вентилятор рециркуляции включить нельзя'
+@@ -4819,7 +4816,7 @@ translations:
+   Z: Z
+   Z Calibration: Калибровка Z
+   Z Movement: Движение Z
+-  Z Offset: Z-смещение
++  Z Offset: Смещение по Z
+   Z Range: Диапазон Z
+   Z Tilt Adjust...: Регулировка наклона Z...
+   Z is at its limit ({}mm): Z на пределе ({}mm)
+@@ -4831,10 +4828,10 @@ translations:
+   Z {:.2f} mm: Z {:.2f} мм
+   Z {}, will lift to {}mm: 'Z {}, подъём до {}мм'
+   'Z {}, will lift to {}mm: last print is {}mm tall': 'Z {}, подъём до {}мм: высота последней печати {}мм'
+-  'Z-Off:': 'Z-Off:'
+-  Z-Offset: Z-смещение
+-  Z-Offset Calibration: Калибровка Z-смещения
+-  'Z-Offset:': 'Z-смещение:'
++  'Z-Off:': 'Z-смещ.:'
++  Z-Offset: Смещение по Z
++  Z-Offset Calibration: Калибровка смещения по Z
++  'Z-Offset:': 'Смещение по Z:'
+   Z-Tilt: Z-наклон
+   Z-Tilt Adjust: Регулировка Z-наклона
+   Z-Tilt Adjust complete: Z-Tilt завершён
+@@ -4844,14 +4841,13 @@ translations:
+   Z-Tilt may still be running — response timed out: Z-Tilt может ещё выполняться —
+     время ожидания истекло
+   Z-Tilt timed out: Z-Tilt — время ожидания истекло
+-  Z-offset calibration timed out: Время ожидания калибровки Z-смещения истекло
+-  'Z-offset failed: {}': 'Ошибка Z-смещения: {}'
+-  Z-offset is auto-saved by firmware: Z-смещение автосохраняется прошивкой
+-  Z-offset saved: Z-смещение сохранено
+-  Z-offset saved ({:+.3f}mm). Klipper restarting...: Z-смещение сохранено ({:+.3f}мм). Перезапуск Klipper...
+-    Перезапуск Klipper...
+-  Z-offset saved - Klipper restarting...: Z-смещение сохранено — Klipper перезапускается...
+-  'Z-offset saving is off, so HelixScreen did not save this. Klipper holds it until the next config save.': 'Сохранение Z-смещения выключено, поэтому HelixScreen не сохранил его. Klipper хранит значение до следующего сохранения конфигурации.'
++  Z-offset calibration timed out: Время ожидания калибровки смещения по Z истекло
++  'Z-offset failed: {}': 'Ошибка смещения по Z: {}'
++  Z-offset is auto-saved by firmware: Смещение по Z автосохраняется прошивкой
++  Z-offset saved: Смещение по Z сохранено
++  Z-offset saved ({:+.3f}mm). Klipper restarting...: Смещение по Z сохранено ({:+.3f}мм). Перезапуск Klipper...
++  Z-offset saved - Klipper restarting...: Смещение по Z сохранено — Klipper перезапускается...
++  'Z-offset saving is off, so HelixScreen did not save this. Klipper holds it until the next config save.': 'Сохранение смещения по Z выключено, поэтому HelixScreen не сохранил его. Klipper хранит значение до следующего сохранения конфигурации.'
+   'Z:': 'Z:'
+   'Z: 0.000': 'Z: 0.000'
+   Zone {:.0f}-{:.0f} Hz: "Зона {:.0f}-{:.0f} Гц"
+@@ -4917,7 +4913,7 @@ translations:
+   matched: совпадают
+   material differs: 'другой материал'
+   mm: мм
+-  mm Z-offset: мм Z-смещение
++  mm Z-offset: мм смещение по Z
+   mm before clog: мм до засора
+   needs: требуется
+   needs approval: требует подтверждения
+@@ -4970,7 +4966,7 @@ translations:
+   was {:.0f}%: 'было {:.0f}%'
+   what you turned: "сколько повернули"
+   within one bin: "в пределах одного бина"
+-  wpa_supplicant is not running. WiFi features unavailable.: wpa_supplicant не запущен. Функции WiFi недоступны.
++  wpa_supplicant is not running. WiFi features unavailable.: wpa_supplicant не запущен. Функции Wi-Fi недоступны.
+   you have: у вас
+   ? '{0} are open. {1} prints best in a warm, closed enclosure; an open door cools the chamber and can cause warping or layer splits. Close them, or start anyway.'
+   : '{0} открыты. {1} лучше всего печатается в тёплом закрытом корпусе; открытая дверь охлаждает камеру и может вызвать коробление или расслоение. Закройте их или начните всё равно.'
+@@ -5115,3 +5111,210 @@ translations:
+   'from tag': 'с метки'
+   'Browse catalog...': 'Обзор каталога...'
+   ~{:.1f} Hz / turn: "~{:.1f} Гц / оборот"
++  # Kiln OS (AD5X) strings from the Kiln HelixScreen patches
++  ', corners {:+.3f} to {:+.3f}': ', углы от {:+.3f} до {:+.3f}'
++  ', not fully settled': ', не до конца стабилизировался'
++  'Ad5xFinish': 'Ad5xFinish'
++  'Ad5xIfs': 'Ad5xIfs'
++  'Ad5xMesh': 'Ad5xMesh'
++  'Ad5xNozzle': 'Ad5xNozzle'
++  'Ad5xPid': 'Ad5xPid'
++  'Ad5xSelfcheck': 'Ad5xSelfcheck'
++  'Ad5xShaper': 'Ad5xShaper'
++  'Ad5xSoak': 'Ad5xSoak'
++  'Ad5xSummary': 'Ad5xSummary'
++  'Ad5xTimezone': 'Ad5xTimezone'
++  'Ad5xTrash': 'Ad5xTrash'
++  'Ad5xZoffset': 'Ad5xZoffset'
++  'After a cold start the bed keeps moving for minutes after it reaches its temperature. The print start waits this long before it checks Z; the purge counts toward it.': 'После холодного старта стол ещё несколько минут смещается после достижения температуры. Перед проверкой Z старт печати ждёт столько времени; продувка входит в это время.'
++  'All catalog plugins are installed': 'Все плагины из каталога установлены'
++  'Any colour': 'Любой цвет'
++  'Applying {}... Klipper restarts.': 'Применение {}... Klipper перезапускается.'
++  'Asks for the time zone and the nozzle size, then runs the self-check and the tuning steps again (PID, bed mesh, vibration, IFS, Z offset). Every step can be skipped. Results are saved at the end and Klipper restarts.': 'Запрашивает часовой пояс и размер сопла, затем снова выполняет самопроверку и шаги настройки (PID, сетка стола, вибрации, IFS, смещение по Z). Любой шаг можно пропустить. В конце результаты сохраняются, и Klipper перезапускается.'
++  'Auto colour': 'Авто по цвету'
++  'Auto-refill': 'Автозамена'
++  'Auto-refill is off, so no backup spool takes over.': 'Автозамена выключена, поэтому резервная катушка не подключится.'
++  'Auto-refill is on and {} is a backup, but it did not take over.': 'Автозамена включена и {} — резерв, но замена не произошла.'
++  'Auto-refill is on, but no slot holds a backup for this spool.': 'Автозамена включена, но ни в одном слоте нет резерва для этой катушки.'
++  'Auto-refill to {}': 'Автозамена: {}'
++  'AVAILABLE': 'ДОСТУПНЫЕ'
++  'Away 0.01': 'Дальше 0.01'
++  'Away 0.05': 'Дальше 0.05'
++  'BACKUPS': 'РЕЗЕРВЫ'
++  'backups for slot {}': 'резервы для слотов: {}'
++  'Bed Heat Soak': 'Прогрев стола'
++  'Bed heat soak before the Z check': 'Прогрев стола перед проверкой Z'
++  'Bed heat soak calibration (optional)': 'Калибровка прогрева стола (необязательно)'
++  'Bed soak at {} °C calibrated.': 'Прогрев стола при {} °C откалиброван.'
++  'Bed temperature': 'Температура стола'
++  'Built-in': 'Встроенный'
++  'CALIBRATE': 'КАЛИБРОВАТЬ'
++  'Calibrate the bed soak at {} °C?': 'Откалибровать прогрев стола при {} °C?'
++  'CALIBRATED': 'ОТКАЛИБРОВАНО'
++  'CALIBRATING': 'ИДЁТ КАЛИБРОВКА'
++  'Calibration stopped. Heaters off, nothing saved.': 'Калибровка остановлена. Нагреватели выключены, ничего не сохранено.'
++  'Can''t calibrate now': 'Сейчас калибровка невозможна'
++  'Change the nozzle size to {}?': 'Изменить размер сопла на {}?'
++  'Check that every part of the printer answers': 'Проверка, что все узлы принтера отвечают'
++  'Check the nozzle is over the trash bin': 'Проверьте, что сопло над лотком для отходов'
++  'Closer 0.01': 'Ближе 0.01'
++  'Closer 0.05': 'Ближе 0.05'
++  'Colour match': 'Подбор цвета'
++  'Cutting filament': 'Обрезка филамента'
++  'Deletes the plugin from the printer.': 'Удаляет плагин с принтера.'
++  'Downloads the plugin and turns it on. Klipper restarts when it is installed.': 'Загружает плагин и включает его. После установки Klipper перезапускается.'
++  'Ejecting filament': 'Извлечение филамента'
++  'Ejecting {}': 'Извлечение: {}'
++  'Estimate first': 'По оценке'
++  'Exact': 'Точный'
++  'Exact colour': 'Точный цвет'
++  'Exact: the same colour code. Similar: close shades. Any colour: the same material is enough.': 'Точный: тот же код цвета. Похожий: близкие оттенки. Любой цвет: достаточно того же материала.'
++  'Factory': 'Сброс'
++  'FAIL': 'СБОЙ'
++  'Faster, reliable filament swaps': 'Быстрая и надёжная смена филамента'
++  'Feed a spool up to the toolhead in advance': 'Заранее подать филамент к печатающей головке'
++  'Feed speed': 'Скорость подачи'
++  'Feeding filament': 'Подача филамента'
++  'Feeding {}': 'Подача: {}'
++  'Feeds the spool up to the toolhead sensor and backs it off, so a swap to it is quick': 'Подаёт филамент до датчика печатающей головки и немного отводит назад, чтобы смена на него была быстрой'
++  'Filament Auto-Refill': 'Автозамена филамента'
++  'Filament slots': 'Слоты филамента'
++  'Finds the fastest reliable feed speed and each slot''s distance to the toolhead sensor. Cuts and loads filament; takes several minutes.': 'Находит самую быструю надёжную скорость подачи и расстояние от каждого слота до датчика печатающей головки. Обрезает и загружает филамент; занимает несколько минут.'
++  'First-layer test print with live adjustment': 'Тестовая печать первого слоя с подстройкой на ходу'
++  'Heating nozzle to {}°C': 'Нагрев сопла до {}°C'
++  'Heating nozzle to {}°C ({}°C)': 'Нагрев сопла до {}°C ({}°C)'
++  'Homing and heating...': 'Парковка и нагрев...'
++  'Homing the IFS': 'Парковка IFS'
++  'IFS driver error': 'Ошибка драйвера IFS'
++  'Input shaping against ringing': 'Компенсация вибраций против звона'
++  'Install {}?': 'Установить {}?'
++  'INSTALLED': 'УСТАНОВЛЕННЫЕ'
++  'Installing {}...': 'Установка {}...'
++  'Klipper did not come back with {} within a minute.': 'Klipper не запустился с {} в течение минуты.'
++  'Klipper restarts to apply this. Continue?': 'Для применения Klipper перезапустится. Продолжить?'
++  'Last tune': 'Последняя настройка'
++  'Let the bed cool below {} °C (now {} °C). The calibration measures from a cold bed.': 'Дайте столу остыть ниже {} °C (сейчас {} °C). Калибровка измеряет от холодного стола.'
++  'Load distance': 'Расстояние загрузки'
++  'Loaded in the toolhead': 'Загружен в печатающую головку'
++  'Loading filament': 'Загрузка филамента'
++  'Loading {}': 'Загрузка: {}'
++  'Local time for this screen': 'Местное время для этого экрана'
++  'local.cfg sets the nozzle size; edit it there': 'Размер сопла задаётся в local.cfg; измените его там'
++  'material not set': 'материал не указан'
++  'Measure the shape of the bed': 'Измерение формы стола'
++  'Measures how long the bed keeps moving at that temperature. Takes 20-35 minutes; the bed must be empty and below 40 °C.': 'Измеряет, как долго стол смещается при этой температуре. Занимает 20-35 минут; стол должен быть пустым и холоднее 40 °C.'
++  'Move the trash bin the nozzle purges into': 'Переместить лоток, в который продувается сопло'
++  'Needs a newer Kiln OS': 'Нужна более новая Kiln OS'
++  'New Patch': 'Ещё образец'
++  'no backup': 'нет резерва'
++  'No backup spool': 'Нет резервной катушки'
++  'no backup spools': 'нет резервных катушек'
++  'No backups: put the same filament in another slot and set its material and colour on the Filament screen.': 'Нет резервов: вставьте тот же филамент в другой слот и укажите его материал и цвет на экране «Филамент».'
++  'No calibration during a print': 'Калибровка во время печати недоступна'
++  'No filament in the IFS': 'В IFS нет филамента'
++  'No filament in this slot': 'В этом слоте нет филамента'
++  'No readings yet: the first comes once the bed is hot.': 'Измерений пока нет: первое появится, когда стол нагреется.'
++  'Not available while printing': 'Недоступно во время печати'
++  'not calibrated': 'не откалибровано'
++  'Not calibrated yet: 3 s per degree the bed heats, at most 10 minutes': 'Ещё не откалибровано: 3 с на каждый градус нагрева стола, не более 10 минут'
++  'Not tuned': 'Не настроено'
++  'Nozzle changed to {}': 'Сопло изменено на {}'
++  'Nozzle Size': 'Размер сопла'
++  'PID tuning for the nozzle and the bed': 'Настройка PID сопла и стола'
++  'Plugins can''t be changed during a print': 'Во время печати плагины изменить нельзя'
++  'Power On': 'Включение'
++  'Pre-feed slot 1': 'Предзагрузка слота 1'
++  'Pre-feed slot 2': 'Предзагрузка слота 2'
++  'Pre-feed slot 3': 'Предзагрузка слота 3'
++  'Pre-feed slot 4': 'Предзагрузка слота 4'
++  'Pre-feeding filament': 'Предзагрузка филамента'
++  'Pre-feeding {}': 'Предзагрузка: {}'
++  'Priming the nozzle': 'Подготовка сопла'
++  'Print Cancelled': 'Печать отменена'
++  'Print Finished': 'Печать завершена'
++  'Print Started': 'Печать начата'
++  'Printer add-ons: switch on or off, install, update': 'Дополнения принтера: включение, установка, обновление'
++  'Printer Setup: Bed Mesh': 'Настройка принтера: сетка стола'
++  'Printer Setup: Bed Soak': 'Настройка принтера: прогрев стола'
++  'Printer Setup: Heater Tuning': 'Настройка принтера: нагреватели'
++  'Printer Setup: IFS Tuning': 'Настройка принтера: IFS'
++  'Printer Setup: Purge Box': 'Настройка принтера: лоток для отходов'
++  'Printer Setup: Save': 'Настройка принтера: сохранение'
++  'Printer Setup: Self-Check': 'Настройка принтера: самопроверка'
++  'Printer Setup: Summary': 'Настройка принтера: итоги'
++  'Printer Setup: Vibration Compensation': 'Настройка принтера: компенсация вибраций'
++  'Printer Setup: Z Offset': 'Настройка принтера: смещение по Z'
++  'PRINTER SOUNDS': 'ЗВУКИ ПРИНТЕРА'
++  'Printer Sounds': 'Звуки принтера'
++  'Printer Volume': 'Громкость принтера'
++  'Purge Box': 'Лоток для отходов'
++  'Remove {}?': 'Удалить {}?'
++  'Retracting filament': 'Втягивание филамента'
++  'Retracting {}': 'Втягивание: {}'
++  'Run Again': 'Ещё раз'
++  'Run Setup Wizard': 'Запустить мастер настройки'
++  'Run the hotend PID tune and the first-layer Z offset test now? (The bed doesn''t need retuning.)': 'Запустить сейчас настройку PID хотенда и тест смещения по Z на первом слое? (Стол перенастраивать не нужно.)'
++  'Save the results to the printer configuration': 'Сохранение результатов в конфигурацию принтера'
++  'Saving... Klipper is restarting.': 'Сохранение... Klipper перезапускается.'
++  'Selecting a slot': 'Выбор слота'
++  'Selecting the slot': 'Выбор слота'
++  'Selecting {}': 'Выбор: {}'
++  'Self-check, PID, bed mesh, vibration, IFS, Z offset': 'Самопроверка, PID, сетка стола, вибрации, IFS, смещение по Z'
++  'Similar': 'Похожий'
++  'Similar colour': 'Похожий цвет'
++  'Since the bed was hot, one round a minute:': 'С момента нагрева стола, один замер в минуту:'
++  'Skip keeps the nozzle size Klipper runs with now.': '«Пропустить» оставит размер сопла, с которым Klipper работает сейчас.'
++  'Skip leaves this step out; you can run it later from Settings.': '«Пропустить» пропускает этот шаг; его можно запустить позже из настроек.'
++  'Slot per file': 'Слот из файла'
++  'Slot per file: the file''s own slot for each tool. Auto colour: each tool uses the loaded slot with the same material and the nearest colour, so a file made before can still print.': 'Слот из файла: для каждого инструмента — слот, указанный в файле. Авто по цвету: каждый инструмент берёт загруженный слот с тем же материалом и ближайшим цветом, поэтому можно напечатать и ранее подготовленный файл.'
++  'Slot {}': 'Слот {}'
++  'Slot {} · {} → {}': 'Слот {} · {} → {}'
++  'Slots {}': 'Слоты {}'
++  'Sounds the printer plays on print events': 'Звуки принтера при событиях печати'
++  'STATUS': 'СОСТОЯНИЕ'
++  'Stop the calibration?': 'Остановить калибровку?'
++  'Stopping: heaters off...': 'Остановка: нагреватели выключаются...'
++  'Swap to {}': 'Смена: {}'
++  'Swapping filament': 'Смена филамента'
++  'The bed is still warm': 'Стол ещё тёплый'
++  'The bed must be empty. The printer homes, heats the nozzle and bed and probes the bed every minute; this takes 20-35 minutes. Continue?': 'Стол должен быть пустым. Принтер паркуется, нагревает сопло и стол и каждую минуту измеряет стол; это занимает 20-35 минут. Продолжить?'
++  'The bed soak can''t be calibrated during a print.': 'Прогрев стола нельзя калибровать во время печати.'
++  'The calibration ended; the list shows what was saved.': 'Калибровка завершена; в списке показано, что сохранено.'
++  'The filament slots aren''t available yet': 'Слоты филамента пока недоступны'
++  'The heaters switch off and nothing is saved.': 'Нагреватели выключатся, ничего не сохранится.'
++  'The IFS is busy': 'IFS занят'
++  'The nozzle fitted to the printer': 'Сопло, установленное на принтере'
++  'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it.': 'Сопло, установленное на принтере. От него зависят ширина линий, длина продувки и тест первого слоя.'
++  'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.': 'Сопло, установленное на принтере. От него зависят ширина линий, длина продувки и тест первого слоя. Изменить его можно позже в настройках.'
++  'The nozzle size can''t change during a print': 'Размер сопла нельзя изменить во время печати'
++  'The results so far, before Save': 'Результаты на данный момент, до сохранения'
++  'The temperature to measure, from a cold bed': 'Температура для измерения, начиная с холодного стола'
++  'This printer can''t stop the calibration from the screen; use the emergency stop.': 'Этот принтер не может остановить калибровку с экрана; используйте аварийную остановку.'
++  'Time Zone': 'Часовой пояс'
++  'To add one, put the same filament in a free slot and set its material and colour; it is fed in when it''s needed.': 'Чтобы добавить резерв, вставьте тот же филамент в свободный слот и укажите его материал и цвет; он будет подан, когда понадобится.'
++  'Tool to slot': 'Инструмент → слот'
++  'Tune IFS': 'Настроить IFS'
++  'Tune the IFS feed speed and load distances': 'Настройка скорости подачи и расстояний загрузки IFS'
++  'Tuning': 'Настройка'
++  'Tuning is running': 'Идёт настройка'
++  'Tuning the IFS': 'Настройка IFS'
++  'Tuning {}': 'Настройка: {}'
++  'Turn off auto-refill': 'Выключить автозамену'
++  'Turn off {}?': 'Выключить {}?'
++  'Turn on {}?': 'Включить {}?'
++  'Turns the plugin off and deletes it from the printer. Klipper restarts.': 'Выключает плагин и удаляет его с принтера. Klipper перезапускается.'
++  'Unload distance': 'Расстояние выгрузки'
++  'Unloading {}': 'Выгрузка: {}'
++  'Update {}?': 'Обновить {}?'
++  'Updating {}...': 'Обновление {}...'
++  'Used by the screen''s clock and screensaver. You can change it later in Settings > Language & Time.': 'Используется часами экрана и заставкой. Изменить можно позже в разделе «Настройки > Язык и время».'
++  'Waiting for Klipper...': 'Ожидание Klipper...'
++  'WARN': 'ВНИМАНИЕ'
++  'When a spool runs out mid-print, the printer switches to a slot with the same material and colour and carries on.': 'Если катушка заканчивается во время печати, принтер переключается на слот с тем же материалом и цветом и продолжает печать.'
++  'When there is a new version, Klipper restarts to load it.': 'Когда выходит новая версия, Klipper перезапускается, чтобы загрузить её.'
++  'Which slot each tool of a print uses': 'Какой слот использует каждый инструмент печати'
++  'Which spool auto-refill takes over with': 'Какой катушкой автозамена продолжает печать'
++  'Working on {}...': 'Обработка {}...'
++  '{}  centre {:+.3f} mm': '{}  центр {:+.3f} мм'
++  '{} °C — {} (centre moved {:.2f} mm)': '{} °C — {} (центр сместился на {:.2f} мм)'
++  '{}, set in local.cfg': '{}, задано в local.cfg'

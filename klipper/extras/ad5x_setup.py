@@ -519,7 +519,9 @@ class AD5XSetup:
         # IFS
         self._set("Checking the IFS")
         ifs = self.printer.lookup_object('ifs', None)
-        if ifs is None:
+        if ifs is None and self._ifs_owner():
+            add("IFS", True, "driven by plugin %s" % (self._ifs_owner(),))
+        elif ifs is None:
             add("IFS", False, "not configured", self.require_ifs)
         elif not ifs.get_status(now)['connected']:
             add("IFS", False, ifs.error or "not connected", self.require_ifs)
@@ -739,8 +741,19 @@ class AD5XSetup:
         self._result("shaper", ", ".join(res) or "done")
         self.pending_save = True
         self._set("Input shaper ready to save", 1.)
+    def _ifs_owner(self):
+        """The plugin that drives the IFS instead of Kiln's [ifs] module
+        (plugin.json owns_ifs), or ""."""
+        plugins = self.printer.lookup_object('ad5x_plugins', None)
+        return getattr(plugins, 'ifs_owner', "")
     def _step_ifs(self, params):
         ifs = self.printer.lookup_object('ifs', None)
+        if ifs is None and self._ifs_owner():
+            # Its own tuning, not IFS_TUNE
+            self._result("ifs", "skipped: plugin %s drives the IFS"
+                         % (self._ifs_owner(),))
+            self._set("IFS step skipped", 1.)
+            return
         if ifs is None:
             raise self.printer.command_error("No IFS configured")
         args = "".join(" %s=%s" % (k, params[k]) for k in ("TUBE", "CHANNEL")

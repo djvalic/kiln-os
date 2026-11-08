@@ -24,7 +24,20 @@
 # extras/<module>.py as extras.<module> and creates the objects for its
 # config sections the way Klipper's load_object does. Only enabled,
 # compatible plugins' code is loaded; a module name Klipper already has is
-# refused. No Klipper change needed.
+# refused. No Klipper change needed. Plugin API 1.5: a plugin's extras/ may
+# hold packages (extras/<name>/__init__.py; the plugin's extras/ joins the
+# extras package path, so its modules import each other as Klipper's do),
+# and printer.load_object() also finds plugin modules.
+#
+# IFS owner (plugin API 1.5): a plugin with "owns_ifs": true in plugin.json
+# drives the IFS itself (e.g. Happy Hare) instead of Kiln's [ifs] module.
+# It needs the IFS on Klipper firmware (S61klipper writes IFS_KLIPPER_FLAG
+# when the IFS answers as Klipper), and its plugin.cfg sets [ifs] enable:
+# False and brings its own [mcu ifs] and pins. Kiln's IFS pins
+# (generic-flashforge-ifs.cfg, linked into IFS_MCU_DIR, which ifs.cfg
+# includes) are then left out: sync_ifs_mcu keeps the link in step with
+# plugins.cfg, at boot (S61klipper: "ad5x_plugins.py ifs-mcu") and
+# whenever plugins change. One owner at a time.
 #
 # Moonraker: run as a script (S62moonraker does, before Moonraker starts)
 # it writes moonraker-plugins.conf, the [include] list of the enabled
@@ -54,7 +67,7 @@
 # Copyright (C) 2026  ad5x-open contributors
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
-import importlib.util
+import importlib
 import json
 import logging
 import os
@@ -67,7 +80,7 @@ import time
 # The plugin API this system offers (docs/plugin-api.md): major.minor.
 # Minor: additions only. Major: something plugins may use changed or went.
 # post-build.sh copies it to /usr/lib/os-release as AD5X_PLUGIN_API.
-PLUGIN_API_VERSION = "1.4"
+PLUGIN_API_VERSION = "1.5"
 
 CONFIG_DIR = "/home/klipper/printer_data/config"
 SHIPPED_DIR = "/usr/share/ad5x/plugins"
@@ -76,6 +89,12 @@ CATALOG_FILE = "/usr/share/ad5x/plugin-catalog.json"
 # Picked up by S68ad5x-update-agent (root), which restarts Moonraker
 MOONRAKER_RESTART_FILE = "/data/ad5x/kiln-update/restart-moonraker"
 GIT_TIMEOUT = 600.
+# IFS owner: Kiln's IFS pins are linked into IFS_MCU_DIR (ifs.cfg includes
+# it) while the IFS answers as Klipper (IFS_KLIPPER_FLAG, written by
+# S61klipper) and no enabled plugin owns the IFS
+IFS_MCU_DIR = "/run/ad5x/ifs-mcu"
+IFS_KLIPPER_FLAG = "/run/ad5x/ifs-klipper"
+GENERIC_IFS_CFG = "/usr/share/ad5x/config/generic-flashforge-ifs.cfg"
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
 MODULE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -99,6 +118,11 @@ ROOT_RATE_SECONDS = 10.
 ROOT_RESULT_WAIT = 600.
 # <plugin>.<n>.req / .res (n: a number, unique per request)
 ROOT_FILE_RE = re.compile(r"([a-z0-9][a-z0-9_-]{0,47})\.([0-9]{1,20})\.(req|res)")
+
+# Plugin extras dirs on the extras package path and the plugin modules
+# loaded, at this start (a RESTART runs in the same process)
+_PLUGIN_EXTRAS_DIRS = []
+_PLUGIN_MODULES = set()
 
 PLUGINS_HEADER = """\
 # Plugins enabled on this printer (docs/plugins.md). Written by
@@ -132,7 +156,7 @@ def read_metadata(plugin_dir, name):
     the file is unusable (the plugin can't be enabled then)."""
     meta = {'name': name, 'description': "", 'version': "", 'author': "",
             'url': "", 'requires_os': "", 'requires': [], 'conflicts': [],
-            'root_actions': [], 'error': None}
+            'root_actions': [], 'owns_ifs': False, 'error': None}
     path = os.path.join(plugin_dir, 'plugin.json')
     try:
         with open(path) as f:
@@ -154,6 +178,7 @@ def read_metadata(plugin_dir, name):
             val = [v.strip() for v in val.split(",")]
         meta[key] = [str(v).strip().lower() for v in val if str(v).strip()]
     meta['root_actions'] = read_root_actions(data, name)
+    meta['owns_ifs'] = data.get('owns_ifs') is True
     if data.get('name') not in (None, name):
         meta['error'] = "plugin.json name '%s' differs from the directory" % (
             data.get('name'),)
@@ -295,6 +320,27 @@ def read_enabled(plugins_file):
         if m is not None and m.group('name') not in names:
             names.append(m.group('name'))
     return names, lines
+
+def ifs_owners(names, found):
+    """Enabled plugins that drive the IFS themselves (owns_ifs)."""
+    return [n for n in names if n in found and found[n]['owns_ifs']
+            and not found[n]['error']]
+
+def sync_ifs_mcu(names, found, mcu_dir=IFS_MCU_DIR, flag=IFS_KLIPPER_FLAG,
+                 cfg=GENERIC_IFS_CFG):
+    """Link Kiln's IFS pins (cfg) into mcu_dir while the IFS answers as
+    Klipper (flag) and no enabled plugin owns the IFS; remove the link
+    otherwise. True when it changed. OSError when mcu_dir can't be
+    written."""
+    want = os.path.exists(flag) and not ifs_owners(names, found)
+    link = os.path.join(mcu_dir, os.path.basename(cfg))
+    if want == os.path.lexists(link):
+        return False
+    if want:
+        os.symlink(cfg, link)
+    else:
+        os.unlink(link)
+    return True
 
 def moonraker_text(names, found):
     lines = [MOONRAKER_HEADER.rstrip("\n")]
@@ -596,6 +642,10 @@ class AD5XPlugins:
         self.catalog_file = config.get('catalog_file', CATALOG_FILE)
         self.restart_file = config.get('moonraker_restart_file',
                                        MOONRAKER_RESTART_FILE)
+        self.ifs_mcu_dir = config.get('ifs_mcu_dir', IFS_MCU_DIR)
+        self.ifs_klipper_flag = config.get('ifs_klipper_flag',
+                                           IFS_KLIPPER_FLAG)
+        self.generic_ifs_cfg = config.get('generic_ifs_cfg', GENERIC_IFS_CFG)
         self.catalog = read_catalog(self.catalog_file)
         # The last install/update/remove result survives the Klipper restart
         # that enabling a plugin makes (the screen shows it after)
@@ -617,17 +667,20 @@ class AD5XPlugins:
         self.loaded = read_enabled(self.plugins_file)[0]
         self.warnings = []
         self.modules = {}
-        self._load_extras(config)
-        self.dev_root = DevRoot(self, config)
-        self.printer.register_event_handler("klippy:ready",
-                                            self._handle_ready)
+        # The plugin driving the IFS at this start ("": Kiln's [ifs])
+        self.ifs_owner = (ifs_owners(self.loaded, self.found) or [""])[0]
         # Also while Klipper isn't ready: a plugin whose config stops
-        # Klipper can be disabled from the console (when the error comes
-        # after this section, as a plugin's own sections do)
+        # Klipper can be disabled from the console (also when the error is
+        # raised below, by the IFS owner check or a plugin's extras)
         for cmd in ("ENABLE_PLUGIN", "DISABLE_PLUGIN", "LIST_PLUGINS"):
             self.gcode.register_command(cmd, getattr(self, "cmd_" + cmd),
                                         when_not_ready=True,
                                         desc=getattr(self, "cmd_%s_help" % cmd))
+        self._check_ifs_owner(config)
+        self._load_extras(config)
+        self.dev_root = DevRoot(self, config)
+        self.printer.register_event_handler("klippy:ready",
+                                            self._handle_ready)
         for cmd in ("INSTALL_PLUGIN", "UPDATE_PLUGIN", "REMOVE_PLUGIN"):
             self.gcode.register_command(cmd, getattr(self, "cmd_" + cmd),
                                         desc=getattr(self, "cmd_%s_help" % cmd))
@@ -660,6 +713,40 @@ class AD5XPlugins:
                           name))
             return None
         return info
+    def _sync_ifs_mcu(self, names):
+        try:
+            return sync_ifs_mcu(names, self.found, self.ifs_mcu_dir,
+                                self.ifs_klipper_flag, self.generic_ifs_cfg)
+        except OSError as e:
+            logging.info("ad5x_plugins: can't update %s: %s",
+                         self.ifs_mcu_dir, e)
+            return False
+    def _check_ifs_owner(self, config):
+        """A plugin that owns the IFS: only one, only with the IFS on
+        Klipper firmware, with Kiln's [ifs] off and Kiln's IFS pins left
+        out. Kiln's IFS pins back when no plugin owns it."""
+        owners = ifs_owners(self.loaded, self.found)
+        if len(owners) > 1:
+            raise config.error(
+                "Plugins %s all own the IFS; only one can (DISABLE_PLUGIN "
+                "NAME=%s)" % (", ".join(owners), owners[-1]))
+        if owners and not os.path.exists(self.ifs_klipper_flag):
+            raise config.error(
+                "Plugin %s drives the IFS, which needs the IFS on Klipper "
+                "firmware (/data/ad5x/ifs-klipper.enable, then reboot). "
+                "DISABLE_PLUGIN NAME=%s to use Kiln's IFS module"
+                % (owners[0], owners[0]))
+        # plugins.cfg edited by hand since the link was set: Klipper has
+        # read the old pins; fixed for the next start
+        if self._sync_ifs_mcu(self.loaded):
+            raise config.error(
+                "The IFS changed hands (%s); RESTART to load its pins"
+                % ("plugin " + owners[0] if owners
+                   else "Kiln's IFS module",))
+        if owners and self.printer.lookup_object('ifs', None) is not None:
+            raise config.error(
+                "Plugin %s drives the IFS: its plugin.cfg must set "
+                "[ifs] enable: False" % (owners[0],))
     def _load_extras(self, config):
         core = os.path.dirname(os.path.abspath(__file__))
         # Libraries the plugins bring (python/), after Klipper's own
@@ -673,11 +760,16 @@ class AD5XPlugins:
                 continue
             ext = os.path.join(info['dir'], 'extras')
             for fn in sorted(os.listdir(ext)):
-                mod = fn[:-3]
-                if not fn.endswith('.py') or not MODULE_RE.match(mod):
+                if fn.endswith('.py'):
+                    mod = fn[:-3]
+                elif os.path.isfile(os.path.join(ext, fn, '__init__.py')):
+                    mod = fn
+                else:
                     continue
-                if os.path.exists(os.path.join(core, fn)) or os.path.isdir(
-                        os.path.join(core, mod)):
+                if not MODULE_RE.match(mod):
+                    continue
+                if os.path.exists(os.path.join(core, mod + '.py')) or \
+                        os.path.isdir(os.path.join(core, mod)):
                     raise config.error(
                         "Plugin %s: extras/%s has the name of a Klipper "
                         "module; rename it" % (name, fn))
@@ -685,35 +777,65 @@ class AD5XPlugins:
                     raise config.error(
                         "Plugins %s and %s both have extras/%s"
                         % (wanted[mod][0], name, fn))
-                wanted[mod] = (name, os.path.join(ext, fn))
-        for mod, (name, path) in sorted(wanted.items()):
-            full = 'extras.' + mod
-            spec = importlib.util.spec_from_file_location(full, path)
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[full] = module
-            try:
-                spec.loader.exec_module(module)
-            except Exception as e:
+                wanted[mod] = (name, ext)
+        # The plugins' extras/ dirs join the extras package path (after
+        # Klipper's own), so plugin modules and packages import as
+        # extras.<module> and import each other. A RESTART starts over:
+        # the last start's dirs and modules are dropped first.
+        path = sys.modules['extras'].__path__
+        for d in _PLUGIN_EXTRAS_DIRS:
+            if d in path:
+                path.remove(d)
+        for full in list(sys.modules):
+            if full.split('.')[0] == 'extras' and len(full.split('.')) > 1 \
+                    and full.split('.')[1] in _PLUGIN_MODULES:
                 del sys.modules[full]
-                logging.exception("ad5x_plugins: loading %s", path)
-                raise config.error("Plugin %s: extras/%s.py failed to load: "
+        del _PLUGIN_EXTRAS_DIRS[:]
+        _PLUGIN_MODULES.clear()
+        for name, ext in wanted.values():
+            if ext not in path:
+                path.append(ext)
+                _PLUGIN_EXTRAS_DIRS.append(ext)
+        for mod, (name, ext) in sorted(wanted.items()):
+            full = 'extras.' + mod
+            _PLUGIN_MODULES.add(mod)
+            try:
+                module = importlib.import_module(full)
+            except Exception as e:
+                sys.modules.pop(full, None)
+                logging.exception("ad5x_plugins: loading %s from %s", mod,
+                                  ext)
+                raise config.error("Plugin %s: extras/%s failed to load: "
                                    "%s" % (name, mod, e))
             self.modules[mod] = module
             logging.info("ad5x_plugins: loaded %s from plugin %s", mod, name)
-        # Objects for the plugin modules' config sections, as load_object
-        # would make them (it only looks in klippy/extras)
+        if not self.modules:
+            return
+        # printer.load_object() only looks in klippy/extras: also find the
+        # plugin modules (a plugin module may load another's section)
+        self._klipper_load_object = self.printer.load_object
+        self.printer.load_object = self._load_object
+        # Objects for the plugin modules' config sections, as Klipper's
+        # loader makes them for its own
         for section in config.get_prefix_sections(''):
             sname = section.get_name()
-            parts = sname.split()
-            module = self.modules.get(parts[0])
-            if module is None or self.printer.lookup_object(
-                    sname, None) is not None:
-                continue
-            init = getattr(module, 'load_config_prefix' if len(parts) > 1
-                           else 'load_config', None)
-            if init is None:
-                raise config.error("Unable to load module '%s'" % (sname,))
-            self.printer.add_object(sname, init(config.getsection(sname)))
+            if sname.split()[0] in self.modules:
+                self._load_object(config, sname)
+    def _load_object(self, config, section, *default):
+        parts = section.split()
+        module = self.modules.get(parts[0])
+        if module is None or self.printer.lookup_object(
+                section, None) is not None:
+            return self._klipper_load_object(config, section, *default)
+        init = getattr(module, 'load_config_prefix' if len(parts) > 1
+                       else 'load_config', None)
+        if init is None:
+            if default:
+                return default[0]
+            raise config.error("Unable to load module '%s'" % (section,))
+        obj = init(config.getsection(section))
+        self.printer.add_object(section, obj)
+        return obj
     def _handle_ready(self):
         # Keep the Moonraker list in step (a system update may have added
         # or dropped a plugin's moonraker.conf). Moonraker reads it at its
@@ -750,7 +872,9 @@ class AD5XPlugins:
                 out.append("[include %s/plugi[n].cfg]"
                            % (self.found[name]['dir'],))
         write_if_changed(self.plugins_file, "\n".join(out) + "\n")
-        return read_enabled(self.plugins_file)[0]
+        names = read_enabled(self.plugins_file)[0]
+        self._sync_ifs_mcu(names)
+        return names
     # Commands
     def _check_idle(self, gcmd):
         ps = self.printer.lookup_object('print_stats', None)
@@ -847,6 +971,8 @@ class AD5XPlugins:
         msg += "; restarting Klipper"
         self.job.update({'state': 'done', 'message': msg})
         self._save_job()
+        # An update may have made it an IFS owner, or not
+        self._sync_ifs_mcu(read_enabled(self.plugins_file)[0])
         if touches_moonraker(info):
             self._restart_moonraker()
         self.gcode.run_script("RESTART")
@@ -989,6 +1115,16 @@ class AD5XPlugins:
         if clash:
             raise gcmd.error("Plugin %s can't be on together with %s: "
                              "disable it first" % (name, ", ".join(clash)))
+        if info['owns_ifs']:
+            owners = ifs_owners(enabled, self.found)
+            if owners:
+                raise gcmd.error("Plugin %s drives the IFS already: disable "
+                                 "it first" % (owners[0],))
+            if not os.path.exists(self.ifs_klipper_flag):
+                raise gcmd.error(
+                    "Plugin %s drives the IFS, which needs the IFS on "
+                    "Klipper firmware (/data/ad5x/ifs-klipper.enable, then "
+                    "reboot)" % (name,))
         self._check_idle(gcmd)
         gcmd.respond_info("Plugin %s %s enabled (%s)" % (
             name, info['version'], info['source']))
@@ -1042,6 +1178,8 @@ class AD5XPlugins:
                 notes.append("requires " + ", ".join(info['requires']))
             if info['conflicts']:
                 notes.append("conflicts with " + ", ".join(info['conflicts']))
+            if info['owns_ifs']:
+                notes.append("drives the IFS")
             if on != (name in self.loaded):
                 notes.append("until RESTART")
             lines.append("%s %s %s (%s%s): %s%s" % (
@@ -1058,8 +1196,9 @@ class AD5XPlugins:
             'available': {
                 n: {k: i[k] for k in ('source', 'description', 'version',
                                       'author', 'url', 'requires_os',
-                                      'compatible')}
+                                      'compatible', 'owns_ifs')}
                 for n, i in self.found.items()},
+            'ifs_owner': self.ifs_owner,
             'catalog': {
                 n: dict(e, compatible=api_compatible(e['requires_os']),
                         installed=n in self.found
@@ -1074,14 +1213,26 @@ def load_config(config):
 def main(argv):
     """S62moonraker, before Moonraker starts: write the Moonraker include
     list, or print the plugins' library and component directories.
+    S61klipper, before Klipper starts: link Kiln's IFS pins, or not.
     usage: ad5x_plugins.py moonraker [PLUGINS_CFG [OUT]]
-           ad5x_plugins.py env [PLUGINS_CFG]"""
-    if len(argv) < 2 or argv[1] not in ("moonraker", "env"):
+           ad5x_plugins.py env [PLUGINS_CFG]
+           ad5x_plugins.py ifs-mcu [PLUGINS_CFG]"""
+    if len(argv) < 2 or argv[1] not in ("moonraker", "env", "ifs-mcu"):
         sys.stderr.write("usage: ad5x_plugins.py moonraker [PLUGINS_CFG "
-                         "[OUT]] | env [PLUGINS_CFG]\n")
+                         "[OUT]] | env [PLUGINS_CFG] | ifs-mcu "
+                         "[PLUGINS_CFG]\n")
         return 2
     plugins_file = argv[2] if len(argv) > 2 else os.path.join(
         CONFIG_DIR, 'plugins.cfg')
+    if argv[1] == "ifs-mcu":
+        names = read_enabled(plugins_file)[0]
+        found = scan(SHIPPED_DIR, USER_DIR)
+        sync_ifs_mcu(names, found, IFS_MCU_DIR, IFS_KLIPPER_FLAG,
+                     GENERIC_IFS_CFG)
+        owners = ifs_owners(names, found)
+        if owners:
+            sys.stdout.write("IFS driven by plugin %s\n" % (owners[0],))
+        return 0
     if argv[1] == "env":
         names = read_enabled(plugins_file)[0]
         sys.stdout.write(env_text(names, scan(SHIPPED_DIR, USER_DIR)))

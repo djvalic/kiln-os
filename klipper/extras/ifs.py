@@ -76,6 +76,11 @@ MAP_MODES = ("fixed", "loaded")
 # "paused": the print resumes with the same map.
 PRINT_END_STATES = ("complete", "cancelled", "error", "standby")
 
+# prime_at_print: the print position must be at least this far (mm) outside
+# every labelled object's outline (its bounding box), so the prime bead
+# lands on the prime tower and not on a part.
+PRIME_AT_PRINT_MARGIN = 5.
+
 # Seconds between tries while the IFS is not answering (at start, or after
 # the link drops, e.g. a loose cable). The link comes back by itself.
 RECONNECT_INTERVAL = 10.
@@ -342,6 +347,16 @@ class IFS:
         # insert_base_distance), then prime_gcode. IFS_SWAP PURGE=0|1 sets
         # it for one swap, in a print or not.
         self.purge_mode_variable = config.get('purge_mode_variable', None)
+        # prime_at_print (not stock, off by default; the nopoop plugin sets
+        # it): in a print in mode 0 (prime tower) from layer 2 on, a swap
+        # without purge stays at the print, as zMod's: cut_gcode (AT_PRINT=1)
+        # cuts and goes back to where the print stopped, at print Z (the
+        # prime tower); unload, load and the prime_length prime happen
+        # there, then prime_at_print_gcode (flattens the bead) instead of
+        # prime_gcode. The box as before for layer 1, no layer info
+        # (SET_PRINT_STATS_INFO), mode 2, no cut, no object labels, or a
+        # print position within PRIME_AT_PRINT_MARGIN of an object.
+        self.prime_at_print = config.getboolean('prime_at_print', False)
         # Auto-refill (not stock, off by default; Bambu's AMS "auto refill",
         # zMod's infinite spool): when the slot in use runs empty during a
         # print, the IFS still holds the old strand's tail, so the print
@@ -385,6 +400,8 @@ class IFS:
             config, 'purge_gcode', '')
         self.prime_template = gcode_macro.load_template(
             config, 'prime_gcode', '')
+        self.prime_at_print_template = gcode_macro.load_template(
+            config, 'prime_at_print_gcode', '')
         self.after_template = gcode_macro.load_template(
             config, 'after_gcode', '')
         self.abort_template = gcode_macro.load_template(
@@ -2263,7 +2280,8 @@ class IFS:
                              "toolhead" % (chan,))
         self._run(self._prefeed_channel, chan, op="prefeed", target=chan)
     # Full operations
-    def _swap(self, old, new, flush=None, rounds=None, purge=True):
+    def _swap(self, old, new, flush=None, rounds=None, purge=True,
+              at_print=False):
         toolhead = self.printer.lookup_object('toolhead')
         if old:
             self._track("cutting", "unloading", old)
@@ -2274,23 +2292,28 @@ class IFS:
         # Stock cuts only when the toolhead sensor shows filament. With
         # no sensor configured, trust the recorded channel.
         head = self._head_has_filament()
+        # Priming at the print needs the cut: cut_gcode takes the head back
+        # there. Without a cut the head is still lifted: the box then.
+        at_print = at_print and not purge and bool(old) and head is not False
         if old and head is False:
             logging.info("ifs: toolhead empty, skipping cut of channel %d",
                          old)
             self._set_channel(0)
         elif old:
             # Cut at the toolhead (cut_gcode also moves to the purge
-            # box), then unload the old strand there.
+            # box, or with AT_PRINT=1 back to the print), then unload the
+            # old strand there.
             self._track("cutting", "unloading", old)
             self._ensure_hot()
-            self._run_template(self.cut_template, OLD=old, NEW=new)
+            extra = {'AT_PRINT': 1} if at_print else {}
+            self._run_template(self.cut_template, OLD=old, NEW=new, **extra)
             toolhead.wait_moves()
             self._unload(old)
             self._set_channel(0)
         self._select(new)
         self._load(new, self.load_length, self.load_speed)
         if not purge:
-            self._prime(old, new)
+            self._prime(old, new, at_print)
             self.swap_open = None
             return
         # Stock purge, in rounds: at the purge box, push the new strand
@@ -2332,19 +2355,24 @@ class IFS:
             self._clear_inserted(new)
         self._run_template(self.after_template, OLD=old, NEW=new)
         self.swap_open = None
-    def _prime(self, old, new):
+    def _prime(self, old, new, at_print=False):
         """Second half of a swap without purge (the slicer purges: prime
         tower or its own flush): at the purge box, feed the new strand
         prime_length into the nozzle (IFS and extruder together, as zMod's
         nopoop insert), release the IFS, prime_gcode, F23, after_gcode.
-        Done at the box, not over the print (zMod primes over the print
-        from layer 2 on), so the bead and any ooze stay off the part."""
+        Done at the box, not over the print, so the bead and any ooze stay
+        off the part. at_print (prime_at_print, _at_print_ok): cut_gcode
+        went back to the print position (the prime tower), so the prime is
+        done there, as zMod does from layer 2 on, then prime_at_print_gcode
+        instead of prime_gcode."""
         toolhead = self.printer.lookup_object('toolhead')
-        logging.info("ifs: swap %d -> %d without purge, prime %.0f mm",
-                     old, new, self.prime_length)
+        logging.info("ifs: swap %d -> %d without purge, prime %.0f mm%s",
+                     old, new, self.prime_length,
+                     " at the print position" if at_print else "")
         self._track("priming", "loading", new)
-        self._run_template(self.purge_start_template, OLD=old, NEW=new,
-                           ROUND=1, ROUNDS=1)
+        if not at_print:
+            self._run_template(self.purge_start_template, OLD=old, NEW=new,
+                               ROUND=1, ROUNDS=1)
         toolhead.wait_moves()
         self._ensure_hot()
         if self.prime_length:
@@ -2352,7 +2380,8 @@ class IFS:
         self._release(new)
         self._set_channel(new)
         self._track("priming", "loading", new)
-        self._run_template(self.prime_template, OLD=old, NEW=new)
+        self._run_template(self.prime_at_print_template if at_print
+                           else self.prime_template, OLD=old, NEW=new)
         toolhead.wait_moves()
         self._clear_inserted(new)
         self._run_template(self.after_template, OLD=old, NEW=new)
@@ -2360,6 +2389,56 @@ class IFS:
         ps = self.printer.lookup_object('print_stats', None)
         return ps is not None and ps.get_status(
             self.reactor.monotonic()).get('state') == "printing"
+    def _at_print_ok(self):
+        """Whether a swap without purge may prime at the print position
+        (prime_at_print, as zMod's mode 0): in a print, mode 0, layer 2 or
+        later (print_stats info; none = layer 1, as zMod), outside an object
+        (current_object), and every labelled object's outline at least
+        PRIME_AT_PRINT_MARGIN away, so the bead lands on the prime tower.
+        Anything unknown: no (the box)."""
+        if not self.prime_at_print or not self._in_print():
+            return False
+        if self._purge_mode() != 0:
+            return False
+        now = self.reactor.monotonic()
+        info = self.printer.lookup_object('print_stats').get_status(
+            now).get('info') or {}
+        try:
+            layer = int(info.get('current_layer'))
+        except (TypeError, ValueError):
+            layer = 0
+        if layer < 2:
+            return False
+        gmove = self.printer.lookup_object('gcode_move', None)
+        excl = self.printer.lookup_object('exclude_object', None)
+        why = None
+        if gmove is None or excl is None:
+            why = "no object labels"
+        else:
+            pos = gmove.get_status(now)['gcode_position']
+            st = excl.get_status(now)
+            objs = st.get('objects') or []
+            m = PRIME_AT_PRINT_MARGIN
+            if st.get('current_object'):
+                why = "inside object %s" % (st['current_object'],)
+            elif not objs:
+                why = "no object labels"
+            for o in objs if why is None else []:
+                poly = o.get('polygon') or []
+                if not poly:
+                    why = "object %s has no outline" % (o.get('name'),)
+                    break
+                xs = [p[0] for p in poly]
+                ys = [p[1] for p in poly]
+                if (min(xs) - m <= pos[0] <= max(xs) + m
+                        and min(ys) - m <= pos[1] <= max(ys) + m):
+                    why = "%.1f,%.1f is at object %s" % (
+                        pos[0], pos[1], o.get('name'))
+                    break
+        if why is not None:
+            logging.info("ifs: prime at the box, not at the print: %s", why)
+            return False
+        return True
     def _swap_purges(self, gcmd):
         """Whether a swap purges at the box: the first tool load of a print
         always does; else PURGE= if given; else, while a print runs and
@@ -2372,7 +2451,8 @@ class IFS:
             if purge is None and self._purge_mode_says_slicer():
                 # The slicer's prime tower on the bed does the purge, so the
                 # first load only primes (no purge at the box). The colour
-                # left in the nozzle goes into the bed purge instead.
+                # left in the nozzle goes into PRINT_START's prime line and
+                # the prime tower instead.
                 return False
             # Otherwise the first tool load purges in full at the box: the
             # prime tower doesn't exist yet, so the colour left in the nozzle
@@ -2384,19 +2464,21 @@ class IFS:
         if not self.purge_mode_variable or not self._in_print():
             return True
         return not self._purge_mode_says_slicer()
-    def _purge_mode_says_slicer(self):
-        """purge_mode_variable's save variable is 0 or 2 (the slicer
-        purges)."""
+    def _purge_mode(self):
+        """purge_mode_variable's save variable as a number, else None."""
         if not self.purge_mode_variable:
-            return False
+            return None
         sv = self.printer.lookup_object('save_variables', None)
         mode = sv.allVariables.get(self.purge_mode_variable) \
             if sv is not None else None
         try:
-            mode = int(mode)
+            return int(mode)
         except (TypeError, ValueError):
-            return False
-        return mode in (0, 2)
+            return None
+    def _purge_mode_says_slicer(self):
+        """purge_mode_variable's save variable is 0 or 2 (the slicer
+        purges)."""
+        return self._purge_mode() in (0, 2)
     def _unload_toolhead(self, chan):
         """Nozzle contents back into the lane: the first half of a swap
         (cut, unload, pull back), then release the lane (as FX). A failed
@@ -2456,10 +2538,13 @@ class IFS:
         flush = gcmd.get_float('FLUSH', None, minval=0.)
         rounds = gcmd.get_int('ROUNDS', None, minval=1, maxval=5)
         purge = self._swap_purges(gcmd)
+        # Read here, before anything moves: the position is the print's
+        at_print = not purge and self._at_print_ok()
         self._require_homed()
         # "swap" takes a slot out of the nozzle first, "load" fills it
         self._with_heat(gcmd, (old, new), self._swap, old, new, flush, rounds,
-                        purge, op="swap" if old else "load", target=new)
+                        purge, at_print, op="swap" if old else "load",
+                        target=new)
     cmd_IFS_SWAP_help = ("Change to another IFS channel (cut, unload, load, "
                          "purge): CHANNEL= [TEMP=] [FLUSH=mm] [ROUNDS=] "
                          "[PURGE=0|1]")
@@ -2848,4 +2933,12 @@ class IfsMaterials:
         return self.ifs.materials_status()
 
 def load_config(config):
+    # enable: False when a plugin drives the IFS (plugin.json owns_ifs, its
+    # plugin.cfg sets it; docs/plugin-api.md): no ifs object, no IFS_*
+    # commands. The section's other options (templates in local.cfg, ...)
+    # are accepted and unused.
+    if not config.getboolean('enable', True):
+        for option in config.get_prefix_options(''):
+            config.get(option, None)
+        return None
     return IFS(config)

@@ -59,6 +59,18 @@ PRINT_START BED=[bed_temperature_initial_layer_single] EXTRUDER=[nozzle_temperat
    (`FORCE=1`, as stock); `macros/print_start.cfg` purges 90 mm once at the
    box instead when that channel is already loaded.
 
+When the slicer purges (`nopoop` plugin, `use_trash_on_print` 0 or 2 when
+`PRINT_START` runs) `macros/print_start.cfg` skips step 3, as zMod does
+with its line purge: the console says "Print start: the slicer purges
+(use_trash_on_print 0), no purge at the box", the nozzle is still brushed,
+and the prime line (below) flushes it in front of the objects. A first
+colour that has to be loaded only primes at the box (12 mm, the swap's
+`prime_length`); the prime line then runs after it, so the change from
+the old colour goes into the line, not into the first layer. Nothing is
+retracted in that start, so the prime line puts nothing back first. Set
+the variable before `PRINT_START` in the start G-code: a later line only
+counts from the next print. The factory start keeps the stock purge.
+
 Without a tool load `macros/print_start.cfg` draws the prime line
 (`_PRIME_LINE`, `macros/prime_line.cfg`, "Prime line"): back to the
 plate's front, put the 3 mm retract back, prime 8 mm in place (a small

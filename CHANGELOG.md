@@ -8,6 +8,18 @@ When an entry fixes a reported issue, add its number as `(issue #N)` in the
 entry, so the GitHub release links to the issue. A release does not close
 the issue: it is closed by hand after the release.
 
+## Unreleased
+
+- **No purge at the box at the print start when the slicer purges** (issue #38): with `use_trash_on_print` 0 or 2 (zMod's nopoop and slicer-purge profiles), `PRINT_START` no longer purges 90 mm at the purge box. The prime line in front of the objects flushes the nozzle instead, as zMod's line purge does; when the print start loads the first colour itself, the line runs after that load. The console says when the box purge is skipped. Trash mode (1, or not set) is unchanged. Set the variable before `PRINT_START` in the start G-code.
+- **Colour changes on the prime tower from layer 2, as zMod** (issue #38): with `use_trash_on_print` 0 a colour change from layer 2 on no longer goes to the purge box. It cuts, goes back to the prime tower, unloads, loads and fills the nozzle there (12 mm), flattens the bead with a small square move and goes on. It only does this when the file reports its layers and labels its objects, and the head is at least 5 mm from every object; otherwise that change uses the box, so the bead never lands on a part. Layer 1 and mode 2 still use the box. `prime_at_print: False` in `local.cfg` (`[ifs]`) keeps every change at the box.
+- **`SAVE_ZMOD_DATA USE_TRASH_ON_PRINT=0|1|2` works** (issue #38): zMod's documented way to set the purge mode gave "Unknown command" and the mode stayed as it was. It now sets `use_trash_on_print` (zmod-compat plugin). Other zMod settings are not saved: the console says which `local.cfg` setting they are here, or that they are ignored.
+- **A plugin can drive the IFS itself** (plugin API 1.5, for Happy Hare, issue #25): on an IFS running Klipper firmware, a plugin whose `plugin.json` says `"owns_ifs": true` takes over the IFS from Kiln's IFS module. While it is on, Kiln's IFS pins and `IFS_*` commands are left out, and the setup wizard skips its IFS step. Plugins can now also bring Python packages, and their modules can load each other's config sections. Nothing changes on printers without such a plugin. Happy Hare itself is not part of Kiln OS: it comes as a plugin of its own.
+- **Russian on the touch screen** (issue #23): the screen uses the stock Flashforge names where they share a term ("Смещение по Z", "Wi-Fi", "Компенсация вибраций"), and the Kiln OS screens (plugins, printer sounds, nozzle size, bed soak, IFS activity, auto-refill, the setup wizard) are in Russian too. Four Russian messages that repeated part of their text, and a slot counter that could show "{0}", are fixed. The screen's languages are now built from the translation files: before, Kiln OS's own translation changes (Russian, and the Korean and Turkish packs) never reached the screen.
+
+## v0.0.48
+
+- Klipper updated to upstream 282db76 (a documentation fix only). No other changes.
+
 ## v0.0.47
 
 - **Klipper updated to v0.13.0-821** (from v0.13.0-816): upstream frees old pressure advance values instead of keeping them, which helps long prints that change pressure advance often (OrcaSlicer's adaptive pressure advance). The other upstream changes don't affect the AD5X: twist compensation is now off only for load cell and eddy current probes, and a homing event change. The board firmware stays as it is: no reflash.

@@ -29,6 +29,7 @@ exists and does what is described below.
 | `END_PRINT` | 140 | `PRINT_END`; `unload_filament: 1` unloads the IFS lane first (zMod `remove_filament`) | zmod-compat |
 | `T0`-`T3` | 5,665 | `IFS_SWAP` through the tool map (`ifs.cfg`); purge decided by the mode below | core / nopoop |
 | `SAVE_VARIABLE VARIABLE=use_trash_on_print VALUE=0|2` | 50 | purge mode for the print's tool changes | nopoop |
+| `SAVE_ZMOD_DATA USE_TRASH_ON_PRINT=0|1|2` | | the same save variable (zMod's documented way); another value is refused, not saved. `REMOVE_FILAMENT`, `DISABLE_PRIMING`, `PRINT_LEVELING`, `USE_KAMP`: not saved, a line names the `local.cfg` setting here (table below). Other keys: one line, ignored | zmod-compat |
 | `_GOTO_TRASH [SPEED=]` | 337 | into the purge box: X 52.5, Y 229 plus this printer's offsets (`unit.cfg`); X first, leaving the box towards Y 220 if inside it; nothing if already there | zmod-compat |
 | `_SBROS_TRASH` | 337 | out of the box to Y 220, back in, out again (knocks the purge off) | zmod-compat |
 | `_DISABLE_SENSOR` / `_ENABLE_SENSOR` | 81 / 81 | toolhead runout sensor (`toolhead`) off / back on, only if it was on | zmod-compat |
@@ -56,10 +57,11 @@ placeholder such as `TOOL=[initial_tool]` (before this check it became tool
 0) and an empty `TOOL=`, which used to load tool 0 and now loads none. Use
 the slicer's expanded value.
 
-Not provided (no file calls them; zMod-only machinery): `SAVE_ZMOD_DATA`,
-`REBOOT` / `SHUTDOWN` (shell access from Klipper), `PID_TUNE_BED` /
-`PID_TUNE_EXTRUDER` (use `SETUP_WIZARD_STEP STEP=pid`: its results are
-kept in `ad5x-tuning.cfg`, which `SAVE_CONFIG` can't), `COLDPULL`, zMod's
+Not provided (no file calls them; zMod-only machinery): zMod's other
+`SAVE_ZMOD_DATA` settings (see the table), `REBOOT` / `SHUTDOWN` (shell
+access from Klipper), `PID_TUNE_BED` / `PID_TUNE_EXTRUDER` (use
+`SETUP_WIZARD_STEP STEP=pid`: its results are kept in `ad5x-tuning.cfg`,
+which `SAVE_CONFIG` can't), `COLDPULL`, zMod's
 camera, MIDI, Telegram and display macros, Bambufy's colour dialogs,
 `POOP` and port sensors, QuickSwap's calibration macros (`IFS_TUNE` does
 that here).
@@ -67,13 +69,17 @@ that here).
 ## Purge modes (nopoop plugin)
 
 zMod's save variable `use_trash_on_print`, which the Nopoop profiles set
-at the start of each file (the Home profile files don't set it):
+at the start of each file (the Home profile files don't set it;
+`SAVE_ZMOD_DATA USE_TRASH_ON_PRINT=` sets it too):
 
 | Value | zMod name | Tool change in a print here |
 |---|---|---|
-| 0 | nopoop | cut, unload, load, then only **prime**: IFS and extruder feed `prime_length` (12 mm) past the head sensor at the purge box, wipe on the box edge (`prime_gcode`), back to the print; the slicer's prime tower takes the purge |
-| 2 | slicer-controlled purge | the same; the slicer then flushes at the box itself (`_GOTO_TRASH`, `G1 E...`, `_SBROS_TRASH`) |
+| 0 | nopoop | layer 1 (or no layer info): cut, unload, load, then only **prime**: IFS and extruder feed `prime_length` (12 mm) past the head sensor at the purge box, wipe on the box edge (`prime_gcode`), back to the print. From layer 2 on (`prime_at_print`, as zMod): cut, back to where the print stopped (the prime tower, at print Z), unload, load and prime there, flatten the bead (`prime_at_print_gcode`), go on. The slicer's prime tower takes the purge |
+| 2 | slicer-controlled purge | the layer-1 way (prime at the box) on every layer; the slicer then flushes at the box itself (`_GOTO_TRASH`, `G1 E...`, `_SBROS_TRASH`) |
 | 1, unset, anything else | (default) | full purge at the box as stock: rounds of 90 mm push + flush |
+
+With 0 or 2, `PRINT_START` doesn't purge at the box either (the prime line
+flushes the nozzle, as zMod's line purge; `docs/print-start.md`).
 
 - Outside a print (console, screen, `IFS_LOAD`) every swap purges, as on
   zMod.
@@ -88,13 +94,21 @@ at the start of each file (the Home profile files don't set it):
 
 Differences from zMod:
 
-- zMod primes over the print from layer 2 on in mode 0 (and squiggles the
-  blob flat); here the prime always happens at the purge box, then the
-  head returns to where the print stopped. A few seconds more per change,
-  no bead on the part.
+- Mode 0 from layer 2 on primes at the print, as zMod, only when it is
+  safe: the layer must be known (`SET_PRINT_STATS_INFO`, which zMod
+  profiles send), the file must label its objects, and the print position
+  must be at least 5 mm outside every object's outline and not inside an
+  object. Otherwise (and with `prime_at_print: False` in `local.cfg`'s
+  `[ifs]`) the change primes at the box, which costs a few seconds and
+  keeps the bead off the part. zMod primes wherever the head is, so a
+  file in mode 0 without a prime tower gets the bead on the part there.
+- The flatten move here is a 3 mm square around the bead without
+  extrusion (`prime_at_print_gcode`), not zMod's pattern.
 - The first tool after `START_PRINT` in a mode-0/2 file only primes, as
-  on zMod (its start purge and `LINE_PURGE` already cleared the nozzle
-  with the previous filament).
+  on zMod. Neither purges at the box at the start: zMod's line purge (with
+  KAMP) and the prime line here flush the nozzle. When `PRINT_START` loads
+  the first colour itself (`TOOL=`), the prime line runs after that load,
+  so it flushes the new colour.
 - The prime length: zMod inserts 12 mm (plus its
   `filament_unload_before_cutting`, 0 by default); QuickSwap's
   `insert_base_distance` was 8 mm on the user's printer, plus its own
@@ -140,5 +154,6 @@ prime tower purges it. On 2026-10-17 a nopoop print started with the previous
 colour in its first layer, which is why the box purge existed; in trash mode
 (`use_trash_on_print` 1) that box purge still runs. Later changes follow
 `use_trash_on_print`. A resume from pause is not
-a new print; a first tool that is already loaded needs no purge (PRINT_START
-purged the nozzle).
+a new print. In trash mode a first tool that is already loaded needs no
+purge (PRINT_START purged the nozzle at the box); in mode 0 or 2
+PRINT_START doesn't purge at the box and the prime line flushes it.

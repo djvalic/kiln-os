@@ -6,7 +6,12 @@ update.
 
 ## Version
 
-Current: **1.4** (1.4, 2026-10-20: additions only: the plugin catalog
+Current: **1.5** (1.5, 2026-11-07: additions only: a plugin can drive
+the IFS itself (`owns_ifs`, "A plugin that drives the IFS" below), `[ifs]
+enable: False`, packages in a plugin's `extras/`, `printer.load_object()`
+finding plugin modules, `printer.ad5x_plugins` `ifs_owner` and
+`available.<name>.owns_ifs`.
+1.4, 2026-10-20: additions only: the plugin catalog
 and `INSTALL_PLUGIN`, `UPDATE_PLUGIN`, `REMOVE_PLUGIN`;
 `printer.ad5x_plugins` `catalog`, `job`; Moonraker restarts by itself when
 a switch changes its plugin parts; the bed heat soak: `BED_SOAK_CALIBRATE`,
@@ -32,7 +37,7 @@ files instead of the image.)
 
 - In Klipper: `printer.ad5x_plugins.api_version` (also printed by
   `LIST_PLUGINS`).
-- On the system: `AD5X_PLUGIN_API="1.4"` in `/usr/lib/os-release`
+- On the system: `AD5X_PLUGIN_API="1.5"` in `/usr/lib/os-release`
   (`/etc/os-release`), for scripts.
 - In the code: `PLUGIN_API_VERSION` in `klipper/extras/ad5x_plugins.py`
   (the build copies it to os-release).
@@ -65,6 +70,7 @@ ad5x-myplugin/            the git repository; cloned as /data/ad5x/plugins/myplu
   README.md               what it does, how to use it
   extras/                 optional: Klipper modules
     myplugin_led.py
+    myplugin_lib/         optional (1.5): a package (__init__.py), imported as extras.myplugin_lib
   moonraker.conf          optional: Moonraker sections (update manager, ...)
   python/                 optional (1.3): pure-Python libraries the plugin needs
   moonraker/components/   optional (1.3): Moonraker components (name.py)
@@ -97,6 +103,7 @@ The clone's directory name must match `name` in `plugin.json`
 | `requires_os` | recommended | Plugin API version written for, `major.minor` |
 | `requires` | no | Plugins that must be enabled first |
 | `conflicts` | no | Plugins that can't be enabled together with this one |
+| `owns_ifs` | no | `true` (1.5): the plugin drives the IFS instead of Kiln's `[ifs]` module ("A plugin that drives the IFS") |
 
 `plugin.cfg` example:
 
@@ -162,6 +169,33 @@ Rules for plugins:
   write to files outside the config directory.
 - A module name can't be the name of a Klipper module or another
   plugin's module (refused at startup).
+
+### A plugin that drives the IFS (1.5)
+
+For a multi-material engine of its own (Happy Hare, ...) on an IFS
+running Klipper firmware (`/data/ad5x/ifs-klipper.enable`, set by the
+owner as root; `docs/deviations-from-stock.md`). With `"owns_ifs": true`
+in `plugin.json`:
+
+- `ENABLE_PLUGIN` refuses it unless the IFS answered as Klipper at this
+  boot, and while another plugin drives the IFS.
+- While it is enabled, Kiln's IFS pins (`generic-flashforge-ifs.cfg`:
+  `[mcu ifs]`, the feeder and selector steppers, drivers, sensors) are
+  left out from the next Klipper start; the plugin's `plugin.cfg` brings
+  its own `[mcu ifs]` and pins. They come back when it is disabled.
+- Its `plugin.cfg` must set `[ifs]` `enable: False`: Kiln's IFS module
+  then makes no `printer.ifs`, `printer.ifs_materials` or `IFS_*`
+  commands (the section's other options, such as templates, are
+  accepted and unused), and the setup wizard skips its IFS step.
+  `PRINT_START` loads no first tool then (it checks `'ifs' in printer`);
+  the slicer's tool change does.
+- `T0`-`T3` (`ifs.cfg`) and `UNLOAD_FILAMENT` (`macros/`) still call
+  Kiln's IFS: the plugin replaces them with its own `[gcode_macro ...]`
+  (plugins.cfg comes after both).
+- Klipper stops with a config error naming the plugin when: two such
+  plugins are enabled, the IFS doesn't answer as Klipper, `[ifs]` is still
+  on, or `plugins.cfg` was edited by hand so the pins changed hands (then
+  `RESTART` once: the pins are set for the next start).
 
 ## Config order
 
@@ -251,19 +285,28 @@ printer` before calling one.
 | `IFS_TUNE`, `IFS_TUNE_RESET` | Swap tuning |
 
 Swap templates in `[ifs]` a plugin may replace (same parameters):
-`before_gcode` (`OLD`, `NEW`), `cut_gcode` (`OLD`, `NEW`),
+`before_gcode` (`OLD`, `NEW`), `cut_gcode` (`OLD`, `NEW`; next version:
+`AT_PRINT=1` when the swap primes at the print: go back to the print
+position, before_gcode's saved state `ifs_swap`, instead of the box),
 `unload_gcode` (`OLD`, `NEW`, `LENGTH`, `SPEED`, `RETRACT`: 1 when the template retracts the extruder, 0 on IFS Klipper firmware where the module retracts it with the feeder), `purge_start_gcode`
 (`OLD`, `NEW`, `ROUND`, `ROUNDS`), `purge_gcode` (`OLD`, `NEW`,
 `ROUND`, `ROUNDS`, `FLUSH`, `FLUSH_SPEED`), `prime_gcode` (`OLD`,
-`NEW`; in macros/ `ifs_templates.cfg`), `after_gcode` (`OLD`, `NEW`).
+`NEW`; in macros/ `ifs_templates.cfg`), `prime_at_print_gcode` (`OLD`,
+`NEW`; next version, in macros/ `ifs_templates.cfg`: after a prime at the
+print position, instead of `prime_gcode`), `after_gcode` (`OLD`, `NEW`).
 A later definition replaces a whole template. Templates must not call
 `IFS_*` commands. Options a plugin may set: `purge_mode_variable`,
-`prime_length`, and the documented lengths, speeds and timeouts in
-`ifs.cfg`.
+`prime_length`, `prime_at_print` (next version), and the documented
+lengths, speeds and timeouts in `ifs.cfg`.
 
 Purge decision of a swap: `PURGE=` if given; else, while
 `print_stats.state` is `printing` and `purge_mode_variable` is set, that
-save variable: 0 or 2 = prime only, other = purge; else purge.
+save variable: 0 or 2 = prime only, other = purge; else purge. A swap
+that only primes does it at the print position (no `purge_start_gcode`)
+when `prime_at_print` is on, the variable is 0, `print_stats.info.current_layer`
+is 2 or more, the toolhead had filament to cut, and `exclude_object` lists
+objects with outlines, none of them current, the print position at least
+5 mm outside each outline's bounding box; else at the box.
 
 ### Power-loss recovery (`klipper/extras/ad5x_resume.py`, 1.2)
 
@@ -295,7 +338,7 @@ save variable: 0 or 2 = prime only, other = purge; else purge.
 | `printer.ifs_materials` | `available`, `channel_count`, `slots` (`"1"`-`"4"`: `type`, `color`, `temp`), `loaded`, `temperatures` |
 | `printer.ad5x_setup` | `step`, `state`, `message`, `progress`, `results`, `checks`, `pending_save`, `zoffset` |
 | `printer.ad5x_config` | `notices` (lines of `config-updates.txt`), `backups` (`macros/*.bak-*`) |
-| `printer.ad5x_plugins` | `api_version`, `enabled`, `available` (per plugin: `source`, `description`, `version`, `author`, `url`, `requires_os`, `compatible`), `catalog` (1.4, per plugin: `title`, `description`, `url`, `requires_os`, `compatible`, `installed`), `job` (1.4: `name`, `action`, `state` idle/running/done/failed, `message`), `warnings` |
+| `printer.ad5x_plugins` | `api_version`, `enabled`, `available` (per plugin: `source`, `description`, `version`, `author`, `url`, `requires_os`, `compatible`, `owns_ifs` (1.5)), `ifs_owner` (1.5: the plugin driving the IFS at this start, "" Kiln's `[ifs]`), `catalog` (1.4, per plugin: `title`, `description`, `url`, `requires_os`, `compatible`, `installed`), `job` (1.4: `name`, `action`, `state` idle/running/done/failed, `message`), `warnings` |
 | `printer.ad5x_weight` | `connected`, `weight` |
 | `printer['gcode_macro _AD5X_UNIT']` | `z_offset`, `cut_x_offset`, `cut_y_offset`, `x_offset`, `y_offset` (purge box at X 52.5 + `x_offset`, Y 229 + `y_offset`; cut at X `cut_x_offset` - 2.5, Y `cut_y_offset` - 7.5) |
 | `printer['filament_switch_sensor toolhead']` | Klipper's runout fields (`enabled`, `filament_detected`); also `adc_filament_sensor toolhead`; `SET_FILAMENT_SENSOR SENSOR=toolhead` |
@@ -317,7 +360,11 @@ Read them; write only your own (prefixed) variables, except
 - Loaded by `[ad5x_plugins]` as `extras.<module>`, only for enabled,
   compatible plugins; `load_config(config)` / `load_config_prefix(config)`
   as for any Klipper module (`docs/plugins.md`, "Python extras").
-- Klipper is mainline v0.13.0-816 (`buildroot/package/klipper`); its
+- 1.5: `extras/` may hold packages (`extras/<name>/__init__.py`); the
+  plugin's modules import each other as Klipper's do (`from .mylib import
+  x`), and `printer.load_object(config, '<module> <name>')` also finds
+  plugin modules.
+- Klipper is mainline v0.13.0-821 (`buildroot/package/klipper`); its
   module interfaces are Klipper's, not part of this API's promise. Python
   3 is the image's (3.14 now); no compiler on the printer, no pip.
 - Our modules' Python classes (`ifs.IFS`, ...) are internal: use their

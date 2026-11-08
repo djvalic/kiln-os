@@ -97,10 +97,14 @@ Existing printers needed no change to `printer.cfg`: the include sits in
 Klipper only loads modules from `klippy/extras`, which is in the
 read-only image. `[ad5x_plugins]` comes before the plugins' sections, and
 when Klipper creates it, it imports each enabled plugin's
-`extras/<module>.py` as Klipper module `extras.<module>`, then creates
-the objects for the config sections named after those modules, the way
-Klipper's own loader does (`load_config` / `load_config_prefix`). No
-Klipper patch: everything stays in our extra. Rules:
+`extras/<module>.py` (and, plugin API 1.5, each package
+`extras/<package>/__init__.py`) as Klipper module `extras.<module>`, then
+creates the objects for the config sections named after those modules,
+the way Klipper's own loader does (`load_config` / `load_config_prefix`).
+The plugin's `extras/` joins the path of Klipper's `extras` package, so
+its modules import each other as Klipper's do, and
+`printer.load_object()` finds them too. No Klipper patch: everything
+stays in our extra. Rules:
 
 - Only enabled plugins' code is loaded, and only when the plugin's
   `plugin.json` is valid and its `requires_os` fits.
@@ -108,10 +112,13 @@ Klipper patch: everything stays in our extra. Rules:
   like another enabled plugin's module stops Klipper with a config error
   naming the plugin. Rename it.
 - Sections of plugin modules are created when `[ad5x_plugins]` is
-  created. Look up other objects in `klippy:connect`, not in `__init__`.
-  `printer.load_object()` can't find plugin modules; import a sibling
-  module of the same plugin as `from . import <module>` only if it sorts
-  before yours, or keep a plugin's code in one module.
+  created. Look up other objects in `klippy:connect`, not in `__init__`
+  (`printer.load_object()` creates one that isn't there yet).
+- A RESTART loads the plugins' code afresh: a disabled plugin's modules
+  are gone, an updated one's are read again.
+- A plugin that drives the IFS itself (Happy Hare, ...) sets
+  `"owns_ifs": true` in `plugin.json`: `docs/plugin-api.md`, "A plugin
+  that drives the IFS".
 
 ### Moonraker parts
 
@@ -184,7 +191,7 @@ touched; delete it and reboot to get the default again.
 | Plugin | Default | What |
 |---|---|---|
 | `zmod-compat` | on | zMod's macro names for slicer G-code and the console: `START_PRINT`, `END_PRINT`, `_GOTO_TRASH`, `_SBROS_TRASH`, sensors, timelapse, Spoolman, pause at layer, ... (`docs/zmod-compat.md`) |
-| `nopoop` | on | zMod's purge modes: in a print, `use_trash_on_print` 0 (prime tower) or 2 (slicer flush) makes tool changes prime only, without purge rounds |
+| `nopoop` | on | zMod's purge modes: in a print, `use_trash_on_print` 0 (prime tower) or 2 (slicer flush) makes tool changes prime only, without purge rounds (0 from layer 2: on the prime tower, as zMod), and `PRINT_START` skips its purge at the box |
 | `bambufy-compat` | off (on when migrating from a zMod with Bambufy) | Bambufy profiles: `_NOPOOP`, `_M106`; needs `zmod-compat` |
 | `recommend` | off (also after zMod; probe speed moves the Z offset) | zMod's recommended probing, mesh and corner values |
 

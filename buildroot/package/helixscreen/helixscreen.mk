@@ -14,7 +14,10 @@ HELIXSCREEN_SITE_METHOD = git
 HELIXSCREEN_GIT_SUBMODULES = YES
 HELIXSCREEN_LICENSE = GPL-3.0+
 HELIXSCREEN_LICENSE_FILES = LICENSE
-HELIXSCREEN_DEPENDENCIES = openssl zlib host-python3 \
+# host-python-pyyaml: the build makes the language packs (ui_xml/translations)
+# from translations/*.yml; without PyYAML it keeps upstream's packs and the
+# patched YAML (0030, 0032) never reaches the screen
+HELIXSCREEN_DEPENDENCIES = openssl zlib host-python3 host-python-pyyaml \
 	host-autoconf host-automake host-libtool host-pkgconf host-bison host-flex
 
 # Upstream applies its LVGL/libhv/Lua/libnl patches with `git -C <submodule>
