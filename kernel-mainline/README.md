@@ -113,8 +113,11 @@ Nothing below writes the flash; a hung test kernel costs a power cycle.
   test switch PE9/PE10 to UART0 (function 1) on stock:
   `b=0x13605000; for o in 0x18 0x28 0x38 0x44; do devmem $((b+o)) 32 0x600; done`
   (clear INT, MSK and PAT1, set PAT0). Our device tree muxes all four pins.
-- **From the stock kernel:** write our 6.6 release into
-  `/data/ad5x/kernel/failed` and reboot cleanly; the printer stays on stock.
+- **From the stock kernel:** record our 6.6 release as failed and reboot
+  cleanly; the printer stays on stock. Since issue #42 the record needs a
+  second line, the reason (a one-line record is taken as an old one and
+  retried once):
+  `printf '%s\nkernel test: stay on stock\n' "$(cat /usr/lib/ad5x/kernel66/release)" > /data/ad5x/kernel/failed`
   Then, from `/data/ad5x/chainload/` (`chainload.ko`, `chainload.sh`):
   `chainload.sh stage IMAGE` (loads it, prints what it staged) and
   `chainload.sh go` (stops services and jumps). Undo with `ad5x-kernel retry`
