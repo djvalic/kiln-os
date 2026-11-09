@@ -1,156 +1,156 @@
 # Translation of en.txt into Russian. Keep the ids; an empty text shows English.
-back	
-cancel	
-continue	
-try	
-done	
-stop	
-check	
-rescan	
-install	
-restore	
-eject	
-mount	
-reboot	
-shut_down	
-power	
-boot_main_os	
-install_now	
-restore_now	
-restore_stock	
-restore_stock_fw_btn	
-start_backup	
-dry_run	
-are_you_sure	
-step_1_of_2	
-step_2_of_2	
-wait_n_s	
-no_network	
-not_running	
-no_network_home	
-ssh_not_running	
-recovery_title	
-busy	
-swu_ready	
-swu_not_running	
-boot_flag_unreadable	
-next_main	
-next_recovery	
-home_slot	
-slot_installed	
-slot_not_found	
-slot_empty	
-slot_unknown	
-home_trace	
-home_no_trace	
-home_last_update	
-home_no_update	
-back_up	
-install_update	
-network_ssh	
-logs	
-reboot_power	
-update	
-update_from_browser	
-boot_main_what	
-boot_main_q	
-boot_main_text	
-no_main_q	
-no_main_text	
-installing_update	
-install_q	
-install_q_text	
-install_q_text2	
-checking_update	
-no_update_fmt	
-upload_hint	
-upload_hint_nonet	
-mounting	
-ejecting	
-usb_busy	
-usb_mounted	
-usb_not_mounted	
-usb_none	
-usb_no_stick	
-bk_dest_none	
-bk_dest	
-backup_dry_run	
-backing_up	
-back_up_title	
-backup_text	
-also_userdata	
-restore_title	
-pick_backup	
-partitions_to_write	
-greyed_out	
-restore_dry_run	
-restoring	
-restore_backup_q	
-restore_q	
-restore_q2	
-no_backups	
-insert_backup_usb	
-stock_dry_run	
-restoring_stock	
-restore_stock_q	
-stock_q_text	
-stock_q_text2	
-stock_saved_note	
-stock_none_note	
-restore_stock_firmware	
-stock_back_title	
-stock_text	
-stock_backup_first	
-address	
-name	
-upload	
-recovery_row	
-update_upload_page	
-plug_in	
-ssh_login_text	
-usb_summary	
-update_one	
-update_many	
-flag_rescue_system	
-flag_rescue_boot	
-flag_rescue_flash	
-flag_autoupdate	
-empty_log	
-reading	
-logs_tab_session	
-logs_tab_updates	
-logs_tab_swupdate	
-logs_tab_system	
-rebooting	
-shutting_down	
-reboot_main	
-reboot_recovery	
-reboot_text	
-reboot_q	
-shutdown_q	
-shutdown_text	
-power_text	
-power_text2	
-reboot_into_flag	
-waiting_status	
-receiving	
-step_fmt	
-preparing	
-swu_status	
-swu_idle	
-swu_starting	
-swu_installing	
-swu_success	
-swu_failed	
-swu_receiving	
-swu_done	
-swu_subprocess	
-swu_progress	
-restarting	
-working	
-working_dont_off	
-could_not_start	
-job_done	
-job_stopped	
-update_failed	
-job_failed	
+back	Назад
+cancel	Отмена
+continue	Продолжить
+try	Попробовать
+done	Готово
+stop	Стоп
+check	Проверить
+rescan	Обновить
+install	Установить
+restore	Восстановить
+eject	Извлечь
+mount	Подключить
+reboot	Перезагрузить
+shut_down	Выключить
+power	Питание
+boot_main_os	Запустить ОС
+install_now	Установить
+restore_now	Восстановить
+restore_stock	Вернуть родную
+restore_stock_fw_btn	Вернуть родную прошивку…
+start_backup	Начать копирование
+dry_run	Проба
+are_you_sure	Вы уверены?
+step_1_of_2	Шаг 1 из 2
+step_2_of_2	Шаг 2 из 2: последняя возможность отменить
+wait_n_s	Подождите %d с
+no_network	нет сети
+not_running	не запущен
+no_network_home	Нет сети (Ethernet или Wi-Fi)
+ssh_not_running	SSH не запущен
+recovery_title	—  Восстановление
+busy	занят
+swu_ready	SWUpdate готов
+swu_not_running	SWUpdate не запущен
+boot_flag_unreadable	флаг загрузки не читается
+next_main	следующий запуск: основная ОС
+next_recovery	следующий запуск: восстановление
+home_slot	Основная ОС (слот B): %s   ·   %s
+slot_installed	установлена
+slot_not_found	не найдена
+slot_empty	пусто
+slot_unknown	неизвестно
+home_trace	Последний запуск основной ОС дошёл до: %s
+home_no_trace	Последний запуск основной ОС: нет записи
+home_last_update	Последнее обновление: %s
+home_no_update	Последнее обновление: нет записи
+back_up	Резервная копия
+install_update	Установить обновление
+network_ssh	Сеть / SSH
+logs	Журналы
+reboot_power	Перезагрузка / питание
+update	Обновление
+update_from_browser	Обновление из браузера
+boot_main_what	Проверка слота B, установка флага загрузки, перезапуск
+boot_main_q	Запустить основную ОС?
+boot_main_text	Принтер перезапустится в основную ОС (слот B). Если она не запустится до конца, следующий запуск вернётся сюда.
+no_main_q	Основная ОС не найдена?
+no_main_text	Похоже, в слоте B нет системы. ad5x-boot-main проверит его ещё раз и откажется, если он пуст. Всё равно попробовать?
+installing_update	Установка обновления
+install_q	Установить обновление?
+install_q_text	Установить %s в слот основной ОС (B)? Система, которая там сейчас, будет заменена.
+install_q_text2	SWUpdate проверит подпись, затем запишет слот B. Не выключайте принтер, пока не появится «готово».
+checking_update	Проверка обновления
+no_update_fmt	Обновление .swu или .zip не найдено.\nСкопируйте его в %s или в корень USB-накопителя либо загрузите из браузера.
+upload_hint	Или загрузите из браузера:  http://%s:8080
+upload_hint_nonet	Или загрузите из браузера на порт 8080 (сети пока нет)
+mounting	Подключение
+ejecting	Извлечение
+usb_busy	%s USB-накопителя…
+usb_mounted	%s (%s), свободно %s
+usb_not_mounted	USB-накопитель %s не подключён
+usb_none	Нет USB-накопителя: вставьте его (FAT32, exFAT или ext4)
+usb_no_stick	USB: накопитель не подключён
+bk_dest_none	Куда: USB-накопитель (не подключён)
+bk_dest	Куда:  %s/%s<дата>-<n>/
+backup_dry_run	Копирование (проба)
+backing_up	Резервное копирование
+back_up_title	Резервная копия на USB
+backup_text	Копирует eMMC на накопитель: загрузочную область, оба слота, флаг загрузки и usershare, каждую часть читает обратно и проверяет. На принтере ничего не меняется.
+also_userdata	И userdata (5,8 ГБ, долго)
+restore_title	Восстановление с USB
+pick_backup	Выберите копию слева.
+partitions_to_write	Разделы для записи:
+greyed_out	Серым: свой слот восстановления и загрузочная область (только из командной строки).
+restore_dry_run	Восстановление (проба)
+restoring	Восстановление копии
+restore_backup_q	Восстановить копию?
+restore_q	Записать копию %s поверх этих разделов принтера:\n%s
+restore_q2	%s будут перезаписаны. Это нельзя отменить. Не выключайте принтер до конца.
+no_backups	На этом накопителе нет копий (папки %s...).
+insert_backup_usb	Вставьте USB-накопитель с копией.
+stock_dry_run	Возврат прошивки (проба)
+restoring_stock	Возврат родной прошивки
+restore_stock_q	Вернуть родную прошивку?
+stock_q_text	Записывает сохранённую родную систему Flashforge в основной слот (B) и делает её системой для запуска. Kiln OS в слоте B будет заменена.
+stock_q_text2	Слот B будет перезаписан родной прошивкой. Не выключайте принтер до конца.
+stock_saved_note	Сохранённая родная система найдена в /data/ad5x/stock.
+stock_none_note	В /data/ad5x/stock нет сохранённой родной системы: её создаёт ad5x-update --replace-stock при установке Kiln OS.
+restore_stock_firmware	Вернуть родную прошивку
+stock_back_title	Возврат к прошивке Flashforge
+stock_text	Записывает родную систему, сохранённую на принтере при установке Kiln OS, обратно в основной слот (B), проверяет её и направляет на неё флаг загрузки. Система восстановления остаётся как есть.
+stock_backup_first	Сначала сделайте резервную копию, чтобы сохранить эту систему. Перед записью вас спросят дважды.
+address	Адрес
+name	Имя
+upload	Загрузка
+recovery_row	Версия
+update_upload_page	Страница загрузки обновления
+plug_in	Подключите Ethernet или настройте Wi-Fi в /data/ad5x/wpa_supplicant.conf
+ssh_login_text	Вход: root с паролем root принтера или ключом из /data/ad5x/ssh/authorized_keys. Сеть: /data/ad5x/network.conf.
+usb_summary	%sUSB %s (%s): %d %s
+update_one	обновление
+update_many	обновл.
+flag_rescue_system	, аварийная система
+flag_rescue_boot	, метка rescue-boot
+flag_rescue_flash	, метка rescue-flash
+flag_autoupdate	, метка autoupdate
+empty_log	(пусто)
+reading	чтение…
+logs_tab_session	Этот сеанс
+logs_tab_updates	Обновления
+logs_tab_swupdate	SWUpdate
+logs_tab_system	Система
+rebooting	Перезагрузка
+shutting_down	Выключение
+reboot_main	основную ОС (флаг загрузки: слот B)
+reboot_recovery	восстановление снова (флаг загрузки: восстановление)
+reboot_text	Принтер перезапустится в %s.
+reboot_q	Перезагрузить?
+shutdown_q	Выключить?
+shutdown_text	Останавливает систему, чтобы принтер можно было безопасно выключить выключателем питания.
+power_text	«Выключить» останавливает систему, после чего принтер можно выключить выключателем питания. Не выключайте во время установки или восстановления: записываемый раздел станет непригодным.
+power_text2	«Запустить ОС» ставит флаг загрузки на основную ОС (слот B) и перезапускает; «Перезагрузить» оставляет флаг как есть.
+reboot_into_flag	Принтер перезапустится в систему, на которую указывает флаг загрузки.
+waiting_status	Ожидание ответа на запрос состояния…
+receiving	Получение обновления: %u%%
+step_fmt	Шаг %u из %u: %s%s%s%s
+preparing	подготовка
+swu_status	SWUpdate: %s
+swu_idle	ожидание
+swu_starting	запуск
+swu_installing	установка
+swu_success	успешно
+swu_failed	ошибка
+swu_receiving	получение
+swu_done	готово
+swu_subprocess	подпроцесс
+swu_progress	выполнение
+restarting	Перезапуск…
+working	Выполнение…
+working_dont_off	Выполнение… не выключайте
+could_not_start	Не удалось запустить команду
+job_done	%s: готово
+job_stopped	%s: остановлено
+update_failed	Ошибка обновления (см. журнал)
+job_failed	%s: ошибка (код %d)

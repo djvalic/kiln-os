@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: valix <djvalic.wc@gmail.com>
+Date: Mon, 9 Nov 2026 12:00:00 +0000
+Subject: [PATCH] toolhead: do not log every SET_VELOCITY_LIMIT
+
+Slicers send SET_VELOCITY_LIMIT ACCEL=... for each feature, and each call
+logged a four-line block: 174k lines in one boot on one printer (issue
+#40). Kiln OS: keep the values in the log rollover header (so each new
+klippy.log still starts with the current limits) and keep the console
+reply for a plain SET_VELOCITY_LIMIT, but stop writing every call to
+klippy.log.
+---
+--- a/klippy/toolhead.py
++++ b/klippy/toolhead.py
+@@ -583,7 +583,10 @@ class ToolHeadCommandHelper:
+                "max_accel: %.6f\n"
+                "minimum_cruise_ratio: %.6f\n"
+                "square_corner_velocity: %.6f" % (mv, ma, mcr, scv))
+-        self.printer.set_rollover_info("toolhead", "toolhead: %s" % (msg,))
++        # Kiln OS: slicers send this for every feature; keep it in the
++        # rollover header but out of the log (issue #40)
++        self.printer.set_rollover_info("toolhead", "toolhead: %s" % (msg,),
++                                       log=False)
+         if (max_velocity is None and max_accel is None
+             and square_corner_velocity is None and min_cruise_ratio is None):
+             gcmd.respond_info(msg, log=False)

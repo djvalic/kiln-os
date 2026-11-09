@@ -1,0 +1,109 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Mon, 9 Nov 2026 14:00:00 -0500
+Subject: [PATCH] i18n: IFS "Changing filament" translated, Z-offset text names
+ its button, Russian fits (issue #23)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- The IFS status for a change started by a zMod macro goes through
+  lv_tr() (it showed in English in every language).
+- The AD5X Z-offset step text says "New Patch", the button's name,
+  instead of "Start again".
+- Russian: "Сохр. и рестарт"; the vibration and Z offset wizard titles
+  shortened to fit; "Смена филамента".
+---
+ src/printer/ams_backend_ad5x_ifs.cpp | 2 +-
+ src/ui/ui_wizard_ad5x_setup.cpp      | 2 +-
+ translations/en.yml                  | 3 ++-
+ translations/ru.yml                  | 9 +++++----
+ 4 files changed, 9 insertions(+), 7 deletions(-)
+
+diff --git a/src/printer/ams_backend_ad5x_ifs.cpp b/src/printer/ams_backend_ad5x_ifs.cpp
+index 8d7a80d5e7..b53e836810 100644
+--- a/src/printer/ams_backend_ad5x_ifs.cpp
++++ b/src/printer/ams_backend_ad5x_ifs.cpp
+@@ -2851,7 +2851,7 @@ void AmsBackendAd5xIfs::apply_zmod_change_macro(const json& status) {
+                 system_info_.action == AmsAction::IDLE) {
+                 system_info_.action = AmsAction::SELECTING;
+                 action_start_time_ = std::chrono::steady_clock::now();
+-                set_operation_detail_locked("Changing filament");
++                set_operation_detail_locked(lv_tr("Changing filament"));
+                 zmod_change_owns_action_ = true;
+                 zmod_change_in_job_ = in_job;
+             }
+diff --git a/src/ui/ui_wizard_ad5x_setup.cpp b/src/ui/ui_wizard_ad5x_setup.cpp
+index 1a323beb4f..4f7c831024 100644
+--- a/src/ui/ui_wizard_ad5x_setup.cpp
++++ b/src/ui/ui_wizard_ad5x_setup.cpp
+@@ -80,7 +80,7 @@ const std::vector<StepSpec> k_specs = {
+      false},
+     {StepId::Ad5xZoffset, "zoffset", "wizard_ad5x_zoffset",
+      "Prints a 30 mm test patch. While it prints, press Closer or Away until the lines are "
+-     "flat and just touch, then Accept. Start again prints another patch beside it.",
++     "flat and just touch, then Accept. New Patch prints another patch beside it.",
+      false},
+     {StepId::Ad5xSoak, "soak", "wizard_ad5x_soak",
+      "Calibrates the bed heat soak: how long the bed keeps warming after it reaches 60 \xC2\xB0"
+diff --git a/translations/en.yml b/translations/en.yml
+index f8d26592f2..f59cd54c17 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -4977,6 +4977,7 @@ translations:
+   'Calibration stopped. Heaters off, nothing saved.': 'Calibration stopped. Heaters off, nothing saved.'
+   'Can''t calibrate now': 'Can''t calibrate now'
+   'Change the nozzle size to {}?': 'Change the nozzle size to {}?'
++  'Changing filament': 'Changing filament'
+   'Changing the nozzle size... Klipper will restart.': 'Changing the nozzle size... Klipper will restart.'
+   'Check that every part of the printer answers': 'Check that every part of the printer answers'
+   'Check the nozzle is over the trash bin': 'Check the nozzle is over the trash bin'
+@@ -5076,7 +5077,7 @@ translations:
+   'PRINTER SOUNDS': 'PRINTER SOUNDS'
+   'Printer Sounds': 'Printer Sounds'
+   'Printer Volume': 'Printer Volume'
+-  'Prints a 30 mm test patch. While it prints, press Closer or Away until the lines are flat and just touch, then Accept. Start again prints another patch beside it.': 'Prints a 30 mm test patch. While it prints, press Closer or Away until the lines are flat and just touch, then Accept. Start again prints another patch beside it.'
++  'Prints a 30 mm test patch. While it prints, press Closer or Away until the lines are flat and just touch, then Accept. New Patch prints another patch beside it.': 'Prints a 30 mm test patch. While it prints, press Closer or Away until the lines are flat and just touch, then Accept. New Patch prints another patch beside it.'
+   'Purge Box': 'Purge Box'
+   'Purge box': 'Purge box'
+   'Remove {}?': 'Remove {}?'
+diff --git a/translations/ru.yml b/translations/ru.yml
+index d75af902fa..ad9f986c74 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -3538,7 +3538,7 @@ translations:
+   Samples: Образцы
+   Samples Tolerance: Допуск образцов
+   Save: Сохранить
+-  Save & Restart: Сохранить
++  Save & Restart: 'Сохр. и рестарт'
+   Save As New: Сохранить как новый
+   Save Hardware: Сохранить оборудование
+   Save Printer Configuration: Сохранить конфигурацию принтера
+@@ -5157,6 +5157,7 @@ translations:
+   'Calibration stopped. Heaters off, nothing saved.': 'Калибровка остановлена. Нагреватели выключены, ничего не сохранено.'
+   'Can''t calibrate now': 'Сейчас калибровка невозможна'
+   'Change the nozzle size to {}?': 'Изменить размер сопла на {}?'
++  'Changing filament': 'Смена филамента'
+   'Changing the nozzle size... Klipper will restart.': 'Смена размера сопла... Klipper перезапустится.'
+   'Check that every part of the printer answers': 'Проверка, что все узлы принтера отвечают'
+   'Check the nozzle is over the trash bin': 'Проверьте, что сопло над лотком для отходов'
+@@ -5251,12 +5252,12 @@ translations:
+   'Printer Setup: Save': 'Настройка принтера: сохранение'
+   'Printer Setup: Self-Check': 'Настройка принтера: самопроверка'
+   'Printer Setup: Summary': 'Настройка принтера: итоги'
+-  'Printer Setup: Vibration Compensation': 'Настройка принтера: компенсация вибраций'
+-  'Printer Setup: Z Offset': 'Настройка принтера: смещение по Z'
++  'Printer Setup: Vibration Compensation': 'Настройка принтера: вибрации'
++  'Printer Setup: Z Offset': 'Настройка принтера: смещение Z'
+   'PRINTER SOUNDS': 'ЗВУКИ ПРИНТЕРА'
+   'Printer Sounds': 'Звуки принтера'
+   'Printer Volume': 'Громкость принтера'
+-  'Prints a 30 mm test patch. While it prints, press Closer or Away until the lines are flat and just touch, then Accept. Start again prints another patch beside it.': 'Печатает тестовый образец 30 мм. Во время печати нажимайте «Ближе» или «Дальше», пока линии не станут плоскими и не будут едва касаться друг друга, затем нажмите «Принять». «Ещё образец» печатает новый образец рядом.'
++  'Prints a 30 mm test patch. While it prints, press Closer or Away until the lines are flat and just touch, then Accept. New Patch prints another patch beside it.': 'Печатает тестовый образец 30 мм. Во время печати нажимайте «Ближе» или «Дальше», пока линии не станут плоскими и не будут едва касаться друг друга, затем нажмите «Принять». «Ещё образец» печатает новый образец рядом.'
+   'Purge Box': 'Лоток для отходов'
+   'Purge box': 'Лоток для отходов'
+   'Remove {}?': 'Удалить {}?'
+-- 
+2.56.0
+

@@ -26,12 +26,15 @@
 # The previous start's log is kept as wifi.log.1 (one generation), so a
 # Wi-Fi that died before a reboot still has its log. A config it
 # can't read is put aside (wpa_supplicant.conf.bad-*) and it starts with
-# a new one, so the screen can still join a network.
+# a new one, so the screen can still join a network. Any other failure
+# (the adapter or its driver, issue #45) keeps the config: two more tries,
+# then Wi-Fi stays down until the next start.
 CONF=/data/ad5x/wpa_supplicant.conf
 LOG=/data/ad5x/printer_data/logs/wifi.log
 OFF=/data/ad5x/wifi.disable
 HELIX=/data/ad5x/helixscreen/config/settings.json
 CTRL=/var/run/wpa_supplicant
+OUT=/tmp/ad5x-wifi-start.txt
 
 log() {
 	echo "ad5x-wifi: $*"
@@ -92,16 +95,18 @@ nets() {
 # start_wpa: wpa_supplicant on $CONF, up when its control socket is
 start_wpa() {
 	wpa_supplicant -B -i wlan0 -c $CONF -P /var/run/wpa_supplicant.pid \
-		> /tmp/ad5x-wifi-start.txt 2>&1
+		> $OUT 2>&1
 	rc=$?
+	# -B returns after the interface is set up: a failure leaves no
+	# daemon whose socket could still come
 	i=0
-	while [ ! -S $CTRL/wlan0 ] && [ $i -lt 30 ]; do
+	while [ $rc = 0 ] && [ ! -S $CTRL/wlan0 ] && [ $i -lt 30 ]; do
 		usleep 100000; i=$((i + 1))
 	done
 	[ $rc = 0 ] && [ -S $CTRL/wlan0 ] && return 0
 	log "wpa_supplicant didn't start (exit $rc):"
-	sed 's/^/    /' /tmp/ad5x-wifi-start.txt >> $LOG 2>/dev/null
-	cat /tmp/ad5x-wifi-start.txt
+	sed 's/^/    /' $OUT >> $LOG 2>/dev/null
+	cat $OUT
 	[ -f /var/run/wpa_supplicant.pid ] &&
 		kill "$(cat /var/run/wpa_supplicant.pid)" 2>/dev/null
 	return 1
@@ -150,6 +155,28 @@ driver_info() {
 	return 0
 }
 
+# Is the config to blame for the failed start_wpa? When wpa_supplicant
+# says so: every way wpa_config_read() fails ends in this line
+# (wpa_supplicant 2.11, wpa_supplicant_init_iface()), and it reads the
+# config before it touches the driver. Or when it started (exit 0) but
+# made no control socket: no ctrl_interface=$CTRL in the config. Anything
+# else, e.g. "Could not set interface wlan0 flags (UP)" / "Failed to
+# initialize driver interface", is the adapter or its driver (issue #45).
+conf_bad() {
+	[ "$rc" = 0 ] || grep -q 'Failed to read or parse configuration' $OUT 2>/dev/null
+}
+
+# Not the config: two more tries, 2 s apart (each brings wlan0 up again,
+# so the 8821CU downloads its firmware again, issue #43)
+retry_wpa() {
+	for t in 2 3; do
+		sleep 2
+		log "try $t of 3"
+		start_wpa && return 0
+	done
+	return 1
+}
+
 radio() {
 	for r in /sys/class/net/wlan0/phy80211/rfkill*/soft; do
 		[ -f "$r" ] && echo "$1" > "$r"
@@ -196,7 +223,14 @@ start)
 	else
 		radio 0
 	fi
-	if ! start_wpa; then
+	if start_wpa; then
+		:
+	elif ! conf_bad; then
+		retry_wpa || {
+			log "wpa_supplicant didn't start, not for its config: $CONF kept ($(nets) saved network(s)); Wi-Fi is down until the next start"
+			exit 0
+		}
+	else
 		bad=$CONF.bad-$(date +%Y%m%d-%H%M%S)
 		mv $CONF $bad
 		log "$(grep -c '^[[:space:]]*network[[:space:]]*=' $bad) saved network(s) put aside in $bad; starting with none"

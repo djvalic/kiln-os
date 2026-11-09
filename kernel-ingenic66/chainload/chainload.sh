@@ -42,13 +42,15 @@ go_now() {
 	done
 	killall ustreamer ad5x-fbstream 2>/dev/null
 	sleep 2
-	# USB, Wi-Fi and Ethernet do DMA into RAM: stop them before the copy
+	# USB, Wi-Fi and Ethernet do DMA into RAM: stop them before the copy.
+	# The network first: the Wi-Fi driver (8821cu) sits on USB and crashes
+	# the kernel from a stale timer if its USB host goes away under it.
+	for i in wlan0 wlan1 eth0; do ip link set $i down 2>/dev/null; done
+	rmmod 8821cu soc_mac_driver 2>/dev/null
 	for d in 13500000.otg 13540000.usb; do
 		[ -e /sys/bus/platform/drivers/dwc2/$d ] &&
 			echo $d > /sys/bus/platform/drivers/dwc2/unbind
 	done
-	for i in wlan0 wlan1 eth0; do ip link set $i down 2>/dev/null; done
-	rmmod 8821cu soc_mac_driver 2>/dev/null
 	# one CPU
 	for c in /sys/devices/system/cpu/cpu[1-9]*/online; do
 		[ -f "$c" ] && echo 0 > "$c"

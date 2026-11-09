@@ -1,0 +1,378 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Mon, 9 Nov 2026 13:00:00 -0500
+Subject: [PATCH] i18n: wizard texts, Back/Cancel and refill dropdowns
+ translated; Russian fixes (issue #23)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- The AD5X wizard's step descriptions, summary labels and restart
+  messages (20 strings in tables, so the extractor never found them)
+  are in en.yml and ru.yml.
+- The wizard's Back/Cancel label goes through lv_tr() (upstream set it
+  untranslated in every language).
+- The auto-refill dropdowns carry options_tag, so their Russian shows.
+- Russian: two titles/buttons shortened to fit ("Настройка принтера:
+  лоток", "Сохранить"); no → or № (the screen font has neither); one
+  Pressure Advance capitalised. Kiln's own "Slot {} · {} → {}" uses an
+  em dash, so English no longer shows a box either.
+---
+ src/ui/ui_settings_ad5x_refill.cpp      |  2 +-
+ src/ui/ui_wizard.cpp                    |  2 +-
+ translations/en.yml                     | 22 ++++++++++++++-
+ translations/ru.yml                     | 36 +++++++++++++++++++------
+ ui_xml/settings_ad5x_refill_overlay.xml |  2 ++
+ 5 files changed, 53 insertions(+), 11 deletions(-)
+
+diff --git a/src/ui/ui_settings_ad5x_refill.cpp b/src/ui/ui_settings_ad5x_refill.cpp
+index 99329c86cc..0a1cb294dd 100644
+--- a/src/ui/ui_settings_ad5x_refill.cpp
++++ b/src/ui/ui_settings_ad5x_refill.cpp
+@@ -211,7 +211,7 @@ std::string backup_line(const SlotBackup& slot) {
+         }
+         target = fmt::format(fmt::runtime(lv_tr("Slots {}")), list);
+     }
+-    return fmt::format(fmt::runtime(lv_tr("Slot {} · {} → {}")), slot.slot, what, target);
++    return fmt::format(fmt::runtime(lv_tr("Slot {} · {} — {}")), slot.slot, what, target);
+ }
+ 
+ bool any_backup(const std::vector<SlotBackup>& slots) {
+diff --git a/src/ui/ui_wizard.cpp b/src/ui/ui_wizard.cpp
+index 9fa1f2e5cc..57cb2bec03 100644
+--- a/src/ui/ui_wizard.cpp
++++ b/src/ui/ui_wizard.cpp
+@@ -708,7 +708,7 @@ void ui_wizard_navigate_to_step(helix::wizard::StepId step) {
+                 }
+             }
+             if (lbl) {
+-                lv_label_set_text(lbl, btn_label_text);
++                lv_label_set_text(lbl, lv_tr(btn_label_text));
+             }
+         }
+     }
+diff --git a/translations/en.yml b/translations/en.yml
+index 7865cc88c2..f8d26592f2 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -4965,18 +4965,22 @@ translations:
+   'Bed Heat Soak': 'Bed Heat Soak'
+   'Bed heat soak before the Z check': 'Bed heat soak before the Z check'
+   'Bed heat soak calibration (optional)': 'Bed heat soak calibration (optional)'
++  'Bed soak': 'Bed soak'
+   'Bed soak at {} °C calibrated.': 'Bed soak at {} °C calibrated.'
+   'Bed temperature': 'Bed temperature'
+   'Built-in': 'Built-in'
+   'CALIBRATE': 'CALIBRATE'
+   'Calibrate the bed soak at {} °C?': 'Calibrate the bed soak at {} °C?'
+   'CALIBRATED': 'CALIBRATED'
++  'Calibrates the bed heat soak: how long the bed keeps warming after it reaches 60 °C, so the first layer stays flat. Takes about 15 minutes and starts from a cold bed. Skip it if you don''t need it.': 'Calibrates the bed heat soak: how long the bed keeps warming after it reaches 60 °C, so the first layer stays flat. Takes about 15 minutes and starts from a cold bed. Skip it if you don''t need it.'
+   'CALIBRATING': 'CALIBRATING'
+   'Calibration stopped. Heaters off, nothing saved.': 'Calibration stopped. Heaters off, nothing saved.'
+   'Can''t calibrate now': 'Can''t calibrate now'
+   'Change the nozzle size to {}?': 'Change the nozzle size to {}?'
++  'Changing the nozzle size... Klipper will restart.': 'Changing the nozzle size... Klipper will restart.'
+   'Check that every part of the printer answers': 'Check that every part of the printer answers'
+   'Check the nozzle is over the trash bin': 'Check the nozzle is over the trash bin'
++  'Checks the boards, IFS, accelerometer, bed scale, filament sensor and fans, homes, and heats nozzle and bed briefly. Fans and heaters each run for about 10 seconds and switch off again.': 'Checks the boards, IFS, accelerometer, bed scale, filament sensor and fans, homes, and heats nozzle and bed briefly. Fans and heaters each run for about 10 seconds and switch off again.'
+   'Closer 0.01': 'Closer 0.01'
+   'Closer 0.05': 'Closer 0.05'
+   'Colour match': 'Colour match'
+@@ -5003,9 +5007,11 @@ translations:
+   'First-layer test print with live adjustment': 'First-layer test print with live adjustment'
+   'Heating nozzle to {}°C': 'Heating nozzle to {}°C'
+   'Heating nozzle to {}°C ({}°C)': 'Heating nozzle to {}°C ({}°C)'
++  'Heats the bed to 60 °C and probes the whole bed to measure its shape. Keep the bed clear. The bed stays warm for the Z offset test that follows.': 'Heats the bed to 60 °C and probes the whole bed to measure its shape. Keep the bed clear. The bed stays warm for the Z offset test that follows.'
+   'Homing and heating...': 'Homing and heating...'
+   'Homing the IFS': 'Homing the IFS'
+   'IFS driver error': 'IFS driver error'
++  'IFS tuning': 'IFS tuning'
+   'Input shaping against ringing': 'Input shaping against ringing'
+   'Install {}?': 'Install {}?'
+   'INSTALLED': 'INSTALLED'
+@@ -5014,6 +5020,7 @@ translations:
+   'Klipper restarts to apply this. Continue?': 'Klipper restarts to apply this. Continue?'
+   'Last tune': 'Last tune'
+   'Let the bed cool below {} °C (now {} °C). The calibration measures from a cold bed.': 'Let the bed cool below {} °C (now {} °C). The calibration measures from a cold bed.'
++  'Load cell estimate': 'Load cell estimate'
+   'Load distance': 'Load distance'
+   'Loaded in the toolhead': 'Loaded in the toolhead'
+   'Loading filament': 'Loading filament'
+@@ -5023,7 +5030,9 @@ translations:
+   'material not set': 'material not set'
+   'Measure the shape of the bed': 'Measure the shape of the bed'
+   'Measures how long the bed keeps moving at that temperature. Takes 20-35 minutes; the bed must be empty and below 40 °C.': 'Measures how long the bed keeps moving at that temperature. Takes 20-35 minutes; the bed must be empty and below 40 °C.'
++  'Measures the frame''s vibrations with the toolhead accelerometer and sets vibration compensation. The printer is loud for a few minutes.': 'Measures the frame''s vibrations with the toolhead accelerometer and sets vibration compensation. The printer is loud for a few minutes.'
+   'Move the trash bin the nozzle purges into': 'Move the trash bin the nozzle purges into'
++  'Moves the nozzle over the purge box at the back. If the box isn''t under the nozzle, move it with the arrows, then Accept.': 'Moves the nozzle over the purge box at the back. If the box isn''t under the nozzle, move it with the arrows, then Accept.'
+   'Needs a newer Kiln OS': 'Needs a newer Kiln OS'
+   'New Patch': 'New Patch'
+   'no backup': 'no backup'
+@@ -5067,7 +5076,9 @@ translations:
+   'PRINTER SOUNDS': 'PRINTER SOUNDS'
+   'Printer Sounds': 'Printer Sounds'
+   'Printer Volume': 'Printer Volume'
++  'Prints a 30 mm test patch. While it prints, press Closer or Away until the lines are flat and just touch, then Accept. Start again prints another patch beside it.': 'Prints a 30 mm test patch. While it prints, press Closer or Away until the lines are flat and just touch, then Accept. Start again prints another patch beside it.'
+   'Purge Box': 'Purge Box'
++  'Purge box': 'Purge box'
+   'Remove {}?': 'Remove {}?'
+   'Retracting filament': 'Retracting filament'
+   'Retracting {}': 'Retracting {}'
+@@ -5075,10 +5086,13 @@ translations:
+   'Run Setup Wizard': 'Run Setup Wizard'
+   'Run the hotend PID tune and the first-layer Z offset test now? (The bed doesn''t need retuning.)': 'Run the hotend PID tune and the first-layer Z offset test now? (The bed doesn''t need retuning.)'
+   'Save the results to the printer configuration': 'Save the results to the printer configuration'
++  'Saves the results to the printer configuration. Klipper restarts and the screen reconnects by itself.': 'Saves the results to the printer configuration. Klipper restarts and the screen reconnects by itself.'
++  'Saving setup results... Klipper will restart.': 'Saving setup results... Klipper will restart.'
+   'Saving... Klipper is restarting.': 'Saving... Klipper is restarting.'
+   'Selecting a slot': 'Selecting a slot'
+   'Selecting the slot': 'Selecting the slot'
+   'Selecting {}': 'Selecting {}'
++  'Self-check': 'Self-check'
+   'Self-check, PID, bed mesh, vibration, IFS, Z offset': 'Self-check, PID, bed mesh, vibration, IFS, Z offset'
+   'Similar': 'Similar'
+   'Similar colour': 'Similar colour'
+@@ -5088,7 +5102,7 @@ translations:
+   'Slot per file': 'Slot per file'
+   'Slot per file: the file''s own slot for each tool. Auto colour: each tool uses the loaded slot with the same material and the nearest colour, so a file made before can still print.': 'Slot per file: the file''s own slot for each tool. Auto colour: each tool uses the loaded slot with the same material and the nearest colour, so a file made before can still print.'
+   'Slot {}': 'Slot {}'
+-  'Slot {} · {} → {}': 'Slot {} · {} → {}'
++  'Slot {} · {} — {}': 'Slot {} · {} — {}'
+   'Slots {}': 'Slots {}'
+   'Sounds the printer plays on print events': 'Sounds the printer plays on print events'
+   'STATUS': 'STATUS'
+@@ -5107,6 +5121,7 @@ translations:
+   'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it.': 'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it.'
+   'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.': 'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.'
+   'The nozzle size can''t change during a print': 'The nozzle size can''t change during a print'
++  'The results of the tuning so far. Check them, then Save.': 'The results of the tuning so far. Check them, then Save.'
+   'The results so far, before Save': 'The results so far, before Save'
+   'The temperature to measure, from a cold bed': 'The temperature to measure, from a cold bed'
+   'This printer can''t stop the calibration from the screen; use the emergency stop.': 'This printer can''t stop the calibration from the screen; use the emergency stop.'
+@@ -5115,6 +5130,9 @@ translations:
+   'Tool to slot': 'Tool to slot'
+   'Tune IFS': 'Tune IFS'
+   'Tune the IFS feed speed and load distances': 'Tune the IFS feed speed and load distances'
++  'Tunes filament swaps for every loaded IFS slot: the fastest reliable feed speed and the load and unload distances. Load filament into the slots you use first.': 'Tunes filament swaps for every loaded IFS slot: the fastest reliable feed speed and the load and unload distances. Load filament into the slots you use first.'
++  'Tunes the heater control: the nozzle at 220 °C with the part fan running, then the bed at 60 °C. Takes 10 to 20 minutes; stay near the printer.': 'Tunes the heater control: the nozzle at 220 °C with the part fan running, then the bed at 60 °C. Takes 10 to 20 minutes; stay near the printer.'
++  'Tunes the nozzle heater at 220 °C with the part fan running. The bed keeps its tuning. Takes 5 to 10 minutes; stay near the printer.': 'Tunes the nozzle heater at 220 °C with the part fan running. The bed keeps its tuning. Takes 5 to 10 minutes; stay near the printer.'
+   'Tuning': 'Tuning'
+   'Tuning is running': 'Tuning is running'
+   'Tuning the IFS': 'Tuning the IFS'
+@@ -5128,6 +5146,7 @@ translations:
+   'Update {}?': 'Update {}?'
+   'Updating {}...': 'Updating {}...'
+   'Used by the screen''s clock and screensaver. You can change it later in Settings > Language & Time.': 'Used by the screen''s clock and screensaver. You can change it later in Settings > Language & Time.'
++  'Vibration compensation': 'Vibration compensation'
+   'Waiting for Klipper...': 'Waiting for Klipper...'
+   'WARN': 'WARN'
+   'When a spool runs out mid-print, the printer switches to a slot with the same material and colour and carries on.': 'When a spool runs out mid-print, the printer switches to a slot with the same material and colour and carries on.'
+@@ -5135,6 +5154,7 @@ translations:
+   'Which slot each tool of a print uses': 'Which slot each tool of a print uses'
+   'Which spool auto-refill takes over with': 'Which spool auto-refill takes over with'
+   'Working on {}...': 'Working on {}...'
++  'Z offset': 'Z offset'
+   '{}  centre {:+.3f} mm': '{}  centre {:+.3f} mm'
+   '{} °C — {} (centre moved {:.2f} mm)': '{} °C — {} (centre moved {:.2f} mm)'
+   '{}, set in local.cfg': '{}, set in local.cfg'
+diff --git a/translations/ru.yml b/translations/ru.yml
+index 2ea74d165f..d75af902fa 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -3538,7 +3538,7 @@ translations:
+   Samples: Образцы
+   Samples Tolerance: Допуск образцов
+   Save: Сохранить
+-  Save & Restart: Сохранить и перезапустить
++  Save & Restart: Сохранить
+   Save As New: Сохранить как новый
+   Save Hardware: Сохранить оборудование
+   Save Printer Configuration: Сохранить конфигурацию принтера
+@@ -3770,7 +3770,7 @@ translations:
+   Shutting down screen...: Выключение экрана...
+   Shutting down...: Выключение...
+   Signal: Сигнал
+-  'Signal #': Сигнал №
++  'Signal #': Номер сигнала
+   Similarity: "Схожесть"
+   Single object: 'Один объект'
+   Single toggle macro. State is not tracked.: Один макрос переключения. Состояние
+@@ -3833,7 +3833,7 @@ translations:
+   Speed used to push filament out of the box (mm/s): Скорость выталкивания филамента
+     из коробки (мм/с)
+   Spool: Катушка
+-  'Spool #': Катушка №
++  'Spool #': 'Катушка #'
+   'Spool #{}': 'Катушка #{}'
+   Spool Info: Информация о катушке
+   Spool Not Found: 'Катушка не найдена'
+@@ -4204,7 +4204,7 @@ translations:
+   The printer applied this value and keeps it for this tool.: 'Принтер применил это значение и сохранил его для этого инструмента.'
+   The printer can draw a priming line before a print. HelixScreen offers it in the pre-print options.: 'Принтер может нарисовать линию прочистки перед печатью. HelixScreen предлагает ее в параметрах подготовки к печати.'
+   The printer can measure each tool's offset automatically. Run it on the tool offset calibration screen.: 'Принтер может автоматически измерить смещение каждого инструмента. Запустите это на экране калибровки смещений инструментов.'
+-  The printer can measure pressure advance on its own. Run it on the PA calibration screen.: 'Принтер может сам измерить pressure advance. Запускается на экране «Калибровка PA».'
++  The printer can measure pressure advance on its own. Run it on the PA calibration screen.: 'Принтер может сам измерить Pressure Advance. Запускается на экране «Калибровка PA».'
+   The printer can pause at a chosen layer, for a filament swap or an insert. Set the layer from the print preview.: 'Принтер может встать на паузу на выбранном слое, для смены филамента или вставки детали. Слой задается в предпросмотре печати.'
+   The printer could not work out where to resume.: Принтер не смог определить, откуда продолжить.
+   The printer did not change its bed check: 'Принтер не изменил проверку стола'
+@@ -5087,7 +5087,7 @@ translations:
+   '{} · {}': '{} · {}'
+   '{} · {} · {}': '{} · {} · {}'
+   '{} — response timed out': '{} — время ожидания ответа истекло'
+-  '{} → {}: no filament loaded.': '{} → {}: филамент не загружен.'
++  '{} → {}: no filament loaded.': '{} ({}): филамент не загружен.'
+   "{}'s nozzle is still heating": 'Сопло {} всё ещё нагревается'
+   '{}, {}': '{}, {}'
+   "{}: the tag names Spoolman spool #{}, which doesn't exist": '{}: метка указывает катушку Spoolman #{}, которой не существует'
+@@ -5145,18 +5145,22 @@ translations:
+   'Bed Heat Soak': 'Прогрев стола'
+   'Bed heat soak before the Z check': 'Прогрев стола перед проверкой Z'
+   'Bed heat soak calibration (optional)': 'Калибровка прогрева стола (необязательно)'
++  'Bed soak': 'Прогрев стола'
+   'Bed soak at {} °C calibrated.': 'Прогрев стола при {} °C откалиброван.'
+   'Bed temperature': 'Температура стола'
+   'Built-in': 'Встроенный'
+   'CALIBRATE': 'КАЛИБРОВАТЬ'
+   'Calibrate the bed soak at {} °C?': 'Откалибровать прогрев стола при {} °C?'
+   'CALIBRATED': 'ОТКАЛИБРОВАНО'
++  'Calibrates the bed heat soak: how long the bed keeps warming after it reaches 60 °C, so the first layer stays flat. Takes about 15 minutes and starts from a cold bed. Skip it if you don''t need it.': 'Калибрует прогрев стола: сколько стол ещё прогревается после достижения 60 °C, чтобы первый слой оставался ровным. Занимает около 15 минут и начинается с холодного стола. Если это не нужно, пропустите шаг.'
+   'CALIBRATING': 'ИДЁТ КАЛИБРОВКА'
+   'Calibration stopped. Heaters off, nothing saved.': 'Калибровка остановлена. Нагреватели выключены, ничего не сохранено.'
+   'Can''t calibrate now': 'Сейчас калибровка невозможна'
+   'Change the nozzle size to {}?': 'Изменить размер сопла на {}?'
++  'Changing the nozzle size... Klipper will restart.': 'Смена размера сопла... Klipper перезапустится.'
+   'Check that every part of the printer answers': 'Проверка, что все узлы принтера отвечают'
+   'Check the nozzle is over the trash bin': 'Проверьте, что сопло над лотком для отходов'
++  'Checks the boards, IFS, accelerometer, bed scale, filament sensor and fans, homes, and heats nozzle and bed briefly. Fans and heaters each run for about 10 seconds and switch off again.': 'Проверяет платы, IFS, акселерометр, тензодатчик стола, датчик филамента и вентиляторы, паркует оси и ненадолго нагревает сопло и стол. Вентиляторы и нагреватели работают около 10 секунд каждый и снова выключаются.'
+   'Closer 0.01': 'Ближе 0.01'
+   'Closer 0.05': 'Ближе 0.05'
+   'Colour match': 'Подбор цвета'
+@@ -5183,9 +5187,11 @@ translations:
+   'First-layer test print with live adjustment': 'Тестовая печать первого слоя с подстройкой на ходу'
+   'Heating nozzle to {}°C': 'Нагрев сопла до {}°C'
+   'Heating nozzle to {}°C ({}°C)': 'Нагрев сопла до {}°C ({}°C)'
++  'Heats the bed to 60 °C and probes the whole bed to measure its shape. Keep the bed clear. The bed stays warm for the Z offset test that follows.': 'Нагревает стол до 60 °C и проходит датчиком по всему столу, чтобы измерить его форму. Стол должен быть пустым. Стол остаётся тёплым для следующего теста смещения по Z.'
+   'Homing and heating...': 'Парковка и нагрев...'
+   'Homing the IFS': 'Парковка IFS'
+   'IFS driver error': 'Ошибка драйвера IFS'
++  'IFS tuning': 'Настройка IFS'
+   'Input shaping against ringing': 'Компенсация вибраций против звона'
+   'Install {}?': 'Установить {}?'
+   'INSTALLED': 'УСТАНОВЛЕННЫЕ'
+@@ -5194,6 +5200,7 @@ translations:
+   'Klipper restarts to apply this. Continue?': 'Для применения Klipper перезапустится. Продолжить?'
+   'Last tune': 'Последняя настройка'
+   'Let the bed cool below {} °C (now {} °C). The calibration measures from a cold bed.': 'Дайте столу остыть ниже {} °C (сейчас {} °C). Калибровка измеряет от холодного стола.'
++  'Load cell estimate': 'Оценка по тензодатчику'
+   'Load distance': 'Расстояние загрузки'
+   'Loaded in the toolhead': 'Загружен в печатающую головку'
+   'Loading filament': 'Загрузка филамента'
+@@ -5203,7 +5210,9 @@ translations:
+   'material not set': 'материал не указан'
+   'Measure the shape of the bed': 'Измерение формы стола'
+   'Measures how long the bed keeps moving at that temperature. Takes 20-35 minutes; the bed must be empty and below 40 °C.': 'Измеряет, как долго стол смещается при этой температуре. Занимает 20-35 минут; стол должен быть пустым и холоднее 40 °C.'
++  'Measures the frame''s vibrations with the toolhead accelerometer and sets vibration compensation. The printer is loud for a few minutes.': 'Измеряет вибрации рамы акселерометром печатающей головки и настраивает компенсацию вибраций. Несколько минут принтер будет громко шуметь.'
+   'Move the trash bin the nozzle purges into': 'Переместить лоток, в который продувается сопло'
++  'Moves the nozzle over the purge box at the back. If the box isn''t under the nozzle, move it with the arrows, then Accept.': 'Перемещает сопло к лотку для отходов сзади. Если лоток не под соплом, сдвиньте его стрелками и нажмите «Принять».'
+   'Needs a newer Kiln OS': 'Нужна более новая Kiln OS'
+   'New Patch': 'Ещё образец'
+   'no backup': 'нет резерва'
+@@ -5238,7 +5247,7 @@ translations:
+   'Printer Setup: Bed Soak': 'Настройка принтера: прогрев стола'
+   'Printer Setup: Heater Tuning': 'Настройка принтера: нагреватели'
+   'Printer Setup: IFS Tuning': 'Настройка принтера: IFS'
+-  'Printer Setup: Purge Box': 'Настройка принтера: лоток для отходов'
++  'Printer Setup: Purge Box': 'Настройка принтера: лоток'
+   'Printer Setup: Save': 'Настройка принтера: сохранение'
+   'Printer Setup: Self-Check': 'Настройка принтера: самопроверка'
+   'Printer Setup: Summary': 'Настройка принтера: итоги'
+@@ -5247,7 +5256,9 @@ translations:
+   'PRINTER SOUNDS': 'ЗВУКИ ПРИНТЕРА'
+   'Printer Sounds': 'Звуки принтера'
+   'Printer Volume': 'Громкость принтера'
++  'Prints a 30 mm test patch. While it prints, press Closer or Away until the lines are flat and just touch, then Accept. Start again prints another patch beside it.': 'Печатает тестовый образец 30 мм. Во время печати нажимайте «Ближе» или «Дальше», пока линии не станут плоскими и не будут едва касаться друг друга, затем нажмите «Принять». «Ещё образец» печатает новый образец рядом.'
+   'Purge Box': 'Лоток для отходов'
++  'Purge box': 'Лоток для отходов'
+   'Remove {}?': 'Удалить {}?'
+   'Retracting filament': 'Втягивание филамента'
+   'Retracting {}': 'Втягивание: {}'
+@@ -5255,10 +5266,13 @@ translations:
+   'Run Setup Wizard': 'Запустить мастер настройки'
+   'Run the hotend PID tune and the first-layer Z offset test now? (The bed doesn''t need retuning.)': 'Запустить сейчас настройку PID хотенда и тест смещения по Z на первом слое? (Стол перенастраивать не нужно.)'
+   'Save the results to the printer configuration': 'Сохранение результатов в конфигурацию принтера'
++  'Saves the results to the printer configuration. Klipper restarts and the screen reconnects by itself.': 'Сохраняет результаты в конфигурацию принтера. Klipper перезапустится, и экран подключится снова сам.'
++  'Saving setup results... Klipper will restart.': 'Сохранение результатов настройки... Klipper перезапустится.'
+   'Saving... Klipper is restarting.': 'Сохранение... Klipper перезапускается.'
+   'Selecting a slot': 'Выбор слота'
+   'Selecting the slot': 'Выбор слота'
+   'Selecting {}': 'Выбор: {}'
++  'Self-check': 'Самопроверка'
+   'Self-check, PID, bed mesh, vibration, IFS, Z offset': 'Самопроверка, PID, сетка стола, вибрации, IFS, смещение по Z'
+   'Similar': 'Похожий'
+   'Similar colour': 'Похожий цвет'
+@@ -5268,7 +5282,7 @@ translations:
+   'Slot per file': 'Слот из файла'
+   'Slot per file: the file''s own slot for each tool. Auto colour: each tool uses the loaded slot with the same material and the nearest colour, so a file made before can still print.': 'Слот из файла: для каждого инструмента — слот, указанный в файле. Авто по цвету: каждый инструмент берёт загруженный слот с тем же материалом и ближайшим цветом, поэтому можно напечатать и ранее подготовленный файл.'
+   'Slot {}': 'Слот {}'
+-  'Slot {} · {} → {}': 'Слот {} · {} → {}'
++  'Slot {} · {} — {}': 'Слот {} · {} — {}'
+   'Slots {}': 'Слоты {}'
+   'Sounds the printer plays on print events': 'Звуки принтера при событиях печати'
+   'STATUS': 'СОСТОЯНИЕ'
+@@ -5287,14 +5301,18 @@ translations:
+   'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it.': 'Сопло, установленное на принтере. От него зависят ширина линий, длина продувки и тест первого слоя.'
+   'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.': 'Сопло, установленное на принтере. От него зависят ширина линий, длина продувки и тест первого слоя. Изменить его можно позже в настройках.'
+   'The nozzle size can''t change during a print': 'Размер сопла нельзя изменить во время печати'
++  'The results of the tuning so far. Check them, then Save.': 'Результаты настройки на данный момент. Проверьте их, затем сохраните.'
+   'The results so far, before Save': 'Результаты на данный момент, до сохранения'
+   'The temperature to measure, from a cold bed': 'Температура для измерения, начиная с холодного стола'
+   'This printer can''t stop the calibration from the screen; use the emergency stop.': 'Этот принтер не может остановить калибровку с экрана; используйте аварийную остановку.'
+   'Time Zone': 'Часовой пояс'
+   'To add one, put the same filament in a free slot and set its material and colour; it is fed in when it''s needed.': 'Чтобы добавить резерв, вставьте тот же филамент в свободный слот и укажите его материал и цвет; он будет подан, когда понадобится.'
+-  'Tool to slot': 'Инструмент → слот'
++  'Tool to slot': 'Назначение слотов'
+   'Tune IFS': 'Настроить IFS'
+   'Tune the IFS feed speed and load distances': 'Настройка скорости подачи и расстояний загрузки IFS'
++  'Tunes filament swaps for every loaded IFS slot: the fastest reliable feed speed and the load and unload distances. Load filament into the slots you use first.': 'Настраивает смену филамента для каждого загруженного слота IFS: самую быструю надёжную скорость подачи и расстояния загрузки и выгрузки. Сначала загрузите филамент в нужные слоты.'
++  'Tunes the heater control: the nozzle at 220 °C with the part fan running, then the bed at 60 °C. Takes 10 to 20 minutes; stay near the printer.': 'Настраивает управление нагревателями: сопло при 220 °C с включённым обдувом детали, затем стол при 60 °C. Занимает от 10 до 20 минут; оставайтесь рядом с принтером.'
++  'Tunes the nozzle heater at 220 °C with the part fan running. The bed keeps its tuning. Takes 5 to 10 minutes; stay near the printer.': 'Настраивает нагреватель сопла при 220 °C с включённым обдувом детали. Настройка стола не меняется. Занимает от 5 до 10 минут; оставайтесь рядом с принтером.'
+   'Tuning': 'Настройка'
+   'Tuning is running': 'Идёт настройка'
+   'Tuning the IFS': 'Настройка IFS'
+@@ -5308,6 +5326,7 @@ translations:
+   'Update {}?': 'Обновить {}?'
+   'Updating {}...': 'Обновление {}...'
+   'Used by the screen''s clock and screensaver. You can change it later in Settings > Language & Time.': 'Используется часами экрана и заставкой. Изменить можно позже в разделе «Настройки > Язык и время».'
++  'Vibration compensation': 'Компенсация вибраций'
+   'Waiting for Klipper...': 'Ожидание Klipper...'
+   'WARN': 'ВНИМАНИЕ'
+   'When a spool runs out mid-print, the printer switches to a slot with the same material and colour and carries on.': 'Если катушка заканчивается во время печати, принтер переключается на слот с тем же материалом и цветом и продолжает печать.'
+@@ -5315,6 +5334,7 @@ translations:
+   'Which slot each tool of a print uses': 'Какой слот использует каждый инструмент печати'
+   'Which spool auto-refill takes over with': 'Какой катушкой автозамена продолжает печать'
+   'Working on {}...': 'Обработка {}...'
++  'Z offset': 'Смещение по Z'
+   '{}  centre {:+.3f} mm': '{}  центр {:+.3f} мм'
+   '{} °C — {} (centre moved {:.2f} mm)': '{} °C — {} (центр сместился на {:.2f} мм)'
+   '{}, set in local.cfg': '{}, задано в local.cfg'
+diff --git a/ui_xml/settings_ad5x_refill_overlay.xml b/ui_xml/settings_ad5x_refill_overlay.xml
+index 613978b6a1..7797e4ca37 100644
+--- a/ui_xml/settings_ad5x_refill_overlay.xml
++++ b/ui_xml/settings_ad5x_refill_overlay.xml
+@@ -29,11 +29,13 @@
+         </lv_obj>
+         <setting_dropdown_row name="row_ad5x_refill_match"
+                               label="Colour match" icon="palette" options="Exact&#10;Similar&#10;Any colour"
++                              options_tag="Exact&#10;Similar&#10;Any colour"
+                               description="Exact: the same colour code. Similar: close shades. Any colour: the same material is enough."
+                               bind_selected="ad5x_refill_match" callback="on_ad5x_refill_match_changed"
+                               disabled="ad5x_refill_busy" dropdown_width="40%"/>
+         <setting_dropdown_row name="row_ad5x_map_mode"
+                               label="Tool to slot" icon="filament" options="Slot per file&#10;Auto colour"
++                              options_tag="Slot per file&#10;Auto colour"
+                               description="Slot per file: the file's own slot for each tool. Auto colour: each tool uses the loaded slot with the same material and the nearest colour, so a file made before can still print."
+                               bind_selected="ad5x_map_mode" callback="on_ad5x_map_mode_changed"
+                               disabled="ad5x_refill_busy" dropdown_width="40%"/>
+-- 
+2.56.0
+

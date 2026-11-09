@@ -1,0 +1,4 @@
+# Main OS BusyBox additions (on top of Buildroot's default config)
+# ionice: the timelapse plugin zips and renders at idle I/O priority, so
+# its eMMC writes don't starve Klipper (issue #40; mq-deadline honours it)
+CONFIG_IONICE=y

@@ -1,0 +1,104 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Mon, 9 Nov 2026 12:00:00 -0500
+Subject: [PATCH] wifi: a switch-on whose backend can't start keeps the stored
+ setting (issue #45)
+
+On Kiln OS the backend is down when wpa_supplicant isn't running (the
+Wi-Fi adapter failed at start). Tapping the switch then failed, and the
+outcome "off" was saved as wifi_enabled=false and as the expectation: at
+the next start the radio was blocked, so Wi-Fi stayed off on a printer
+with Ethernet even after the adapter worked again. A switch-on that
+fails with the backend still not running reached no radio: neither
+WiFiManager nor the Network Settings overlay saves anything for it.
+---
+ include/wifi_manager.h                 | 15 +++++++++++++++
+ src/api/wifi_manager.cpp               | 13 ++++++++++---
+ src/ui/ui_overlay_network_settings.cpp |  8 +++++++-
+ 3 files changed, 32 insertions(+), 4 deletions(-)
+
+diff --git a/include/wifi_manager.h b/include/wifi_manager.h
+index 646e662740..8b7de09ea0 100644
+--- a/include/wifi_manager.h
++++ b/include/wifi_manager.h
+@@ -11,6 +11,7 @@
+ #include "wifi_control_breaker.h"
+ #include "wifi_scan_scheduler.h"
+ 
++#include <atomic>
+ #include <chrono>
+ #include <condition_variable>
+ #include <cstdint>
+@@ -456,7 +457,21 @@ class WiFiManager {
+      */
+     bool has_non_wifi_fallback();
+ 
++    /**
++     * @brief The last switch-on failed because the backend could not start
++     *        (on Kiln OS: wpa_supplicant isn't running, the adapter failed).
++     *
++     * Nothing reached the radio then, so the stored "WiFi on" setting must
++     * not be changed: saving "off" would block the radio at the next start
++     * once the adapter works again.
++     */
++    bool last_switch_on_unstarted() const { return switch_on_unstarted_.load(); }
++
+   private:
++    // Set by the radio worker (set_enabled_async) before its answer is
++    // delivered, read on the UI thread by that answer's caller.
++    std::atomic<bool> switch_on_unstarted_{false};
++
+     // Grants the auth-failure-debounce regression test direct access to the
+     // connection handlers and grace-timer state (helixscreen#1050).
+     friend class WiFiManagerTestAccess;
+diff --git a/src/api/wifi_manager.cpp b/src/api/wifi_manager.cpp
+index d8c123704a..0d9e604485 100644
+--- a/src/api/wifi_manager.cpp
++++ b/src/api/wifi_manager.cpp
+@@ -1267,14 +1267,21 @@ void WiFiManager::set_enabled_async(bool enabled, helix::LifetimeToken token,
+         [this, enabled, answer]() -> helix::Callback<void()> {
+             WiFiError result = apply_radio_enabled(enabled);
+             const bool success = result.success();
+-            const bool actual = backend_->is_running() && backend_->is_radio_enabled();
++            const bool running = backend_->is_running();
++            const bool actual = running && backend_->is_radio_enabled();
++            // Switched on and the backend didn't start: nothing reached the
++            // radio, so the stored setting stays as it was (Kiln OS issue #45)
++            const bool unstarted = enabled && !success && !running;
++            switch_on_unstarted_.store(unstarted);
+             const bool wired_fallback = has_non_wifi_fallback();
+-            return [enabled, result, wired_fallback, success, actual, answer]() {
++            return [enabled, result, wired_fallback, success, actual, unstarted, answer]() {
+                 report_radio_result(enabled, result, wired_fallback);
+                 // Ahead of the caller's callback, so a caller that saves in
+                 // that callback flushes this write with it rather than
+                 // costing a second save.
+-                persist_radio_expectation(enabled, success, actual);
++                if (!unstarted) {
++                    persist_radio_expectation(enabled, success, actual);
++                }
+                 answer(success, actual);
+             };
+         },
+diff --git a/src/ui/ui_overlay_network_settings.cpp b/src/ui/ui_overlay_network_settings.cpp
+index 38984121fd..39e6e0416f 100644
+--- a/src/ui/ui_overlay_network_settings.cpp
++++ b/src/ui/ui_overlay_network_settings.cpp
+@@ -1097,7 +1097,13 @@ void NetworkSettingsOverlay::finish_wlan_toggle(bool requested, bool success, bo
+     // switch. This save also flushes the expectation WiFiManager stages for the
+     // same toggle: it queues that write ahead of this callback, so the pair
+     // still costs one write.
+-    SystemSettingsManager::instance().set_wifi_enabled(outcome.enabled);
++    // A switch-on whose backend couldn't start (Kiln OS: the adapter failed)
++    // changes nothing: saving "off" would block the radio at the next start.
++    if (requested && !success && wifi_manager_ && wifi_manager_->last_switch_on_unstarted()) {
++        spdlog::info("[NetworkSettingsOverlay] WiFi backend could not start - stored setting kept");
++    } else {
++        SystemSettingsManager::instance().set_wifi_enabled(outcome.enabled);
++    }
+ 
+     // Update combined network status
+     update_any_network_connected();
+-- 
+2.56.0
+
