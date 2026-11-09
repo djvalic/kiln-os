@@ -792,13 +792,18 @@ class IFS:
         self.mcu_inserted = 0
         self.adopt_pending = True
         # A zMod-compat print that did not end in a state we saw (power loss,
-        # shutdown, restart): no print runs now, so its map mode goes back
+        # shutdown, restart): no print runs now, so its map mode goes back.
+        # From a callback: SAVE_VARIABLE waits for its file write, and
+        # klippy:ready handlers must not pause the reactor
         if self.zmod_prev is not None and not self._in_print():
-            self._zmod_restore()
+            self.reactor.register_callback(self._ready_zmod_restore)
         self.is_ready = True
         if self.prefeed and (self.is_mcu_mode or self.fd is not None):
             self.reactor.register_callback(self._ready_prefeed)
         self.reactor.register_timer(self._watch_print, self.reactor.NOW)
+    def _ready_zmod_restore(self, eventtime):
+        if self.zmod_prev is not None and not self._in_print():
+            self._zmod_restore()
     def _watch_print(self, eventtime):
         ps = self.printer.lookup_object('print_stats', None)
         if ps is not None:

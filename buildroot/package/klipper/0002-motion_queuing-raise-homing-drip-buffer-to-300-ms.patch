@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: valix <djvalic.wc@gmail.com>
+Date: Sun, 8 Nov 2026 12:00:00 +0000
+Subject: [PATCH] motion_queuing: raise homing drip buffer to 300 ms
+
+During homing and probing the host sends steps to the MCU in 50 ms
+segments and keeps only DRIP_TIME (100 ms) queued ahead of the MCU
+clock. On the AD5X the host can stall for up to ~0.3 s (seen right
+after a large G-code upload), which empties the MCU step queue and
+shuts down with "Timer too close".
+
+Kiln OS: keep 300 ms queued instead. The MCU still stops on the trsync
+trigger and drops later steps, so there is no overshoot; the cost is
+about 0.2 s more wait after each homing or probe trigger. Issue #40.
+---
+--- a/klippy/extras/motion_queuing.py
++++ b/klippy/extras/motion_queuing.py
+@@ -18,7 +18,8 @@
+ SDS_CHECK_TIME = 0.001 # step+dir+step filter in stepcompress.c
+ 
+ DRIP_SEGMENT_TIME = 0.050
+-DRIP_TIME = 0.100
++# AD5X: the host can stall up to ~0.3 s after a large upload (issue #40)
++DRIP_TIME = 0.300
+ 
+ class PrinterMotionQueuing:
+     def __init__(self, config):
