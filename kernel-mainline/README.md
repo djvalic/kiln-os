@@ -45,7 +45,7 @@ Each patch must be acceptable to a mainline reviewer:
 
 ## Status
 
-**On the printer** (2026-11-09): 45 patches, checkpatch `--strict` clean,
+**On the printer** (2026-11-09): 46 patches, checkpatch `--strict` clean,
 every commit builds with `W=1`, `dt_binding_check` and `dtbs_check` clean.
 
 - **Boot to a serial console:** the kernel reaches `Waiting for root
@@ -88,10 +88,23 @@ every commit builds with `W=1`, `dt_binding_check` and `dtbs_check` clean.
 - **Floating point:** Kiln's userspace is built for the o32 FP64 ABI;
   without `MIPS_O32_FP64_SUPPORT` the kernel runs it with FR=0 and doubles
   come out wrong (found with the TCP rates). The defconfig enables it.
+- **Wi-Fi:** with the secondary cache fix below, rtw88 brings `wlan0` up in
+  every boot, survives repeated down/up, and scans, with no rtw88 errors
+  (6 boots). Without it about one register read in 500 came back stale.
 - Klipper itself has not run on this kernel yet: next is Kiln's userspace
   on it (rtw88 is a module and needs its firmware in the root file system).
 
 Generic fixes this SoC needed, in the series:
+
+- **Ingenic L2 cache maintenance.** On XBurst a secondary cache operation
+  is still writing back when its instruction retires; mainline's DMA cache
+  maintenance did not wait, so DMA reads could come back with the buffer's
+  old contents, silently. rtw88 showed it: stale register reads, only for
+  buffers at the start of a 64-byte L2 line, then wrong values written back
+  into the chip. Ingenic's kernels (both XBurst generations, and Kiln's 6.6)
+  end their L2 operations with an uncached load (`__fast_iob()`); the fix
+  does the same in `sc-mips.c`. 0 stale reads in 30000 with it, about 1 in
+  500 without.
 
 - **Ingenic USB PHY supply.** `exit()` disabled the regulator that
   `power_off()` had already disabled; DWC2 calls both on removal and on a
@@ -118,9 +131,14 @@ Open points:
 - **sparse** has not run on the series (it could not be installed here).
 - **eMMC above 25 MHz.** HS200 at its full rate needs the sample clock
   tuning; the stock kernel runs at 25 MHz too, so it stays there for now.
-- **Wi-Fi, first start.** The first `ip link set wlan0 up` after boot
-  fails in rtw88 ("H2C queue mismatch", "failed to configure mac") in 2
-  of 4 boots; the second one works. In rtw88's power-on, not in the port.
+- **Wi-Fi under load.** The USB disconnects (-71) seen in some early
+  boots with the camera plugged in have not come back since the L2 fix,
+  and stale reads turning into wrong register writes would explain them;
+  not proven. rtw88 still never checks for short register reads
+  (`ret < len`).
+- **Ingenic's SoC code not yet compared:** the SDK's X2600 setup
+  (`arch/mips/xburst2/soc-x2600/`) and its idle routine (a SYNC before
+  WAIT, which mainline's `r4k_wait` lacks).
 - **USB PHY from cold.** The tests chainload from the stock kernel, which
   has set the PHY registers already; that our driver sets them from their
   reset values is still to be seen (a direct boot).

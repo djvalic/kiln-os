@@ -28,6 +28,8 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <stdint.h>
+#include <signal.h>
 #include <sys/mount.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -141,6 +143,13 @@ static void show_phy_regs(void)
 	printf(" usb PCR %08x PCR1 %08x hs_tx %02x vbus %02x\n",
 	       reg32(0x1000004c), reg32(0x100000e8),
 	       reg32(0x10078430), reg32(0x1007843c));
+	/* the host port's DWC2 core, to compare with the stock kernel's */
+	printf("dwc2 usb: GOTGCTL %08x GAHBCFG %08x GUSBCFG %08x GRXFSIZ %08x GNPTXFSIZ %08x\n",
+	       reg32(0x13540000), reg32(0x13540008), reg32(0x1354000c),
+	       reg32(0x13540024), reg32(0x13540028));
+	printf("dwc2 usb: HPTXFSIZ %08x GDFIFOCFG %08x HCFG %08x HFIR %08x HPRT %08x\n",
+	       reg32(0x13540100), reg32(0x1354005c), reg32(0x13540400),
+	       reg32(0x13540404), reg32(0x13540440));
 }
 
 static int has_usb(const char *vid, const char *pid)
@@ -239,6 +248,33 @@ static void wifi_scan(int s)
 		p += e.len;
 	}
 	printf("\nwlan0: %d access points\n", n);
+}
+
+static int if_down(int s, const char *name)
+{
+	struct ifreq r = { 0 };
+
+	snprintf(r.ifr_name, IFNAMSIZ, "%s", name);
+	if (ioctl(s, SIOCGIFFLAGS, &r))
+		return -errno;
+	r.ifr_flags &= ~IFF_UP;
+	return ioctl(s, SIOCSIFFLAGS, &r) ? -errno : 0;
+}
+
+/* Power the Wi-Fi chip down and up again: how often does the start fail? */
+static void wifi_cycles(int s, int count)
+{
+	int i, err, bad = 0;
+
+	for (i = 1; i <= count; i++) {
+		if_down(s, "wlan0");
+		usleep(500000);
+		err = if_up(s, "wlan0");
+		if (err)
+			bad++;
+		printf("wlan0: cycle %d: %s\n", i, err ? strerror(-err) : "ok");
+	}
+	printf("wlan0: %d of %d restarts failed\n", bad, count);
 }
 
 static int setup_eth(int s)
@@ -344,6 +380,70 @@ static int fp_check(void)
 	return 0;
 }
 
+/* Physical address of a virtual one, from /proc/self/pagemap (root only) */
+static unsigned long long phys_of(const void *v)
+{
+	uint64_t e = 0;
+	long psz = sysconf(_SC_PAGESIZE);
+	int fd = open("/proc/self/pagemap", O_RDONLY);
+
+	if (fd < 0)
+		return 0;
+	if (pread(fd, &e, 8, ((uintptr_t)v / psz) * 8) != 8)
+		e = 0;
+	close(fd);
+	if (!(e >> 63))
+		return 0;
+	return (e & ((1ULL << 55) - 1)) * psz + ((uintptr_t)v % psz);
+}
+
+/*
+ * Memory check, in a child process: lock MEM_MB of memory, fill each word
+ * with a value made from its own address, then verify it all every 2 s.
+ * Anything else writing to RAM (a DMA gone astray, the SoC's RISC-V core,
+ * a bad DDR range) shows up as a mismatch at a physical address.
+ */
+#define MEM_MB	300
+static void mem_check(void)
+{
+	size_t n = (size_t)MEM_MB << 20, words = n / 4, i;
+	uint32_t *m = mmap(NULL, n, PROT_READ | PROT_WRITE,
+			   MAP_PRIVATE | MAP_ANONYMOUS | MAP_POPULATE, -1, 0);
+	unsigned long long lo = ~0ULL, hi = 0, pa;
+	unsigned long pass = 0, bad = 0;
+
+	if (m == MAP_FAILED || mlock(m, n)) {
+		printf("mem: no %d MB: %s\n", MEM_MB, strerror(errno));
+		_exit(1);
+	}
+	for (i = 0; i < words; i++)
+		m[i] = (uint32_t)(uintptr_t)&m[i] ^ 0x5aa5c33c;
+	for (i = 0; i < words; i += 1024) {	/* one sample per 4 KiB page */
+		pa = phys_of(&m[i]);
+		if (pa && pa < lo)
+			lo = pa;
+		if (pa > hi)
+			hi = pa;
+	}
+	printf("mem: %d MB filled, physical %#llx..%#llx\n", MEM_MB, lo, hi);
+	for (;;) {
+		sleep(2);
+		pass++;
+		for (i = 0; i < words; i++) {
+			uint32_t want = (uint32_t)(uintptr_t)&m[i] ^ 0x5aa5c33c;
+
+			if (m[i] == want)
+				continue;
+			if (++bad <= 20)
+				printf("mem: pass %lu: BAD at phys %#llx: %08x, want %08x\n",
+				       pass, phys_of(&m[i]), m[i], want);
+			m[i] = want;
+		}
+		if (pass % 10 == 0)
+			printf("mem: %lu passes, %lu bad words\n", pass, bad);
+	}
+}
+
 int main(void)
 {
 	int s, i, n, ls, lo;
@@ -359,6 +459,9 @@ int main(void)
 	setvbuf(stdout, NULL, _IONBF, 0);
 
 	printf("\n=== netusb-test\n");
+	if (fork() == 0)
+		mem_check();
+	sleep(3);	/* let the fill finish before the USB tests */
 	fp_check();
 
 	/* the hub, then its devices, enumerate within a few seconds */
@@ -396,8 +499,11 @@ int main(void)
 				break;
 			sleep(1);
 		}
-		if (!n)
+		if (!n) {
+			wifi_cycles(s, 5);
+			if_up(s, "wlan0");
 			wifi_scan(s);
+		}
 	}
 
 	printf("--- eth0\n");
