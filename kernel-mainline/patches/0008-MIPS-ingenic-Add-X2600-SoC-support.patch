@@ -1,0 +1,88 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sun, 8 Nov 2026 11:21:35 -0700
+Subject: [PATCH 08/45] MIPS: ingenic: Add X2600 SoC support
+
+The Ingenic X2600 has two XBurst2 cores. Its interrupt controller and
+UART follow earlier Ingenic SoCs, while its GPIO, clock and timer units
+need new driver support. Add its machine type and Kconfig symbol, and
+the Flashforge Adventurer 5X as a board using it.
+
+Drivers for the SoC's blocks come in separate patches; until then a
+kernel for this board does not boot.
+---
+ arch/mips/generic/board-ingenic.c |  3 +++
+ arch/mips/include/asm/bootinfo.h  |  1 +
+ arch/mips/ingenic/Kconfig         | 15 +++++++++++++++
+ 3 files changed, 19 insertions(+)
+
+diff --git a/arch/mips/generic/board-ingenic.c b/arch/mips/generic/board-ingenic.c
+index 1f4906875..baac937e9 100644
+--- a/arch/mips/generic/board-ingenic.c
++++ b/arch/mips/generic/board-ingenic.c
+@@ -24,6 +24,8 @@
+ static __init char *ingenic_get_system_type(unsigned long machtype)
+ {
+ 	switch (machtype) {
++	case MACH_INGENIC_X2600:
++		return "X2600";
+ 	case MACH_INGENIC_X2100:
+ 		return "X2100";
+ 	case MACH_INGENIC_X2000H:
+@@ -151,6 +153,7 @@ static const struct of_device_id ingenic_of_match[] __initconst = {
+ 	{ .compatible = "ingenic,x2000e", .data = (void *)MACH_INGENIC_X2000E },
+ 	{ .compatible = "ingenic,x2000h", .data = (void *)MACH_INGENIC_X2000H },
+ 	{ .compatible = "ingenic,x2100", .data = (void *)MACH_INGENIC_X2100 },
++	{ .compatible = "ingenic,x2600", .data = (void *)MACH_INGENIC_X2600 },
+ 	{}
+ };
+ 
+diff --git a/arch/mips/include/asm/bootinfo.h b/arch/mips/include/asm/bootinfo.h
+index 2128ba903..e36ad39ff 100644
+--- a/arch/mips/include/asm/bootinfo.h
++++ b/arch/mips/include/asm/bootinfo.h
+@@ -86,6 +86,7 @@ enum ingenic_machine_type {
+ 	MACH_INGENIC_X2000E,
+ 	MACH_INGENIC_X2000H,
+ 	MACH_INGENIC_X2100,
++	MACH_INGENIC_X2600,
+ };
+ 
+ extern char *system_type;
+diff --git a/arch/mips/ingenic/Kconfig b/arch/mips/ingenic/Kconfig
+index f595b339a..bb07c598e 100644
+--- a/arch/mips/ingenic/Kconfig
++++ b/arch/mips/ingenic/Kconfig
+@@ -9,6 +9,7 @@ config MACH_INGENIC_GENERIC
+ 	select MACH_JZ4780
+ 	select MACH_X1000
+ 	select MACH_X1830
++	select MACH_X2600
+ 
+ choice
+ 	prompt "Machine type"
+@@ -43,6 +44,14 @@ config X1830_CU1830_NEO
+ 	bool "YSH & ATIL CU1830 Module with Neo backplane"
+ 	select MACH_X1830
+ 
++config X2600_FLASHFORGE_AD5X
++	bool "Flashforge Adventurer 5X"
++	select MACH_X2600
++	help
++	  Support for the Flashforge Adventurer 5X 3D printer, whose main
++	  board uses the Ingenic X2600 SoC. Selecting it builds the
++	  printer's device tree into the kernel.
++
+ endchoice
+ 
+ config MACH_JZ4725B
+@@ -76,3 +85,9 @@ config MACH_X1830
+ 	select MIPS_CPU_SCACHE
+ 	select SYS_HAS_CPU_MIPS32_R2
+ 	select SYS_SUPPORTS_HIGHMEM
++
++config MACH_X2600
++	bool
++	select MIPS_CPU_SCACHE
++	select SYS_HAS_CPU_MIPS32_R2
++	select SYS_SUPPORTS_HIGHMEM

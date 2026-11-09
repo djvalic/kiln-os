@@ -1,0 +1,76 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sun, 8 Nov 2026 15:21:37 -0700
+Subject: [PATCH 29/45] MIPS: dts: ingenic: ad5x: Add the motion and toolhead
+ board ports
+
+The Adventurer 5X runs its motion controller and its toolhead board as
+Klipper MCUs at 230400 baud, on UART2 (PD12, PD13) and UART5 (PB26,
+PB27). Describe them as ttyS2 and ttyS5, as the stock firmware names
+them.
+---
+ arch/mips/boot/dts/ingenic/ad5x.dts | 28 ++++++++++++++++++++++++++++
+ 1 file changed, 28 insertions(+)
+
+diff --git a/arch/mips/boot/dts/ingenic/ad5x.dts b/arch/mips/boot/dts/ingenic/ad5x.dts
+index cde599392..a2364864f 100644
+--- a/arch/mips/boot/dts/ingenic/ad5x.dts
++++ b/arch/mips/boot/dts/ingenic/ad5x.dts
+@@ -10,7 +10,9 @@ / {
+ 
+ 	aliases {
+ 		serial0 = &uart0;
++		serial2 = &uart2;
+ 		serial4 = &uart4;
++		serial5 = &uart5;
+ 	};
+ 
+ 	chosen {
+@@ -52,10 +54,20 @@ pins_uart0: uart0 {
+ 		groups = "uart0-e";
+ 	};
+ 
++	pins_uart2: uart2 {
++		function = "uart2";
++		groups = "uart2-data";
++	};
++
+ 	pins_uart4: uart4 {
+ 		function = "uart4";
+ 		groups = "uart4-data-b";
+ 	};
++
++	pins_uart5: uart5 {
++		function = "uart5";
++		groups = "uart5-data-b";
++	};
+ };
+ 
+ /* Debug console */
+@@ -66,6 +78,14 @@ &uart0 {
+ 	status = "okay";
+ };
+ 
++/* Motion controller (Klipper MCU) */
++&uart2 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pins_uart2>;
++
++	status = "okay";
++};
++
+ /* Filament changer (IFS): half-duplex RS-485, driver enable on PC3 */
+ &uart4 {
+ 	pinctrl-names = "default";
+@@ -76,3 +96,11 @@ &uart4 {
+ 
+ 	status = "okay";
+ };
++
++/* Toolhead board (eboard, Klipper MCU) */
++&uart5 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pins_uart5>;
++
++	status = "okay";
++};

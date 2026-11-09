@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sun, 8 Nov 2026 14:24:07 -0700
+Subject: [PATCH 28/45] MIPS: dts: ingenic: ad5x: Add the filament changer port
+
+The Adventurer 5X talks to its filament changer (IFS) over a half-duplex
+RS-485 link on UART4 (PB24, PB25), the transceiver's driver enable on
+PC3. Describe it, with RS-485 enabled from boot, as ttyS4 like the stock
+firmware.
+---
+ arch/mips/boot/dts/ingenic/ad5x.dts | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/arch/mips/boot/dts/ingenic/ad5x.dts b/arch/mips/boot/dts/ingenic/ad5x.dts
+index 75362aec7..cde599392 100644
+--- a/arch/mips/boot/dts/ingenic/ad5x.dts
++++ b/arch/mips/boot/dts/ingenic/ad5x.dts
+@@ -2,6 +2,7 @@
+ /dts-v1/;
+ 
+ #include "x2600.dtsi"
++#include <dt-bindings/gpio/gpio.h>
+ 
+ / {
+ 	compatible = "flashforge,ad5x", "ingenic,x2600";
+@@ -9,6 +10,7 @@ / {
+ 
+ 	aliases {
+ 		serial0 = &uart0;
++		serial4 = &uart4;
+ 	};
+ 
+ 	chosen {
+@@ -49,6 +51,11 @@ pins_uart0: uart0 {
+ 		function = "uart0";
+ 		groups = "uart0-e";
+ 	};
++
++	pins_uart4: uart4 {
++		function = "uart4";
++		groups = "uart4-data-b";
++	};
+ };
+ 
+ /* Debug console */
+@@ -58,3 +65,14 @@ &uart0 {
+ 
+ 	status = "okay";
+ };
++
++/* Filament changer (IFS): half-duplex RS-485, driver enable on PC3 */
++&uart4 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pins_uart4>;
++
++	rts-gpios = <&gpc 3 GPIO_ACTIVE_HIGH>;
++	linux,rs485-enabled-at-boot-time;
++
++	status = "okay";
++};

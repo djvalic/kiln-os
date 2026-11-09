@@ -80,8 +80,6 @@ for y in $(git -C "$KSRC" diff --name-only "v$KVER..HEAD" -- 'Documentation/devi
 		bad "dt_binding_check $y"
 done
 "${MAKE[@]}" -s dtbs_check 2> "$tmp/dtbs" || bad "dtbs_check"
-# Known until the X2600 PDMA is supported: the UARTs have no dmas (as x1830)
-grep -E 'ingenic/(x2600|ad5x)' "$tmp/dtbs" | grep -v "serial@1003[0-7]000: 'dma" &&
-	bad "dtbs_check warnings"
+grep -E 'ingenic/(x2600|ad5x)' "$tmp/dtbs" && bad "dtbs_check warnings"
 
 [ $fail = 0 ] && echo "all checks passed" || { echo "checks failed"; exit 1; }

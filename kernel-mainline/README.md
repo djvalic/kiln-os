@@ -45,7 +45,7 @@ Each patch must be acceptable to a mainline reviewer:
 
 ## Status
 
-**On the printer** (2026-11-08): 33 patches, checkpatch `--strict` clean,
+**On the printer** (2026-11-09): 45 patches, checkpatch `--strict` clean,
 every commit builds with `W=1`, `dt_binding_check` and `dtbs_check` clean.
 
 - **Boot to a serial console:** the kernel reaches `Waiting for root
@@ -74,10 +74,32 @@ every commit builds with `W=1`, `dt_binding_check` and `dtbs_check` clean.
   `sdhci-of-dwcmshc`; its card clock comes from the CGU, which now switches
   the MSC clock to the crystal for card identification (400 kHz is out of
   MPLL's reach).
-- Klipper itself has not run on this kernel yet: Kiln's userspace needs
-  networking (not in the defconfig yet), Ethernet and USB (Wi-Fi).
+- **USB** (`tools/netusb-test.c`): the host port's DWC2 controller and
+  PHY bring up the internal hub, the camera and the RTL8821CU Wi-Fi
+  module, all at 480 Mb/s. `rtw88_8821cu` loads its firmware (24.11.0)
+  and a scan finds the access points around. The OTG controller runs as
+  Kiln's 6.6 kernel has it (OTG mode, VBUS detected outside its PHY),
+  though none of the display's USB ports reach it. The PHY registers end
+  up as under 6.6: USBPCR 0x80000000, USBPCR1 0x30000000, the highest HS
+  eye (0x30 = 0x6D) on both, the OTG PHY's VBUS comparator off.
+- **Ethernet:** the MAC is a DWMAC GMAC 3.7 (stmmac with the X1000 glue),
+  RMII to an IC Plus IP101G at MDIO address 1; link 100 Mb/s full duplex
+  in 2 s, TCP at 11.8 MB/s each way (line rate).
+- **Floating point:** Kiln's userspace is built for the o32 FP64 ABI;
+  without `MIPS_O32_FP64_SUPPORT` the kernel runs it with FR=0 and doubles
+  come out wrong (found with the TCP rates). The defconfig enables it.
+- Klipper itself has not run on this kernel yet: next is Kiln's userspace
+  on it (rtw88 is a module and needs its firmware in the root file system).
 
 Generic fixes this SoC needed, in the series:
+
+- **Ingenic USB PHY supply.** `exit()` disabled the regulator that
+  `power_off()` had already disabled; DWC2 calls both on removal and on a
+  failed probe (seen as a regulator warning when the PHY clock was off).
+- **Ingenic MAC binding.** The DTs use `"snps,dwmac"` as fallback (that
+  makes stmmac treat the core as a GMAC) and the common DWMAC properties,
+  which the binding rejected; and the CGU binding checked the MAC's PHY
+  control register (a syscon) against the MAC binding.
 
 - **zboot cache maintenance.** The decompressor jumped to the kernel without
   writing back the L1 data cache (an old FIXME), so the kernel ran stale
@@ -96,6 +118,15 @@ Open points:
 - **sparse** has not run on the series (it could not be installed here).
 - **eMMC above 25 MHz.** HS200 at its full rate needs the sample clock
   tuning; the stock kernel runs at 25 MHz too, so it stays there for now.
+- **Wi-Fi, first start.** The first `ip link set wlan0 up` after boot
+  fails in rtw88 ("H2C queue mismatch", "failed to configure mac") in 2
+  of 4 boots; the second one works. In rtw88's power-on, not in the port.
+- **USB PHY from cold.** The tests chainload from the stock kernel, which
+  has set the PHY registers already; that our driver sets them from their
+  reset values is still to be seen (a direct boot).
+- **MAC address.** stmmac takes the address the stock kernel left in the
+  MAC; booted directly by the boot loader the MAC gets a random one
+  unless the DT or the boot loader provides it.
 - **From Ingenic's SDK, not documentation:** the PLL VCO range (672-2400
   MHz, the range of Ingenic's PLL table; the boot loader's settings are
   inside it), which pins have pull resistors (all allowed), and the X2600
@@ -133,6 +164,8 @@ mounts `/data` read-write (the boot flag is safe: `ad5x.noslot`).
   second line, the reason (a one-line record is taken as an old one and
   retried once):
   `printf '%s\nkernel test: stay on stock\n' "$(cat /usr/lib/ad5x/kernel66/release)" > /data/ad5x/kernel/failed`
+  Images before that (v0.0.47) want the release alone, one line, and drop
+  a two-line record.
   Then, from `/data/ad5x/chainload/` (`chainload.ko`, `chainload.sh`):
   `chainload.sh stage IMAGE` (loads it, prints what it staged) and
   `chainload.sh go` (stops services and jumps). Undo with `ad5x-kernel retry`

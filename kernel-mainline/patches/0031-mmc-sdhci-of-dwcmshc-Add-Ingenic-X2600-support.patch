@@ -1,0 +1,106 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sun, 8 Nov 2026 16:17:42 -0700
+Subject: [PATCH 31/45] mmc: sdhci-of-dwcmshc: Add Ingenic X2600 support
+
+The two MSC controllers of the Ingenic X2600 are DesignWare MSHC 1.40a.
+As on the Rockchip parts, their SDCLK frequency select bits have no
+effect: the card clock is the core clock itself, made by the SoC's CGU.
+Set the card rate there and leave the internal divider at 0, so the
+reported actual clock is what the card gets. The lowest rate comes from
+the CGU too (it switches the clock to the crystal for card
+identification). Its mux only switches while the clock is gated, so
+gate it around the rate change; the card clock is off then anyway.
+
+The DMA engine takes 32-bit addresses and lengths, and the high-speed
+enable bit in HOST_CONTROL must stay clear, as in the vendor driver.
+---
+ drivers/mmc/host/sdhci-of-dwcmshc.c | 68 +++++++++++++++++++++++++++++
+ 1 file changed, 68 insertions(+)
+
+diff --git a/drivers/mmc/host/sdhci-of-dwcmshc.c b/drivers/mmc/host/sdhci-of-dwcmshc.c
+index 1baa2379c..6443e4c75 100644
+--- a/drivers/mmc/host/sdhci-of-dwcmshc.c
++++ b/drivers/mmc/host/sdhci-of-dwcmshc.c
+@@ -2257,6 +2257,70 @@ static const struct dwcmshc_pltfm_data sdhci_dwcmshc_hpe_gsc_pdata = {
+ 	.init = dwcmshc_hpe_gsc_init,
+ };
+ 
++/*
++ * As on Rockchip, the SDCLK frequency select bits of the X2600 MSHC have no
++ * effect: the card clock is the core clock from the CGU, which divides and
++ * picks its own parent (EXCLK below 1.7 MHz, for card identification).
++ */
++static void dwcmshc_x2600_set_clock(struct sdhci_host *host, unsigned int clock)
++{
++	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
++	int err;
++
++	sdhci_writew(host, 0, SDHCI_CLOCK_CONTROL);
++	host->mmc->actual_clock = 0;
++
++	if (!clock)
++		return;
++
++	/*
++	 * The CGU switches the clock's parent only while it is gated; the
++	 * card clock is off and no command is in flight here.
++	 */
++	clk_disable_unprepare(pltfm_host->clk);
++	err = clk_set_rate(pltfm_host->clk, clock);
++	if (err)
++		dev_err(mmc_dev(host->mmc), "failed to set clock %u Hz: %d\n",
++			clock, err);
++	if (clk_prepare_enable(pltfm_host->clk)) {
++		dev_err(mmc_dev(host->mmc), "failed to enable the core clock\n");
++		return;
++	}
++	if (err)
++		return;
++
++	host->mmc->actual_clock = clk_get_rate(pltfm_host->clk);
++	sdhci_enable_clk(host, 0);
++}
++
++static unsigned int dwcmshc_x2600_get_min_clock(struct sdhci_host *host)
++{
++	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
++
++	return clk_round_rate(pltfm_host->clk, 1);
++}
++
++static const struct sdhci_ops sdhci_dwcmshc_x2600_ops = {
++	.set_clock		= dwcmshc_x2600_set_clock,
++	.set_bus_width		= sdhci_set_bus_width,
++	.set_uhs_signaling	= dwcmshc_set_uhs_signaling,
++	.get_max_clock		= rk35xx_get_max_clock,
++	.get_min_clock		= dwcmshc_x2600_get_min_clock,
++	.reset			= dwcmshc_reset,
++	.adma_write_desc	= dwcmshc_adma_write_desc,
++};
++
++static const struct dwcmshc_pltfm_data sdhci_dwcmshc_x2600_pdata = {
++	.pdata = {
++		.ops = &sdhci_dwcmshc_x2600_ops,
++		.quirks = SDHCI_QUIRK_CAP_CLOCK_BASE_BROKEN |
++			  SDHCI_QUIRK_NO_HISPD_BIT |
++			  SDHCI_QUIRK_32BIT_DMA_ADDR |
++			  SDHCI_QUIRK_32BIT_DMA_SIZE,
++		.quirks2 = SDHCI_QUIRK2_PRESET_VALUE_BROKEN,
++	},
++};
++
+ static const struct cqhci_host_ops dwcmshc_cqhci_ops = {
+ 	.enable		= dwcmshc_sdhci_cqe_enable,
+ 	.disable	= sdhci_cqe_disable,
+@@ -2377,6 +2441,10 @@ static const struct of_device_id sdhci_dwcmshc_dt_ids[] = {
+ 		.compatible = "hpe,gsc-dwcmshc",
+ 		.data = &sdhci_dwcmshc_hpe_gsc_pdata,
+ 	},
++	{
++		.compatible = "ingenic,x2600-dwcmshc",
++		.data = &sdhci_dwcmshc_x2600_pdata,
++	},
+ 	{},
+ };
+ MODULE_DEVICE_TABLE(of, sdhci_dwcmshc_dt_ids);
