@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 11:33:35 -0700
-Subject: [PATCH 23/52] dt-bindings: pinctrl: ingenic: Add X2600
+Subject: [PATCH 23/68] dt-bindings: pinctrl: ingenic: Add X2600
 
 The GPIO and pin controller of the Ingenic X2600 follows the X2000 one,
 with its ports 0x1000 apart and shadow registers in each port. Document

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 19:41:59 -0700
-Subject: [PATCH 45/52] dt-bindings: net: ingenic,mac: Add X2600
+Subject: [PATCH 45/68] dt-bindings: net: ingenic,mac: Add X2600
 
 The X2600's Ethernet MAC is a DWMAC GMAC 3.7 and, like the X1000's, it
 only has an RMII interface; the glue driver handles it as an X1000. So

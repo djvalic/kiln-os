@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 16:17:42 -0700
-Subject: [PATCH 36/52] mmc: sdhci-of-dwcmshc: Add Ingenic X2600 support
+Subject: [PATCH 36/68] mmc: sdhci-of-dwcmshc: Add Ingenic X2600 support
 
 The two MSC controllers of the Ingenic X2600 are DesignWare MSHC 1.40a.
 As on the Rockchip parts, their SDCLK frequency select bits have no

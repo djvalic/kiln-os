@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 19:48:47 -0700
-Subject: [PATCH 08/52] dt-bindings: net: ingenic,mac: Describe the MAC as a
+Subject: [PATCH 08/68] dt-bindings: net: ingenic,mac: Describe the MAC as a
  DWMAC
 
 The MAC is a Synopsys DWMAC GMAC, and the binding did not say so:

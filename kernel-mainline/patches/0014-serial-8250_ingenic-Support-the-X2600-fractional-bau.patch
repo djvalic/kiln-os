@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 12:07:07 -0700
-Subject: [PATCH 14/52] serial: 8250_ingenic: Support the X2600 fractional baud
+Subject: [PATCH 14/68] serial: 8250_ingenic: Support the X2600 fractional baud
  rate
 
 From the 24 MHz crystal the plain 16550 divisor cannot produce many

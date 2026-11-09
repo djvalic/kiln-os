@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 19:48:37 -0700
-Subject: [PATCH 44/52] dt-bindings: mfd: syscon: Add Ingenic X2600 MAC PHY
+Subject: [PATCH 44/68] dt-bindings: mfd: syscon: Add Ingenic X2600 MAC PHY
  control
 
 The CGU of the X2600 holds the register that sets up the Ethernet MAC's

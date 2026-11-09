@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 15:41:13 -0700
-Subject: [PATCH 25/52] dt-bindings: dma: ingenic: Add X2600
+Subject: [PATCH 25/68] dt-bindings: dma: ingenic: Add X2600
 
 The DMA controller of the Ingenic X2600 has the registers, descriptor
 format and 32 channels of the X1830's. Document its compatible, with the

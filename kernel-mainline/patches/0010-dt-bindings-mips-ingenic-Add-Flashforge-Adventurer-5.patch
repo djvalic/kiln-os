@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 11:21:17 -0700
-Subject: [PATCH 10/52] dt-bindings: mips: ingenic: Add Flashforge Adventurer
+Subject: [PATCH 10/68] dt-bindings: mips: ingenic: Add Flashforge Adventurer
  5X
 
 The Flashforge Adventurer 5X is a 3D printer whose main board uses the

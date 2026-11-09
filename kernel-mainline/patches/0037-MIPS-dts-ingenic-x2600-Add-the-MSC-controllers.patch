@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 16:17:42 -0700
-Subject: [PATCH 37/52] MIPS: dts: ingenic: x2600: Add the MSC controllers
+Subject: [PATCH 37/68] MIPS: dts: ingenic: x2600: Add the MSC controllers
 
 Add the two DesignWare MSHC SD/MMC controllers, disabled.
 ---

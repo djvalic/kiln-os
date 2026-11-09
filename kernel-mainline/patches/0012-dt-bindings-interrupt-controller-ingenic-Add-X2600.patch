@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 11:22:08 -0700
-Subject: [PATCH 12/52] dt-bindings: interrupt-controller: ingenic: Add X2600
+Subject: [PATCH 12/68] dt-bindings: interrupt-controller: ingenic: Add X2600
 
 Each XBurst2 core of the Ingenic X2600 has its own bank of the JZ4780
 interrupt controller: two chips of 32 interrupts with the same status,

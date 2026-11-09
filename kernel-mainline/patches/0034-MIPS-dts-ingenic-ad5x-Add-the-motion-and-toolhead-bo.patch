@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 15:21:37 -0700
-Subject: [PATCH 34/52] MIPS: dts: ingenic: ad5x: Add the motion and toolhead
+Subject: [PATCH 34/68] MIPS: dts: ingenic: ad5x: Add the motion and toolhead
  board ports
 
 The Adventurer 5X runs its motion controller and its toolhead board as
@@ -13,7 +13,7 @@ them.
  1 file changed, 28 insertions(+)
 
 diff --git a/arch/mips/boot/dts/ingenic/ad5x.dts b/arch/mips/boot/dts/ingenic/ad5x.dts
-index cde599392..a2364864f 100644
+index e05ba3182..9680565c7 100644
 --- a/arch/mips/boot/dts/ingenic/ad5x.dts
 +++ b/arch/mips/boot/dts/ingenic/ad5x.dts
 @@ -10,7 +10,9 @@ / {
@@ -59,10 +59,10 @@ index cde599392..a2364864f 100644
 +	status = "okay";
 +};
 +
- /* Filament changer (IFS): half-duplex RS-485, driver enable on PC3 */
- &uart4 {
- 	pinctrl-names = "default";
-@@ -76,3 +96,11 @@ &uart4 {
+ /*
+  * Filament changer (IFS): half-duplex RS-485, driver enable on PC3. The
+  * transceiver does not echo what it sends, and the IFS answers within a
+@@ -82,3 +102,11 @@ &uart4 {
  
  	status = "okay";
  };

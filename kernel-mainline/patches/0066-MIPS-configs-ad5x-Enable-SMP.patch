@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Mon, 9 Nov 2026 08:16:49 -0700
-Subject: [PATCH 52/52] MIPS: configs: ad5x: Enable SMP
+Subject: [PATCH 66/68] MIPS: configs: ad5x: Enable SMP
 
 Run both cores of the X2600. Suspend needs CPU hotplug on an SMP
 kernel, which this platform does not have yet, so the line disabling

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 16:17:42 -0700
-Subject: [PATCH 16/52] clk: ingenic: cgu: Let a mux pick its parent by rate
+Subject: [PATCH 16/68] clk: ingenic: cgu: Let a mux pick its parent by rate
 
 The core only ever divides the parent a mux is on. Where the dividers
 cannot reach a requested rate from that parent, the rate request fails or

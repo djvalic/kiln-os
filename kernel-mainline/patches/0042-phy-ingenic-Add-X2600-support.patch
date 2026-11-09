@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 19:41:17 -0700
-Subject: [PATCH 42/52] phy: ingenic: Add X2600 support
+Subject: [PATCH 42/68] phy: ingenic: Add X2600 support
 
 The X2600 has two USB 2.0 PHYs, each controlled by USBPCR, USBRDT and
 USBPCR1 in the CGU; for the second one USBPCR1 is not next to the other

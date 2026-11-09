@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 19:40:11 -0700
-Subject: [PATCH 40/52] dt-bindings: phy: ingenic: Add X2600
+Subject: [PATCH 40/68] dt-bindings: phy: ingenic: Add X2600
 
 The X2600 has two USB 2.0 PHYs, one per DWC2 controller, controlled
 through the CGU like those of the earlier SoCs. Only the first one's

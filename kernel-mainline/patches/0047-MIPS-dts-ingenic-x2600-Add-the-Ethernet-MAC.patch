@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 19:42:50 -0700
-Subject: [PATCH 47/52] MIPS: dts: ingenic: x2600: Add the Ethernet MAC
+Subject: [PATCH 47/68] MIPS: dts: ingenic: x2600: Add the Ethernet MAC
 
 Add the RMII Ethernet MAC, its MDIO bus and the CGU register that
 controls its PHY interface. Its bus clock is the GMAC gate of AHB2.

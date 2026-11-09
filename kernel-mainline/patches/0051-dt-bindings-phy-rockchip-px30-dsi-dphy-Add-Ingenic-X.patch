@@ -1,0 +1,62 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Mon, 9 Nov 2026 10:04:37 -0700
+Subject: [PATCH 51/68] dt-bindings: phy: rockchip,px30-dsi-dphy: Add Ingenic
+ X2600
+
+The LVDS PHY of the Ingenic X2600 is the same Innosilicon MIPI/LVDS
+combo PHY: the same register layout, the same LVDS registers. The SoC
+has no reset controller, so the APB reset is required on Rockchip SoCs
+only.
+---
+ .../bindings/phy/rockchip,px30-dsi-dphy.yaml  | 20 ++++++++++++++++---
+ 1 file changed, 17 insertions(+), 3 deletions(-)
+
+diff --git a/Documentation/devicetree/bindings/phy/rockchip,px30-dsi-dphy.yaml b/Documentation/devicetree/bindings/phy/rockchip,px30-dsi-dphy.yaml
+index 83e7c8258..e86d96b2a 100644
+--- a/Documentation/devicetree/bindings/phy/rockchip,px30-dsi-dphy.yaml
++++ b/Documentation/devicetree/bindings/phy/rockchip,px30-dsi-dphy.yaml
+@@ -4,7 +4,11 @@
+ $id: http://devicetree.org/schemas/phy/rockchip,px30-dsi-dphy.yaml#
+ $schema: http://devicetree.org/meta-schemas/core.yaml#
+ 
+-title: Rockchip MIPI DPHY with additional LVDS/TTL modes
++title: Innosilicon MIPI DPHY with additional LVDS/TTL modes
++
++description:
++  The Innosilicon MIPI D-PHY of Rockchip SoCs and of the Ingenic X2600,
++  which can also drive LVDS and TTL panels.
+ 
+ maintainers:
+   - Heiko Stuebner <heiko@sntech.de>
+@@ -15,6 +19,7 @@ properties:
+ 
+   compatible:
+     enum:
++      - ingenic,x2600-dsi-dphy
+       - rockchip,px30-dsi-dphy
+       - rockchip,rk3128-dsi-dphy
+       - rockchip,rk3368-dsi-dphy
+@@ -53,8 +58,17 @@ required:
+   - reg
+   - clocks
+   - clock-names
+-  - resets
+-  - reset-names
++
++allOf:
++  - if:
++      properties:
++        compatible:
++          contains:
++            pattern: "^rockchip,"
++    then:
++      required:
++        - resets
++        - reset-names
+ 
+ additionalProperties: false
+ 
+-- 
+2.43.0
+

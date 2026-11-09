@@ -36,17 +36,21 @@ Each patch must be acceptable to a mainline reviewer:
    controller, timer, clocks, pinctrl, UART, `x2600.dtsi`, `ad5x.dts`,
    `ad5x_defconfig`.
 2. eMMC (SDHCI), read-only first.
-3. I2C (touch), USB OTG and PHY (Wi-Fi), Ethernet, DMA, watchdog/restart.
-4. RS-485 for the IFS (`8250_ingenic` + `serial8250_em485`).
+3. I2C (touch), USB OTG and PHY (Wi-Fi), Ethernet, DMA, watchdog/restart:
+   done.
+4. RS-485 for the IFS (`8250_ingenic` + `serial8250_em485`): done.
 5. PWM (speaker).
-6. Display: a DRM driver for the DPU, the LVDS encoder, the KX070 panel
-   in `panel-simple`.
+6. Display: a DRM driver for the DPU, the LVDS PHY, the KX070 panel on
+   `panel-lvds`: done.
 7. SMP (second XBurst2 core): done.
 
 ## Status
 
-**On the printer** (2026-11-09): 52 patches, checkpatch `--strict` clean,
+**On the printer** (2026-11-09): 68 patches, checkpatch `--strict` clean,
 every commit builds with `W=1`, `dt_binding_check` and `dtbs_check` clean.
+Kiln OS runs on it (`build.sh` adds `kiln.config`: Wi-Fi with its firmware
+built in, webcams, zram) and it has printed: a 2 h 10 min PETG print
+through Klipper, Happy Hare and the IFS, every layer, no kernel warnings.
 
 - **Boot to a serial console:** the kernel reaches `Waiting for root
   device`: XBurst II CPU (PRId 0x00132000), early console, 490 MB RAM with
@@ -109,8 +113,26 @@ every commit builds with `W=1`, `dt_binding_check` and `dtbs_check` clean.
   passed without them, but that proves little (cache evictions can hide
   a missed invalidation) and nothing documents that the hardware makes
   it safe, so they stay. Without CPU hotplug, suspend is off.
-- Klipper itself has not run on this kernel yet: next is Kiln's userspace
-  on it (rtw88 is a module and needs its firmware in the root file system).
+- **Klipper:** all four MCUs (motion controller, toolhead board, IFS, bed
+  weighing board on `ttyS7`) connect from Kiln's userspace, and a full
+  print ran. The IFS needed `rs485-rx-during-tx`: without it the 8250 core
+  empties the RX FIFO when the driver enable drops, and the IFS, which
+  answers within one frame, has started its reply by then (its transceiver
+  does not echo our bytes, so nothing else changes).
+- **Display:** a DRM driver for the DPU (`ingenic-dpu`) scans out one
+  plane through the simple read channel; the SoC's Innosilicon LVDS PHY
+  (the IP of `phy-rockchip-inno-dsidphy`, its PLL locked to the crystal)
+  drives the KX070 panel on `panel-lvds`, with the backlight on PC14.
+  HelixScreen runs on it through DRM (atomic page flips, vblank events)
+  and through `/dev/fb0` (fbdev emulation); starting and stopping it
+  repeatedly leaves no warnings.
+- **Touch:** the TSC2007 on I2C0 (`i2c-jz4780`, the X1000 register map),
+  pen-down on PC7; HelixScreen's stored calibration lands taps right.
+- **Restart:** the watchdog (`jz4740_wdt`, an X2600 variant: the TCU
+  watchdog registers in a block of their own, cleared with TCSR.CLRZ
+  since its counter ignores writes) restarts the board; `reboot` used to
+  hang. A 10 s timeout fires when its pinger is killed, and not while it
+  pings.
 
 Generic fixes this SoC needed, in the series:
 
@@ -160,6 +182,15 @@ Generic fixes this SoC needed, in the series:
   in its TCR register.
 
 Open points:
+
+- **IFS link errors (not the kernel).** Over the 2 h print Klipper counted
+  604 invalid bytes from the IFS (about 30 messages) and resent 791;
+  Klipper recovers, the print is unaffected. The stock kernel does the
+  same with the same configuration (idle, 5 min: 21 invalid on stock,
+  about 20 on mainline); an earlier clean stock print ran without Happy
+  Hare, whose buffer sensors add traffic from the IFS on the half-duplex
+  bus. The UART counts no framing, parity or overrun errors, and does not
+  receive our own bytes back.
 
 - **sparse** has not run on the series (it could not be installed here).
 - **eMMC above 25 MHz.** HS200 at its full rate needs the sample clock

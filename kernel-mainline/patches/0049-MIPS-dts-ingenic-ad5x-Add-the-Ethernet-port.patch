@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 19:43:18 -0700
-Subject: [PATCH 49/52] MIPS: dts: ingenic: ad5x: Add the Ethernet port
+Subject: [PATCH 49/68] MIPS: dts: ingenic: ad5x: Add the Ethernet port
 
 The MAC talks RMII to an IC Plus IP101G at MDIO address 1, which also
 supplies the 50 MHz reference clock: the stock firmware leaves the
@@ -11,7 +11,7 @@ SoC's own PHY clock output (PC15) as a GPIO.
  1 file changed, 24 insertions(+)
 
 diff --git a/arch/mips/boot/dts/ingenic/ad5x.dts b/arch/mips/boot/dts/ingenic/ad5x.dts
-index 949335d43..8c11bca7f 100644
+index 5e1be6730..2ed7aac6c 100644
 --- a/arch/mips/boot/dts/ingenic/ad5x.dts
 +++ b/arch/mips/boot/dts/ingenic/ad5x.dts
 @@ -69,6 +69,25 @@ &exclk {

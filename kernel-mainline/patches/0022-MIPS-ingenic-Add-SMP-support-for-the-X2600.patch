@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Mon, 9 Nov 2026 08:16:49 -0700
-Subject: [PATCH 22/52] MIPS: ingenic: Add SMP support for the X2600
+Subject: [PATCH 22/68] MIPS: ingenic: Add SMP support for the X2600
 
 The X2600 has two XBurst2 cores. Its core control unit (CCU) holds the
 second one in reset and sets the address it starts from, and has a

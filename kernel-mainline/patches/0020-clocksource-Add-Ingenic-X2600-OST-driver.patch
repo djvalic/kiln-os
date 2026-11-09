@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 11:30:18 -0700
-Subject: [PATCH 20/52] clocksource: Add Ingenic X2600 OST driver
+Subject: [PATCH 20/68] clocksource: Add Ingenic X2600 OST driver
 
 The Ingenic X2600 has no system timer that mainline supports: the MIPS
 CP0 counter is not implemented in XBurst cores, and the OST differs from

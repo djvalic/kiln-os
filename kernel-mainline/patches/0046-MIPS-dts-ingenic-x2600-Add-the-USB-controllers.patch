@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 19:42:37 -0700
-Subject: [PATCH 46/52] MIPS: dts: ingenic: x2600: Add the USB controllers
+Subject: [PATCH 46/68] MIPS: dts: ingenic: x2600: Add the USB controllers
 
 Add the two DWC2 USB controllers and their PHYs. Ingenic's SDK runs the
 second controller as a host only; boards choose with dr_mode.

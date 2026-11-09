@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 16:17:42 -0700
-Subject: [PATCH 38/52] MIPS: dts: ingenic: ad5x: Add the eMMC
+Subject: [PATCH 38/68] MIPS: dts: ingenic: ad5x: Add the eMMC
 
 The printer boots from an 8-bit eMMC on MSC0. Run it at 25 MHz for now,
 the rate the stock firmware uses.
@@ -10,7 +10,7 @@ the rate the stock firmware uses.
  1 file changed, 20 insertions(+)
 
 diff --git a/arch/mips/boot/dts/ingenic/ad5x.dts b/arch/mips/boot/dts/ingenic/ad5x.dts
-index a2364864f..23fc4581d 100644
+index 9680565c7..21baa3562 100644
 --- a/arch/mips/boot/dts/ingenic/ad5x.dts
 +++ b/arch/mips/boot/dts/ingenic/ad5x.dts
 @@ -9,6 +9,7 @@ / {

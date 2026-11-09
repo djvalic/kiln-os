@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 11:22:29 -0700
-Subject: [PATCH 13/52] dt-bindings: serial: ingenic: Add X2600
+Subject: [PATCH 13/68] dt-bindings: serial: ingenic: Add X2600
 
 The UARTs of the Ingenic X2600 are those of the X1000: 64-byte FIFOs and
 the same registers. Document their compatible, with the X1000 one as

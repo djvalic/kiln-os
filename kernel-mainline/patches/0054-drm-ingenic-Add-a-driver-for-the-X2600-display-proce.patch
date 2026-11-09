@@ -1,0 +1,699 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Mon, 9 Nov 2026 10:04:37 -0700
+Subject: [PATCH 54/68] drm/ingenic: Add a driver for the X2600 display
+ processing unit
+
+The display controller of the Ingenic X2600 is not the LCD controller
+that ingenic-drm supports: it reads framebuffers through descriptor
+chains, with a four-layer composer, a rotator and a simple read channel,
+and drives a parallel TFT or an LVDS interface.
+
+Add a driver for it that uses the simple read channel: one primary plane
+(XRGB8888 or RGB565) scanned out through a self-linked descriptor, so
+that a page flip changes the framebuffer address in that descriptor; the
+display end interrupt is the vblank. For LVDS it drives the SoC's LVDS
+PHY through the generic PHY API.
+
+The read channel only starts once the display interface is set up and a
+framebuffer is in place (started earlier it hangs busy), so the CRTC and
+encoder are enabled before the planes. A read channel left running by
+the boot loader or a previous kernel is stopped at probe.
+
+The register layout and programming sequence follow Ingenic's X2600 SDK
+kernel; the composer and the rotator are left alone.
+---
+ drivers/gpu/drm/Makefile              |   1 +
+ drivers/gpu/drm/ingenic/Kconfig       |  20 +
+ drivers/gpu/drm/ingenic/Makefile      |   1 +
+ drivers/gpu/drm/ingenic/ingenic-dpu.c | 609 ++++++++++++++++++++++++++
+ 4 files changed, 631 insertions(+)
+ create mode 100644 drivers/gpu/drm/ingenic/ingenic-dpu.c
+
+diff --git a/drivers/gpu/drm/Makefile b/drivers/gpu/drm/Makefile
+index e635fcffd..674db2534 100644
+--- a/drivers/gpu/drm/Makefile
++++ b/drivers/gpu/drm/Makefile
+@@ -206,6 +206,7 @@ obj-$(CONFIG_DRM_STM) += stm/
+ obj-$(CONFIG_DRM_STI) += sti/
+ obj-y 			+= imx/
+ obj-$(CONFIG_DRM_INGENIC) += ingenic/
++obj-$(CONFIG_DRM_INGENIC_DPU) += ingenic/
+ obj-$(CONFIG_DRM_LOGICVC) += logicvc/
+ obj-$(CONFIG_DRM_MEDIATEK) += mediatek/
+ obj-$(CONFIG_DRM_MESON)	+= meson/
+diff --git a/drivers/gpu/drm/ingenic/Kconfig b/drivers/gpu/drm/ingenic/Kconfig
+index 04ecfb0c5..21b54ef6d 100644
+--- a/drivers/gpu/drm/ingenic/Kconfig
++++ b/drivers/gpu/drm/ingenic/Kconfig
+@@ -38,3 +38,23 @@ config DRM_INGENIC_DW_HDMI
+ 	  select this option.
+ 
+ endif
++
++config DRM_INGENIC_DPU
++	tristate "DRM support for the Ingenic X2600 display processing unit"
++	depends on DRM && OF && COMMON_CLK
++	depends on MACH_INGENIC || COMPILE_TEST
++	select DRM_BRIDGE
++	select DRM_BRIDGE_CONNECTOR
++	select DRM_CLIENT_SELECTION
++	select DRM_DISPLAY_HELPER
++	select DRM_GEM_DMA_HELPER
++	select DRM_KMS_HELPER
++	select DRM_PANEL_BRIDGE
++	help
++	  Choose this option for the display processing unit (DPU) of the
++	  Ingenic X2600, which drives parallel TFT panels, and LVDS panels
++	  through the SoC's LVDS PHY. The driver shows one framebuffer
++	  through the DPU's simple read channel; the composer and the
++	  rotator are not used.
++
++	  If M is selected the module will be called ingenic-dpu.
+diff --git a/drivers/gpu/drm/ingenic/Makefile b/drivers/gpu/drm/ingenic/Makefile
+index f10cc1c5a..b05aa43f0 100644
+--- a/drivers/gpu/drm/ingenic/Makefile
++++ b/drivers/gpu/drm/ingenic/Makefile
+@@ -2,3 +2,4 @@ obj-$(CONFIG_DRM_INGENIC) += ingenic-drm.o
+ ingenic-drm-y = ingenic-drm-drv.o
+ ingenic-drm-$(CONFIG_DRM_INGENIC_IPU) += ingenic-ipu.o
+ obj-$(CONFIG_DRM_INGENIC_DW_HDMI) += ingenic-dw-hdmi.o
++obj-$(CONFIG_DRM_INGENIC_DPU) += ingenic-dpu.o
+diff --git a/drivers/gpu/drm/ingenic/ingenic-dpu.c b/drivers/gpu/drm/ingenic/ingenic-dpu.c
+new file mode 100644
+index 000000000..501e0d23f
+--- /dev/null
++++ b/drivers/gpu/drm/ingenic/ingenic-dpu.c
+@@ -0,0 +1,609 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/*
++ * DRM driver for the display processing unit (DPU) of the Ingenic X2600
++ *
++ * The DPU has a composer with four layers, a rotator and a simple read
++ * channel (RDMA) that sends one framebuffer straight to the display
++ * interface. This driver uses the read channel only: one primary plane,
++ * scanned out through a self-linked descriptor, so that a page flip is a
++ * new framebuffer address in that descriptor. The display interface is
++ * either parallel TFT or LVDS, the latter through an LVDS PHY.
++ *
++ * Register layout and programming sequence from Ingenic's X2600 SDK
++ * (Linux 6.6) framebuffer driver.
++ */
++
++#include <linux/bitfield.h>
++#include <linux/bits.h>
++#include <linux/clk.h>
++#include <linux/delay.h>
++#include <linux/dma-mapping.h>
++#include <linux/interrupt.h>
++#include <linux/io.h>
++#include <linux/iopoll.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/phy/phy.h>
++#include <linux/phy/phy-lvds.h>
++#include <linux/platform_device.h>
++
++#include <drm/clients/drm_client_setup.h>
++#include <drm/drm_atomic.h>
++#include <drm/drm_atomic_helper.h>
++#include <drm/drm_bridge.h>
++#include <drm/drm_bridge_connector.h>
++#include <drm/drm_crtc.h>
++#include <drm/drm_crtc_helper.h>
++#include <drm/drm_drv.h>
++#include <drm/drm_encoder.h>
++#include <drm/drm_fbdev_dma.h>
++#include <drm/drm_fb_dma_helper.h>
++#include <drm/drm_fourcc.h>
++#include <drm/drm_framebuffer.h>
++#include <drm/drm_gem_dma_helper.h>
++#include <drm/drm_gem_framebuffer_helper.h>
++#include <drm/drm_managed.h>
++#include <drm/drm_of.h>
++#include <drm/drm_plane.h>
++#include <drm/drm_print.h>
++#include <drm/drm_probe_helper.h>
++#include <drm/drm_simple_kms_helper.h>
++#include <drm/drm_vblank.h>
++
++#define DPU_RDMA_CHAIN_ADDR		0x1000
++#define DPU_RDMA_CHAIN_CTRL		0x1004
++#define DPU_RDMA_CHAIN_CTRL_START	BIT(0)
++
++#define DPU_CTRL			0x2000
++#define DPU_CTRL_GEN_STP_RDMA		BIT(4)
++#define DPU_CTRL_QCK_STP_RDMA		BIT(1)
++
++#define DPU_ST				0x2004
++#define DPU_CLR_ST			0x2008
++#define DPU_INTC			0x200c
++#define DPU_INT_FLAG			0x2010
++#define DPU_INT_DISP_END		BIT(17)
++#define DPU_ST_SRD_WORKING		BIT(3)
++#define DPU_CLR_ST_ALL			0x01fffffe
++
++#define DPU_COM_CONFIG			0x2014
++#define DPU_COM_CONFIG_BURST_MASK	GENMASK(9, 2)
++#define DPU_COM_CONFIG_BURST_16		0x2a8	/* 16 beats: BDMA, RDMA, WDMA, scaler */
++#define DPU_COM_CONFIG_OUT_SEL_MASK	GENMASK(1, 0)
++#define DPU_COM_CONFIG_OUT_SEL_RDMA	BIT(1)
++
++#define DPU_PCFG_RD_CTRL		0x2018
++#define DPU_PCFG_RD_CTRL_VAL		0x00070005	/* fixed read QoS: composer 2, RDMA 3 */
++#define DPU_PCFG_WR_CTRL		0x201c
++#define DPU_PCFG_WR_CTRL_VAL		0x00000007	/* fixed write QoS 3 */
++
++#define DPU_DISP_COM			0x8000
++#define DPU_DISP_COM_DITHER_DW_MASK	GENMASK(21, 16)
++#define DPU_DISP_COM_DITHER_EN		BIT(4)
++#define DPU_DISP_COM_IF_MASK		GENMASK(2, 0)
++#define DPU_DISP_COM_IF_TFT		1
++#define DPU_DISP_COM_IF_LVDS		4
++
++#define DPU_TFT_HSYNC			0x9000
++#define DPU_TFT_VSYNC			0x9004
++#define DPU_TFT_HDE			0x9008
++#define DPU_TFT_VDE			0x900c
++#define DPU_TFT_CFG			0x9010
++#define DPU_TFT_START_MASK		GENMASK(27, 16)
++#define DPU_TFT_END_MASK		GENMASK(11, 0)
++
++/* RDMA descriptor chain configuration */
++#define DPU_RDMA_CFG_FORMAT		GENMASK(22, 19)
++#define DPU_RDMA_FORMAT_RGB565		2
++#define DPU_RDMA_FORMAT_XRGB8888	4
++
++/* RDMA descriptor interrupt control: end of frame, start of frame, end of display */
++#define DPU_RDMA_IRQ_CTRL		(BIT(17) | BIT(2) | BIT(1))
++
++struct ingenic_dpu_rdma_desc {
++	u32 next;
++	u32 addr;
++	u32 stride;	/* in pixels */
++	u32 cfg;
++	u32 irq_ctrl;
++} __aligned(32);
++
++struct ingenic_dpu {
++	struct drm_device drm;
++	void __iomem *base;
++	struct clk *clk;
++	struct phy *phy;
++
++	struct drm_plane plane;
++	struct drm_crtc crtc;
++	struct drm_encoder encoder;
++
++	struct ingenic_dpu_rdma_desc *desc;
++	dma_addr_t desc_dma;
++	bool rdma_running;
++};
++
++static inline struct ingenic_dpu *drm_to_dpu(struct drm_device *drm)
++{
++	return container_of(drm, struct ingenic_dpu, drm);
++}
++
++static inline struct ingenic_dpu *crtc_to_dpu(struct drm_crtc *crtc)
++{
++	return container_of(crtc, struct ingenic_dpu, crtc);
++}
++
++static inline struct ingenic_dpu *encoder_to_dpu(struct drm_encoder *encoder)
++{
++	return container_of(encoder, struct ingenic_dpu, encoder);
++}
++
++static void dpu_update_bits(struct ingenic_dpu *dpu, u32 reg, u32 mask, u32 val)
++{
++	writel((readl(dpu->base + reg) & ~mask) | val, dpu->base + reg);
++}
++
++static const u32 ingenic_dpu_formats[] = {
++	DRM_FORMAT_XRGB8888,
++	DRM_FORMAT_RGB565,
++};
++
++static int ingenic_dpu_plane_atomic_check(struct drm_plane *plane,
++					  struct drm_atomic_commit *state)
++{
++	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state, plane);
++	struct drm_crtc_state *crtc_state = NULL;
++
++	if (new_state->crtc)
++		crtc_state = drm_atomic_get_new_crtc_state(state, new_state->crtc);
++
++	/* The read channel always fills the whole screen */
++	return drm_atomic_helper_check_plane_state(new_state, crtc_state,
++						   DRM_PLANE_NO_SCALING,
++						   DRM_PLANE_NO_SCALING,
++						   false, true);
++}
++
++static void ingenic_dpu_plane_atomic_update(struct drm_plane *plane,
++					    struct drm_atomic_commit *state)
++{
++	struct ingenic_dpu *dpu = drm_to_dpu(plane->dev);
++	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state, plane);
++	struct drm_framebuffer *fb = new_state->fb;
++	u32 format;
++
++	if (!new_state->visible)
++		return;
++
++	format = fb->format->format == DRM_FORMAT_RGB565 ?
++		 DPU_RDMA_FORMAT_RGB565 : DPU_RDMA_FORMAT_XRGB8888;
++
++	/* Fetched again at the start of every frame */
++	WRITE_ONCE(dpu->desc->addr, drm_fb_dma_get_gem_addr(fb, new_state, 0));
++	WRITE_ONCE(dpu->desc->stride, fb->pitches[0] / fb->format->cpp[0]);
++	WRITE_ONCE(dpu->desc->cfg, FIELD_PREP(DPU_RDMA_CFG_FORMAT, format));
++}
++
++static const struct drm_plane_helper_funcs ingenic_dpu_plane_helper_funcs = {
++	.atomic_check	= ingenic_dpu_plane_atomic_check,
++	.atomic_update	= ingenic_dpu_plane_atomic_update,
++};
++
++static const struct drm_plane_funcs ingenic_dpu_plane_funcs = {
++	.update_plane		= drm_atomic_helper_update_plane,
++	.disable_plane		= drm_atomic_helper_disable_plane,
++	.reset			= drm_atomic_helper_plane_reset,
++	.destroy		= drm_plane_cleanup,
++	.atomic_duplicate_state	= drm_atomic_helper_plane_duplicate_state,
++	.atomic_destroy_state	= drm_atomic_helper_plane_destroy_state,
++};
++
++static void ingenic_dpu_rdma_stop(struct ingenic_dpu *dpu)
++{
++	u32 st;
++
++	if (!(readl(dpu->base + DPU_ST) & DPU_ST_SRD_WORKING))
++		return;
++
++	/* Stop at the end of the current frame, quickly if that fails */
++	writel(DPU_CTRL_GEN_STP_RDMA, dpu->base + DPU_CTRL);
++	if (readl_poll_timeout(dpu->base + DPU_ST, st,
++			       !(st & DPU_ST_SRD_WORKING), 1000, 100000)) {
++		writel(DPU_CTRL_QCK_STP_RDMA, dpu->base + DPU_CTRL);
++		if (readl_poll_timeout(dpu->base + DPU_ST, st,
++				       !(st & DPU_ST_SRD_WORKING), 1000, 100000))
++			drm_warn(&dpu->drm, "read channel does not stop\n");
++	}
++}
++
++static enum drm_mode_status
++ingenic_dpu_crtc_mode_valid(struct drm_crtc *crtc,
++			    const struct drm_display_mode *mode)
++{
++	struct ingenic_dpu *dpu = crtc_to_dpu(crtc);
++	long rate;
++
++	if (mode->htotal > FIELD_MAX(DPU_TFT_END_MASK) ||
++	    mode->vtotal > FIELD_MAX(DPU_TFT_END_MASK))
++		return MODE_BAD;
++
++	rate = clk_round_rate(dpu->clk, mode->clock * 1000);
++	if (rate < 0)
++		return MODE_CLOCK_RANGE;
++
++	/* Within 0.5% */
++	if (abs(rate - mode->clock * 1000) > mode->clock * 5)
++		return MODE_CLOCK_RANGE;
++
++	return MODE_OK;
++}
++
++static void ingenic_dpu_crtc_atomic_enable(struct drm_crtc *crtc,
++					   struct drm_atomic_commit *state)
++{
++	struct ingenic_dpu *dpu = crtc_to_dpu(crtc);
++	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
++	struct drm_display_mode *mode = &crtc_state->adjusted_mode;
++	unsigned int hsw = mode->hsync_end - mode->hsync_start;
++	unsigned int vsw = mode->vsync_end - mode->vsync_start;
++	unsigned int hds = mode->htotal - mode->hsync_start;
++	unsigned int vds = mode->vtotal - mode->vsync_start;
++	int ret;
++
++	ret = clk_set_rate(dpu->clk, mode->clock * 1000);
++	if (ret)
++		drm_warn(&dpu->drm, "cannot set pixel clock: %d\n", ret);
++
++	ret = clk_prepare_enable(dpu->clk);
++	if (ret) {
++		drm_err(&dpu->drm, "cannot enable pixel clock: %d\n", ret);
++		return;
++	}
++
++	dpu_update_bits(dpu, DPU_DISP_COM,
++			DPU_DISP_COM_IF_MASK | DPU_DISP_COM_DITHER_EN |
++			DPU_DISP_COM_DITHER_DW_MASK,
++			dpu->phy ? DPU_DISP_COM_IF_LVDS : DPU_DISP_COM_IF_TFT);
++	dpu_update_bits(dpu, DPU_COM_CONFIG,
++			DPU_COM_CONFIG_BURST_MASK | DPU_COM_CONFIG_OUT_SEL_MASK,
++			DPU_COM_CONFIG_BURST_16 | DPU_COM_CONFIG_OUT_SEL_RDMA);
++	writel(DPU_PCFG_RD_CTRL_VAL, dpu->base + DPU_PCFG_RD_CTRL);
++	writel(DPU_PCFG_WR_CTRL_VAL, dpu->base + DPU_PCFG_WR_CTRL);
++	writel(DPU_CLR_ST_ALL, dpu->base + DPU_CLR_ST);
++
++	/* Each pair: where the pulse or the active area starts, and ends */
++	writel(FIELD_PREP(DPU_TFT_START_MASK, hsw) |
++	       FIELD_PREP(DPU_TFT_END_MASK, mode->htotal),
++	       dpu->base + DPU_TFT_HSYNC);
++	writel(FIELD_PREP(DPU_TFT_START_MASK, vsw) |
++	       FIELD_PREP(DPU_TFT_END_MASK, mode->vtotal),
++	       dpu->base + DPU_TFT_VSYNC);
++	writel(FIELD_PREP(DPU_TFT_START_MASK, hds) |
++	       FIELD_PREP(DPU_TFT_END_MASK, hds + mode->hdisplay),
++	       dpu->base + DPU_TFT_HDE);
++	writel(FIELD_PREP(DPU_TFT_START_MASK, vds) |
++	       FIELD_PREP(DPU_TFT_END_MASK, vds + mode->vdisplay),
++	       dpu->base + DPU_TFT_VDE);
++	writel(0, dpu->base + DPU_TFT_CFG);
++
++	drm_crtc_vblank_on(crtc);
++}
++
++static void ingenic_dpu_crtc_atomic_disable(struct drm_crtc *crtc,
++					    struct drm_atomic_commit *state)
++{
++	struct ingenic_dpu *dpu = crtc_to_dpu(crtc);
++
++	drm_crtc_vblank_off(crtc);
++
++	ingenic_dpu_rdma_stop(dpu);
++	dpu->rdma_running = false;
++
++	clk_disable_unprepare(dpu->clk);
++
++	if (crtc->state->event && !crtc->state->active) {
++		spin_lock_irq(&crtc->dev->event_lock);
++		drm_crtc_send_vblank_event(crtc, crtc->state->event);
++		crtc->state->event = NULL;
++		spin_unlock_irq(&crtc->dev->event_lock);
++	}
++}
++
++static void ingenic_dpu_crtc_atomic_flush(struct drm_crtc *crtc,
++					  struct drm_atomic_commit *state)
++{
++	struct ingenic_dpu *dpu = crtc_to_dpu(crtc);
++	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
++	struct drm_pending_vblank_event *event = crtc_state->event;
++
++	/*
++	 * Start the read channel only once the display interface is set up
++	 * and the descriptor holds a framebuffer: started earlier, it hangs
++	 * busy and cannot be stopped. The commit tail enables the CRTC and
++	 * the encoder before it updates the planes, so this is the first
++	 * flush after that.
++	 */
++	if (crtc_state->active && !dpu->rdma_running && dpu->desc->addr) {
++		writel(dpu->desc_dma, dpu->base + DPU_RDMA_CHAIN_ADDR);
++		writel(DPU_RDMA_CHAIN_CTRL_START, dpu->base + DPU_RDMA_CHAIN_CTRL);
++		dpu->rdma_running = true;
++	}
++
++	if (event) {
++		crtc_state->event = NULL;
++
++		spin_lock_irq(&crtc->dev->event_lock);
++		if (crtc_state->active && drm_crtc_vblank_get(crtc) == 0)
++			drm_crtc_arm_vblank_event(crtc, event);
++		else
++			drm_crtc_send_vblank_event(crtc, event);
++		spin_unlock_irq(&crtc->dev->event_lock);
++	}
++}
++
++static int ingenic_dpu_enable_vblank(struct drm_crtc *crtc)
++{
++	struct ingenic_dpu *dpu = crtc_to_dpu(crtc);
++
++	writel(DPU_INT_DISP_END, dpu->base + DPU_CLR_ST);
++	dpu_update_bits(dpu, DPU_INTC, DPU_INT_DISP_END, DPU_INT_DISP_END);
++
++	return 0;
++}
++
++static void ingenic_dpu_disable_vblank(struct drm_crtc *crtc)
++{
++	struct ingenic_dpu *dpu = crtc_to_dpu(crtc);
++
++	dpu_update_bits(dpu, DPU_INTC, DPU_INT_DISP_END, 0);
++}
++
++static const struct drm_crtc_helper_funcs ingenic_dpu_crtc_helper_funcs = {
++	.mode_valid	= ingenic_dpu_crtc_mode_valid,
++	.atomic_check	= drm_crtc_helper_atomic_check,
++	.atomic_enable	= ingenic_dpu_crtc_atomic_enable,
++	.atomic_disable	= ingenic_dpu_crtc_atomic_disable,
++	.atomic_flush	= ingenic_dpu_crtc_atomic_flush,
++};
++
++static const struct drm_crtc_funcs ingenic_dpu_crtc_funcs = {
++	.set_config		= drm_atomic_helper_set_config,
++	.page_flip		= drm_atomic_helper_page_flip,
++	.reset			= drm_atomic_helper_crtc_reset,
++	.destroy		= drm_crtc_cleanup,
++	.atomic_duplicate_state	= drm_atomic_helper_crtc_duplicate_state,
++	.atomic_destroy_state	= drm_atomic_helper_crtc_destroy_state,
++	.enable_vblank		= ingenic_dpu_enable_vblank,
++	.disable_vblank		= ingenic_dpu_disable_vblank,
++};
++
++static void ingenic_dpu_encoder_atomic_enable(struct drm_encoder *encoder,
++					      struct drm_atomic_commit *state)
++{
++	struct ingenic_dpu *dpu = encoder_to_dpu(encoder);
++	struct drm_crtc_state *crtc_state;
++	union phy_configure_opts opts = { };
++	int ret;
++
++	if (!dpu->phy)
++		return;
++
++	crtc_state = drm_atomic_get_new_crtc_state(state, encoder->crtc);
++	opts.lvds.differential_clk_rate = crtc_state->adjusted_mode.clock * 1000;
++	opts.lvds.bits_per_lane_and_dclk_cycle = 7;
++	opts.lvds.lanes = 4;
++
++	ret = phy_set_mode(dpu->phy, PHY_MODE_LVDS);
++	if (!ret)
++		ret = phy_configure(dpu->phy, &opts);
++	if (!ret)
++		ret = phy_power_on(dpu->phy);
++	if (ret)
++		drm_err(&dpu->drm, "cannot start the LVDS PHY: %d\n", ret);
++}
++
++static void ingenic_dpu_encoder_atomic_disable(struct drm_encoder *encoder,
++					       struct drm_atomic_commit *state)
++{
++	struct ingenic_dpu *dpu = encoder_to_dpu(encoder);
++
++	if (dpu->phy)
++		phy_power_off(dpu->phy);
++}
++
++static const struct drm_encoder_helper_funcs ingenic_dpu_encoder_helper_funcs = {
++	.atomic_enable	= ingenic_dpu_encoder_atomic_enable,
++	.atomic_disable	= ingenic_dpu_encoder_atomic_disable,
++};
++
++static const struct drm_mode_config_helper_funcs ingenic_dpu_mode_config_helpers = {
++	.atomic_commit_tail = drm_atomic_helper_commit_tail_rpm,
++};
++
++static const struct drm_mode_config_funcs ingenic_dpu_mode_config_funcs = {
++	.fb_create	= drm_gem_fb_create,
++	.atomic_check	= drm_atomic_helper_check,
++	.atomic_commit	= drm_atomic_helper_commit,
++};
++
++static irqreturn_t ingenic_dpu_irq_handler(int irq, void *arg)
++{
++	struct ingenic_dpu *dpu = arg;
++	u32 flags = readl(dpu->base + DPU_INT_FLAG);
++
++	if (!(flags & DPU_INT_DISP_END))
++		return IRQ_NONE;
++
++	writel(DPU_INT_DISP_END, dpu->base + DPU_CLR_ST);
++	drm_crtc_handle_vblank(&dpu->crtc);
++
++	return IRQ_HANDLED;
++}
++
++DEFINE_DRM_GEM_DMA_FOPS(ingenic_dpu_fops);
++
++static const struct drm_driver ingenic_dpu_driver = {
++	.driver_features	= DRIVER_MODESET | DRIVER_GEM | DRIVER_ATOMIC,
++	.name			= "ingenic-dpu",
++	.desc			= "Ingenic X2600 display processing unit",
++	.major			= 1,
++	.minor			= 0,
++	.fops			= &ingenic_dpu_fops,
++	DRM_GEM_DMA_DRIVER_OPS,
++	DRM_FBDEV_DMA_DRIVER_OPS,
++};
++
++static int ingenic_dpu_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct drm_connector *connector;
++	struct drm_bridge *bridge;
++	struct ingenic_dpu *dpu;
++	struct drm_device *drm;
++	int irq, ret;
++
++	dpu = devm_drm_dev_alloc(dev, &ingenic_dpu_driver, struct ingenic_dpu, drm);
++	if (IS_ERR(dpu))
++		return PTR_ERR(dpu);
++
++	drm = &dpu->drm;
++	platform_set_drvdata(pdev, dpu);
++
++	dpu->base = devm_platform_ioremap_resource(pdev, 0);
++	if (IS_ERR(dpu->base))
++		return PTR_ERR(dpu->base);
++
++	irq = platform_get_irq(pdev, 0);
++	if (irq < 0)
++		return irq;
++
++	dpu->clk = devm_clk_get(dev, "lcd");
++	if (IS_ERR(dpu->clk))
++		return dev_err_probe(dev, PTR_ERR(dpu->clk), "no pixel clock\n");
++
++	dpu->phy = devm_phy_optional_get(dev, "lvds");
++	if (IS_ERR(dpu->phy))
++		return dev_err_probe(dev, PTR_ERR(dpu->phy), "no LVDS PHY\n");
++
++	bridge = devm_drm_of_get_bridge(dev, dev->of_node, 0, 0);
++	if (IS_ERR(bridge))
++		return dev_err_probe(dev, PTR_ERR(bridge), "no panel or bridge\n");
++
++	dpu->desc = dmam_alloc_coherent(dev, sizeof(*dpu->desc), &dpu->desc_dma,
++					GFP_KERNEL);
++	if (!dpu->desc)
++		return -ENOMEM;
++
++	dpu->desc->next = dpu->desc_dma;
++	dpu->desc->irq_ctrl = DPU_RDMA_IRQ_CTRL;
++
++	/*
++	 * Whatever ran before (the boot loader, another kernel) may have left
++	 * the read channel running from its own memory: stop it first.
++	 */
++	ret = clk_prepare_enable(dpu->clk);
++	if (ret)
++		return ret;
++	ingenic_dpu_rdma_stop(dpu);
++	writel(0, dpu->base + DPU_INTC);
++	writel(DPU_CLR_ST_ALL, dpu->base + DPU_CLR_ST);
++	clk_disable_unprepare(dpu->clk);
++
++	ret = drmm_mode_config_init(drm);
++	if (ret)
++		return ret;
++
++	drm->mode_config.min_width = 1;
++	drm->mode_config.min_height = 1;
++	drm->mode_config.max_width = FIELD_MAX(DPU_TFT_END_MASK);
++	drm->mode_config.max_height = FIELD_MAX(DPU_TFT_END_MASK);
++	drm->mode_config.funcs = &ingenic_dpu_mode_config_funcs;
++	drm->mode_config.helper_private = &ingenic_dpu_mode_config_helpers;
++
++	drm_plane_helper_add(&dpu->plane, &ingenic_dpu_plane_helper_funcs);
++	ret = drm_universal_plane_init(drm, &dpu->plane, 1, &ingenic_dpu_plane_funcs,
++				       ingenic_dpu_formats,
++				       ARRAY_SIZE(ingenic_dpu_formats), NULL,
++				       DRM_PLANE_TYPE_PRIMARY, NULL);
++	if (ret)
++		return ret;
++
++	drm_crtc_helper_add(&dpu->crtc, &ingenic_dpu_crtc_helper_funcs);
++	ret = drm_crtc_init_with_planes(drm, &dpu->crtc, &dpu->plane, NULL,
++					&ingenic_dpu_crtc_funcs, NULL);
++	if (ret)
++		return ret;
++
++	drm_encoder_helper_add(&dpu->encoder, &ingenic_dpu_encoder_helper_funcs);
++	ret = drm_simple_encoder_init(drm, &dpu->encoder,
++				      dpu->phy ? DRM_MODE_ENCODER_LVDS :
++						 DRM_MODE_ENCODER_DPI);
++	if (ret)
++		return ret;
++
++	dpu->encoder.possible_crtcs = drm_crtc_mask(&dpu->crtc);
++
++	ret = drm_bridge_attach(&dpu->encoder, bridge, NULL,
++				DRM_BRIDGE_ATTACH_NO_CONNECTOR);
++	if (ret)
++		return ret;
++
++	connector = drm_bridge_connector_init(drm, &dpu->encoder);
++	if (IS_ERR(connector))
++		return PTR_ERR(connector);
++
++	ret = drm_vblank_init(drm, 1);
++	if (ret)
++		return ret;
++
++	ret = devm_request_irq(dev, irq, ingenic_dpu_irq_handler, 0,
++			       dev_name(dev), dpu);
++	if (ret)
++		return ret;
++
++	drm_mode_config_reset(drm);
++
++	ret = drm_dev_register(drm, 0);
++	if (ret)
++		return ret;
++
++	drm_client_setup(drm, NULL);
++
++	return 0;
++}
++
++static void ingenic_dpu_remove(struct platform_device *pdev)
++{
++	struct ingenic_dpu *dpu = platform_get_drvdata(pdev);
++
++	drm_dev_unregister(&dpu->drm);
++	drm_atomic_helper_shutdown(&dpu->drm);
++}
++
++static void ingenic_dpu_shutdown(struct platform_device *pdev)
++{
++	struct ingenic_dpu *dpu = platform_get_drvdata(pdev);
++
++	drm_atomic_helper_shutdown(&dpu->drm);
++}
++
++static const struct of_device_id ingenic_dpu_of_match[] = {
++	{ .compatible = "ingenic,x2600-dpu" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, ingenic_dpu_of_match);
++
++static struct platform_driver ingenic_dpu_platform_driver = {
++	.driver = {
++		.name = "ingenic-dpu",
++		.of_match_table = ingenic_dpu_of_match,
++	},
++	.probe = ingenic_dpu_probe,
++	.remove = ingenic_dpu_remove,
++	.shutdown = ingenic_dpu_shutdown,
++};
++module_platform_driver(ingenic_dpu_platform_driver);
++
++MODULE_AUTHOR("Hunter Laux <hunterlaux@gmail.com>");
++MODULE_DESCRIPTION("DRM driver for the Ingenic X2600 display processing unit");
++MODULE_LICENSE("GPL");
+-- 
+2.43.0
+
