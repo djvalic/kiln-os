@@ -5,10 +5,11 @@ config BR2_PACKAGE_HELIXSCREEN
 	depends on BR2_TOOLCHAIN_GCC_AT_LEAST_8 # C++17, std::filesystem
 	select BR2_PACKAGE_OPENSSL
 	select BR2_PACKAGE_ZLIB
+	select BR2_PACKAGE_LIBDRM
 	help
 	  HelixScreen, an LVGL touch screen UI for Klipper/Moonraker,
-	  built from source for the panel's framebuffer (fbdev) and
-	  evdev touch. In /usr/lib/helixscreen; started by
+	  built from source for the panel: DRM/KMS, or the framebuffer
+	  (fbdev) on kernels without a DRM driver, and evdev touch. In /usr/lib/helixscreen; started by
 	  S70helixscreen when /data/ad5x/helixscreen.enable exists.
 
 	  https://github.com/prestonbrown/helixscreen

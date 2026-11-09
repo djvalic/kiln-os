@@ -1,6 +1,9 @@
 #!/bin/sh
-# HelixScreen, the touch screen UI, on the panel's framebuffer (/dev/fb0,
-# 800x480) with the tsc2007 touch (evdev, found by the app). Talks to
+# HelixScreen, the touch screen UI, on the panel (800x480): through DRM
+# where the kernel has a DRM driver (mainline), else the framebuffer
+# /dev/fb0 (6.6, stock), which mainline also provides, so the wait for
+# fb0 below holds on every kernel. The tsc2007 touch (evdev) is found by
+# the app. Talks to
 # Moonraker at 127.0.0.1:7125. Read-only files in /usr/lib/helixscreen;
 # settings and cache in /data/ad5x/helixscreen, log with Klipper's (so
 # Fluidd shows it). Runs as root (framebuffer, input) at nice 10.
