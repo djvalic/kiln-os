@@ -1,0 +1,46 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Mon, 9 Nov 2026 15:10:00 -0500
+Subject: [PATCH] ad5x: print status binds only the heater chips that are there
+
+Kiln's printer tile (patch 0036) replaces the ps_chip_nozzle, _bed and
+_chamber chips with its own stats, tinted through ps_chip_*_tone. The
+print status still bound the old chips' icons as required, so every print
+logged three "[HeaterIconBinder] Required icon ... is missing" errors.
+A chip that isn't there is now skipped.
+---
+ src/ui/ui_panel_print_status.cpp | 18 ++++++++++++------
+ 1 file changed, 12 insertions(+), 6 deletions(-)
+
+diff --git a/src/ui/ui_panel_print_status.cpp b/src/ui/ui_panel_print_status.cpp
+index b65f5d3f6e..2c691dde81 100644
+--- a/src/ui/ui_panel_print_status.cpp
++++ b/src/ui/ui_panel_print_status.cpp
+@@ -1136,12 +1136,18 @@ lv_obj_t* PrintStatusPanel::create(lv_obj_t* parent) {
+ 
+     // Thermal tint for the heater chip icons. The binder owns its own
+     // observers, so this needs no hook into on_temperature_changed().
+-    nozzle_icon_binder_.bind_required(lv_obj_find_by_name(overlay_root_, "ps_chip_nozzle"),
+-                                      printer_state_, helix::HeaterType::Nozzle);
+-    bed_icon_binder_.bind_required(lv_obj_find_by_name(overlay_root_, "ps_chip_bed"),
+-                                   printer_state_, helix::HeaterType::Bed);
+-    chamber_icon_binder_.bind_required(lv_obj_find_by_name(overlay_root_, "ps_chip_chamber"),
+-                                       printer_state_, helix::HeaterType::Chamber);
++    // Kiln OS: the printer tile's stats (patch 0036) replace these chips and are
++    // tinted through ps_chip_*_tone, so a chip that isn't there isn't bound (each
++    // missing one logged an error at every print)
++    if (lv_obj_t* chip = lv_obj_find_by_name(overlay_root_, "ps_chip_nozzle")) {
++        nozzle_icon_binder_.bind_required(chip, printer_state_, helix::HeaterType::Nozzle);
++    }
++    if (lv_obj_t* chip = lv_obj_find_by_name(overlay_root_, "ps_chip_bed")) {
++        bed_icon_binder_.bind_required(chip, printer_state_, helix::HeaterType::Bed);
++    }
++    if (lv_obj_t* chip = lv_obj_find_by_name(overlay_root_, "ps_chip_chamber")) {
++        chamber_icon_binder_.bind_required(chip, printer_state_, helix::HeaterType::Chamber);
++    }
+ 
+     // The first arrangement is measured from on_activate(): overlay_root_ is
+     // HIDDEN until then, and a hidden subtree lays out at 0 width.
+-- 
+2.56.0
+

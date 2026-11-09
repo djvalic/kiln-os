@@ -18,12 +18,13 @@ Content-Transfer-Encoding: 8bit
   Pressure Advance capitalised. Kiln's own "Slot {} · {} → {}" uses an
   em dash, so English no longer shows a box either.
 ---
- src/ui/ui_settings_ad5x_refill.cpp      |  2 +-
- src/ui/ui_wizard.cpp                    |  2 +-
- translations/en.yml                     | 22 ++++++++++++++-
- translations/ru.yml                     | 36 +++++++++++++++++++------
- ui_xml/settings_ad5x_refill_overlay.xml |  2 ++
- 5 files changed, 53 insertions(+), 11 deletions(-)
+ src/ui/ui_settings_ad5x_refill.cpp       |  2 +-
+ src/ui/ui_wizard.cpp                     |  2 +-
+ tests/unit/test_settings_ad5x_refill.cpp |  6 ++--
+ translations/en.yml                      | 22 ++++++++++++++-
+ translations/ru.yml                      | 36 ++++++++++++++++++------
+ ui_xml/settings_ad5x_refill_overlay.xml  |  2 ++
+ 6 files changed, 56 insertions(+), 14 deletions(-)
 
 diff --git a/src/ui/ui_settings_ad5x_refill.cpp b/src/ui/ui_settings_ad5x_refill.cpp
 index 99329c86cc..0a1cb294dd 100644
@@ -51,6 +52,30 @@ index 9fa1f2e5cc..57cb2bec03 100644
              }
          }
      }
+diff --git a/tests/unit/test_settings_ad5x_refill.cpp b/tests/unit/test_settings_ad5x_refill.cpp
+index 6d65baa414..d1c29f6f39 100644
+--- a/tests/unit/test_settings_ad5x_refill.cpp
++++ b/tests/unit/test_settings_ad5x_refill.cpp
+@@ -61,16 +61,16 @@ TEST_CASE("backups are listed for the slots with filament", "[ad5x_refill]") {
+     CHECK(slots[2].backups == std::vector<int>{1});
+     CHECK(any_backup(slots));
+ 
+-    CHECK(backup_line(slots[1]) == "Slot 2 · PLA → no backup");
++    CHECK(backup_line(slots[1]) == "Slot 2 · PLA — no backup");
+     const std::string first = backup_line(slots[0]);
+     CHECK(first.rfind("Slot 1 · PLA ", 0) == 0);
+     CHECK(first.find("black") != std::string::npos);
+-    CHECK(first.find("→ Slot 3") != std::string::npos);
++    CHECK(first.find("— Slot 3") != std::string::npos);
+ 
+     SlotBackup several;
+     several.slot = 4;
+     several.backups = {2, 1};
+-    CHECK(backup_line(several) == "Slot 4 · material not set → Slots 2, 1");
++    CHECK(backup_line(several) == "Slot 4 · material not set — Slots 2, 1");
+ }
+ 
+ TEST_CASE("without loaded_channels the slots with a backup are listed", "[ad5x_refill]") {
 diff --git a/translations/en.yml b/translations/en.yml
 index 7865cc88c2..f8d26592f2 100644
 --- a/translations/en.yml

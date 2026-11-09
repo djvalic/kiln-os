@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: valix <djvalic.wc@gmail.com>
+Date: Mon, 9 Nov 2026 12:00:00 +0000
+Subject: [PATCH] reactor: drop a completion's waiter when pause() raises
+
+ReactorCompletion.wait() added the current greenlet to the waiting list
+and removed it only after pause() returned. When pause() raised (pauses
+disabled, as in a klippy:ready handler; SAVE_VARIABLE waits on the
+threaded executor), the greenlet stayed in the list, and the later
+complete() called update_timer() on its None timer: AttributeError
+'NoneType' object has no attribute 'timer_is_running' in the reactor,
+which used up klippy's one retry for unhandled exceptions. Kiln OS: remove
+it in a finally. The ReactorError still reaches the caller.
+---
+ klippy/reactor.py | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/klippy/reactor.py b/klippy/reactor.py
+index 3ba351b..a43ca43 100644
+--- a/klippy/reactor.py
++++ b/klippy/reactor.py
+@@ -35,8 +35,13 @@ class ReactorCompletion:
+         if self.result is self.sentinel:
+             wait = greenlet.getcurrent()
+             self.waiting.append(wait)
+-            self.reactor.pause(waketime)
+-            self.waiting.remove(wait)
++            # Kiln OS: also when pause() raises (pauses disabled, as in a
++            # klippy:ready handler): a greenlet left in the list made the
++            # later complete() call update_timer(None, ...)
++            try:
++                self.reactor.pause(waketime)
++            finally:
++                self.waiting.remove(wait)
+             if self.result is self.sentinel:
+                 return waketime_result
+         return self.result
+-- 
+2.56.0
+

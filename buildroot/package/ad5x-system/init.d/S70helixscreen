@@ -37,11 +37,26 @@ start)
 	# through Klipper would
 	grep -q '^PWM=pwmchip0/pwm13$' /run/ad5x-sound.conf 2>/dev/null &&
 		export HELIX_PWM_SOUND=0:13
+	# Log detail follows Klipper's LOG_MODE (klipper/extras/ad5x_log.py
+	# writes comms/log-mode: "short" or "extended [until]"; docs/logs.md):
+	# short = warnings and errors, extended = debug. Klipper rewrites the
+	# file when it connects; the screen then follows printer.ad5x_log
+	# itself (patch 0049), also when the mode changes or its time is over.
+	LEVEL=warn
+	MODEFILE=/data/ad5x/printer_data/comms/log-mode
+	if [ -f $MODEFILE ] && read -r m t < $MODEFILE && [ "$m" = extended ]; then
+		case $t in
+		''|*[!0-9]*) LEVEL=debug ;;
+		*) [ "$(date +%s)" -lt "$t" ] && LEVEL=debug ;;
+		esac
+	fi
+	# At warn the screen's own start lines aren't in its log: one here
+	echo "$(date '+%F %T') S70helixscreen: start, log level $LEVEL" >> $LOG
 	HOME=$D \
 	HELIX_DATA_DIR=/usr/lib/helixscreen \
 	HELIX_CONFIG_DIR=$D/config \
 	HELIX_CACHE_DIR=$D/cache \
-	HELIX_LOG_DEST=file HELIX_LOG_FILE=$LOG \
+	HELIX_LOG_DEST=file HELIX_LOG_FILE=$LOG HELIX_LOG_LEVEL=$LEVEL \
 	HELIX_LOG_ROTATE_BYTES=1048576 HELIX_LOG_ROTATE_FILES=3 \
 	HELIX_DISABLE_AUTO_UPDATES=1 \
 	HELIX_WIZARD_FLAG_FILE=/data/ad5x/printer_data/comms/run-setup-wizard \

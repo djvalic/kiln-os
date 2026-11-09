@@ -42,6 +42,8 @@ define AD5X_SYSTEM_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/usr/lib/ad5x/apps.sh
 	$(INSTALL) -D -m 0644 $(@D)/lib/dev-root.sh \
 		$(TARGET_DIR)/usr/lib/ad5x/dev-root.sh
+	$(INSTALL) -D -m 0644 $(@D)/lib/logs.sh \
+		$(TARGET_DIR)/usr/lib/ad5x/logs.sh
 	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-dev-root \
 		$(TARGET_DIR)/usr/bin/ad5x-dev-root
 		$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-moonraker-migrate \

@@ -1,0 +1,90 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: valix <djvalic.wc@gmail.com>
+Date: Mon, 9 Nov 2026 12:00:00 +0000
+Subject: [PATCH 1/2] serialhdl: rate limit the log of unhandled MCU messages
+
+After a failed connect (an MCU still in shutdown after M112 and a host
+reboot) the MCUs keep sending analog_in_state with no handler, and each
+one was logged: 14852 lines (2.5 MB) in 6.5 min on one printer. Kiln OS:
+per message name, the first 20 are logged in full, then one count line
+every 60 s while they keep coming, and the count left at disconnect.
+---
+ klippy/serialhdl.py | 41 ++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 40 insertions(+), 1 deletion(-)
+
+diff --git a/klippy/serialhdl.py b/klippy/serialhdl.py
+index ef33bc7..42b6768 100644
+--- a/klippy/serialhdl.py
++++ b/klippy/serialhdl.py
+@@ -11,6 +11,12 @@ import msgproto, chelper, util
+ class error(Exception):
+     pass
+ 
++# Kiln OS: messages without a handler ("got {...}") are logged per message
++# name: the first UNHANDLED_LOG_FIRST in full, then one count line every
++# UNHANDLED_LOG_EVERY seconds while they keep coming
++UNHANDLED_LOG_FIRST = 20
++UNHANDLED_LOG_EVERY = 60.
++
+ class SerialReader:
+     def __init__(self, reactor, mcu_name=""):
+         self.reactor = reactor
+@@ -39,6 +45,8 @@ class SerialReader:
+         self.last_notify_id = 0
+         self.pending_notifications = {}
+         self.can_wait_acks = True
++        # Kiln OS: name -> [logged, held back, count since]
++        self.unhandled = {}
+         self.tdd_timer = None
+         self.tdd_nop_cmd = None
+         self.last_tx_time = 0.
+@@ -259,6 +267,12 @@ class SerialReader:
+         if self.serial_dev is not None:
+             self.serial_dev.close()
+             self.serial_dev = None
++        # Kiln OS: the held back count of unhandled messages
++        now = self.reactor.monotonic()
++        for name, st in sorted(self.unhandled.items()):
++            if st[1]:
++                self._log_unhandled(name, st, now)
++        self.unhandled.clear()
+         # Abort any waiting commands and then restore ability to wait
+         self.abort_wait_acks()
+         self.pending_notifications.clear()
+@@ -351,7 +365,32 @@ class SerialReader:
+         logging.info("%s%s: %s", self.warn_prefix,
+                      params['#name'], params['#msg'])
+     def handle_default(self, params):
+-        logging.warning("%sgot %s", self.warn_prefix, params)
++        # Kiln OS: rate limited. After a failed connect (an MCU still in
++        # shutdown) the MCUs keep sending analog_in_state with no handler:
++        # 14852 of these lines (2.5 MB) in 6.5 min
++        name = params.get('#name')
++        now = params.get('#receive_time', 0.)
++        st = self.unhandled.get(name)
++        if st is None:
++            st = self.unhandled[name] = [0, 0, now]
++        if st[0] < UNHANDLED_LOG_FIRST:
++            st[0] += 1
++            logging.warning("%sgot %s", self.warn_prefix, params)
++            if st[0] >= UNHANDLED_LOG_FIRST:
++                st[2] = now
++                logging.warning("%smore unhandled '%s' messages are counted"
++                                " (one line per %.0f s)", self.warn_prefix,
++                                name, UNHANDLED_LOG_EVERY)
++            return
++        st[1] += 1
++        if now - st[2] >= UNHANDLED_LOG_EVERY:
++            self._log_unhandled(name, st, now, params)
++    def _log_unhandled(self, name, st, now, params=None):
++        logging.warning("%s%d more unhandled '%s' messages in %.0f s%s",
++                        self.warn_prefix, st[1], name, max(0., now - st[2]),
++                        "" if params is None else "; last: %s" % (params,))
++        st[1] = 0
++        st[2] = now
+ 
+ # Class to send a query command and return the received response
+ class SerialRetryCommand:
+-- 
+2.56.0
+

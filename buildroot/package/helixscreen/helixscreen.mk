@@ -116,6 +116,11 @@ define HELIXSCREEN_INSTALL_TARGET_CMDS
 	find $(HELIXSCREEN_INSTDIR)/assets/images/printers -maxdepth 1 -name '*.png' \
 		! -name 'flashforge-*' ! -name 'generic-corexy.png' -delete
 	ln -sf ../lib/helixscreen/bin/helix-screen $(TARGET_DIR)/usr/bin/helix-screen
+	# What HelixScreen's update checker expects of an install (asset_name as
+	# its platform key: mips). Without it, each start tried to write one into
+	# the read-only /usr and logged two lines; updates come with Kiln OS.
+	printf '{"project_name": "helixscreen", "project_owner": "prestonbrown", "version": "%s", "asset_name": "helixscreen-mips.zip"}\n' \
+		'$(HELIXSCREEN_VERSION)' > $(HELIXSCREEN_INSTDIR)/release_info.json
 endef
 
 $(eval $(generic-package))

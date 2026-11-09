@@ -1,0 +1,39 @@
+database: write-ahead log, synced at checkpoints
+
+On an idle printer HelixScreen writes one small row (helix-screen
+local_screen seen_at) every 10 minutes. With SQLite's defaults each
+commit created a rollback journal, synced it twice, synced the directory,
+wrote and synced the database and deleted the journal: on ext4 each sync
+is a journal commit, about 100 KB on the eMMC for a few bytes of data,
+14 MB or more a day. Now journal_mode=WAL (kept in the database file)
+and synchronous=NORMAL: a commit appends to moonraker-sql.db-wal and is
+synced at checkpoints (every 1000 pages) or when Moonraker closes. A
+power cut can lose the last commits, not the database. Backup and
+restore use SQLite's backup API, which works with WAL.
+
+Upstream: not submitted (AD5X open OS)
+
+--- a/moonraker/components/database.py	2026-11-09 10:04:40.060700938 -0500
++++ b/moonraker/components/database.py	2026-11-09 10:04:40.070198349 -0500
+@@ -754,6 +754,13 @@
+         self.sync_conn = sqlite3.connect(
+             str(db_path), timeout=1., detect_types=sqlite3.PARSE_DECLTYPES
+         )
++        # Kiln OS: write-ahead log, synced at checkpoints only. A small
++        # commit (HelixScreen's presence row every 10 min) was a rollback
++        # journal created, synced twice and deleted, each sync an ext4
++        # journal commit on the eMMC. journal_mode is kept in the file;
++        # synchronous is per connection.
++        self.sync_conn.execute("PRAGMA journal_mode=WAL")
++        self.sync_conn.execute("PRAGMA synchronous=NORMAL")
+         self.sync_conn.row_factory = sqlite3.Row
+         self.setup_database()
+ 
+@@ -777,6 +784,7 @@
+         conn = sqlite3.connect(
+             str(self._db_path), timeout=1., detect_types=sqlite3.PARSE_DECLTYPES
+         )
++        conn.execute("PRAGMA synchronous=NORMAL")  # Kiln OS: see above
+         conn.row_factory = sqlite3.Row
+         while True:
+             future, func, args = self.command_queue.get()

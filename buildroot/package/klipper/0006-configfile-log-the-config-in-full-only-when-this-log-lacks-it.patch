@@ -1,0 +1,97 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: valix <djvalic.wc@gmail.com>
+Date: Mon, 9 Nov 2026 12:00:00 +0000
+Subject: [PATCH] configfile: log the config in full only when this log lacks
+ it
+
+Every Klipper start and RESTART wrote the whole config (about 45 KB) to
+klippy.log. Kiln OS: when the same config (sha1) is already in full in
+the same log file (inode, size and rollover time checked against a small
+state file in printer_data/comms), write a one-line note instead. The
+rollover header at the top of each day's file still has it in full.
+---
+ klippy/configfile.py | 54 +++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 53 insertions(+), 1 deletion(-)
+
+diff --git a/klippy/configfile.py b/klippy/configfile.py
+index 6091d78..7302d04 100644
+--- a/klippy/configfile.py
++++ b/klippy/configfile.py
+@@ -4,6 +4,7 @@
+ #
+ # This file may be distributed under the terms of the GNU GPLv3 license.
+ import sys, os, glob, re, time, logging, configparser, io
++import hashlib, json
+ 
+ error = configparser.Error
+ 
+@@ -12,6 +13,10 @@ error = configparser.Error
+ # Config section parsing helper
+ ######################################################################
+ 
++# Kiln OS: what log_config last wrote in full, and to which log file
++KILN_LOG_STATE = os.environ.get(
++    'KILN_LOG_STATE', '/home/klipper/printer_data/comms/klippy-config.json')
++
+ class sentinel:
+     pass
+ 
+@@ -484,7 +489,54 @@ class PrinterConfig:
+         lines = ["===== Config file =====",
+                  cfgrdr.build_config_string(config.fileconfig),
+                  "======================="]
+-        self.printer.set_rollover_info("config", "\n".join(lines))
++        info = "\n".join(lines)
++        # Kiln OS: in full only when this log file lacks this config; the
++        # rollover header (top of each day's file) always has it in full
++        note = self._kiln_config_note(info)
++        if note is not None:
++            logging.info(note)
++        self.printer.set_rollover_info("config", info, log=note is None)
++    def _kiln_config_note(self, info):
++        # A one-line note if this config is already in full further up the
++        # current log file, else None (and remember this one)
++        bglogger = getattr(self.printer, 'bglogger', None)
++        if (bglogger is None
++            or self.printer.get_start_args().get('debugoutput') is not None
++            or not os.path.isdir(os.path.dirname(KILN_LOG_STATE))):
++            return None
++        data = info.encode('utf-8', 'replace')
++        digest = hashlib.sha1(data).hexdigest()
++        # Before the stat: a rollover between the two then shows as a new
++        # inode, never as the old file with a next day's rollover time
++        rollover_at = bglogger.rolloverAt
++        try:
++            st = os.stat(bglogger.baseFilename)
++        except OSError:
++            return None
++        try:
++            with open(KILN_LOG_STATE) as f:
++                old = json.load(f)
++            # Same file: still the inode it had, and at least as long as
++            # it was with that config written (a new file may reuse the
++            # inode, but starts short)
++            if (old['sha1'] == digest and old['ino'] == st.st_ino
++                and st.st_size >= old['end']
++                and time.time() < rollover_at):
++                return ("===== Config file unchanged since %s (sha1 %s);"
++                        " in full further up this log =====" % (
++                            old['date'], digest[:12]))
++        except Exception:
++            pass
++        try:
++            tmp = KILN_LOG_STATE + '.tmp'
++            with open(tmp, 'w') as f:
++                json.dump({'sha1': digest, 'ino': st.st_ino,
++                           'end': st.st_size + len(data),
++                           'date': time.strftime('%Y-%m-%d %H:%M:%S')}, f)
++            os.rename(tmp, KILN_LOG_STATE)
++        except OSError:
++            logging.warning("Unable to write %s", KILN_LOG_STATE)
++        return None
+     def check_unused_options(self, config):
+         self.validate.check_unused(config.fileconfig)
+     # Deprecation warnings
+-- 
+2.56.0
+

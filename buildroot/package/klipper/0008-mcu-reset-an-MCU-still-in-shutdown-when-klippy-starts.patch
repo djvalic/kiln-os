@@ -1,0 +1,68 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: valix <djvalic.wc@gmail.com>
+Date: Mon, 9 Nov 2026 12:00:00 +0000
+Subject: [PATCH] mcu: reset an MCU still in shutdown when klippy starts
+
+After an M112 (or another shutdown) and a host reboot the boards stay in
+shutdown: nothing at boot resets them, and klippy only reported "Can not
+update MCU config as it is shutdown" while the boards' unhandled
+analog_in_state messages filled the log (2.5 MB in 6 min on one
+printer), until a FIRMWARE_RESTART by hand. Kiln OS: on a fresh start
+(start_reason startup) an MCU that is in shutdown and resets by command
+gets the automated firmware restart upstream already uses for a CRC
+mismatch. A RESTART in a running session is unchanged, and after the
+automated restart the error stands, so it cannot loop.
+---
+ klippy/mcu.py | 16 ++++++++++++++--
+ 1 file changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/klippy/mcu.py b/klippy/mcu.py
+index 8833a3b..8e7d155 100644
+--- a/klippy/mcu.py
++++ b/klippy/mcu.py
+@@ -694,6 +694,16 @@ class MCURestartHelper:
+         raise error("Attempt MCU '%s' restart failed" % (self._name,))
+     def check_restart_on_crc_mismatch(self):
+         self._check_restart("CRC mismatch")
++    def check_restart_on_shutdown(self):
++        # Kiln OS: a new klippy (a host reboot or a service restart) that
++        # finds the MCU still in shutdown, e.g. after M112 and a reboot,
++        # resets it once by command, as FIRMWARE_RESTART would. A RESTART
++        # in a running session still needs FIRMWARE_RESTART; after the
++        # automated one, _check_restart returns and the error stands.
++        start_reason = self._printer.get_start_args().get("start_reason")
++        if (start_reason == 'startup' and self._restart_method == 'command'
++            and self._reset_cmd is not None):
++            self._check_restart("MCU still in shutdown at startup")
+     def check_restart_on_send_config(self):
+         if self._restart_method == 'rpi_usb':
+             # Only configure mcu after usb power reset
+@@ -1039,7 +1049,7 @@ class MCUConfigHelper:
+                     "Pin '%s' is not a valid pin name on mcu '%s'"
+                     % (enum_value, self._name))
+             raise
+-    def _send_get_config(self):
++    def _send_get_config(self, restart_on_shutdown=False):
+         get_config_cmd = self._mcu.lookup_query_command(
+             "get_config",
+             "config is_config=%c crc=%u is_shutdown=%c move_count=%hu")
+@@ -1050,13 +1060,15 @@ class MCUConfigHelper:
+             raise error("MCU '%s' error during config: %s" % (
+                 self._name, self._conn_helper.get_shutdown_msg()))
+         if config_params['is_shutdown']:
++            if restart_on_shutdown:
++                self._conn_helper.get_restart_helper().check_restart_on_shutdown()
+             raise error("Can not update MCU '%s' config as it is shutdown" % (
+                 self._name,))
+         return config_params
+     def _connect(self):
+         # Finalize the config and check if a restart is needed
+         restart_helper = self._conn_helper.get_restart_helper()
+-        config_params = self._send_get_config()
++        config_params = self._send_get_config(restart_on_shutdown=True)
+         if not config_params['is_config']:
+             # Not configured - sending full config will be required
+             restart_helper.check_restart_on_send_config()
+-- 
+2.56.0
+

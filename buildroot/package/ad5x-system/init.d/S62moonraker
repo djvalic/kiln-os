@@ -44,9 +44,21 @@ start)
 	eval "$(/usr/bin/python3 $KROOT/klippy/extras/ad5x_plugins.py env \
 		$PD/config/plugins.cfg 2>/dev/null)"
 	export AD5X_PLUGIN_PYTHON AD5X_MOONRAKER_COMPONENTS
+	# Log mode (Klipper's LOG_MODE writes comms/log-mode: "short" or
+	# "extended [until]"; docs/logs.md): extended starts Moonraker verbose
+	# (-v, every API request and reply) until its time is over; it takes
+	# effect at Moonraker's next start
+	V=
+	if [ -f $PD/comms/log-mode ] && read -r m t < $PD/comms/log-mode && [ "$m" = extended ]; then
+		case $t in
+		''|*[!0-9]*) V=-v ;;
+		*) [ "$(date +%s)" -lt "$t" ] && V=-v ;;
+		esac
+	fi
+	[ -n "$V" ] && echo "moonraker: verbose (log mode extended)"
 	HOME=/home/klipper start-stop-daemon -S -b -m -p $PID -c klipper \
 		-x /usr/bin/python3 -- $MROOT/moonraker/moonraker.py \
-		-d $PD -c $TOP
+		-d $PD -c $TOP $V
 	;;
 stop)
 	start-stop-daemon -K -p $PID -s INT

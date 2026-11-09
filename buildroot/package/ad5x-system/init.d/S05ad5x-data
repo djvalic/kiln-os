@@ -122,6 +122,9 @@ start)
 	[ -f $pd/config/moonraker.conf ] && ad5x-moonraker-migrate $pd/config/moonraker.conf
 	chown -R klipper:klipper $pd
 	chmod 700 /data/ad5x/ssh
+	# Kiln's append-only logs: the last 64 KiB each (lib/logs.sh)
+	. /usr/lib/ad5x/logs.sh
+	kiln_logs_trim
 	;;
 stop)
 	umount /data 2>/dev/null

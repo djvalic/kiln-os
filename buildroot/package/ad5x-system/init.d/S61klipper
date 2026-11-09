@@ -5,6 +5,7 @@ PD=/home/klipper/printer_data
 PID=/var/run/klipper.pid
 # The image's Klipper or a newer daily package (lib/apps.sh)
 . /usr/lib/ad5x/apps.sh
+. /usr/lib/ad5x/logs.sh
 KROOT=$(app_root klipper)
 case "$1" in
 start)
@@ -31,6 +32,8 @@ start)
 		/usr/bin/python3 $KROOT/klippy/extras/ad5x_plugins.py ifs-mcu \
 			$PD/config/plugins.cfg
 	fi
+	# Old dated klippy logs: at most 5 and 50 MB (lib/logs.sh)
+	klippy_log_retention $PD/logs
 	HOME=/home/klipper start-stop-daemon -S -b -m -p $PID -c klipper -N -10 \
 		-x /usr/bin/python3 -- $KROOT/klippy/klippy.py \
 		$PD/config/printer.cfg -l $PD/logs/klippy.log \

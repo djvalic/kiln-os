@@ -1,0 +1,608 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Mon, 9 Nov 2026 15:00:00 -0500
+Subject: [PATCH] ad5x: Log detail row (Klipper's LOG_MODE); screen log level
+ follows it
+
+Settings > System gets "Log detail: Short / Extended" when Klipper has
+Kiln's ad5x_log object; it sends LOG_MODE MODE=short|extended and shows
+printer.ad5x_log.mode. HelixScreen's own Log Level row is hidden then.
+Ad5xLogModel follows the object from discovery on (as the auto-refill
+model) and sets this screen's log level at once: warn in short mode,
+debug in extended, also when the mode changes from the console or
+LOG_MODE's HOURS run out. S70helixscreen sets the start level from the
+same mode. Strings in en and ru.
+---
+ include/ui_settings_ad5x_log.h           | 103 +++++++++
+ include/ui_settings_system.h             |   2 +
+ src/api/moonraker_discovery_sequence.cpp |   9 +
+ src/application/discovery_steps.cpp      |   8 +
+ src/ui/ui_settings_ad5x_log.cpp          | 266 +++++++++++++++++++++++
+ src/ui/ui_settings_system.cpp            |   9 +
+ tests/unit/test_discovery_steps.cpp      |   1 +
+ translations/en.yml                      |   4 +
+ translations/ru.yml                      |   4 +
+ ui_xml/settings_system_overlay.xml       |  14 +-
+ 10 files changed, 419 insertions(+), 1 deletion(-)
+ create mode 100644 include/ui_settings_ad5x_log.h
+ create mode 100644 src/ui/ui_settings_ad5x_log.cpp
+
+diff --git a/include/ui_settings_ad5x_log.h b/include/ui_settings_ad5x_log.h
+new file mode 100644
+index 0000000000..162d91d39c
+--- /dev/null
++++ b/include/ui_settings_ad5x_log.h
+@@ -0,0 +1,103 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++/**
++ * @file ui_settings_ad5x_log.h
++ * @brief Kiln OS log detail: Klipper's LOG_MODE on Settings > System
++ *
++ * Klipper's `ad5x_log` object (klipper/extras/ad5x_log.py): `mode` ("short"
++ * or "extended") and `until` (Unix time, or null). LOG_MODE MODE=short|extended
++ * sets it, saved by Klipper. Short: Klipper's statistics once a minute, this
++ * screen's log at warnings and errors. Extended: everything, this screen's
++ * log at debug.
++ *
++ * Ad5xLogModel follows the object from the first discovery on (a tail
++ * discovery step attaches it), so this screen's own log level follows a
++ * change made anywhere (the console, the end of LOG_MODE's HOURS) at once.
++ * S70helixscreen sets the level at start from the same mode.
++ *
++ * @pattern Process-wide model, as Ad5xRefillModel
++ * @threading Main thread only; Moonraker callbacks hop over via lifetime tokens
++ */
++
++#pragma once
++
++#include "ui_observer_guard.h"
++#include "ui_subscription_guard.h"
++
++#include "async_lifetime_guard.h"
++#include "json_fwd.h"
++#include "lvgl/lvgl.h"
++#include "subject_managed_panel.h"
++
++#include <string>
++
++namespace helix {
++class IMoonrakerAPI;
++}
++
++namespace helix::ad5x_log {
++
++/// "short" (index 0) / "extended" (1); out of range: "short".
++const char* mode_name(int index);
++
++/// 1 for Klipper's "extended", 0 for anything else.
++int mode_index(const std::string& name);
++
++/// "LOG_MODE MODE=extended"
++std::string mode_gcode(int index);
++
++/// The object, the shared subjects and the command.
++///
++/// Subjects: `ad5x_log_available` (1 when Klipper has `ad5x_log`: shows the
++/// row and hides HelixScreen's own Log Level row), `ad5x_log_mode` (0 short,
++/// 1 extended) and `ad5x_log_busy` (1 while a change is pending, the object
++/// has not answered or Klipper is not ready).
++class Ad5xLogModel {
++  public:
++    Ad5xLogModel() = default;
++    ~Ad5xLogModel();
++    Ad5xLogModel(const Ad5xLogModel&) = delete;
++    Ad5xLogModel& operator=(const Ad5xLogModel&) = delete;
++
++    void init_subjects();
++
++    /// From each discovery: follow @p api's status updates (again when the
++    /// API changed) and take `ad5x_log` from the discovery's initial
++    /// @p status. Nothing on a printer without it.
++    void attach(IMoonrakerAPI* api, const json& status);
++
++    /// Ask Klipper for the object.
++    void query();
++
++    /// LOG_MODE MODE=short|extended
++    void set_mode(int index);
++
++  private:
++    void detach();
++    void merge(const json& delta);
++    void send(const std::string& gcode);
++    void refresh();
++    /// This screen's log level for Klipper's mode, when it changed.
++    void apply_log_level(int mode);
++
++    SubjectManager subjects_;
++    lv_subject_t available_{};
++    lv_subject_t mode_{};
++    lv_subject_t busy_{};
++    bool subjects_initialized_ = false;
++
++    IMoonrakerAPI* api_ = nullptr;
++    json obj_ = json::object(); ///< `ad5x_log`'s fields
++    bool loaded_ = false;
++    bool klippy_ready_ = true;
++    int pending_ = 0;
++    int applied_mode_ = -1; ///< The mode the log level was last set for
++
++    SubscriptionGuard subscription_;
++    ObserverGuard klippy_observer_;
++    AsyncLifetimeGuard lifetime_;
++};
++
++Ad5xLogModel& model();
++
++} // namespace helix::ad5x_log
+diff --git a/include/ui_settings_system.h b/include/ui_settings_system.h
+index 23e4602f6c..2345b2e294 100644
+--- a/include/ui_settings_system.h
++++ b/include/ui_settings_system.h
+@@ -47,6 +47,8 @@ class SystemSettingsOverlay : public OverlayBase {
+         return "settings_system_overlay";
+     }
+ 
++    /// Kiln OS: the Log detail row's subjects (ad5x_log), before the XML
++    void init_subjects() override;
+     void register_callbacks() override;
+ 
+     /// The Performance row's action: open the Performance overlay.
+diff --git a/src/api/moonraker_discovery_sequence.cpp b/src/api/moonraker_discovery_sequence.cpp
+index 412beddc21..9a8dd98004 100644
+--- a/src/api/moonraker_discovery_sequence.cpp
++++ b/src/api/moonraker_discovery_sequence.cpp
+@@ -1524,6 +1524,15 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
+         }
+     }
+ 
++    // Kiln OS log detail (ui_settings_ad5x_log.cpp): `mode` and `until`, two
++    // small fields that change only with LOG_MODE, so the whole object.
++    {
++        const auto& objects = hw.printer_objects();
++        if (std::find(objects.begin(), objects.end(), "ad5x_log") != objects.end()) {
++            subscription_objects["ad5x_log"] = nullptr;
++        }
++    }
++
+     // AD5X filament auto-refill (ui_settings_ad5x_refill.cpp): `ifs` carries
+     // auto_refill, refill_match, refill_backups and refill_notice, which the
+     // Settings screen and the "No backup spool" pop-up read; `ifs_materials`
+diff --git a/src/application/discovery_steps.cpp b/src/application/discovery_steps.cpp
+index 0ed4f03d94..d407a8e243 100644
+--- a/src/application/discovery_steps.cpp
++++ b/src/application/discovery_steps.cpp
+@@ -10,6 +10,7 @@
+ 
+ #include "ui_panel_calibration_zoffset.h"
+ #include "ui_settings_about.h"
++#include "ui_settings_ad5x_log.h"
+ #include "ui_settings_ad5x_refill.h"
+ #include "ui_update_queue.h"
+ #include "ui_wizard.h"
+@@ -175,6 +176,12 @@ void ad5x_refill_watch_step(DiscoveryContext& ctx) {
+     ad5x_refill::model().attach(&ctx.api, ctx.status);
+ }
+ 
++// Kiln OS log detail: follow Klipper's LOG_MODE, so this screen's own log level
++// follows a change made anywhere. Nothing on a Klipper without ad5x_log.
++void ad5x_log_watch_step(DiscoveryContext& ctx) {
++    ad5x_log::model().attach(&ctx.api, ctx.status);
++}
++
+ constexpr DiscoveryStep kTailSteps[] = {
+     {"update_checker_connected", false, update_checker_connected_step, nullptr},
+     {"about_print_hours", false, about_print_hours_step, nullptr},
+@@ -192,6 +199,7 @@ constexpr DiscoveryStep kTailSteps[] = {
+     {"remote_screen_webcam", false, remote_screen_webcam_step, nullptr},
+     {"manual_probe_autoopen", false, manual_probe_autoopen_step, nullptr},
+     {"ad5x_refill_watch", false, ad5x_refill_watch_step, nullptr},
++    {"ad5x_log_watch", false, ad5x_log_watch_step, nullptr},
+ };
+ 
+ } // namespace
+diff --git a/src/ui/ui_settings_ad5x_log.cpp b/src/ui/ui_settings_ad5x_log.cpp
+new file mode 100644
+index 0000000000..4e3052a012
+--- /dev/null
++++ b/src/ui/ui_settings_ad5x_log.cpp
+@@ -0,0 +1,266 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include "ui_settings_ad5x_log.h"
++
++#include "ui_error_reporting.h"
++#include "ui_update_queue.h"
++
++#include "app_globals.h"
++#include "i_moonraker_api.h"
++#include "i_moonraker_client.h"
++#include "json_utils.h"
++#include "logging_init.h"
++#include "lvgl/src/others/translation/lv_translation.h"
++#include "observer_factory.h"
++#include "printer_discovery.h"
++#include "printer_state.h"
++#include "static_panel_registry.h"
++
++#include <spdlog/fmt/fmt.h>
++#include <spdlog/spdlog.h>
++
++#include <algorithm>
++#include <iterator>
++
++namespace helix::ad5x_log {
++
++namespace {
++
++constexpr const char* kObject = "ad5x_log";
++constexpr const char* kModes[] = {"short", "extended"};
++
++void set_if_changed(lv_subject_t* subject, int value) {
++    if (lv_subject_get_int(subject) != value) {
++        lv_subject_set_int(subject, value);
++    }
++}
++
++} // namespace
++
++const char* mode_name(int index) {
++    if (index < 0 || index >= static_cast<int>(std::size(kModes))) {
++        return kModes[0];
++    }
++    return kModes[index];
++}
++
++int mode_index(const std::string& name) {
++    return name == kModes[1] ? 1 : 0;
++}
++
++std::string mode_gcode(int index) {
++    return fmt::format("LOG_MODE MODE={}", mode_name(index));
++}
++
++// ============================================================================
++// MODEL
++// ============================================================================
++
++Ad5xLogModel::~Ad5xLogModel() {
++    lifetime_.invalidate();
++    subscription_.reset();
++    klippy_observer_.reset();
++    subjects_.deinit_all();
++}
++
++void Ad5xLogModel::init_subjects() {
++    if (subjects_initialized_) {
++        return;
++    }
++    // 1 when Klipper has ad5x_log: the Log detail row shows, Log Level hides
++    UI_MANAGED_SUBJECT_INT(available_, 0, "ad5x_log_available", subjects_);
++    // 0 short, 1 extended
++    UI_MANAGED_SUBJECT_INT(mode_, 0, "ad5x_log_mode", subjects_);
++    // 1 while a change is pending, the object has not answered or Klipper is not ready
++    UI_MANAGED_SUBJECT_INT(busy_, 1, "ad5x_log_busy", subjects_);
++    subjects_initialized_ = true;
++}
++
++void Ad5xLogModel::attach(IMoonrakerAPI* api, const json& status) {
++    init_subjects();
++    if (!api) {
++        return;
++    }
++    const auto& objects = api->hardware().printer_objects();
++    if (std::find(objects.begin(), objects.end(), kObject) == objects.end()) {
++        // Another printer, or a Klipper without Kiln's log mode: the level S70
++        // set stays
++        detach();
++        return;
++    }
++
++    if (api != api_) {
++        detach();
++        api_ = api;
++        const auto token = lifetime_.token();
++        // Runs on the WebSocket thread: copy the object out, apply it on the main thread
++        const SubscriptionId id = api->subscribe_notifications([this, token](const json& note) {
++            const json* params = json_util::find_member(note, "params");
++            if (!params || !params->is_array() || params->empty()) {
++                return;
++            }
++            const json* obj = json_util::find_member((*params)[0], kObject);
++            if (!obj || !obj->is_object() || obj->empty()) {
++                return;
++            }
++            json delta = *obj;
++            token.defer("Ad5xLogModel::status_update", [this, delta]() { merge(delta); });
++        });
++        subscription_ = SubscriptionGuard(api, id);
++    }
++
++    if (!klippy_observer_) {
++        klippy_observer_ = ui::observe<int>(
++            get_printer_state().network_state().get_klippy_state_subject(), this,
++            [](Ad5xLogModel* self, int state) {
++                const bool ready = static_cast<KlippyState>(state) == KlippyState::READY;
++                if (ready == self->klippy_ready_) {
++                    return;
++                }
++                self->klippy_ready_ = ready;
++                if (ready) {
++                    self->query();
++                }
++                self->refresh();
++            },
++            get_printer_state().get_subjects_lifetime());
++    }
++
++    // The discovery's initial status carries the object whole
++    if (const json* obj = json_util::find_member(status, kObject); obj && obj->is_object()) {
++        merge(*obj);
++    } else {
++        query();
++    }
++}
++
++void Ad5xLogModel::detach() {
++    subscription_.reset();
++    api_ = nullptr;
++    obj_ = json::object();
++    loaded_ = false;
++    pending_ = 0;
++    refresh();
++}
++
++void Ad5xLogModel::query() {
++    IMoonrakerClient* client = get_moonraker_client();
++    if (!client || client->get_connection_state() != ConnectionState::CONNECTED || !api_) {
++        return;
++    }
++    const auto token = lifetime_.token();
++    json params = {{"objects", {{kObject, nullptr}}}};
++    client->send_jsonrpc(
++        "printer.objects.query", params,
++        [this, token](const json& response) {
++            const json* result = json_util::find_member(response, "result");
++            const json* status = result ? json_util::find_member(*result, "status") : nullptr;
++            const json* obj = status ? json_util::find_member(*status, kObject) : nullptr;
++            if (!obj || !obj->is_object()) {
++                return;
++            }
++            json delta = *obj;
++            token.defer("Ad5xLogModel::status_query", [this, delta]() { merge(delta); });
++        },
++        [](const MoonrakerError& err) {
++            spdlog::debug("[AD5X log] {} query failed: {}", kObject, err.message);
++        },
++        0, /*silent=*/true);
++}
++
++void Ad5xLogModel::merge(const json& delta) {
++    if (!api_) {
++        return;
++    }
++    for (auto it = delta.begin(); it != delta.end(); ++it) {
++        obj_[it.key()] = it.value();
++    }
++    loaded_ = obj_.contains("mode");
++    refresh();
++}
++
++void Ad5xLogModel::send(const std::string& gcode) {
++    IMoonrakerAPI* api = get_moonraker_api();
++    if (!api) {
++        NOTIFY_WARNING("{}", lv_tr("Not connected to the printer"));
++        refresh();
++        return;
++    }
++    spdlog::info("[AD5X log] {}", gcode);
++    ++pending_;
++    refresh();
++
++    // Klipper's answer releases the row; a fresh query then shows what it kept
++    const auto token = lifetime_.token();
++    api->execute_gcode(
++        gcode,
++        [this, token]() {
++            token.defer("Ad5xLogModel::send_done", [this]() {
++                pending_ = std::max(0, pending_ - 1);
++                query();
++                refresh();
++            });
++        },
++        [this, token](const MoonrakerError& err) {
++            const std::string message = err.message;
++            token.defer("Ad5xLogModel::send_error", [this, message]() {
++                pending_ = std::max(0, pending_ - 1);
++                NOTIFY_WARNING("{}", message.empty() ? std::string(lv_tr("Failed")) : message);
++                query();
++                refresh();
++            });
++        },
++        0, /*silent=*/false, /*on_queued=*/nullptr, /*caller_surfaces_errors=*/true);
++}
++
++void Ad5xLogModel::set_mode(int index) {
++    index = std::clamp(index, 0, static_cast<int>(std::size(kModes)) - 1);
++    if (subjects_initialized_) {
++        lv_subject_set_int(&mode_, index);
++    }
++    send(mode_gcode(index));
++}
++
++void Ad5xLogModel::apply_log_level(int mode) {
++#ifndef HELIX_WATCHDOG
++    if (mode == applied_mode_) {
++        return;
++    }
++    applied_mode_ = mode;
++    // Said at info where it shows: after raising the level, before lowering it
++    const auto say = [mode]() {
++        spdlog::info("[AD5X log] Klipper log mode {}: this screen's log at {}", mode_name(mode),
++                     mode == 1 ? "debug" : "warn");
++    };
++    if (mode == 1) {
++        helix::logging::set_runtime_level(spdlog::level::debug);
++        say();
++    } else {
++        say();
++        helix::logging::set_runtime_level(spdlog::level::warn);
++    }
++#else
++    (void)mode;
++#endif
++}
++
++void Ad5xLogModel::refresh() {
++    const int mode = mode_index(json_util::safe_string(obj_, "mode", "short"));
++    if (subjects_initialized_) {
++        set_if_changed(&available_, loaded_ ? 1 : 0);
++        // While Klipper has not answered a change, the row keeps what the user set
++        if (loaded_ && pending_ == 0) {
++            set_if_changed(&mode_, mode);
++        }
++        set_if_changed(&busy_, (pending_ > 0 || !loaded_ || !klippy_ready_) ? 1 : 0);
++    }
++    if (loaded_) {
++        apply_log_level(mode);
++    }
++}
++
++Ad5xLogModel& model() {
++    return helix::lazy_global<Ad5xLogModel>("Ad5xLogModel");
++}
++
++} // namespace helix::ad5x_log
+diff --git a/src/ui/ui_settings_system.cpp b/src/ui/ui_settings_system.cpp
+index 5f7c74189f..ab72aa6a27 100644
+--- a/src/ui/ui_settings_system.cpp
++++ b/src/ui/ui_settings_system.cpp
+@@ -7,6 +7,7 @@
+ #include "ui_nav.h"
+ #include "ui_overlay_performance.h"
+ #include "ui_panel_common.h"
++#include "ui_settings_ad5x_log.h"
+ #include "ui_settings_security.h"
+ #include "ui_settings_storage.h"
+ #if !defined(HELIX_PLATFORM_ESP32)
+@@ -32,6 +33,11 @@ SystemSettingsOverlay::~SystemSettingsOverlay() {
+     }
+ }
+ 
++void SystemSettingsOverlay::init_subjects() {
++    // Kiln OS: the Log detail row binds these; the model may not be attached yet
++    helix::ad5x_log::model().init_subjects();
++}
++
+ void SystemSettingsOverlay::register_callbacks() {
+     using helix::ui::event_selected;
+     register_xml_callbacks({
+@@ -61,6 +67,9 @@ void SystemSettingsOverlay::register_callbacks() {
+          [](lv_event_t* e) {
+              SystemSettingsManager::instance().set_log_level_by_index(event_selected(e));
+          }},
++        // Kiln OS: Klipper's LOG_MODE, which also sets this screen's log level
++        {"on_ad5x_log_mode_changed",
++         [](lv_event_t* e) { helix::ad5x_log::model().set_mode(event_selected(e)); }},
+         {"on_storage_clicked",
+          [](lv_event_t*) {
+              get_storage_settings_overlay().show(get_system_settings_overlay().parent_screen_);
+diff --git a/tests/unit/test_discovery_steps.cpp b/tests/unit/test_discovery_steps.cpp
+index 7eb4861ed7..e8efe353fe 100644
+--- a/tests/unit/test_discovery_steps.cpp
++++ b/tests/unit/test_discovery_steps.cpp
+@@ -155,6 +155,7 @@ TEST_CASE("the tail discovery steps run in this order", "[discovery_steps]") {
+         "remote_screen_webcam",
+         "manual_probe_autoopen",
+         "ad5x_refill_watch",
++        "ad5x_log_watch",
+     };
+     CHECK(tail == expected);
+ }
+diff --git a/translations/en.yml b/translations/en.yml
+index f59cd54c17..c6bc2a23e4 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -4994,6 +4994,7 @@ translations:
+   'Exact': 'Exact'
+   'Exact colour': 'Exact colour'
+   'Exact: the same colour code. Similar: close shades. Any colour: the same material is enough.': 'Exact: the same colour code. Similar: close shades. Any colour: the same material is enough.'
++  'Extended': 'Extended'
+   'Factory': 'Factory'
+   'FAIL': 'FAIL'
+   'Faster, reliable filament swaps': 'Faster, reliable filament swaps'
+@@ -5028,6 +5029,7 @@ translations:
+   'Loading {}': 'Loading {}'
+   'Local time for this screen': 'Local time for this screen'
+   'local.cfg sets the nozzle size; edit it there': 'local.cfg sets the nozzle size; edit it there'
++  'Log detail': 'Log detail'
+   'material not set': 'material not set'
+   'Measure the shape of the bed': 'Measure the shape of the bed'
+   'Measures how long the bed keeps moving at that temperature. Takes 20-35 minutes; the bed must be empty and below 40 °C.': 'Measures how long the bed keeps moving at that temperature. Takes 20-35 minutes; the bed must be empty and below 40 °C.'
+@@ -5095,6 +5097,8 @@ translations:
+   'Selecting {}': 'Selecting {}'
+   'Self-check': 'Self-check'
+   'Self-check, PID, bed mesh, vibration, IFS, Z offset': 'Self-check, PID, bed mesh, vibration, IFS, Z offset'
++  'Short': 'Short'
++  'Short: warnings and errors, and Klipper''s statistics once a minute. Extended: everything, for troubleshooting; the logs fill faster.': 'Short: warnings and errors, and Klipper''s statistics once a minute. Extended: everything, for troubleshooting; the logs fill faster.'
+   'Similar': 'Similar'
+   'Similar colour': 'Similar colour'
+   'Since the bed was hot, one round a minute:': 'Since the bed was hot, one round a minute:'
+diff --git a/translations/ru.yml b/translations/ru.yml
+index ad9f986c74..3e29a69f67 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -5174,6 +5174,7 @@ translations:
+   'Exact': 'Точный'
+   'Exact colour': 'Точный цвет'
+   'Exact: the same colour code. Similar: close shades. Any colour: the same material is enough.': 'Точный: тот же код цвета. Похожий: близкие оттенки. Любой цвет: достаточно того же материала.'
++  'Extended': 'Подробный'
+   'Factory': 'Сброс'
+   'FAIL': 'СБОЙ'
+   'Faster, reliable filament swaps': 'Быстрая и надёжная смена филамента'
+@@ -5208,6 +5209,7 @@ translations:
+   'Loading {}': 'Загрузка: {}'
+   'Local time for this screen': 'Местное время для этого экрана'
+   'local.cfg sets the nozzle size; edit it there': 'Размер сопла задаётся в local.cfg; измените его там'
++  'Log detail': 'Детализация журнала'
+   'material not set': 'материал не указан'
+   'Measure the shape of the bed': 'Измерение формы стола'
+   'Measures how long the bed keeps moving at that temperature. Takes 20-35 minutes; the bed must be empty and below 40 °C.': 'Измеряет, как долго стол смещается при этой температуре. Занимает 20-35 минут; стол должен быть пустым и холоднее 40 °C.'
+@@ -5275,6 +5277,8 @@ translations:
+   'Selecting {}': 'Выбор: {}'
+   'Self-check': 'Самопроверка'
+   'Self-check, PID, bed mesh, vibration, IFS, Z offset': 'Самопроверка, PID, сетка стола, вибрации, IFS, смещение по Z'
++  'Short': 'Краткий'
++  'Short: warnings and errors, and Klipper''s statistics once a minute. Extended: everything, for troubleshooting; the logs fill faster.': 'Краткий: предупреждения и ошибки, статистика Klipper раз в минуту. Подробный: всё, для поиска неисправностей; журналы заполняются быстрее.'
+   'Similar': 'Похожий'
+   'Similar colour': 'Похожий цвет'
+   'Since the bed was hot, one round a minute:': 'С момента нагрева стола, один замер в минуту:'
+diff --git a/ui_xml/settings_system_overlay.xml b/ui_xml/settings_system_overlay.xml
+index 9bb1e722d6..ff3e82e353 100644
+--- a/ui_xml/settings_system_overlay.xml
++++ b/ui_xml/settings_system_overlay.xml
+@@ -52,7 +52,19 @@
+                               label="Log Level" icon="console" description="Set logging verbosity for troubleshooting"
+                               options="Warn&#10;Info&#10;Debug&#10;Trace"
+                               options_tag="Warn&#10;Info&#10;Debug&#10;Trace" bind_selected="settings_log_level"
+-                              callback="on_log_level_changed"/>
++                              callback="on_log_level_changed">
++          <!-- Kiln OS: Log detail below sets this screen's level from Klipper's LOG_MODE -->
++          <bind_flag_if_eq subject="ad5x_log_available" flag="hidden" ref_value="1"/>
++        </setting_dropdown_row>
++        <!-- Kiln OS: Klipper's LOG_MODE (klipper/extras/ad5x_log.py) -->
++        <setting_dropdown_row name="row_ad5x_log_mode"
++                              label="Log detail" icon="console" options="Short&#10;Extended"
++                              options_tag="Short&#10;Extended"
++                              description="Short: warnings and errors, and Klipper's statistics once a minute. Extended: everything, for troubleshooting; the logs fill faster."
++                              bind_selected="ad5x_log_mode" callback="on_ad5x_log_mode_changed"
++                              disabled="ad5x_log_busy" dropdown_width="40%">
++          <bind_flag_if_eq subject="ad5x_log_available" flag="hidden" ref_value="0"/>
++        </setting_dropdown_row>
+         <!-- ================================================================== -->
+         <!-- RESTART -->
+         <!-- ================================================================== -->
+-- 
+2.56.0
+
