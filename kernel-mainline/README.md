@@ -45,7 +45,7 @@ Each patch must be acceptable to a mainline reviewer:
 
 ## Status
 
-**On the printer** (2026-11-09): 46 patches, checkpatch `--strict` clean,
+**On the printer** (2026-11-09): 47 patches, checkpatch `--strict` clean,
 every commit builds with `W=1`, `dt_binding_check` and `dtbs_check` clean.
 
 - **Boot to a serial console:** the kernel reaches `Waiting for root
@@ -95,6 +95,13 @@ every commit builds with `W=1`, `dt_binding_check` and `dtbs_check` clean.
   on it (rtw88 is a module and needs its firmware in the root file system).
 
 Generic fixes this SoC needed, in the series:
+
+- **UserLocal on XBurst II.** The Ingenic CPU feature overrides, written
+  for XBurst1 (which has no UserLocal register), forced it off, so every
+  thread pointer read from userspace (glibc's `rdhwr $29`, on each access
+  to thread-local data) trapped and was emulated. The X2600 has it; the
+  kernel now probes Config3 for it. A thread pointer read: 559 ns before,
+  2.8 ns after.
 
 - **Ingenic L2 cache maintenance.** On XBurst a secondary cache operation
   is still writing back when its instruction retires; mainline's DMA cache

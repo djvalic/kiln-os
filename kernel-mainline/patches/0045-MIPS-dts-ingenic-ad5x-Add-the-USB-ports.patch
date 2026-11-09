@@ -1,0 +1,88 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sun, 8 Nov 2026 19:43:18 -0700
+Subject: [PATCH 45/47] MIPS: dts: ingenic: ad5x: Add the USB ports
+
+The second USB controller runs the printer's internal USB hub, with the
+camera and the RTL8821CU Wi-Fi module behind it. The Wi-Fi module's
+power is switched by PB7 (the stock firmware turns it on when it loads
+the Wi-Fi driver); keep it on. The stock firmware ignores the VBUS
+overcurrent input of this port, so do the same.
+
+None of the display's USB ports reaches the OTG controller; set it up
+as the stock firmware does, as an OTG port with VBUS detected outside
+its PHY.
+---
+ arch/mips/boot/dts/ingenic/ad5x.dts | 48 +++++++++++++++++++++++++++++
+ 1 file changed, 48 insertions(+)
+
+diff --git a/arch/mips/boot/dts/ingenic/ad5x.dts b/arch/mips/boot/dts/ingenic/ad5x.dts
+index 23fc4581d..949335d43 100644
+--- a/arch/mips/boot/dts/ingenic/ad5x.dts
++++ b/arch/mips/boot/dts/ingenic/ad5x.dts
+@@ -43,6 +43,26 @@ rtos@fc00000 {
+ 			no-map;
+ 		};
+ 	};
++
++	vcc_3v3: regulator-3v3 {
++		compatible = "regulator-fixed";
++		regulator-name = "vcc-3v3";
++		regulator-min-microvolt = <3300000>;
++		regulator-max-microvolt = <3300000>;
++		regulator-always-on;
++	};
++
++	/* The RTL8821CU Wi-Fi module, behind the USB hub */
++	regulator-wifi {
++		compatible = "regulator-fixed";
++		regulator-name = "wifi-power";
++		regulator-min-microvolt = <3300000>;
++		regulator-max-microvolt = <3300000>;
++		gpio = <&gpb 7 GPIO_ACTIVE_HIGH>;
++		enable-active-high;
++		regulator-always-on;
++		vin-supply = <&vcc_3v3>;
++	};
+ };
+ 
+ &exclk {
+@@ -63,6 +83,20 @@ &msc0 {
+ 	status = "okay";
+ };
+ 
++/* OTG port: not on the display's USB ports; set up as the stock firmware does */
++&otg {
++	dr_mode = "otg";
++
++	status = "okay";
++};
++
++&otg_phy {
++	vcc-supply = <&vcc_3v3>;
++	ingenic,external-vbus-detect;
++
++	status = "okay";
++};
++
+ &pinctrl {
+ 	pins_mmc0: mmc0 {
+ 		function = "mmc0";
+@@ -124,3 +158,17 @@ &uart5 {
+ 
+ 	status = "okay";
+ };
++
++/* Host port: an internal USB hub with the camera and the Wi-Fi module */
++&usb {
++	dr_mode = "host";
++	disable-over-current;
++
++	status = "okay";
++};
++
++&usb_phy {
++	vcc-supply = <&vcc_3v3>;
++
++	status = "okay";
++};

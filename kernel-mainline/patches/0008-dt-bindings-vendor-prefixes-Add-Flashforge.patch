@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sun, 8 Nov 2026 11:21:04 -0700
+Subject: [PATCH 08/47] dt-bindings: vendor-prefixes: Add Flashforge
+
+Flashforge (Zhejiang Flashforge 3D Technology Co., Ltd.) makes 3D
+printers, among them the Adventurer 5X built around the Ingenic X2600
+SoC.
+---
+ Documentation/devicetree/bindings/vendor-prefixes.yaml | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/Documentation/devicetree/bindings/vendor-prefixes.yaml b/Documentation/devicetree/bindings/vendor-prefixes.yaml
+index ba2002969..df29e47a7 100644
+--- a/Documentation/devicetree/bindings/vendor-prefixes.yaml
++++ b/Documentation/devicetree/bindings/vendor-prefixes.yaml
+@@ -610,6 +610,8 @@ patternProperties:
+     description: Firefly
+   "^fitipower,.*":
+     description: Fitipower Integrated Technology Inc.
++  "^flashforge,.*":
++    description: Zhejiang Flashforge 3D Technology Co., Ltd.
+   "^flipkart,.*":
+     description: Flipkart Inc.
+   "^focaltech,.*":

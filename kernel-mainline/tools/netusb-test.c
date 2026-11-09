@@ -30,6 +30,7 @@
 #include <sys/mman.h>
 #include <stdint.h>
 #include <signal.h>
+#include <pthread.h>
 #include <sys/mount.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -444,6 +445,53 @@ static void mem_check(void)
 	}
 }
 
+/*
+ * Thread pointer reads, as glibc does them (rdhwr $29, UserLocal): native
+ * when the kernel enables UserLocal, else each one traps and is emulated.
+ * Also checks that thread-local data stays per thread.
+ */
+static __thread volatile int tls_var;
+
+static unsigned long read_tp(void)
+{
+	unsigned long tp;
+
+	__asm__ volatile(".set push\n.set mips32r2\nrdhwr %0, $29\n.set pop"
+			 : "=r"(tp));
+	return tp;
+}
+
+static void *tls_thread(void *arg)
+{
+	int i, bad = 0;
+
+	tls_var = (int)(long)arg;
+	for (i = 0; i < 100000; i++)
+		if (tls_var != (int)(long)arg)
+			bad++;
+	return (void *)(long)bad;
+}
+
+static void tls_check(void)
+{
+	unsigned long tp0 = read_tp(), x = 0;
+	pthread_t t1, t2;
+	void *b1, *b2;
+	double t0;
+	int i;
+
+	t0 = now();
+	for (i = 0; i < 1000000; i++)
+		x += read_tp();
+	t0 = now() - t0;
+	pthread_create(&t1, NULL, tls_thread, (void *)1L);
+	pthread_create(&t2, NULL, tls_thread, (void *)2L);
+	pthread_join(t1, &b1);
+	pthread_join(t2, &b2);
+	printf("tls: %.1f ns per thread pointer read (tp %#lx, sum %#lx), threads %s\n",
+	       t0 * 1e3, tp0, x, !b1 && !b2 ? "ok" : "BAD");
+}
+
 int main(void)
 {
 	int s, i, n, ls, lo;
@@ -459,6 +507,7 @@ int main(void)
 	setvbuf(stdout, NULL, _IONBF, 0);
 
 	printf("\n=== netusb-test\n");
+	tls_check();
 	if (fork() == 0)
 		mem_check();
 	sleep(3);	/* let the fill finish before the USB tests */
