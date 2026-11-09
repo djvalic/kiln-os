@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sun, 8 Nov 2026 14:23:55 -0700
+Subject: [PATCH 29/49] serial: 8250_ingenic: Support RS-485
+
+Ingenic boards put half-duplex RS-485 transceivers on their UARTs, the
+Flashforge Adventurer 5X its filament changer, with the transceiver's
+driver enable on a GPIO. Use the 8250 core's software RS-485 support,
+which drives RTS (rts-gpios through mctrl_gpio) around each transmission.
+
+The UART raises no interrupt once its shift register is empty, only when
+the FIFO is (THRE): set UART_CAP_NOTEMT so that the driver enable is
+released one frame after the FIFO empties, not with the last byte still
+being sent.
+---
+ drivers/tty/serial/8250/8250_ingenic.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/tty/serial/8250/8250_ingenic.c b/drivers/tty/serial/8250/8250_ingenic.c
+index fbde19d31..7e37f21ee 100644
+--- a/drivers/tty/serial/8250/8250_ingenic.c
++++ b/drivers/tty/serial/8250/8250_ingenic.c
+@@ -411,7 +411,12 @@ static int ingenic_uart_probe(struct platform_device *pdev)
+ 	uart.port.serial_in = ingenic_uart_serial_in;
+ 	uart.port.dev = &pdev->dev;
+ 	uart.tx_loadsz = cdata->tx_loadsz;
+-	uart.capabilities = UART_CAP_FIFO | UART_CAP_RTOIE;
++	/* No interrupt when the transmitter is empty, only the FIFO (THRE) */
++	uart.capabilities = UART_CAP_FIFO | UART_CAP_RTOIE | UART_CAP_NOTEMT;
++	uart.port.rs485_config = serial8250_em485_config;
++	uart.port.rs485_supported = serial8250_em485_supported;
++	uart.rs485_start_tx = serial8250_em485_start_tx;
++	uart.rs485_stop_tx = serial8250_em485_stop_tx;
+ 
+ 	err = uart_read_port_properties(&uart.port);
+ 	if (err)

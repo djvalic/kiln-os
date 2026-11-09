@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sun, 8 Nov 2026 19:41:59 -0700
+Subject: [PATCH 41/49] dt-bindings: usb: dwc2: Add Ingenic X2600
+
+The X2600 has two DWC2 controllers. Their cores are what the X2000
+parameters of the driver assume (16 host channels, a 16-bit UTMI
+interface, room for its host FIFOs in their 3576 words of FIFO RAM),
+so the X2000 compatible serves as fallback.
+---
+ Documentation/devicetree/bindings/usb/dwc2.yaml | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/Documentation/devicetree/bindings/usb/dwc2.yaml b/Documentation/devicetree/bindings/usb/dwc2.yaml
+index 6c3a10991..a748046bd 100644
+--- a/Documentation/devicetree/bindings/usb/dwc2.yaml
++++ b/Documentation/devicetree/bindings/usb/dwc2.yaml
+@@ -25,6 +25,9 @@ properties:
+       - const: ingenic,x1700-otg
+       - const: ingenic,x1830-otg
+       - const: ingenic,x2000-otg
++      - items:
++          - const: ingenic,x2600-otg
++          - const: ingenic,x2000-otg
+       - items:
+           - const: rockchip,rk3066-usb
+           - const: snps,dwc2

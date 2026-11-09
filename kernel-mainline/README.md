@@ -45,7 +45,7 @@ Each patch must be acceptable to a mainline reviewer:
 
 ## Status
 
-**On the printer** (2026-11-09): 47 patches, checkpatch `--strict` clean,
+**On the printer** (2026-11-09): 49 patches, checkpatch `--strict` clean,
 every commit builds with `W=1`, `dt_binding_check` and `dtbs_check` clean.
 
 - **Boot to a serial console:** the kernel reaches `Waiting for root
@@ -102,6 +102,14 @@ Generic fixes this SoC needed, in the series:
   to thread-local data) trapped and was emulated. The X2600 has it; the
   kernel now probes Config3 for it. A thread pointer read: 559 ns before,
   2.8 ns after.
+- **Physically tagged icache on XBurst II.** The same overrides, and the
+  probe, treated every XBurst icache as virtually tagged, which only
+  XBurst1's is; the kernel then flushed it on context switches without
+  need. 3% off a pipe round trip; 2400 fork + exec runs of two programs
+  at the same addresses all ran the right one.
+- **-O2.** The defconfig builds the kernel for performance instead of
+  size: fork 690 -> 510 us, fork + exec 1946 -> 1534 us, loopback TCP
+  306 -> 365 MB/s, for a 12% larger image.
 
 - **Ingenic L2 cache maintenance.** On XBurst a secondary cache operation
   is still writing back when its instruction retires; mainline's DMA cache

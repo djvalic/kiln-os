@@ -1,0 +1,64 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sun, 8 Nov 2026 19:44:20 -0700
+Subject: [PATCH 48/49] MIPS: configs: ad5x: Enable networking, Ethernet and
+ USB
+
+Enable IPv4 networking, the Ethernet MAC and its IP101G PHY, and both
+USB ports with their PHYs; the gadget framework makes the DWC2 driver
+dual-role, for the OTG port. The Wi-Fi module's driver (rtw88) is built
+as modules, so that it probes once its firmware can be loaded from the
+root file system.
+---
+ arch/mips/configs/ad5x_defconfig | 21 ++++++++++++++++++++-
+ 1 file changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/arch/mips/configs/ad5x_defconfig b/arch/mips/configs/ad5x_defconfig
+index b1e8f927f..495621263 100644
+--- a/arch/mips/configs/ad5x_defconfig
++++ b/arch/mips/configs/ad5x_defconfig
+@@ -16,8 +16,22 @@ CONFIG_MIPS_O32_FP64_SUPPORT=y
+ CONFIG_MIPS_CMDLINE_BUILTIN_EXTEND=y
+ # CONFIG_SUSPEND is not set
+ # CONFIG_SECCOMP is not set
++CONFIG_MODULES=y
++CONFIG_MODULE_UNLOAD=y
++CONFIG_NET=y
++CONFIG_PACKET=y
++CONFIG_UNIX=y
++CONFIG_INET=y
++CONFIG_IP_MULTICAST=y
++CONFIG_CFG80211=m
++CONFIG_MAC80211=m
+ CONFIG_DEVTMPFS=y
+ CONFIG_DEVTMPFS_MOUNT=y
++CONFIG_NETDEVICES=y
++CONFIG_STMMAC_ETH=y
++CONFIG_ICPLUS_PHY=y
++CONFIG_RTW88=m
++CONFIG_RTW88_8821CU=m
+ # CONFIG_INPUT_KEYBOARD is not set
+ # CONFIG_INPUT_MOUSE is not set
+ # CONFIG_SERIO is not set
+@@ -30,8 +44,12 @@ CONFIG_SERIAL_8250_INGENIC=y
+ CONFIG_SERIAL_OF_PLATFORM=y
+ CONFIG_GPIO_SYSFS=y
+ # CONFIG_HWMON is not set
++CONFIG_REGULATOR=y
++CONFIG_REGULATOR_FIXED_VOLTAGE=y
+ # CONFIG_HID is not set
+-# CONFIG_USB_SUPPORT is not set
++CONFIG_USB=y
++CONFIG_USB_DWC2=y
++CONFIG_USB_GADGET=y
+ CONFIG_MMC=y
+ CONFIG_MMC_SDHCI=y
+ CONFIG_MMC_SDHCI_PLTFM=y
+@@ -41,6 +59,7 @@ CONFIG_DMA_JZ4780=y
+ # CONFIG_INGENIC_TIMER is not set
+ CONFIG_INGENIC_X2600_OST=y
+ # CONFIG_IOMMU_SUPPORT is not set
++CONFIG_PHY_INGENIC_USB=y
+ CONFIG_EXT4_FS=y
+ CONFIG_TMPFS=y
+ CONFIG_SQUASHFS=y

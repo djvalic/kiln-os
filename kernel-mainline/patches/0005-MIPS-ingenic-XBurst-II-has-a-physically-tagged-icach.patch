@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Mon, 9 Nov 2026 02:44:43 -0700
+Subject: [PATCH 05/49] MIPS: ingenic: XBurst II has a physically tagged icache
+
+The Ingenic CPU support treats every XBurst instruction cache as
+virtually tagged: the feature overrides, written for the first XBurst
+SoCs, fix cpu_has_vtag_icache to 1, and the probe marks the icache so.
+That holds for XBurst1, but not for the XBurst II core of the X2600,
+whose icache Ingenic's own kernel treats as physically tagged (its
+X2600 feature overrides set cpu_has_vtag_icache to 0). With a virtually
+tagged icache assumed, the kernel flushes it where this core does not
+need it, on context switches among others.
+
+Mark the icache virtually tagged on XBurst1 only, and let the flag
+decide instead of the override. On the X2600 a pipe round trip between
+two processes (two context switches) takes 3% less: 16.4 instead of
+17.0 us. 2400 fork + exec runs alternating between two programs at the
+same addresses all ran the right one.
+---
+ arch/mips/include/asm/mach-ingenic/cpu-feature-overrides.h | 1 -
+ arch/mips/kernel/cpu-probe.c                               | 5 +++--
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/arch/mips/include/asm/mach-ingenic/cpu-feature-overrides.h b/arch/mips/include/asm/mach-ingenic/cpu-feature-overrides.h
+index 08d6e2349..cbcaf7b17 100644
+--- a/arch/mips/include/asm/mach-ingenic/cpu-feature-overrides.h
++++ b/arch/mips/include/asm/mach-ingenic/cpu-feature-overrides.h
+@@ -27,7 +27,6 @@
+ #define cpu_has_mips3d 0
+ #define cpu_has_smartmips 0
+ #define kernel_uses_llsc	1
+-#define cpu_has_vtag_icache	1
+ #define cpu_has_dc_aliases	0
+ #define cpu_has_ic_fills_f_dc	0
+ #define cpu_has_pindexed_dcache 0
+diff --git a/arch/mips/kernel/cpu-probe.c b/arch/mips/kernel/cpu-probe.c
+index b976ef5cc..f8e654e82 100644
+--- a/arch/mips/kernel/cpu-probe.c
++++ b/arch/mips/kernel/cpu-probe.c
+@@ -1769,8 +1769,9 @@ static inline void cpu_probe_ingenic(struct cpuinfo_mips *c, unsigned int cpu)
+ 	c->options &= ~MIPS_CPU_COUNTER;
+ 	BUG_ON(__builtin_constant_p(cpu_has_counter) && cpu_has_counter);
+ 
+-	/* XBurst has virtually tagged icache */
+-	c->icache.flags |= MIPS_CACHE_VTAG;
++	/* XBurst1 has a virtually tagged icache, XBurst II does not */
++	if ((c->processor_id & PRID_IMP_MASK) != PRID_IMP_XBURST2)
++		c->icache.flags |= MIPS_CACHE_VTAG;
+ 
+ 	switch (c->processor_id & PRID_IMP_MASK) {
+ 

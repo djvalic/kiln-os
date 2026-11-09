@@ -12,7 +12,10 @@
  *       dd if=/dev/zero bs=1M count=64 | nc -N 192.168.1.77 5001
  *       nc 192.168.1.77 5002 | pv > /dev/null
  *
- *   mipsel-linux-gcc -static -O2 -o init netusb-test.c
+ *   mipsel-linux-gcc -static -O2 -pthread -o init netusb-test.c
+ *
+ * The kernel benchmarks at the end fork + exec /t1 and /t2, built from
+ * exec-target.c (see there); put them in the initramfs next to /init.
  */
 #include <arpa/inet.h>
 #include <dirent.h>
@@ -31,6 +34,7 @@
 #include <stdint.h>
 #include <signal.h>
 #include <pthread.h>
+#include <sys/wait.h>
 #include <sys/mount.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -492,6 +496,148 @@ static void tls_check(void)
 	       t0 * 1e3, tp0, x, !b1 && !b2 ? "ok" : "BAD");
 }
 
+/*
+ * Kernel micro-benchmarks, each run 3 times, best kept: system call,
+ * context switch (pipe ping-pong), fork, fork + exec of two small programs
+ * (/t1, /t2: different code at the same addresses, so a stale I-cache would
+ * run the wrong one and return the wrong code) and loopback TCP.
+ */
+static double best_of(double (*fn)(void))
+{
+	double b = 1e30, t;
+	int i;
+
+	for (i = 0; i < 3; i++) {
+		t = fn();
+		if (t < b)
+			b = t;
+	}
+	return b;
+}
+
+static double b_syscall(void)
+{
+	double t0 = now();
+	int i;
+
+	for (i = 0; i < 200000; i++)
+		getppid();
+	return (now() - t0) / 200000 * 1e9;	/* ns */
+}
+
+static double b_pipe(void)
+{
+	int a[2], b[2], i;
+	char c = 0;
+	double t0;
+	pid_t p;
+
+	if (pipe(a) || pipe(b))
+		return -1;
+	p = fork();
+	if (!p) {
+		for (i = 0; i < 20000; i++)
+			if (read(a[0], &c, 1) != 1 || write(b[1], &c, 1) != 1)
+				break;
+		_exit(0);
+	}
+	t0 = now();
+	for (i = 0; i < 20000; i++)
+		if (write(a[1], &c, 1) != 1 || read(b[0], &c, 1) != 1)
+			break;
+	t0 = now() - t0;
+	waitpid(p, NULL, 0);
+	close(a[0]); close(a[1]); close(b[0]); close(b[1]);
+	return t0 / 20000 * 1e6;	/* us per round trip */
+}
+
+static double b_fork(void)
+{
+	double t0 = now();
+	int i;
+
+	for (i = 0; i < 1000; i++) {
+		pid_t p = fork();
+
+		if (!p)
+			_exit(0);
+		waitpid(p, NULL, 0);
+	}
+	return (now() - t0) / 1000 * 1e6;	/* us */
+}
+
+static int exec_bad;
+
+static double b_exec(void)
+{
+	double t0 = now();
+	int i, st;
+
+	for (i = 0; i < 300; i++) {
+		const char *prog = i & 1 ? "/t2" : "/t1";
+		pid_t p = fork();
+
+		if (!p) {
+			execl(prog, prog, (char *)NULL);
+			_exit(99);
+		}
+		waitpid(p, &st, 0);
+		if (!WIFEXITED(st) || WEXITSTATUS(st) != (i & 1 ? 22 : 11))
+			exec_bad++;
+	}
+	return (now() - t0) / 300 * 1e6;	/* us */
+}
+
+static double b_lo(void)
+{
+	static char buf[65536];
+	struct sockaddr_in a = { .sin_family = AF_INET, .sin_port = htons(5099) };
+	unsigned long long total = 0, want = 32ULL << 20;
+	int one = 1, ls, c, s;
+	double t0;
+	pid_t p;
+	ssize_t n;
+
+	inet_pton(AF_INET, "127.0.0.1", &a.sin_addr);
+	ls = socket(AF_INET, SOCK_STREAM, 0);
+	setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+	if (bind(ls, (struct sockaddr *)&a, sizeof(a)) || listen(ls, 1))
+		return -1;
+	p = fork();
+	if (!p) {
+		s = socket(AF_INET, SOCK_STREAM, 0);
+		if (connect(s, (struct sockaddr *)&a, sizeof(a)))
+			_exit(1);
+		while (total < want && (n = write(s, buf, sizeof(buf))) > 0)
+			total += n;
+		_exit(0);
+	}
+	c = accept(ls, NULL, NULL);
+	t0 = now();
+	while ((n = read(c, buf, sizeof(buf))) > 0)
+		total += n;
+	t0 = now() - t0;
+	close(c);
+	close(ls);
+	waitpid(p, NULL, 0);
+	return total / t0 / 1e6;	/* MB/s */
+}
+
+static void benchmarks(void)
+{
+	double lo = 0, t;
+	int i;
+
+	for (i = 0; i < 3; i++) {	/* throughput: best is highest */
+		t = b_lo();
+		if (t > lo)
+			lo = t;
+	}
+	printf("bench: syscall %.0f ns, pipe round trip %.1f us, fork %.0f us, fork+exec %.0f us (%d wrong exits), loopback TCP %.1f MB/s\n",
+	       best_of(b_syscall), best_of(b_pipe), best_of(b_fork),
+	       best_of(b_exec), exec_bad, lo);
+}
+
 int main(void)
 {
 	int s, i, n, ls, lo;
@@ -560,6 +706,7 @@ int main(void)
 
 	ls = listen_on(5001);
 	lo = listen_on(5002);
+	benchmarks();
 	printf("=== netusb ready: sink on %s:5001, source on :5002\n", ETH_ADDR);
 	p[0] = (struct pollfd){ .fd = ls, .events = POLLIN };
 	p[1] = (struct pollfd){ .fd = lo, .events = POLLIN };

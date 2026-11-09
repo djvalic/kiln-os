@@ -1,0 +1,94 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sun, 8 Nov 2026 11:24:10 -0700
+Subject: [PATCH 15/49] clk: ingenic: cgu: Support a second PLL post-divider
+
+The PLLs of the Ingenic X2600 have two post-VCO dividers in series,
+OD1 and OD0, each holding its divider value: Fout = Fvco / (OD1 * OD0).
+The single od field with its encoding table cannot describe that: it
+would have to list every OD1/OD0 pair, and recalc_rate() hits BUG_ON()
+for any pair a boot loader programmed that the table lacks.
+
+Add an optional second divider field, od2, read as a plain value in
+recalc_rate() and set to 1 in set_rate(), so the first field keeps
+selecting the rate. PLLs without it are unchanged.
+---
+ drivers/clk/ingenic/cgu.c | 18 ++++++++++++++++--
+ drivers/clk/ingenic/cgu.h |  6 ++++++
+ 2 files changed, 22 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/clk/ingenic/cgu.c b/drivers/clk/ingenic/cgu.c
+index 41e4c6913..25dba6674 100644
+--- a/drivers/clk/ingenic/cgu.c
++++ b/drivers/clk/ingenic/cgu.c
+@@ -83,7 +83,7 @@ ingenic_pll_recalc_rate(struct clk_hw *hw, unsigned long parent_rate)
+ 	const struct ingenic_cgu_clk_info *clk_info = to_clk_info(ingenic_clk);
+ 	struct ingenic_cgu *cgu = ingenic_clk->cgu;
+ 	const struct ingenic_cgu_pll_info *pll_info;
+-	unsigned m, n, od, od_enc = 0;
++	unsigned int m, n, od, od2 = 1, od_enc = 0;
+ 	bool bypass;
+ 	u32 ctl;
+ 
+@@ -102,6 +102,11 @@ ingenic_pll_recalc_rate(struct clk_hw *hw, unsigned long parent_rate)
+ 		od_enc &= GENMASK(pll_info->od_bits - 1, 0);
+ 	}
+ 
++	if (pll_info->od2_bits > 0) {
++		od2 = ctl >> pll_info->od2_shift;
++		od2 &= GENMASK(pll_info->od2_bits - 1, 0);
++	}
++
+ 	if (pll_info->bypass_bit >= 0) {
+ 		ctl = readl(cgu->base + pll_info->bypass_reg);
+ 
+@@ -122,8 +127,12 @@ ingenic_pll_recalc_rate(struct clk_hw *hw, unsigned long parent_rate)
+ 		BUG_ON(od == pll_info->od_max);
+ 	od++;
+ 
++	/* A second post-VCO divider of 0 is not a valid setting */
++	if (!od2)
++		return 0;
++
+ 	return div_u64((u64)parent_rate * m * pll_info->rate_multiplier,
+-		n * od);
++		n * od * od2);
+ }
+ 
+ static void
+@@ -232,6 +241,11 @@ ingenic_pll_set_rate(struct clk_hw *hw, unsigned long req_rate,
+ 		ctl |= pll_info->od_encoding[od - 1] << pll_info->od_shift;
+ 	}
+ 
++	if (pll_info->od2_bits > 0) {
++		ctl &= ~(GENMASK(pll_info->od2_bits - 1, 0) << pll_info->od2_shift);
++		ctl |= 1 << pll_info->od2_shift;
++	}
++
+ 	writel(ctl, cgu->base + pll_info->reg);
+ 
+ 	if (pll_info->set_rate_hook)
+diff --git a/drivers/clk/ingenic/cgu.h b/drivers/clk/ingenic/cgu.h
+index 0d417d69d..b184c58f5 100644
+--- a/drivers/clk/ingenic/cgu.h
++++ b/drivers/clk/ingenic/cgu.h
+@@ -39,6 +39,11 @@
+  * @od_encoding: a pointer to an array mapping post-VCO divider values to
+  *               their encoded values in the PLL control register, or -1 for
+  *               unsupported values
++ * @od2_shift: the index of the lowest bit of a second post-VCO divider, in
++ *             series with the first one and holding the divider value itself
++ * @od2_bits: the size of the second post-VCO divider field in bits, or 0 if
++ *	      there is no such field. The PLL rate is set with this divider
++ *	      at 1.
+  * @bypass_reg: the offset of the bypass control register within the CGU
+  * @bypass_bit: the index of the bypass bit in the PLL control register, or
+  *              -1 if there is no bypass bit
+@@ -56,6 +61,7 @@ struct ingenic_cgu_pll_info {
+ 	u8 m_shift, m_bits, m_offset;
+ 	u8 n_shift, n_bits, n_offset;
+ 	u8 od_shift, od_bits, od_max;
++	u8 od2_shift, od2_bits;
+ 	unsigned bypass_reg;
+ 	s8 bypass_bit;
+ 	s8 enable_bit;

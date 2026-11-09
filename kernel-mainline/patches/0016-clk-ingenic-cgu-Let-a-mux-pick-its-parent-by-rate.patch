@@ -1,0 +1,150 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sun, 8 Nov 2026 16:17:42 -0700
+Subject: [PATCH 16/49] clk: ingenic: cgu: Let a mux pick its parent by rate
+
+The core only ever divides the parent a mux is on. Where the dividers
+cannot reach a requested rate from that parent, the rate request fails or
+comes out far off: the X2600 MSC clocks run from MPLL for the card clock,
+but their divider cannot go below 1.7 MHz from it, while card
+identification needs 400 kHz, which the 24 MHz crystal gives.
+
+Add a by_rate flag to the mux info. With it, determine_rate looks at
+every parent and picks the one giving the highest rate not above the
+request (the lowest rate available if none is), the way an MMC host wants
+its card clock. CLK_SET_RATE_NO_REPARENT still keeps the parent. The
+divider calculation now takes the parent to check the bypass mask
+against, since it can be another one than the current parent.
+
+No clock sets the flag yet, so nothing changes for the existing SoCs.
+---
+ drivers/clk/ingenic/cgu.c | 69 +++++++++++++++++++++++++++++++++++----
+ drivers/clk/ingenic/cgu.h |  4 +++
+ 2 files changed, 66 insertions(+), 7 deletions(-)
+
+diff --git a/drivers/clk/ingenic/cgu.c b/drivers/clk/ingenic/cgu.c
+index 25dba6674..0605a969a 100644
+--- a/drivers/clk/ingenic/cgu.c
++++ b/drivers/clk/ingenic/cgu.c
+@@ -472,14 +472,11 @@ ingenic_clk_calc_hw_div(const struct ingenic_cgu_clk_info *clk_info,
+ }
+ 
+ static unsigned
+-ingenic_clk_calc_div(struct clk_hw *hw,
+-		     const struct ingenic_cgu_clk_info *clk_info,
++ingenic_clk_calc_div(const struct ingenic_cgu_clk_info *clk_info, u8 parent,
+ 		     unsigned long parent_rate, unsigned long req_rate)
+ {
+ 	unsigned int div, hw_div;
+-	u8 parent;
+ 
+-	parent = ingenic_clk_get_parent(hw);
+ 	if (clk_info->div.bypass_mask & BIT(parent))
+ 		return 1;
+ 
+@@ -507,6 +504,58 @@ ingenic_clk_calc_div(struct clk_hw *hw,
+ 	return div;
+ }
+ 
++/*
++ * Pick the parent and divider giving the highest rate not above the
++ * request, or the lowest rate any parent can give if all are above it.
++ */
++static int
++ingenic_clk_determine_rate_by_parent(struct clk_hw *hw,
++				     const struct ingenic_cgu_clk_info *clk_info,
++				     struct clk_rate_request *req)
++{
++	unsigned long parent_rate, rate, best_rate = 0, low_rate = ULONG_MAX;
++	struct clk_hw *parent, *best = NULL, *low = NULL;
++	unsigned long best_parent_rate = 0, low_parent_rate = 0;
++	unsigned int i, div;
++
++	for (i = 0; i < clk_hw_get_num_parents(hw); i++) {
++		parent = clk_hw_get_parent_by_index(hw, i);
++		if (!parent)
++			continue;
++
++		parent_rate = clk_hw_get_rate(parent);
++		if (!parent_rate)
++			continue;
++
++		div = ingenic_clk_calc_div(clk_info, i, parent_rate, req->rate);
++		rate = DIV_ROUND_UP(parent_rate, div);
++
++		if (rate <= req->rate && rate > best_rate) {
++			best = parent;
++			best_rate = rate;
++			best_parent_rate = parent_rate;
++		}
++		if (rate < low_rate) {
++			low = parent;
++			low_rate = rate;
++			low_parent_rate = parent_rate;
++		}
++	}
++
++	if (!best) {
++		if (!low)
++			return -EINVAL;
++		best = low;
++		best_rate = low_rate;
++		best_parent_rate = low_parent_rate;
++	}
++
++	req->best_parent_hw = best;
++	req->best_parent_rate = best_parent_rate;
++	req->rate = best_rate;
++	return 0;
++}
++
+ static int ingenic_clk_determine_rate(struct clk_hw *hw,
+ 				      struct clk_rate_request *req)
+ {
+@@ -514,9 +563,14 @@ static int ingenic_clk_determine_rate(struct clk_hw *hw,
+ 	const struct ingenic_cgu_clk_info *clk_info = to_clk_info(ingenic_clk);
+ 	unsigned int div = 1;
+ 
++	if ((clk_info->type & CGU_CLK_MUX) && (clk_info->type & CGU_CLK_DIV) &&
++	    clk_info->mux.by_rate &&
++	    !(clk_hw_get_flags(hw) & CLK_SET_RATE_NO_REPARENT))
++		return ingenic_clk_determine_rate_by_parent(hw, clk_info, req);
++
+ 	if (clk_info->type & CGU_CLK_DIV)
+-		div = ingenic_clk_calc_div(hw, clk_info, req->best_parent_rate,
+-					   req->rate);
++		div = ingenic_clk_calc_div(clk_info, ingenic_clk_get_parent(hw),
++					   req->best_parent_rate, req->rate);
+ 	else if (clk_info->type & CGU_CLK_FIXDIV)
+ 		div = clk_info->fixdiv.div;
+ 	else if (clk_hw_can_set_rate_parent(hw))
+@@ -549,7 +603,8 @@ ingenic_clk_set_rate(struct clk_hw *hw, unsigned long req_rate,
+ 	int ret = 0;
+ 
+ 	if (clk_info->type & CGU_CLK_DIV) {
+-		div = ingenic_clk_calc_div(hw, clk_info, parent_rate, req_rate);
++		div = ingenic_clk_calc_div(clk_info, ingenic_clk_get_parent(hw),
++					   parent_rate, req_rate);
+ 		rate = DIV_ROUND_UP(parent_rate, div);
+ 
+ 		if (rate != req_rate)
+diff --git a/drivers/clk/ingenic/cgu.h b/drivers/clk/ingenic/cgu.h
+index b184c58f5..82ba18828 100644
+--- a/drivers/clk/ingenic/cgu.h
++++ b/drivers/clk/ingenic/cgu.h
+@@ -79,11 +79,15 @@ struct ingenic_cgu_pll_info {
+  * @shift: number of bits to shift the mux value by (ie. the index of
+  *         the lowest bit of the mux value within its control register)
+  * @bits: the size of the mux value in bits
++ * @by_rate: on a rate change, switch to the parent giving the highest rate
++ *           not above the requested one (for a clock that also divides);
++ *           unless the mux is glitch-free, only while the clock is gated
+  */
+ struct ingenic_cgu_mux_info {
+ 	unsigned reg;
+ 	u8 shift;
+ 	u8 bits;
++	bool by_rate;
+ };
+ 
+ /**

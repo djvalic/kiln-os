@@ -1,0 +1,92 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sun, 8 Nov 2026 11:37:01 -0700
+Subject: [PATCH 25/49] MIPS: dts: ingenic: Add Flashforge Adventurer 5X
+
+Add the device tree of the Flashforge Adventurer 5X 3D printer, built
+around the Ingenic X2600 with 512 MiB of DDR (256 MiB at 0 and 256 MiB
+at 0x30000000). The areas the stock firmware keeps for its media drivers
+and for the firmware of the SoC's RISC-V core are reserved.
+
+For now it enables the debug console on UART0 (PE9 to PE12).
+---
+ arch/mips/boot/dts/ingenic/Makefile |  1 +
+ arch/mips/boot/dts/ingenic/ad5x.dts | 60 +++++++++++++++++++++++++++++
+ 2 files changed, 61 insertions(+)
+ create mode 100644 arch/mips/boot/dts/ingenic/ad5x.dts
+
+diff --git a/arch/mips/boot/dts/ingenic/Makefile b/arch/mips/boot/dts/ingenic/Makefile
+index 6e674f1a3..f22fa84b0 100644
+--- a/arch/mips/boot/dts/ingenic/Makefile
++++ b/arch/mips/boot/dts/ingenic/Makefile
+@@ -5,3 +5,4 @@ dtb-$(CONFIG_JZ4770_GCW0)	+= gcw0.dtb
+ dtb-$(CONFIG_JZ4780_CI20)	+= ci20.dtb
+ dtb-$(CONFIG_X1000_CU1000_NEO)	+= cu1000-neo.dtb
+ dtb-$(CONFIG_X1830_CU1830_NEO)	+= cu1830-neo.dtb
++dtb-$(CONFIG_X2600_FLASHFORGE_AD5X)	+= ad5x.dtb
+diff --git a/arch/mips/boot/dts/ingenic/ad5x.dts b/arch/mips/boot/dts/ingenic/ad5x.dts
+new file mode 100644
+index 000000000..75362aec7
+--- /dev/null
++++ b/arch/mips/boot/dts/ingenic/ad5x.dts
+@@ -0,0 +1,60 @@
++// SPDX-License-Identifier: GPL-2.0
++/dts-v1/;
++
++#include "x2600.dtsi"
++
++/ {
++	compatible = "flashforge,ad5x", "ingenic,x2600";
++	model = "Flashforge Adventurer 5X";
++
++	aliases {
++		serial0 = &uart0;
++	};
++
++	chosen {
++		stdout-path = "serial0:115200n8";
++	};
++
++	memory@0 {
++		device_type = "memory";
++		reg = <0x00000000 0x10000000>,
++		      <0x30000000 0x10000000>;
++	};
++
++	reserved-memory {
++		#address-cells = <1>;
++		#size-cells = <1>;
++		ranges;
++
++		/* Kept by the stock firmware for its media drivers ("rmem") */
++		media@ec00000 {
++			reg = <0x0ec00000 0x01000000>;
++			no-map;
++		};
++
++		/* Firmware of the SoC's RISC-V core ("rtos_size") */
++		rtos@fc00000 {
++			reg = <0x0fc00000 0x00400000>;
++			no-map;
++		};
++	};
++};
++
++&exclk {
++	clock-frequency = <24000000>;
++};
++
++&pinctrl {
++	pins_uart0: uart0 {
++		function = "uart0";
++		groups = "uart0-e";
++	};
++};
++
++/* Debug console */
++&uart0 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pins_uart0>;
++
++	status = "okay";
++};
