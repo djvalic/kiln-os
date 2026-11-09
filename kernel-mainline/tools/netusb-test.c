@@ -17,6 +17,7 @@
  * The kernel benchmarks at the end fork + exec /t1 and /t2, built from
  * exec-target.c (see there); put them in the initramfs next to /init.
  */
+#define _GNU_SOURCE
 #include <arpa/inet.h>
 #include <dirent.h>
 #include <errno.h>
@@ -26,10 +27,12 @@
 #include <linux/wireless.h>
 #include <netinet/in.h>
 #include <poll.h>
+#include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/cachectl.h>
 #include <sys/mman.h>
 #include <stdint.h>
 #include <signal.h>
@@ -638,6 +641,273 @@ static void benchmarks(void)
 	       best_of(b_exec), exec_bad, lo);
 }
 
+/*
+ * SMP checks: which CPUs are online; a CPU-bound loop on both CPUs at once
+ * against one; and stress for what SMP relies on, two threads pinned to
+ * different CPUs each time: atomic increments (LL/SC), a mutex, message
+ * passing through release/acquire, and TLB shootdowns (one thread maps,
+ * fills and unmaps memory while the other keeps checking its own).
+ */
+static void pin(int cpu)
+{
+	cpu_set_t m;
+
+	CPU_ZERO(&m);
+	CPU_SET(cpu, &m);
+	sched_setaffinity(0, sizeof(m), &m);
+}
+
+static volatile unsigned long spin_sink;
+
+static void spin(void)
+{
+	unsigned long i, x = 0;
+
+	for (i = 0; i < 100000000; i++)
+		x += i ^ (x >> 3);
+	spin_sink = x;
+}
+
+static double spin_on(int ncpu)
+{
+	double t0 = now();
+	int i;
+
+	for (i = 0; i < ncpu; i++)
+		if (!fork()) {
+			pin(i);
+			spin();
+			_exit(0);
+		}
+	for (i = 0; i < ncpu; i++)
+		wait(NULL);
+	return now() - t0;
+}
+
+#define SMP_N	2000000
+
+static unsigned long at_count, mx_count;
+static pthread_mutex_t mx = PTHREAD_MUTEX_INITIALIZER;
+static volatile int stop_flag;
+
+/* message passing: payload written, then published with release */
+static int mp_data[16];
+static int mp_seq, mp_ack;
+static unsigned long mp_bad;
+
+/* TLB shootdowns */
+static unsigned long tlb_bad, tlb_maps;
+
+static void *smp_thread(void *arg)
+{
+	long id = (long)arg;
+	int i, k, v;
+
+	pin(id);
+
+	for (i = 0; i < SMP_N; i++)
+		__atomic_fetch_add(&at_count, 1, __ATOMIC_RELAXED);
+	for (i = 0; i < SMP_N / 4; i++) {
+		pthread_mutex_lock(&mx);
+		mx_count++;
+		pthread_mutex_unlock(&mx);
+	}
+
+	/* message passing: thread 0 sends, thread 1 checks */
+	for (v = 1; v <= 200000; v++) {
+		if (id == 0) {
+			for (k = 0; k < 16; k++)
+				mp_data[k] = v;
+			__atomic_store_n(&mp_seq, v, __ATOMIC_RELEASE);
+			while (__atomic_load_n(&mp_ack, __ATOMIC_ACQUIRE) != v)
+				;
+		} else {
+			while (__atomic_load_n(&mp_seq, __ATOMIC_ACQUIRE) != v)
+				;
+			for (k = 0; k < 16; k++)
+				if (mp_data[k] != v)
+					mp_bad++;
+			__atomic_store_n(&mp_ack, v, __ATOMIC_RELEASE);
+		}
+	}
+
+	/* TLB shootdowns: thread 0 maps and unmaps, thread 1 checks a buffer */
+	if (id == 0) {
+		double t0 = now();
+
+		while (now() - t0 < 3) {
+			unsigned int *p = mmap(NULL, 65536, PROT_READ | PROT_WRITE,
+					       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+			if (p == MAP_FAILED)
+				break;
+			for (k = 0; k < 16384; k += 1024)
+				p[k] = k ^ 0x5a5a5a5a;
+			for (k = 0; k < 16384; k += 1024)
+				if (p[k] != (k ^ 0x5a5a5a5a))
+					tlb_bad++;
+			munmap(p, 65536);
+			tlb_maps++;
+		}
+		stop_flag = 1;
+	} else {
+		static unsigned int buf[65536];
+		unsigned int r = 0;
+
+		while (!stop_flag) {
+			for (k = 0; k < 65536; k += 1024)
+				buf[k] = r + k;
+			for (k = 0; k < 65536; k += 1024)
+				if (buf[k] != r + k)
+					tlb_bad++;
+			r++;
+		}
+	}
+	return NULL;
+}
+
+/*
+ * Cross-CPU instruction cache coherence: thread 1 (CPU 1) keeps running a
+ * function in a buffer that thread 0 (CPU 0) rewrites, flushing it with
+ * cacheflush() on its own CPU, before telling thread 1 to call it again.
+ * Thread 1 must then get the new value. When the kernel performs the
+ * flush only on the calling CPU, this holds only if the hardware applies
+ * cache instructions to both cores.
+ */
+#define XC_N	20000
+
+static unsigned int *xc_code;
+static int xc_gen, xc_ack;
+static unsigned long xc_stale;
+
+static void *xc_thread(void *arg)
+{
+	long id = (long)arg;
+	int g;
+
+	pin(id);
+	for (g = 1; g <= XC_N; g++) {
+		if (id == 0) {
+			xc_code[0] = 0x24020000 | (g & 0x7fff);	/* li v0, g */
+			cacheflush(xc_code, 16, BCACHE);
+			__atomic_store_n(&xc_gen, g, __ATOMIC_RELEASE);
+			while (__atomic_load_n(&xc_ack, __ATOMIC_ACQUIRE) != g)
+				;
+		} else {
+			int (*fn)(void) = (int (*)(void))xc_code;
+
+			while (__atomic_load_n(&xc_gen, __ATOMIC_ACQUIRE) != g)
+				fn();	/* keep the old code in this CPU's cache */
+			if (fn() != (g & 0x7fff))
+				xc_stale++;
+			__atomic_store_n(&xc_ack, g, __ATOMIC_RELEASE);
+		}
+	}
+	return NULL;
+}
+
+static void icache_check(void)
+{
+	pthread_t t[2];
+	long i;
+
+	xc_code = mmap(NULL, 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
+		       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (xc_code == MAP_FAILED)
+		return;
+	xc_code[0] = 0x24020000;	/* li v0, 0 */
+	xc_code[1] = 0x03e00008;	/* jr ra */
+	xc_code[2] = 0;			/* nop */
+	cacheflush(xc_code, 16, BCACHE);
+	for (i = 0; i < 2; i++)
+		pthread_create(&t[i], NULL, xc_thread, (void *)i);
+	for (i = 0; i < 2; i++)
+		pthread_join(t[i], NULL);
+	printf("smp: code rewritten on CPU 0 and run on CPU 1 %d times: %lu stale: %s\n",
+	       XC_N, xc_stale, xc_stale ? "BAD" : "ok");
+}
+
+static unsigned long ipi_total(void)
+{
+	char line[256];
+	unsigned long a = 0, b = 0;
+	FILE *f = fopen("/proc/interrupts", "r");
+
+	if (!f)
+		return 0;
+	while (fgets(line, sizeof(line), f))
+		if (strstr(line, "ipi"))
+			sscanf(line, " %*d: %lu %lu", &a, &b);
+	fclose(f);
+	return a + b;
+}
+
+static void show_interrupts(void)
+{
+	char line[256];
+	FILE *f = fopen("/proc/interrupts", "r");
+
+	if (!f)
+		return;
+	while (fgets(line, sizeof(line), f))
+		if (strstr(line, "CPU0") || strstr(line, "ipi") ||
+		    strstr(line, "ost"))
+			printf("irq: %s", line);
+	fclose(f);
+}
+
+static pid_t mem_pid;
+
+static void smp_check(void)
+{
+	pthread_t t[2];
+	double t1, t2;
+	long i;
+
+	printf("--- smp\n");
+	/* the memory test in the background would take a CPU */
+	kill(mem_pid, SIGKILL);
+	waitpid(mem_pid, NULL, 0);
+	printf("smp: online %s, possible %s\n",
+	       line_of("/sys/devices/system/cpu/online"),
+	       line_of("/sys/devices/system/cpu/possible"));
+	t1 = spin_on(1);
+	t2 = spin_on(2);
+	printf("smp: loop on 1 CPU %.2f s, the same loop on 2 CPUs at once %.2f s: %.2fx the work per second\n",
+	       t1, t2, 2 * t1 / t2);
+
+	for (i = 0; i < 2; i++)
+		pthread_create(&t[i], NULL, smp_thread, (void *)i);
+	for (i = 0; i < 2; i++)
+		pthread_join(t[i], NULL);
+	printf("smp: atomic %lu/%d, mutex %lu/%d, message passing %lu bad, %lu maps, %lu bad words: %s\n",
+	       at_count, 2 * SMP_N, mx_count, 2 * (SMP_N / 4), mp_bad,
+	       tlb_maps, tlb_bad,
+	       at_count == 2 * SMP_N && mx_count == 2 * (SMP_N / 4) &&
+	       !mp_bad && !tlb_bad ? "ok" : "BAD");
+	icache_check();
+	show_interrupts();
+
+	/* the same benchmarks with every process on CPU 0 */
+	if (!fork()) {
+		pin(0);
+		unsigned long i0;
+
+		printf("pinned to CPU 0: ");
+		benchmarks();
+		i0 = ipi_total();
+		b_fork();
+		printf("pinned to CPU 0: %.1f IPIs per fork\n",
+		       (ipi_total() - i0) / 1000.0);
+		i0 = ipi_total();
+		b_exec();
+		printf("pinned to CPU 0: %.1f IPIs per fork+exec\n",
+		       (ipi_total() - i0) / 300.0);
+		_exit(0);
+	}
+	wait(NULL);
+}
+
 int main(void)
 {
 	int s, i, n, ls, lo;
@@ -654,7 +924,8 @@ int main(void)
 
 	printf("\n=== netusb-test\n");
 	tls_check();
-	if (fork() == 0)
+	mem_pid = fork();
+	if (mem_pid == 0)
 		mem_check();
 	sleep(3);	/* let the fill finish before the USB tests */
 	fp_check();
@@ -707,6 +978,7 @@ int main(void)
 	ls = listen_on(5001);
 	lo = listen_on(5002);
 	benchmarks();
+	smp_check();
 	printf("=== netusb ready: sink on %s:5001, source on :5002\n", ETH_ADDR);
 	p[0] = (struct pollfd){ .fd = ls, .events = POLLIN };
 	p[1] = (struct pollfd){ .fd = lo, .events = POLLIN };

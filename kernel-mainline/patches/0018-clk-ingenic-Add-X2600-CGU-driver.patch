@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 11:27:21 -0700
-Subject: [PATCH 18/49] clk: ingenic: Add X2600 CGU driver
+Subject: [PATCH 18/52] clk: ingenic: Add X2600 CGU driver
 
 Add support for the clock generation unit of the Ingenic X2600: the
 APLL, MPLL and EPLL, the CPU, L2 cache, AHB, APB and DDR clocks, the
@@ -688,3 +688,6 @@ index 000000000..59f2f6da6
 + * in the case where the device node is compatible with "simple-mfd".
 + */
 +CLK_OF_DECLARE_DRIVER(x2600_cgu, "ingenic,x2600-cgu", x2600_cgu_init);
+-- 
+2.43.0
+

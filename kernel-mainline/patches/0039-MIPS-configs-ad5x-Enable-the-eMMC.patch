@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 16:17:42 -0700
-Subject: [PATCH 37/49] MIPS: configs: ad5x: Enable the eMMC
+Subject: [PATCH 39/52] MIPS: configs: ad5x: Enable the eMMC
 
 Enable the DesignWare MSHC driver for the eMMC, and ext4 and squashfs
 (LZO, XZ), which the printer's partitions use.
@@ -34,3 +34,6 @@ index 20b9ff27d..b1e8f927f 100644
  CONFIG_PRINTK_TIME=y
  CONFIG_CONSOLE_LOGLEVEL_DEFAULT=15
  CONFIG_MESSAGE_LOGLEVEL_DEFAULT=7
+-- 
+2.43.0
+

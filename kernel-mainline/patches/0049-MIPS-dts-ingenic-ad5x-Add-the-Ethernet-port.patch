@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 19:43:18 -0700
-Subject: [PATCH 47/49] MIPS: dts: ingenic: ad5x: Add the Ethernet port
+Subject: [PATCH 49/52] MIPS: dts: ingenic: ad5x: Add the Ethernet port
 
 The MAC talks RMII to an IC Plus IP101G at MDIO address 1, which also
 supplies the 50 MHz reference clock: the stock firmware leaves the
@@ -52,3 +52,6 @@ index 949335d43..8c11bca7f 100644
  	pins_mmc0: mmc0 {
  		function = "mmc0";
  		groups = "mmc0-4bit", "mmc0-8bit";
+-- 
+2.43.0
+

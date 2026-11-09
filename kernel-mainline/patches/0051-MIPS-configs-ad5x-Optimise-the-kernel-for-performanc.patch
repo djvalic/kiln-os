@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Mon, 9 Nov 2026 02:45:00 -0700
-Subject: [PATCH 49/49] MIPS: configs: ad5x: Optimise the kernel for
+Subject: [PATCH 51/52] MIPS: configs: ad5x: Optimise the kernel for
  performance
 
 The defconfig had the kernel built for size (-Os). On this printer the
@@ -32,3 +32,6 @@ index 495621263..234ade8ca 100644
  CONFIG_EXPERT=y
  CONFIG_KALLSYMS_ALL=y
  CONFIG_MACH_INGENIC_SOC=y
+-- 
+2.43.0
+

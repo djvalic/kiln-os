@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 11:24:10 -0700
-Subject: [PATCH 15/49] clk: ingenic: cgu: Support a second PLL post-divider
+Subject: [PATCH 15/52] clk: ingenic: cgu: Support a second PLL post-divider
 
 The PLLs of the Ingenic X2600 have two post-VCO dividers in series,
 OD1 and OD0, each holding its divider value: Fout = Fvco / (OD1 * OD0).
@@ -92,3 +92,6 @@ index 0d417d69d..b184c58f5 100644
  	unsigned bypass_reg;
  	s8 bypass_bit;
  	s8 enable_bit;
+-- 
+2.43.0
+

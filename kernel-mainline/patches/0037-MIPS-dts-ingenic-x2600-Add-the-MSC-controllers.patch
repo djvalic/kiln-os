@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 16:17:42 -0700
-Subject: [PATCH 35/49] MIPS: dts: ingenic: x2600: Add the MSC controllers
+Subject: [PATCH 37/52] MIPS: dts: ingenic: x2600: Add the MSC controllers
 
 Add the two DesignWare MSHC SD/MMC controllers, disabled.
 ---
@@ -9,10 +9,10 @@ Add the two DesignWare MSHC SD/MMC controllers, disabled.
  1 file changed, 26 insertions(+)
 
 diff --git a/arch/mips/boot/dts/ingenic/x2600.dtsi b/arch/mips/boot/dts/ingenic/x2600.dtsi
-index dededc83b..48c0e8f33 100644
+index 1f0526a68..c2d6c5f17 100644
 --- a/arch/mips/boot/dts/ingenic/x2600.dtsi
 +++ b/arch/mips/boot/dts/ingenic/x2600.dtsi
-@@ -180,6 +180,32 @@ pdma: dma-controller@13420000 {
+@@ -188,6 +188,32 @@ pdma: dma-controller@13420000 {
  		ingenic,reserved-channels = <0x3>;
  	};
  
@@ -45,3 +45,6 @@ index dededc83b..48c0e8f33 100644
  	uart0: serial@10030000 {
  		compatible = "ingenic,x2600-uart", "ingenic,x1000-uart";
  		reg = <0x10030000 0x100>;
+-- 
+2.43.0
+

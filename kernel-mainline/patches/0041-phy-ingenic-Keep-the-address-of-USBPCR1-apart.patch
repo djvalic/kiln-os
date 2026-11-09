@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 19:40:27 -0700
-Subject: [PATCH 39/49] phy: ingenic: Keep the address of USBPCR1 apart
+Subject: [PATCH 41/52] phy: ingenic: Keep the address of USBPCR1 apart
 
 USBPCR1 has so far always followed USBPCR, USBRDT and USBVBFIL, so it
 was addressed as an offset from the PHY's base. On the X2600 that holds
@@ -91,3 +91,6 @@ index d8e5ef302..a6f69baa1 100644
  
  	priv->clk = devm_clk_get(dev, NULL);
  	if (IS_ERR(priv->clk)) {
+-- 
+2.43.0
+

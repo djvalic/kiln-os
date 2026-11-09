@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 11:37:01 -0700
-Subject: [PATCH 24/49] MIPS: dts: ingenic: Add X2600 SoC
+Subject: [PATCH 26/52] MIPS: dts: ingenic: Add X2600 SoC
 
 Describe the parts of the Ingenic X2600 that mainline supports: the two
 XBurst2 cores, the CPU interrupt controller with the per-core JZ4780
@@ -12,16 +12,16 @@ request lines.
 DMA channels 0 and 1 are left to the DMA controller's own MCU, as
 Ingenic's SDK keeps them.
 ---
- arch/mips/boot/dts/ingenic/x2600.dtsi | 318 ++++++++++++++++++++++++++
- 1 file changed, 318 insertions(+)
+ arch/mips/boot/dts/ingenic/x2600.dtsi | 326 ++++++++++++++++++++++++++
+ 1 file changed, 326 insertions(+)
  create mode 100644 arch/mips/boot/dts/ingenic/x2600.dtsi
 
 diff --git a/arch/mips/boot/dts/ingenic/x2600.dtsi b/arch/mips/boot/dts/ingenic/x2600.dtsi
 new file mode 100644
-index 000000000..dededc83b
+index 000000000..1f0526a68
 --- /dev/null
 +++ b/arch/mips/boot/dts/ingenic/x2600.dtsi
-@@ -0,0 +1,318 @@
+@@ -0,0 +1,326 @@
 +// SPDX-License-Identifier: GPL-2.0
 +#include <dt-bindings/clock/ingenic,x2600-cgu.h>
 +#include <dt-bindings/dma/ingenic,x2600-dma.h>
@@ -57,6 +57,14 @@ index 000000000..dededc83b
 +		#interrupt-cells = <1>;
 +		interrupt-controller;
 +		compatible = "mti,cpu-interrupt-controller";
++	};
++
++	ccu: cpu-controller@12200000 {
++		compatible = "ingenic,x2600-ccu";
++		reg = <0x12200000 0x2000>;
++
++		interrupt-parent = <&cpuintc>;
++		interrupts = <3>;
 +	};
 +
 +	/* The bank of CPU 0; each core has its own, 0x100 apart */
@@ -340,3 +348,6 @@ index 000000000..dededc83b
 +		status = "disabled";
 +	};
 +};
+-- 
+2.43.0
+

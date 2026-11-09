@@ -41,11 +41,11 @@ Each patch must be acceptable to a mainline reviewer:
 5. PWM (speaker).
 6. Display: a DRM driver for the DPU, the LVDS encoder, the KX070 panel
    in `panel-simple`.
-7. SMP (second XBurst2 core).
+7. SMP (second XBurst2 core): done.
 
 ## Status
 
-**On the printer** (2026-11-09): 49 patches, checkpatch `--strict` clean,
+**On the printer** (2026-11-09): 52 patches, checkpatch `--strict` clean,
 every commit builds with `W=1`, `dt_binding_check` and `dtbs_check` clean.
 
 - **Boot to a serial console:** the kernel reaches `Waiting for root
@@ -91,6 +91,24 @@ every commit builds with `W=1`, `dt_binding_check` and `dtbs_check` clean.
 - **Wi-Fi:** with the secondary cache fix below, rtw88 brings `wlan0` up in
   every boot, survives repeated down/up, and scans, with no rtw88 errors
   (6 boots). Without it about one register read in 500 came back stale.
+- **SMP:** both cores run. The core control unit (CCU) starts the second
+  one and carries the IPIs (a mailbox per core, CPU interrupt line 3);
+  each core takes its own OST timer, peripheral interrupts stay on CPU 0.
+  The test init's SMP checks (`smp_check()`): a CPU-bound loop does 2.00x
+  the work on both cores; 4M atomic and 1M mutex increments across the
+  cores all counted; 200000 release/acquire message round trips, none
+  stale; 15000 map/fill/unmap cycles (TLB shootdowns) while the other core
+  checks its buffer, no bad words; code rewritten on CPU 0 then run on
+  CPU 1 20000 times, never stale. XBurst2 is weakly ordered, also around
+  LL/SC (as Ingenic's kernels declare), so the platform selects
+  `WEAK_ORDERING` and `WEAK_REORDERING_BEYOND_LLSC`. Single-process
+  latency costs what SMP costs (fork 510 -> about 600 us, Kiln's 6.6:
+  616 us; loopback TCP 365 -> 400-460 MB/s). Of that, the cache
+  maintenance IPIs mainline sends to the other core are about 50 us of
+  fork; Ingenic's kernels skip them. The cross-CPU code test also
+  passed without them, but that proves little (cache evictions can hide
+  a missed invalidation) and nothing documents that the hardware makes
+  it safe, so they stay. Without CPU hotplug, suspend is off.
 - Klipper itself has not run on this kernel yet: next is Kiln's userspace
   on it (rtw88 is a module and needs its firmware in the root file system).
 

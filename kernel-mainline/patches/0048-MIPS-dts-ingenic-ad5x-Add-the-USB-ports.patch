@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 19:43:18 -0700
-Subject: [PATCH 46/49] MIPS: dts: ingenic: ad5x: Add the USB ports
+Subject: [PATCH 48/52] MIPS: dts: ingenic: ad5x: Add the USB ports
 
 The second USB controller runs the printer's internal USB hub, with the
 camera and the RTL8821CU Wi-Fi module behind it. The Wi-Fi module's
@@ -86,3 +86,6 @@ index 23fc4581d..949335d43 100644
 +
 +	status = "okay";
 +};
+-- 
+2.43.0
+

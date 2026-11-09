@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 19:44:20 -0700
-Subject: [PATCH 48/49] MIPS: configs: ad5x: Enable networking, Ethernet and
+Subject: [PATCH 50/52] MIPS: configs: ad5x: Enable networking, Ethernet and
  USB
 
 Enable IPv4 networking, the Ethernet MAC and its IP101G PHY, and both
@@ -62,3 +62,6 @@ index b1e8f927f..495621263 100644
  CONFIG_EXT4_FS=y
  CONFIG_TMPFS=y
  CONFIG_SQUASHFS=y
+-- 
+2.43.0
+

@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Mon, 9 Nov 2026 08:16:49 -0700
+Subject: [PATCH 21/52] dt-bindings: mips: ingenic: Add X2600 core control unit
+
+The core control unit (CCU) of the Ingenic X2600 starts the secondary
+CPU core and routes interrupts to the cores, among them the
+inter-processor interrupts of its per-core mailboxes. Describe it.
+---
+ .../mips/ingenic/ingenic,x2600-ccu.yaml       | 47 +++++++++++++++++++
+ 1 file changed, 47 insertions(+)
+ create mode 100644 Documentation/devicetree/bindings/mips/ingenic/ingenic,x2600-ccu.yaml
+
+diff --git a/Documentation/devicetree/bindings/mips/ingenic/ingenic,x2600-ccu.yaml b/Documentation/devicetree/bindings/mips/ingenic/ingenic,x2600-ccu.yaml
+new file mode 100644
+index 000000000..40f7f3bc9
+--- /dev/null
++++ b/Documentation/devicetree/bindings/mips/ingenic/ingenic,x2600-ccu.yaml
+@@ -0,0 +1,47 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/mips/ingenic/ingenic,x2600-ccu.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: Ingenic X2600 core control unit (CCU)
++
++maintainers:
++  - Hunter Laux <hunterlaux@gmail.com>
++
++description:
++  The CCU of the Ingenic X2600 starts and stops the CPU cores and routes
++  interrupts to them. It holds the secondary cores in reset and sets the
++  address they start from, enables per core the interrupt lines of the
++  interrupt controller, the OST and the mailboxes, and has one mailbox per
++  core. Writing to a core's mailbox raises an interrupt on that core, on
++  CPU interrupt line 3.
++
++properties:
++  compatible:
++    const: ingenic,x2600-ccu
++
++  reg:
++    maxItems: 1
++
++  interrupts:
++    maxItems: 1
++    description: The mailbox interrupt, a CPU interrupt line
++
++required:
++  - compatible
++  - reg
++  - interrupts
++
++additionalProperties: false
++
++examples:
++  - |
++    cpu-controller@12200000 {
++        compatible = "ingenic,x2600-ccu";
++        reg = <0x12200000 0x2000>;
++
++        interrupt-parent = <&cpuintc>;
++        interrupts = <3>;
++    };
++...
+-- 
+2.43.0
+

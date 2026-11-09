@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 15:06:23 -0700
-Subject: [PATCH 28/49] serial: 8250: Time RS-485 by the TX FIFO where THRE is
+Subject: [PATCH 30/52] serial: 8250: Time RS-485 by the TX FIFO where THRE is
  set early
 
 With UART_CAP_NOTEMT, __stop_tx() releases RTS one frame after LSR.THRE
@@ -62,3 +62,6 @@ index eeb868e93..7844051ca 100644
  
  	/* Serial port overrun backoff */
  	struct delayed_work overrun_backoff;
+-- 
+2.43.0
+

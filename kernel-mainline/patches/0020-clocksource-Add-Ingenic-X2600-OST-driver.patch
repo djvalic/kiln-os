@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 11:30:18 -0700
-Subject: [PATCH 20/49] clocksource: Add Ingenic X2600 OST driver
+Subject: [PATCH 20/52] clocksource: Add Ingenic X2600 OST driver
 
 The Ingenic X2600 has no system timer that mainline supports: the MIPS
 CP0 counter is not implemented in XBurst cores, and the OST differs from
@@ -10,16 +10,17 @@ counter shared by the cores, and a 32-bit compare timer per core that
 interrupts its own core on CPU interrupt line 4.
 
 Use the global counter as clocksource and sched_clock, and each core's
-compare timer as that core's clock event device, set up when the core
-comes online.
+compare timer as that core's clock event device, set up as the core
+starts.
 
 The register layout follows Ingenic's X2600 SDK kernel.
 ---
  MAINTAINERS                             |   7 +
  drivers/clocksource/Kconfig             |  11 +
  drivers/clocksource/Makefile            |   1 +
- drivers/clocksource/ingenic-x2600-ost.c | 331 ++++++++++++++++++++++++
- 4 files changed, 350 insertions(+)
+ drivers/clocksource/ingenic-x2600-ost.c | 332 ++++++++++++++++++++++++
+ include/linux/cpuhotplug.h              |   1 +
+ 5 files changed, 352 insertions(+)
  create mode 100644 drivers/clocksource/ingenic-x2600-ost.c
 
 diff --git a/MAINTAINERS b/MAINTAINERS
@@ -76,10 +77,10 @@ index b46376af6..807143648 100644
  obj-$(CONFIG_X86_NUMACHIP)		+= numachip.o
 diff --git a/drivers/clocksource/ingenic-x2600-ost.c b/drivers/clocksource/ingenic-x2600-ost.c
 new file mode 100644
-index 000000000..20eee691d
+index 000000000..b57bcbcd4
 --- /dev/null
 +++ b/drivers/clocksource/ingenic-x2600-ost.c
-@@ -0,0 +1,331 @@
+@@ -0,0 +1,332 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * Ingenic X2600 operating system timer (OST) driver
@@ -377,7 +378,8 @@ index 000000000..20eee691d
 +	if (ret)
 +		goto err_unregister_cs;
 +
-+	ret = cpuhp_setup_state(CPUHP_AP_ONLINE_DYN, "clockevents/x2600-ost:online",
++	ret = cpuhp_setup_state(CPUHP_AP_INGENIC_X2600_OST_STARTING,
++				"clockevents/ingenic/x2600-ost:starting",
 +				x2600_ost_starting_cpu, x2600_ost_dying_cpu);
 +	if (ret < 0)
 +		goto err_free_irq;
@@ -411,3 +413,18 @@ index 000000000..20eee691d
 +}
 +
 +TIMER_OF_DECLARE(x2600_ost, "ingenic,x2600-ost", x2600_ost_init);
+diff --git a/include/linux/cpuhotplug.h b/include/linux/cpuhotplug.h
+index feb32949a..ab68e5ee3 100644
+--- a/include/linux/cpuhotplug.h
++++ b/include/linux/cpuhotplug.h
+@@ -169,6 +169,7 @@ enum cpuhp_state {
+ 	CPUHP_AP_ARMADA_TIMER_STARTING,
+ 	CPUHP_AP_LOONGARCH_ARCH_TIMER_STARTING,
+ 	CPUHP_AP_MIPS_GIC_TIMER_STARTING,
++	CPUHP_AP_INGENIC_X2600_OST_STARTING,
+ 	CPUHP_AP_ARC_TIMER_STARTING,
+ 	CPUHP_AP_REALTEK_TIMER_STARTING,
+ 	CPUHP_AP_RISCV_TIMER_STARTING,
+-- 
+2.43.0
+

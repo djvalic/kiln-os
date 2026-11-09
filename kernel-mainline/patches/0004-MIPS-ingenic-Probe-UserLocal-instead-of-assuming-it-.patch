@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Mon, 9 Nov 2026 02:06:31 -0700
-Subject: [PATCH 04/49] MIPS: ingenic: Probe UserLocal instead of assuming it
+Subject: [PATCH 04/52] MIPS: ingenic: Probe UserLocal instead of assuming it
  is absent
 
 The Ingenic CPU feature overrides were written for the first XBurst
@@ -32,3 +32,6 @@ index 7ace50127..08d6e2349 100644
  #define cpu_has_nofpuex 0
  #define cpu_has_64bits		0
  #define cpu_has_64bit_zero_reg 0
+-- 
+2.43.0
+

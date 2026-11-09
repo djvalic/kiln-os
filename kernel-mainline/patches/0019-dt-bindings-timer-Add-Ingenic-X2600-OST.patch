@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 11:28:29 -0700
-Subject: [PATCH 19/49] dt-bindings: timer: Add Ingenic X2600 OST
+Subject: [PATCH 19/52] dt-bindings: timer: Add Ingenic X2600 OST
 
 The OST of the Ingenic X2600 is split in two: a global 64-bit counter
 shared by all cores, and a 32-bit compare timer per core, which
@@ -84,3 +84,6 @@ index 000000000..efd0cfb9c
 +        interrupts = <4>;
 +    };
 +...
+-- 
+2.43.0
+

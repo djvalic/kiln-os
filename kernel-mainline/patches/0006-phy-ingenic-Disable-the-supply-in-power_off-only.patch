@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 20:04:58 -0700
-Subject: [PATCH 06/49] phy: ingenic: Disable the supply in power_off() only
+Subject: [PATCH 06/52] phy: ingenic: Disable the supply in power_off() only
 
 The PHY's supply is enabled in power_on() and disabled in power_off(),
 but exit() disabled it once more, so every power_off() then exit(), as
@@ -33,3 +33,6 @@ index 7e62d4685..d8e5ef302 100644
  
  	return 0;
  }
+-- 
+2.43.0
+

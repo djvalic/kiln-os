@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 15:46:34 -0700
-Subject: [PATCH 33/49] dt-bindings: mmc: snps,dwcmshc-sdhci: Add Ingenic X2600
+Subject: [PATCH 35/52] dt-bindings: mmc: snps,dwcmshc-sdhci: Add Ingenic X2600
 
 The MSC controllers of the Ingenic X2600 are Synopsys DesignWare MSHC
 1.40a (DWC_MSHC_VER_ID in the vendor area at 0x500), clocked by one
@@ -22,3 +22,6 @@ index cd823a3ef..45b28cf0a 100644
            - rockchip,rk3568-dwcmshc
            - rockchip,rk3588-dwcmshc
            - snps,dwcmshc-sdhci
+-- 
+2.43.0
+

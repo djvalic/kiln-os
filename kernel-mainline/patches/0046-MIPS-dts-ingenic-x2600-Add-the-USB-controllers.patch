@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 19:42:37 -0700
-Subject: [PATCH 44/49] MIPS: dts: ingenic: x2600: Add the USB controllers
+Subject: [PATCH 46/52] MIPS: dts: ingenic: x2600: Add the USB controllers
 
 Add the two DWC2 USB controllers and their PHYs. Ingenic's SDK runs the
 second controller as a host only; boards choose with dr_mode.
@@ -10,10 +10,10 @@ second controller as a host only; boards choose with dr_mode.
  1 file changed, 58 insertions(+), 1 deletion(-)
 
 diff --git a/arch/mips/boot/dts/ingenic/x2600.dtsi b/arch/mips/boot/dts/ingenic/x2600.dtsi
-index 48c0e8f33..11032cffd 100644
+index c2d6c5f17..541f83277 100644
 --- a/arch/mips/boot/dts/ingenic/x2600.dtsi
 +++ b/arch/mips/boot/dts/ingenic/x2600.dtsi
-@@ -63,12 +63,37 @@ cgu: clock-controller@10000000 {
+@@ -71,12 +71,37 @@ cgu: clock-controller@10000000 {
  		reg = <0x10000000 0x100>;
  		#address-cells = <1>;
  		#size-cells = <1>;
@@ -52,7 +52,7 @@ index 48c0e8f33..11032cffd 100644
  	};
  
  	ost: timer@12000000 {
-@@ -206,6 +231,38 @@ msc1: mmc@13460000 {
+@@ -214,6 +239,38 @@ msc1: mmc@13460000 {
  		status = "disabled";
  	};
  
@@ -91,3 +91,6 @@ index 48c0e8f33..11032cffd 100644
  	uart0: serial@10030000 {
  		compatible = "ingenic,x2600-uart", "ingenic,x1000-uart";
  		reg = <0x10030000 0x100>;
+-- 
+2.43.0
+
