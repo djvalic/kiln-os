@@ -27,8 +27,11 @@ start)
 	[ -f $D/config/settings.json ] || \
 		cp /usr/share/ad5x/helixscreen-settings.json $D/config/settings.json
 	# touch calibration in the running kernel's units (stock 0-800/0-480
-	# with Y flipped, our 6.6 raw 0-4095): ad5x-touch-units
-	ad5x-touch-units $D/config/settings.json
+	# with Y flipped, our 6.6 raw 0-4095): ad5x-touch-units. The same
+	# range in stock units for the recovery OS's touch UI (it always runs
+	# the stock kernel; S80ad5x-recovery-ui reads it, issue #47)
+	ad5x-touch-units $D/config/settings.json \
+		--recovery-cal /data/ad5x/recovery/touch-cal
 	i=0
 	while [ ! -c /dev/fb0 ] && [ $i -lt 10 ]; do sleep 1; i=$((i + 1)); done
 	# The speaker (S35ad5x-sound: PWM channel 13 of pwmchip0, only on our

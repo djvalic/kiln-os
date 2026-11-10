@@ -1,0 +1,592 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Mon, 9 Nov 2026 16:40:00 -0500
+Subject: [PATCH] settings: Boot into recovery on Kiln OS (issue #47)
+
+Settings > System gets "Boot into recovery" under Restart HelixScreen:
+after a confirmation it calls Moonraker's machine.kiln_os.boot_recovery
+(Kiln's kiln_os component), whose update agent points the boot flag at
+the recovery OS in slot A and reboots. That OS installs an update from a
+USB stick or its web page on port 8080. The request goes over the
+screen's own connection to Moonraker (127.0.0.1), so it works with the
+network down. When the agent refuses (a print is running, start-up has
+not finished, slot A doesn't hold the recovery OS), its reason is shown.
+The row is greyed while a print is active and shows only on Kiln OS
+builds (HELIX_KILN_AD5X). Strings in en and ru.
+
+Upstream: not applicable (AD5X OS specific)
+---
+ include/ui_settings_kiln_recovery.h           |  81 ++++++++++
+ include/ui_settings_system.h                  |   2 +-
+ src/ui/ui_settings_kiln_recovery.cpp          | 141 ++++++++++++++++++
+ src/ui/ui_settings_system.cpp                 |   6 +
+ tests/unit/test_settings_kiln_recovery.cpp    | 114 ++++++++++++++
+ tests/unit/test_settings_system_callbacks.cpp |  34 +++++
+ translations/en.yml                           |   6 +
+ translations/ru.yml                           |   6 +
+ ui_xml/settings_system_overlay.xml            |   9 +-
+ 9 files changed, 397 insertions(+), 2 deletions(-)
+ create mode 100644 include/ui_settings_kiln_recovery.h
+ create mode 100644 src/ui/ui_settings_kiln_recovery.cpp
+ create mode 100644 tests/unit/test_settings_kiln_recovery.cpp
+
+diff --git a/include/ui_settings_kiln_recovery.h b/include/ui_settings_kiln_recovery.h
+new file mode 100644
+index 0000000..25e307d
+--- /dev/null
++++ b/include/ui_settings_kiln_recovery.h
+@@ -0,0 +1,81 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++/**
++ * @file ui_settings_kiln_recovery.h
++ * @brief Kiln OS: Settings > System > Boot into recovery (issue #47)
++ *
++ * Moonraker's kiln_os component answers `machine.kiln_os.boot_recovery`
++ * (POST /machine/kiln_os/boot_recovery): Kiln's root update agent points the
++ * boot flag at the recovery OS in slot A and reboots, answering
++ * {"result": "rebooting"}. It refuses while a print may run, before start-up
++ * has finished, or without the recovery OS in slot A; Moonraker then answers
++ * an error "Update agent: refused: <why>".
++ *
++ * The row shows on HELIX_KILN_AD5X builds only (`kiln_boot_recovery_available`)
++ * and is greyed while a print is active (print_active). It goes through the
++ * screen's own Moonraker connection (127.0.0.1), so it works with the network
++ * down.
++ *
++ * @threading Main thread; Moonraker's answer hops over through the UpdateQueue
++ */
++
++#pragma once
++
++#include "lvgl/lvgl.h"
++#include "subject_managed_panel.h"
++
++#include <cstdint>
++#include <functional>
++#include <optional>
++#include <string>
++
++namespace helix {
++class IMoonrakerClient;
++}
++
++namespace helix::kiln_recovery {
++
++/// The JSON-RPC method of POST /machine/kiln_os/boot_recovery
++inline constexpr const char* kMethod = "machine.kiln_os.boot_recovery";
++
++/// Moonraker waits up to 30 s for the update agent; a little more here
++inline constexpr uint32_t kTimeoutMs = 45000;
++
++/// True on HELIX_KILN_AD5X builds; tests override it.
++bool available();
++void set_available_for_test(std::optional<bool> value);
++
++/// Moonraker's error message without the agent's "Update agent: " and
++/// "refused: " prefixes: "a print is running", "start-up has not finished
++/// yet, try again in a minute", ...
++std::string refusal_text(const std::string& message);
++
++/// The answer, on the main thread: @p rebooting true when the printer is
++/// restarting into recovery, else @p text says why not.
++using Done = std::function<void(bool rebooting, const std::string& text)>;
++
++/// Send the request over @p client.
++void request(IMoonrakerClient& client, Done done);
++
++/// The row's action: confirm, then request, with a toast for the outcome.
++void confirm_and_request();
++
++/// The row's subject: `kiln_boot_recovery_available` (1 shows the row).
++class RecoveryRow {
++  public:
++    RecoveryRow() = default;
++    ~RecoveryRow();
++    RecoveryRow(const RecoveryRow&) = delete;
++    RecoveryRow& operator=(const RecoveryRow&) = delete;
++
++    void init_subjects();
++
++  private:
++    SubjectManager subjects_;
++    lv_subject_t available_{};
++    bool subjects_initialized_ = false;
++};
++
++RecoveryRow& row();
++
++} // namespace helix::kiln_recovery
+diff --git a/include/ui_settings_system.h b/include/ui_settings_system.h
+index 2345b2e..826aa81 100644
+--- a/include/ui_settings_system.h
++++ b/include/ui_settings_system.h
+@@ -47,7 +47,7 @@ class SystemSettingsOverlay : public OverlayBase {
+         return "settings_system_overlay";
+     }
+ 
+-    /// Kiln OS: the Log detail row's subjects (ad5x_log), before the XML
++    /// Kiln OS: the Log detail and Boot into recovery rows' subjects, before the XML
+     void init_subjects() override;
+     void register_callbacks() override;
+ 
+diff --git a/src/ui/ui_settings_kiln_recovery.cpp b/src/ui/ui_settings_kiln_recovery.cpp
+new file mode 100644
+index 0000000..8916df4
+--- /dev/null
++++ b/src/ui/ui_settings_kiln_recovery.cpp
+@@ -0,0 +1,141 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include "ui_settings_kiln_recovery.h"
++
++#include "ui_error_reporting.h"
++#include "ui_modal.h"
++#include "ui_toast_manager.h"
++#include "ui_update_queue.h"
++
++#include "app_globals.h"
++#include "i_moonraker_client.h"
++#include "json_utils.h"
++#include "lvgl/src/others/translation/lv_translation.h"
++#include "moonraker_error.h"
++#include "static_panel_registry.h"
++
++#include <spdlog/fmt/fmt.h>
++#include <spdlog/spdlog.h>
++
++#include <memory>
++
++namespace helix::kiln_recovery {
++
++namespace {
++
++// The touch screen is the AD5X's own (HELIX_KILN_AD5X, set in
++// buildroot/package/helixscreen/helixscreen.mk); other builds have no
++// kiln_os component behind the method.
++#if defined(HELIX_KILN_AD5X)
++constexpr bool kBuiltIn = true;
++#else
++constexpr bool kBuiltIn = false;
++#endif
++
++std::optional<bool> g_available_override;
++
++void strip_prefix(std::string& text, const char* prefix) {
++    const std::string p(prefix);
++    if (text.compare(0, p.size(), p) == 0) {
++        text.erase(0, p.size());
++    }
++}
++
++} // namespace
++
++bool available() {
++    return g_available_override.value_or(kBuiltIn);
++}
++
++void set_available_for_test(std::optional<bool> value) {
++    g_available_override = value;
++}
++
++std::string refusal_text(const std::string& message) {
++    std::string text = message;
++    strip_prefix(text, "Update agent: ");
++    strip_prefix(text, "refused: ");
++    strip_prefix(text, "failed: ");
++    return text;
++}
++
++void request(IMoonrakerClient& client, Done done) {
++    auto shared = std::make_shared<Done>(std::move(done));
++    auto finish = [shared](bool rebooting, std::string text) {
++        helix::ui::queue_update("kiln_recovery::answer", [shared, rebooting, text]() {
++            if (*shared) {
++                (*shared)(rebooting, text);
++            }
++        });
++    };
++    spdlog::info("[Kiln recovery] {}", kMethod);
++    client.send_jsonrpc(
++        kMethod, json::object(),
++        [finish](const json& response) {
++            const json* result = json_util::find_member(response, "result");
++            const json* status = result ? json_util::find_member(*result, "result") : nullptr;
++            const std::string answer =
++                status && status->is_string() ? status->get<std::string>() : std::string();
++            if (answer.rfind("rebooting", 0) == 0) {
++                spdlog::info("[Kiln recovery] Rebooting into the recovery OS");
++                finish(true, answer);
++            } else {
++                spdlog::warn("[Kiln recovery] Unexpected answer '{}'", answer);
++                finish(false, answer.empty() ? std::string(lv_tr("Failed")) : answer);
++            }
++        },
++        [finish](const MoonrakerError& err) {
++            spdlog::warn("[Kiln recovery] Refused: {}", err.message);
++            const std::string text = refusal_text(err.message);
++            finish(false, text.empty() ? std::string(lv_tr("Failed")) : text);
++        },
++        kTimeoutMs, /*silent=*/true);
++}
++
++void confirm_and_request() {
++    if (!available()) {
++        return;
++    }
++    helix::ui::modal_confirm(
++        lv_tr("Boot into recovery?"),
++        lv_tr("The printer restarts into the recovery OS, where it can't print. To come back, "
++              "tap Boot main OS on its screen."),
++        ModalSeverity::Warning, lv_tr("Restart"), [] {
++            IMoonrakerClient* client = get_moonraker_client();
++            if (!client || client->get_connection_state() != ConnectionState::CONNECTED) {
++                NOTIFY_WARNING("{}", lv_tr("Not connected to the printer"));
++                return;
++            }
++            request(*client, [](bool rebooting, const std::string& text) {
++                if (rebooting) {
++                    ToastManager::instance().show(ToastSeverity::INFO,
++                                                  lv_tr("Restarting into the recovery OS..."),
++                                                  5000);
++                } else {
++                    NOTIFY_ERROR("{}", fmt::format(fmt::runtime(lv_tr(
++                                                       "Can't boot into recovery: {}")),
++                                                   text));
++                }
++            });
++        });
++}
++
++RecoveryRow::~RecoveryRow() {
++    subjects_.deinit_all();
++}
++
++void RecoveryRow::init_subjects() {
++    if (subjects_initialized_) {
++        return;
++    }
++    // 1 shows Settings > System > Boot into recovery (Kiln OS builds)
++    UI_MANAGED_SUBJECT_INT(available_, available() ? 1 : 0, "kiln_boot_recovery_available",
++                           subjects_);
++    subjects_initialized_ = true;
++}
++
++RecoveryRow& row() {
++    return helix::lazy_global<RecoveryRow>("KilnRecoveryRow");
++}
++
++} // namespace helix::kiln_recovery
+diff --git a/src/ui/ui_settings_system.cpp b/src/ui/ui_settings_system.cpp
+index ab72aa6..02c6e2e 100644
+--- a/src/ui/ui_settings_system.cpp
++++ b/src/ui/ui_settings_system.cpp
+@@ -8,6 +8,7 @@
+ #include "ui_overlay_performance.h"
+ #include "ui_panel_common.h"
+ #include "ui_settings_ad5x_log.h"
++#include "ui_settings_kiln_recovery.h"
+ #include "ui_settings_security.h"
+ #include "ui_settings_storage.h"
+ #if !defined(HELIX_PLATFORM_ESP32)
+@@ -36,6 +37,8 @@ SystemSettingsOverlay::~SystemSettingsOverlay() {
+ void SystemSettingsOverlay::init_subjects() {
+     // Kiln OS: the Log detail row binds these; the model may not be attached yet
+     helix::ad5x_log::model().init_subjects();
++    // Kiln OS: Boot into recovery shows on the AD5X build only
++    helix::kiln_recovery::row().init_subjects();
+ }
+ 
+ void SystemSettingsOverlay::register_callbacks() {
+@@ -78,6 +81,9 @@ void SystemSettingsOverlay::register_callbacks() {
+          [](lv_event_t*) { get_system_settings_overlay().open_performance(); }},
+         {"on_restart_helix_settings_clicked",
+          [](lv_event_t*) { get_system_settings_overlay().handle_restart_helix_clicked(); }},
++        // Kiln OS: restart into the recovery OS (machine.kiln_os.boot_recovery)
++        {"on_kiln_boot_recovery_clicked",
++         [](lv_event_t*) { helix::kiln_recovery::confirm_and_request(); }},
+         {"on_factory_reset_clicked",
+          [](lv_event_t*) { get_system_settings_overlay().handle_factory_reset_clicked(); }},
+         {"on_factory_reset_confirm",
+diff --git a/tests/unit/test_settings_kiln_recovery.cpp b/tests/unit/test_settings_kiln_recovery.cpp
+new file mode 100644
+index 0000000..9549ca8
+--- /dev/null
++++ b/tests/unit/test_settings_kiln_recovery.cpp
+@@ -0,0 +1,114 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//
++// Kiln OS (issue #47): Settings > System > Boot into recovery asks Moonraker's
++// kiln_os component (machine.kiln_os.boot_recovery) to restart the printer into
++// the recovery OS, and shows why when Kiln's update agent refuses.
++
++#include "ui_settings_kiln_recovery.h"
++#include "ui_update_queue.h"
++
++#include "../fake_moonraker_client.h"
++#include "../lvgl_test_fixture.h"
++#include "moonraker_error.h"
++
++#include <optional>
++#include <string>
++
++#include "../catch_amalgamated.hpp"
++
++using helix::test::FakeMoonrakerClient;
++using nlohmann::json;
++namespace recovery = helix::kiln_recovery;
++
++namespace {
++
++struct Answer {
++    bool called = false;
++    bool rebooting = false;
++    std::string text;
++};
++
++/// Send the request, then let @p reply answer the recorded call.
++template <typename Reply> Answer ask(Reply reply) {
++    FakeMoonrakerClient client;
++    Answer answer;
++    recovery::request(client, [&answer](bool rebooting, const std::string& text) {
++        answer.called = true;
++        answer.rebooting = rebooting;
++        answer.text = text;
++    });
++    REQUIRE(client.rpc_calls.size() == 1);
++    const auto& call = client.rpc_calls[0];
++    CHECK(call.method == "machine.kiln_os.boot_recovery");
++    CHECK(call.timeout_ms == recovery::kTimeoutMs);
++    reply(call);
++    // The answer reaches the caller on the main thread, through the queue
++    CHECK_FALSE(answer.called);
++    helix::ui::UpdateQueue::instance().drain();
++    REQUIRE(answer.called);
++    return answer;
++}
++
++MoonrakerError agent_error(const std::string& message) {
++    return MoonrakerError::from_json_rpc({{"code", 400}, {"message", message}},
++                                         "machine.kiln_os.boot_recovery");
++}
++
++} // namespace
++
++TEST_CASE("Kiln recovery: the agent's prefixes are left out of the refusal",
++          "[kiln][kiln_recovery]") {
++    CHECK(recovery::refusal_text("Update agent: refused: a print is running") ==
++          "a print is running");
++    CHECK(recovery::refusal_text(
++              "Update agent: refused: start-up has not finished yet, try again in a minute") ==
++          "start-up has not finished yet, try again in a minute");
++    CHECK(recovery::refusal_text("Update agent didn't answer (is S68ad5x-update-agent running?)") ==
++          "Update agent didn't answer (is S68ad5x-update-agent running?)");
++    CHECK(recovery::refusal_text("Method not found") == "Method not found");
++}
++
++TEST_CASE_METHOD(LVGLTestFixture, "Kiln recovery: Moonraker's answer reaches the caller",
++                 "[kiln][kiln_recovery]") {
++    SECTION("rebooting") {
++        const Answer a = ask([](const FakeMoonrakerClient::RpcCall& call) {
++            REQUIRE(call.success_cb);
++            call.success_cb(json{{"jsonrpc", "2.0"}, {"result", {{"result", "rebooting"}}}});
++        });
++        CHECK(a.rebooting);
++    }
++    SECTION("refused while printing") {
++        const Answer a = ask([](const FakeMoonrakerClient::RpcCall& call) {
++            REQUIRE(call.error_cb);
++            call.error_cb(agent_error("Update agent: refused: a print is running"));
++        });
++        CHECK_FALSE(a.rebooting);
++        CHECK(a.text == "a print is running");
++    }
++    SECTION("refused without the recovery OS in slot A") {
++        const Answer a = ask([](const FakeMoonrakerClient::RpcCall& call) {
++            call.error_cb(agent_error("Update agent: refused: slot A doesn't hold the recovery "
++                                      "OS (it holds: stock)"));
++        });
++        CHECK_FALSE(a.rebooting);
++        CHECK(a.text == "slot A doesn't hold the recovery OS (it holds: stock)");
++    }
++    SECTION("an answer that is not rebooting is not taken for one") {
++        const Answer a = ask([](const FakeMoonrakerClient::RpcCall& call) {
++            call.success_cb(json{{"jsonrpc", "2.0"}, {"result", {{"result", "queued"}}}});
++        });
++        CHECK_FALSE(a.rebooting);
++        CHECK(a.text == "queued");
++    }
++}
++
++TEST_CASE("Kiln recovery: only the Kiln OS build has the row", "[kiln][kiln_recovery]") {
++#if defined(HELIX_KILN_AD5X)
++    CHECK(recovery::available());
++#else
++    CHECK_FALSE(recovery::available());
++#endif
++    recovery::set_available_for_test(true);
++    CHECK(recovery::available());
++    recovery::set_available_for_test(std::nullopt);
++}
+diff --git a/tests/unit/test_settings_system_callbacks.cpp b/tests/unit/test_settings_system_callbacks.cpp
+index 6816a5e..c60aef5 100644
+--- a/tests/unit/test_settings_system_callbacks.cpp
++++ b/tests/unit/test_settings_system_callbacks.cpp
+@@ -7,6 +7,7 @@
+ // way the overlay does (callbacks registered, then the XML) and drive each row.
+ 
+ #include "ui_panel_settings.h"
++#include "ui_settings_kiln_recovery.h"
+ #include "ui_settings_system.h"
+ #include "ui_update_queue.h"
+ 
+@@ -111,6 +112,7 @@ TEST_CASE_METHOD(SystemCallbacksFixture, "System page: every action row runs its
+                              Binding{"row_performance", "on_system_performance_clicked"},
+                              Binding{"row_telemetry_view_data", "on_telemetry_view_data"},
+                              Binding{"row_restart_helix", "on_restart_helix_settings_clicked"},
++                             Binding{"row_kiln_boot_recovery", "on_kiln_boot_recovery_clicked"},
+                              Binding{"row_factory_reset", "on_factory_reset_clicked"}}) {
+         CAPTURE(b.row, b.callback);
+         CHECK(row_runs(b.row, b.callback));
+@@ -142,3 +144,35 @@ TEST_CASE_METHOD(SystemCallbacksFixture,
+     sys.set_telemetry_enabled(before);
+     helix::ui::UpdateQueue::instance().drain();
+ }
++
++// Kiln OS (issue #47): Boot into recovery shows on the AD5X build only
++// (kiln_boot_recovery_available) and is greyed while a print is active.
++TEST_CASE_METHOD(SystemCallbacksFixture,
++                 "System page: Boot into recovery shows on Kiln OS and greys during a print",
++                 "[settings][system_callbacks][kiln]") {
++    lv_subject_t* available = lv_xml_get_subject(nullptr, "kiln_boot_recovery_available");
++    REQUIRE(available != nullptr);
++    lv_subject_t* print_active = lv_xml_get_subject(nullptr, "print_active");
++    REQUIRE(print_active != nullptr);
++    const int available_before = lv_subject_get_int(available);
++    lv_obj_t* row = lv_obj_find_by_name(root_, "row_kiln_boot_recovery");
++    REQUIRE(row != nullptr);
++
++    // The test build is not HELIX_KILN_AD5X: hidden there
++    CHECK(available_before == (helix::kiln_recovery::available() ? 1 : 0));
++    CHECK(lv_obj_has_flag(row, LV_OBJ_FLAG_HIDDEN) == !helix::kiln_recovery::available());
++
++    lv_subject_set_int(available, 1);
++    process_lvgl(5);
++    CHECK_FALSE(lv_obj_has_flag(row, LV_OBJ_FLAG_HIDDEN));
++
++    lv_subject_set_int(print_active, 1);
++    process_lvgl(5);
++    CHECK(lv_obj_has_state(row, LV_STATE_DISABLED));
++    lv_subject_set_int(print_active, 0);
++    process_lvgl(5);
++    CHECK_FALSE(lv_obj_has_state(row, LV_STATE_DISABLED));
++
++    lv_subject_set_int(available, available_before);
++    process_lvgl(5);
++}
+diff --git a/translations/en.yml b/translations/en.yml
+index 3cd2fee..1edc91a 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -5011,6 +5011,8 @@ translations:
+   'Bed soak': 'Bed soak'
+   'Bed soak at {} °C calibrated.': 'Bed soak at {} °C calibrated.'
+   'Bed temperature': 'Bed temperature'
++  'Boot into recovery': 'Boot into recovery'
++  'Boot into recovery?': 'Boot into recovery?'
+   'Built-in': 'Built-in'
+   'CALIBRATE': 'CALIBRATE'
+   'Calibrate the bed soak at {} °C?': 'Calibrate the bed soak at {} °C?'
+@@ -5018,6 +5020,7 @@ translations:
+   'Calibrates the bed heat soak: how long the bed keeps warming after it reaches 60 °C, so the first layer stays flat. Takes about 15 minutes and starts from a cold bed. Skip it if you don''t need it.': 'Calibrates the bed heat soak: how long the bed keeps warming after it reaches 60 °C, so the first layer stays flat. Takes about 15 minutes and starts from a cold bed. Skip it if you don''t need it.'
+   'CALIBRATING': 'CALIBRATING'
+   'Calibration stopped. Heaters off, nothing saved.': 'Calibration stopped. Heaters off, nothing saved.'
++  'Can''t boot into recovery: {}': 'Can''t boot into recovery: {}'
+   'Can''t calibrate now': 'Can''t calibrate now'
+   'Change the nozzle size to {}?': 'Change the nozzle size to {}?'
+   'Changing filament': 'Changing filament'
+@@ -5127,6 +5130,8 @@ translations:
+   'Purge Box': 'Purge Box'
+   'Purge box': 'Purge box'
+   'Remove {}?': 'Remove {}?'
++  'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': 'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)'
++  'Restarting into the recovery OS...': 'Restarting into the recovery OS...'
+   'Retracting filament': 'Retracting filament'
+   'Retracting {}': 'Retracting {}'
+   'Run Again': 'Run Again'
+@@ -5171,6 +5176,7 @@ translations:
+   'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it.': 'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it.'
+   'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.': 'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.'
+   'The nozzle size can''t change during a print': 'The nozzle size can''t change during a print'
++  'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.'
+   'The results of the tuning so far. Check them, then Save.': 'The results of the tuning so far. Check them, then Save.'
+   'The results so far, before Save': 'The results so far, before Save'
+   'The temperature to measure, from a cold bed': 'The temperature to measure, from a cold bed'
+diff --git a/translations/ru.yml b/translations/ru.yml
+index 9c1995c..72dd91f 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -5182,6 +5182,8 @@ translations:
+   'Bed soak': 'Прогрев стола'
+   'Bed soak at {} °C calibrated.': 'Прогрев стола при {} °C откалиброван.'
+   'Bed temperature': 'Температура стола'
++  'Boot into recovery': 'Загрузить систему восстановления'
++  'Boot into recovery?': 'Загрузить систему восстановления?'
+   'Built-in': 'Встроенный'
+   'CALIBRATE': 'КАЛИБРОВАТЬ'
+   'Calibrate the bed soak at {} °C?': 'Откалибровать прогрев стола при {} °C?'
+@@ -5189,6 +5191,7 @@ translations:
+   'Calibrates the bed heat soak: how long the bed keeps warming after it reaches 60 °C, so the first layer stays flat. Takes about 15 minutes and starts from a cold bed. Skip it if you don''t need it.': 'Калибрует прогрев стола: сколько стол ещё прогревается после достижения 60 °C, чтобы первый слой оставался ровным. Занимает около 15 минут и начинается с холодного стола. Если это не нужно, пропустите шаг.'
+   'CALIBRATING': 'ИДЁТ КАЛИБРОВКА'
+   'Calibration stopped. Heaters off, nothing saved.': 'Калибровка остановлена. Нагреватели выключены, ничего не сохранено.'
++  'Can''t boot into recovery: {}': 'Не удалось загрузить систему восстановления: {}'
+   'Can''t calibrate now': 'Сейчас калибровка невозможна'
+   'Change the nozzle size to {}?': 'Изменить размер сопла на {}?'
+   'Changing filament': 'Смена филамента'
+@@ -5298,6 +5301,8 @@ translations:
+   'Purge Box': 'Лоток для отходов'
+   'Purge box': 'Лоток для отходов'
+   'Remove {}?': 'Удалить {}?'
++  'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': 'Перезапуск в систему восстановления (установка обновления с USB-флешки или через веб-страницу на порту 8080)'
++  'Restarting into the recovery OS...': 'Перезапуск в систему восстановления...'
+   'Retracting filament': 'Втягивание филамента'
+   'Retracting {}': 'Втягивание: {}'
+   'Run Again': 'Ещё раз'
+@@ -5342,6 +5347,7 @@ translations:
+   'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it.': 'Сопло, установленное на принтере. От него зависят ширина линий, длина продувки и тест первого слоя.'
+   'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.': 'Сопло, установленное на принтере. От него зависят ширина линий, длина продувки и тест первого слоя. Изменить его можно позже в настройках.'
+   'The nozzle size can''t change during a print': 'Размер сопла нельзя изменить во время печати'
++  'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'Принтер перезапустится в систему восстановления, где печать недоступна. Чтобы вернуться, нажмите на её экране «Запустить ОС».'
+   'The results of the tuning so far. Check them, then Save.': 'Результаты настройки на данный момент. Проверьте их, затем сохраните.'
+   'The results so far, before Save': 'Результаты на данный момент, до сохранения'
+   'The temperature to measure, from a cold bed': 'Температура для измерения, начиная с холодного стола'
+diff --git a/ui_xml/settings_system_overlay.xml b/ui_xml/settings_system_overlay.xml
+index ff3e82e..02faeb6 100644
+--- a/ui_xml/settings_system_overlay.xml
++++ b/ui_xml/settings_system_overlay.xml
+@@ -2,7 +2,7 @@
+ <!-- Copyright (C) 2025-2026 356C LLC -->
+ <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+ <!-- System Settings Overlay -->
+-<!-- Security, performance, telemetry, log level, restart, factory reset -->
++<!-- Security, performance, telemetry, log level, restart, boot into recovery (Kiln OS), factory reset -->
+ <component>
+   <view name="settings_system_overlay" extends="overlay_panel" title="System" bg_color="#screen_bg">
+     <!-- Content Area - no padding, rows handle their own -->
+@@ -71,6 +71,13 @@
+         <setting_action_row name="row_restart_helix"
+                             label="Restart HelixScreen" icon="restart" description="Restart the display application"
+                             callback="on_restart_helix_settings_clicked"/>
++        <!-- Kiln OS (issue #47): machine.kiln_os.boot_recovery, greyed during a print -->
++        <setting_action_row name="row_kiln_boot_recovery"
++                            label="Boot into recovery" icon="power_cycle"
++                            description="Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)"
++                            callback="on_kiln_boot_recovery_clicked" disabled="print_active">
++          <bind_flag_if_eq subject="kiln_boot_recovery_available" flag="hidden" ref_value="0"/>
++        </setting_action_row>
+         <!-- ================================================================== -->
+         <!-- FACTORY RESET -->
+         <!-- ================================================================== -->
+-- 
+2.56.0
+

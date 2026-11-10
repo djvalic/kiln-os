@@ -2,6 +2,7 @@
 """Keep HelixScreen's touch calibration valid on both kernels.
 
 usage: ad5x-touch-units [SETTINGS_JSON] [--kernel stock|own] [--dry-run]
+                        [--recovery-cal FILE]
 
 The two kernels report the TSC2007 touch in different units:
   stock  Flashforge's tsc2007_touch.ko scales the 12-bit readings to the
@@ -14,6 +15,12 @@ range maps the device units to 800x480. This rewrites both for the running
 kernel and records the units in input.ad5x_touch_units ("stock" when
 missing: the calibration was made on the stock kernel). Converting twice
 gives the original values back, so switching kernels keeps one calibration.
+
+--recovery-cal FILE also writes the calibrated range for the recovery OS's
+touch UI (issue #47): "min_x min_y max_x max_y" in stock-kernel units (the
+recovery OS always runs the stock kernel), converted when the settings are
+in our kernel's units. The affine part is left out. Written only when it
+changes; without a calibration the file is left as it is.
 
 Run by S70helixscreen before HelixScreen starts (it must not be running).
 """
@@ -60,10 +67,50 @@ def flip_affine(c):
     return c2
 
 
+def recovery_cal(r, c, units):
+    """the raw values at the screen's left, top, right and bottom edges as
+    "min_x min_y max_x max_y" in stock units. HelixScreen keeps a flip either
+    in the range (min above max, as it calibrates on our kernel) or in the
+    affine (a or e negative, as to_own/to_stock leave it), so the edges come
+    from both, not from the range alone."""
+    a = e = 1.0
+    if c and c.get("valid"):
+        a, e = c.get("a", 1.0), c.get("e", 1.0)
+    left, right = (r["min_x"], r["max_x"]) if a >= 0 else (r["max_x"], r["min_x"])
+    top, bottom = (r["min_y"], r["max_y"]) if e >= 0 else (r["max_y"], r["min_y"])
+    if units != "stock":
+        left, right = left * W / RAW, right * W / RAW
+        top, bottom = H - top * H / RAW, H - bottom * H / RAW
+    return " ".join(str(round(v)) for v in (left, top, right, bottom))
+
+
+def write_recovery_cal(path, line, dry):
+    try:
+        with open(path) as f:
+            if f.read().strip() == line:
+                return
+    except OSError:
+        pass
+    print(f"ad5x-touch-units: recovery touch calibration {line} -> {path}")
+    if dry:
+        return
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            f.write(line + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except OSError as e:
+        print(f"ad5x-touch-units: {path}: {e}", file=sys.stderr)
+
+
 def main(argv):
     path = "/data/ad5x/helixscreen/config/settings.json"
     want = kernel_now()
     dry = False
+    cal_path = None
     args = list(argv)
     while args:
         a = args.pop(0)
@@ -71,6 +118,8 @@ def main(argv):
             want = args.pop(0)
         elif a == "--dry-run":
             dry = True
+        elif a == "--recovery-cal":
+            cal_path = args.pop(0)
         elif a in ("-h", "--help"):
             print(__doc__)
             return 0
@@ -93,6 +142,8 @@ def main(argv):
         return 0
     if have == want:
         print(f"ad5x-touch-units: calibration already in {want} units")
+        if cal_path:
+            write_recovery_cal(cal_path, recovery_cal(r, inp.get("calibration"), have), dry)
         return 0
     conv = to_own if want == "own" else to_stock
     r2, c2 = conv(r, inp.get("calibration"))
@@ -107,6 +158,8 @@ def main(argv):
           f"X {r2['min_x']}..{r2['max_x']} Y {r2['min_y']}..{r2['max_y']}")
     if dry:
         print(json.dumps(inp, indent=2))
+        if cal_path:
+            write_recovery_cal(cal_path, recovery_cal(r2, inp.get("calibration"), want), dry)
         return 0
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
@@ -115,6 +168,8 @@ def main(argv):
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp, path)
+    if cal_path:
+        write_recovery_cal(cal_path, recovery_cal(r2, inp.get("calibration"), want), dry)
     return 0
 
 

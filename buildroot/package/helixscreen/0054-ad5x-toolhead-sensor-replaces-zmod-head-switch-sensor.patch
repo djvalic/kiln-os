@@ -1,0 +1,353 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Mon, 9 Nov 2026 16:30:00 -0500
+Subject: [PATCH] config: the AD5X toolhead sensor is filament_switch_sensor
+ toolhead on Kiln OS
+
+Kiln's Klipper names the toolhead sensor `filament_switch_sensor
+toolhead`; zMod and upstream's AD5X preset call it head_switch_sensor.
+A printer moved from zMod kept head_switch_sensor as its runout sensor
+and in the expected hardware, so Settings > Devices showed "Needs
+attention" with "Configured filament sensor not found", and runout
+pointed at a sensor that does not exist. The preset's own merge at every
+start (Migration 1, a missing preset sensor is added again) would also
+bring it back after any fix to settings.json alone.
+
+On Kiln OS builds (HELIX_KILN_AD5X):
+
+- at every load of settings.json, an AD5X printer's head_switch_sensor
+  entry becomes toolhead with its role and switch; when toolhead is
+  already listed it goes, and toolhead takes over its role if its own is
+  none. The expected and optional hardware lists do the same. Nothing
+  changes when there is no head_switch_sensor, so it saves nothing then.
+- the ad5x preset is read with toolhead in place of head_switch_sensor,
+  so neither the first setup nor the start's preset merge adds it back.
+
+Other printers and other builds are unchanged.
+
+Upstream: not applicable (AD5X OS specific)
+---
+ include/config_migrations.h                 |  15 +++
+ src/system/config.cpp                       |  21 ++++
+ src/system/config_migrations.cpp            | 101 +++++++++++++++
+ tests/unit/test_config_kiln_head_sensor.cpp | 128 ++++++++++++++++++++
+ 4 files changed, 265 insertions(+)
+ create mode 100644 tests/unit/test_config_kiln_head_sensor.cpp
+
+diff --git a/include/config_migrations.h b/include/config_migrations.h
+index c61c30e..74da5d8 100644
+--- a/include/config_migrations.h
++++ b/include/config_migrations.h
+@@ -36,4 +36,19 @@ int migrated_scroll_throw(int stored, int platform_default);
+ /// stamp it. @p config_path locates sidecar files a migration folds in.
+ void run_versioned_migrations(json& config, const std::string& config_path);
+ 
++/// Kiln OS: the AD5X toolhead sensor is Klipper's `filament_switch_sensor
++/// toolhead` there; zMod and upstream's AD5X preset call it `head_switch_sensor`.
++/// In one printer node (a settings printer or a preset's "printer" block): a
++/// head_switch_sensor sensor entry becomes toolhead, keeping its role and switch,
++/// or goes when a toolhead entry is already there (which takes over its role if
++/// its own is none); the hardware expected and optional lists do the same.
++/// Idempotent. @return true if anything changed
++bool kiln_rename_ad5x_head_sensor(json& printer);
++
++/// Kiln OS: kiln_rename_ad5x_head_sensor() for every AD5X printer in a settings
++/// document (by its preset or saved type). Not a versioned migration: it runs at
++/// every load, so a name that comes back (an old backup, a zMod-era file) goes
++/// again. Called only on HELIX_KILN_AD5X builds. @return true if anything changed
++bool kiln_migrate_ad5x_head_sensor(json& config);
++
+ } // namespace helix::config_detail
+diff --git a/src/system/config.cpp b/src/system/config.cpp
+index d01b68f..c577539 100644
+--- a/src/system/config.cpp
++++ b/src/system/config.cpp
+@@ -1083,6 +1083,14 @@ void Config::init(const std::string& config_path) {
+         config_modified = true;
+     }
+ 
++#if defined(HELIX_KILN_AD5X)
++    // Kiln OS: the AD5X toolhead sensor is `filament_switch_sensor toolhead`,
++    // not zMod's head_switch_sensor (printers moved from zMod, upstream's preset).
++    if (!from_newer_build && kiln_migrate_ad5x_head_sensor(data)) {
++        config_modified = true;
++    }
++#endif
++
+     // log_level intentionally NOT migrated - absence allows test_mode fallback
+ 
+     // Ensure display section exists with defaults
+@@ -1710,6 +1718,13 @@ bool Config::apply_preset_file(const std::string& preset_name) {
+             spdlog::info("[Config] Wizard completed, skipping preset '{}' merge", preset_name);
+             return false;
+         }
++#if defined(HELIX_KILN_AD5X)
++        // Kiln OS: the preset's head_switch_sensor is `toolhead` here, or the
++        // sensor migration below would add it back at every start.
++        if (preset_name == "ad5x") {
++            kiln_rename_ad5x_head_sensor(preset_json["printer"]);
++        }
++#endif
+         const auto& preset_printer = preset_json["printer"];
+         bool changed = false;
+ 
+@@ -1911,6 +1926,12 @@ bool Config::apply_preset_file(const std::string& preset_name) {
+                       preset_path);
+         return false;
+     }
++#if defined(HELIX_KILN_AD5X)
++    // Kiln OS: the preset's head_switch_sensor is `toolhead` here.
++    if (preset_name == "ad5x" && preset_json.contains("printer")) {
++        kiln_rename_ad5x_head_sensor(preset_json["printer"]);
++    }
++#endif
+ 
+     // Deep-merge the "printer" section (hardware, fans, heaters, input, etc.) into
+     // the active printer subtree. Guarded by wizard_completed above, so this only
+diff --git a/src/system/config_migrations.cpp b/src/system/config_migrations.cpp
+index 9d20eda..7c2f5e6 100644
+--- a/src/system/config_migrations.cpp
++++ b/src/system/config_migrations.cpp
+@@ -1572,4 +1572,105 @@ int migrated_scroll_throw(int stored, int platform_default) {
+     return stored == 25 ? platform_default : stored;
+ }
+ 
++bool kiln_rename_ad5x_head_sensor(json& printer) {
++    static constexpr const char* kZmod = "filament_switch_sensor head_switch_sensor";
++    static constexpr const char* kKiln = "filament_switch_sensor toolhead";
++    if (!printer.is_object()) {
++        return false;
++    }
++    bool changed = false;
++
++    const json::json_pointer sensors_ptr("/filament_sensors/sensors");
++    if (printer.contains(sensors_ptr) && printer.at(sensors_ptr).is_array()) {
++        json& sensors = printer.at(sensors_ptr);
++        auto name_of = [](const json& s) {
++            return helix::json_util::safe_string(s, "klipper_name");
++        };
++        bool has_kiln = false;
++        for (const auto& s : sensors) {
++            has_kiln = has_kiln || name_of(s) == kKiln;
++        }
++        json kept = json::array();
++        std::string carried_role;
++        bool sensors_changed = false;
++        for (auto& s : sensors) {
++            if (name_of(s) != kZmod) {
++                kept.push_back(s);
++                continue;
++            }
++            sensors_changed = true;
++            if (!has_kiln) {
++                // The user's role and switch carry over to the real sensor.
++                s["klipper_name"] = kKiln;
++                kept.push_back(s);
++                has_kiln = true;
++                continue;
++            }
++            const std::string role = helix::json_util::safe_string(s, "role", "none");
++            if (carried_role.empty() && role != "none") {
++                carried_role = role;
++            }
++        }
++        if (sensors_changed) {
++            if (!carried_role.empty()) {
++                for (auto& s : kept) {
++                    if (name_of(s) == kKiln) {
++                        if (helix::json_util::safe_string(s, "role", "none") == "none") {
++                            s["role"] = carried_role;
++                        }
++                        break;
++                    }
++                }
++            }
++            sensors = std::move(kept);
++            changed = true;
++        }
++    }
++
++    for (const char* list : {"expected", "optional"}) {
++        const json::json_pointer ptr(std::string("/hardware/") + list);
++        if (!printer.contains(ptr) || !printer.at(ptr).is_array()) {
++            continue;
++        }
++        json& names = printer.at(ptr);
++        bool placed = false;
++        for (const auto& n : names) {
++            placed = placed || n == kKiln;
++        }
++        for (auto it = names.begin(); it != names.end();) {
++            if (*it != kZmod) {
++                ++it;
++            } else if (!placed) {
++                *it = kKiln;
++                placed = true;
++                changed = true;
++                ++it;
++            } else {
++                it = names.erase(it);
++                changed = true;
++            }
++        }
++    }
++    return changed;
++}
++
++bool kiln_migrate_ad5x_head_sensor(json& config) {
++    if (!config.contains("printers") || !config["printers"].is_object()) {
++        return false;
++    }
++    bool changed = false;
++    for (auto& [printer_id, printer] : config["printers"].items()) {
++        if (!printer.is_object() || !printer_is_ad5x(config, printer_id, printer)) {
++            continue;
++        }
++        if (kiln_rename_ad5x_head_sensor(printer)) {
++            spdlog::info("[Config] Kiln OS: head_switch_sensor is filament_switch_sensor "
++                         "toolhead for printer '{}'",
++                         printer_id);
++            changed = true;
++        }
++    }
++    return changed;
++}
++
+ } // namespace helix::config_detail
+diff --git a/tests/unit/test_config_kiln_head_sensor.cpp b/tests/unit/test_config_kiln_head_sensor.cpp
+new file mode 100644
+index 0000000..3bc2e02
+--- /dev/null
++++ b/tests/unit/test_config_kiln_head_sensor.cpp
+@@ -0,0 +1,128 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++// Kiln OS: the AD5X toolhead sensor is Klipper's `filament_switch_sensor toolhead`.
++// Printers moved from zMod, and upstream's AD5X preset, name it head_switch_sensor,
++// so Settings > Devices reported "Configured filament sensor not found" and the
++// runout role pointed at a sensor that does not exist.
++
++#include "config_migrations.h"
++
++#include "../catch_amalgamated.hpp"
++#include "hv/json.hpp"
++
++using nlohmann::json;
++using helix::config_detail::kiln_migrate_ad5x_head_sensor;
++using helix::config_detail::kiln_rename_ad5x_head_sensor;
++
++namespace {
++
++constexpr const char* kZmod = "filament_switch_sensor head_switch_sensor";
++constexpr const char* kKiln = "filament_switch_sensor toolhead";
++
++json sensor(const char* klipper_name, const char* role, bool enabled = true) {
++    return {
++        {"klipper_name", klipper_name}, {"role", role}, {"type", "switch"}, {"enabled", enabled}};
++}
++
++json ad5x_printer(json sensors, json expected) {
++    return {{"type", "FlashForge Adventurer 5X"},
++            {"preset", "ad5x"},
++            {"filament_sensors", {{"master_enabled", true}, {"sensors", sensors}}},
++            {"hardware", {{"expected", expected}, {"optional", json::array()}}}};
++}
++
++json document(json printer) {
++    return {{"active_printer_id", "a"}, {"printers", {{"a", std::move(printer)}}}};
++}
++
++const json& printer_of(const json& config) {
++    return config["printers"]["a"];
++}
++
++const json& sensors_of(const json& config) {
++    return printer_of(config)["filament_sensors"]["sensors"];
++}
++
++const json& expected_of(const json& config) {
++    return printer_of(config)["hardware"]["expected"];
++}
++
++} // namespace
++
++TEST_CASE("Kiln: a zMod head_switch_sensor becomes toolhead, keeping the user's choices",
++          "[config][migration][ad5x][kiln]") {
++    json config = document(ad5x_printer(json::array({sensor(kZmod, "runout", false)}),
++                                        json::array({"extruder", kZmod, "heater_bed"})));
++    REQUIRE(kiln_migrate_ad5x_head_sensor(config));
++
++    const json& sensors = sensors_of(config);
++    REQUIRE(sensors.size() == 1);
++    CHECK(sensors[0]["klipper_name"] == kKiln);
++    CHECK(sensors[0]["role"] == "runout");
++    CHECK(sensors[0]["enabled"] == false);
++    CHECK(expected_of(config) == json::array({"extruder", kKiln, "heater_bed"}));
++
++    SECTION("a second run changes nothing") {
++        const json before = config;
++        CHECK_FALSE(kiln_migrate_ad5x_head_sensor(config));
++        CHECK(config == before);
++    }
++}
++
++TEST_CASE("Kiln: the stale entry goes when toolhead is already listed",
++          "[config][migration][ad5x][kiln]") {
++    SECTION("toolhead with no role takes over the runout role") {
++        json config =
++            document(ad5x_printer(json::array({sensor(kZmod, "runout"), sensor(kKiln, "none")}),
++                                  json::array({kKiln, kZmod})));
++        REQUIRE(kiln_migrate_ad5x_head_sensor(config));
++        const json& sensors = sensors_of(config);
++        REQUIRE(sensors.size() == 1);
++        CHECK(sensors[0]["klipper_name"] == kKiln);
++        CHECK(sensors[0]["role"] == "runout");
++        CHECK(expected_of(config) == json::array({kKiln}));
++    }
++
++    SECTION("toolhead's own role stays") {
++        json config = document(ad5x_printer(
++            json::array({sensor(kKiln, "toolhead"), sensor(kZmod, "runout")}), json::array()));
++        REQUIRE(kiln_migrate_ad5x_head_sensor(config));
++        const json& sensors = sensors_of(config);
++        REQUIRE(sensors.size() == 1);
++        CHECK(sensors[0]["role"] == "toolhead");
++    }
++}
++
++TEST_CASE("Kiln: other sensors and printers are left alone", "[config][migration][ad5x][kiln]") {
++    SECTION("an AD5X with toolhead already has nothing to change") {
++        json config = document(ad5x_printer(
++            json::array({sensor(kKiln, "runout"), sensor("filament_motion_sensor ifs", "none")}),
++            json::array({"extruder", kKiln})));
++        const json before = config;
++        CHECK_FALSE(kiln_migrate_ad5x_head_sensor(config));
++        CHECK(config == before);
++    }
++
++    SECTION("a printer that is not an AD5X keeps head_switch_sensor") {
++        json printer = ad5x_printer(json::array({sensor(kZmod, "runout")}), json::array({kZmod}));
++        printer["type"] = "FlashForge Adventurer 5M";
++        printer["preset"] = "ad5m";
++        json config = document(printer);
++        const json before = config;
++        CHECK_FALSE(kiln_migrate_ad5x_head_sensor(config));
++        CHECK(config == before);
++    }
++}
++
++TEST_CASE("Kiln: upstream's AD5X preset reads as toolhead", "[config][migration][ad5x][kiln]") {
++    // The shape of assets/config/presets/ad5x.json's "printer" block.
++    json preset_printer = {
++        {"filament_sensors",
++         {{"master_enabled", true}, {"sensors", json::array({sensor(kZmod, "runout")})}}},
++        {"hardware", {{"expected", json::array({"heater_bed", kZmod, "led chamber_light"})}}}};
++    REQUIRE(kiln_rename_ad5x_head_sensor(preset_printer));
++    CHECK(preset_printer["filament_sensors"]["sensors"][0]["klipper_name"] == kKiln);
++    CHECK(preset_printer["hardware"]["expected"] ==
++          json::array({"heater_bed", kKiln, "led chamber_light"}));
++    CHECK_FALSE(kiln_rename_ad5x_head_sensor(preset_printer));
++}
+-- 
+2.56.0
+

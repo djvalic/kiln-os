@@ -228,9 +228,15 @@ static void page_logs(void);
 static void page_power(void);
 static void page_job(void);
 
+static void dlg_close(void);
+
 static void go(page_fn f)
 {
-	lv_obj_clean(lv_layer_top());	/* any dialog */
+	/* any dialog, with its arm timer and the top layer's CLICKABLE flag:
+	 * left behind, the next page lost its taps to the empty top layer and
+	 * the timer touched the deleted OK button (a web update opens the job
+	 * page over a dialog, issue #47) */
+	dlg_close();
 	cur_refresh = NULL;
 	lv_obj_t *old = scr;
 	scr = lv_obj_create(NULL);
@@ -2030,8 +2036,9 @@ static void click(lv_obj_t *o)
 	settle(100);
 }
 
-void ui_run_shots(void (*shot)(const char *name))
+int ui_run_shots(void (*shot)(const char *name))
 {
+	int fails = 0;
 	settle(300);
 	shot("01-home");
 
@@ -2139,12 +2146,25 @@ void ui_run_shots(void (*shot)(const char *name))
 	shot("21-reboot-confirm");
 	dlg_close();
 
-	/* A browser upload arriving while on the home screen */
+	/* A browser upload arriving while on the home screen, with a dialog
+	 * open (its second stage, arm timer running): the job page replaces
+	 * it and gets the taps (issue #47) */
 	go(page_home);
 	settle(200);
+	on_stock(NULL);
+	settle(100);
+	click(dlg.ok_btn);
 	swu_inject(SWU_START, SWU_SRC_WEBSERVER, 0, 0, 0, "", NULL);
 	swu_inject(SWU_DOWNLOAD, SWU_SRC_WEBSERVER, 0, 0, 0, "", NULL);
 	settle(400);
+	if (cur_page != page_job || dlg.arm || dlg.ok_btn ||
+	    lv_obj_has_flag(lv_layer_top(), LV_OBJ_FLAG_CLICKABLE) ||
+	    lv_obj_get_child_count(lv_layer_top())) {
+		slog("shots: FAIL a dialog was left behind by the page change");
+		fails++;
+	} else {
+		slog("shots: ok   the page change closed the dialog");
+	}
 	swu_inject(SWU_RUN, SWU_SRC_WEBSERVER, 3, 1, 70, "kernel.uimage", NULL);
 	settle(400);
 	shot("22-web-upload");
@@ -2156,4 +2176,5 @@ void ui_run_shots(void (*shot)(const char *name))
 	go(page_home);
 	settle(300);
 	shot("24-home-again");
+	return fails;
 }

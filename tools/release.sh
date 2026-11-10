@@ -154,8 +154,9 @@ else
 		echo
 		echo "Updating a printer already on Kiln OS: Fluidd → Software Updates →"
 		echo "Kiln OS → Update, or copy \`$NAME-update.zip\` to it and run"
-		echo "\`ad5x-update --reboot FILE\`, or put it on a USB stick while the"
-		echo "recovery OS runs."
+		echo "\`ad5x-update --reboot FILE\`, or put it on a USB stick with an empty"
+		echo "\`ad5x-autoupdate\` file and start the recovery OS (docs/updates.md,"
+		echo "\"From a USB stick\")."
 		echo
 		# What's new: the release's CHANGELOG.md section
 		new=$(tools/changelog_section.sh "$VERSION")

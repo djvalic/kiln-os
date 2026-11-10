@@ -1,0 +1,182 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Mon, 9 Nov 2026 16:10:00 -0500
+Subject: [PATCH] ams: the AD5X's two "Endless Spool" rows read Auto-Refill and
+ Auto-Refill colour match
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+On the AD5X IFS the filament system settings had two rows named
+"Endless Spool": the panel's switch, which on Kiln OS is the auto-refill
+on/off (IFS_AUTO_REFILL ENABLE=, patch 0038), and the section patch 0039
+adds for the colour match. The switch now reads "Auto-Refill" and the
+section "Auto-Refill colour match", as Settings > Filament Auto-Refill
+calls it; Russian "Автозамена" and "Автозамена: подбор цвета". Other
+backends keep "Endless Spool".
+
+Upstream: not applicable (AD5X OS specific)
+---
+ src/printer/ams_backend_ad5x_ifs.cpp        |  8 +++--
+ src/ui/ui_ams_device_operations_overlay.cpp | 13 ++++++++
+ tests/unit/test_ams_ad5x_kiln_ifs.cpp       |  5 ++-
+ tests/unit/test_ams_device_ops_rows.cpp     | 35 ++++++++++++++++++++-
+ translations/en.yml                         |  2 ++
+ translations/ru.yml                         |  2 ++
+ 6 files changed, 61 insertions(+), 4 deletions(-)
+
+diff --git a/src/printer/ams_backend_ad5x_ifs.cpp b/src/printer/ams_backend_ad5x_ifs.cpp
+index 7eda2c1..b30e793 100644
+--- a/src/printer/ams_backend_ad5x_ifs.cpp
++++ b/src/printer/ams_backend_ad5x_ifs.cpp
+@@ -7172,8 +7172,12 @@ std::vector<helix::printer::DeviceSection> AmsBackendAd5xIfs::get_device_section
+         return sections;
+     }
+     if (kiln_refill_live_locked()) {
+-        sections.push_back(
+-            device_section("endless_spool", 0, TR_NOOP("Which spool auto-refill takes over with")));
++        // Named for what it holds: the overlay's own switch above it is the
++        // auto-refill on/off, so a second "Endless Spool" row read as a twin.
++        auto refill = device_section("endless_spool", 0,
++                                     TR_NOOP("Which spool auto-refill takes over with"));
++        refill.label = TR_NOOP("Auto-Refill colour match");
++        sections.push_back(std::move(refill));
+     }
+     if (kiln_info_.map_mode.has_value()) {
+         sections.push_back(
+diff --git a/src/ui/ui_ams_device_operations_overlay.cpp b/src/ui/ui_ams_device_operations_overlay.cpp
+index 6f343bd..fc77fdc 100644
+--- a/src/ui/ui_ams_device_operations_overlay.cpp
++++ b/src/ui/ui_ams_device_operations_overlay.cpp
+@@ -457,6 +457,19 @@ void AmsDeviceOperationsOverlay::update_from_backend() {
+     lv_subject_set_int(&can_reset_endless_spool_subject_,
+                        backend->get_endless_spool_capabilities().editable() ? 1 : 0);
+ 
++    // Kiln OS: on the AD5X IFS the Endless Spool switch is Kiln's auto-refill
++    // (IFS_AUTO_REFILL ENABLE=, patch 0038), named as in Settings > Filament
++    // Auto-Refill. Every other backend keeps "Endless Spool".
++    if (overlay_) {
++        lv_obj_t* row = lv_obj_find_by_name(overlay_, "row_endless_spool");
++        lv_obj_t* label = row ? lv_obj_find_by_name(row, "label") : nullptr;
++        if (label) {
++            lv_label_set_translation_tag(label, backend->get_type() == AmsType::AD5X_IFS
++                                                    ? "Auto-Refill"
++                                                    : "Endless Spool");
++        }
++    }
++
+     // Home sends reset() and Recover recover(); a machine with no command
+     // behind either shows the button disabled rather than toasting a refusal.
+     lv_subject_set_int(&can_home_subject_, backend->reset_available() ? 1 : 0);
+diff --git a/tests/unit/test_ams_ad5x_kiln_ifs.cpp b/tests/unit/test_ams_ad5x_kiln_ifs.cpp
+index 486fc84..3e92cf1 100644
+--- a/tests/unit/test_ams_ad5x_kiln_ifs.cpp
++++ b/tests/unit/test_ams_ad5x_kiln_ifs.cpp
+@@ -480,7 +480,10 @@ TEST_CASE("AD5X IFS lists Kiln's device operations", "[ams][ad5x_ifs][kiln_ifs][
+             ids.push_back(s.id);
+             const auto* kind = helix::printer::find_device_section_kind(s.id);
+             REQUIRE(kind != nullptr);
+-            CHECK(s.label == kind->label);
++            // The auto-refill colour match is not a second "Endless Spool" row
++            // beside the overlay's switch.
++            CHECK(s.label == (s.id == "endless_spool" ? std::string("Auto-Refill colour match")
++                                                      : std::string(kind->label)));
+         }
+         CHECK(ids == std::vector<std::string>{"endless_spool", "setup", "calibration", "feeder"});
+         // Every action sits in a declared section.
+diff --git a/tests/unit/test_ams_device_ops_rows.cpp b/tests/unit/test_ams_device_ops_rows.cpp
+index 7ec3e3f..d62b3b9 100644
+--- a/tests/unit/test_ams_device_ops_rows.cpp
++++ b/tests/unit/test_ams_device_ops_rows.cpp
+@@ -43,6 +43,14 @@ class SwitchableEndlessMock : public AmsBackendMock {
+         on_ = on;
+     }
+ 
++    /// Report the AD5X IFS type (Kiln OS: its switch is the auto-refill).
++    void report_ad5x(bool on) {
++        ad5x_ = on;
++    }
++    [[nodiscard]] AmsType get_type() const override {
++        return ad5x_ ? AmsType::AD5X_IFS : AmsBackendMock::get_type();
++    }
++
+     [[nodiscard]] helix::printer::EndlessSpoolCapabilities
+     get_endless_spool_capabilities() const override {
+         auto caps = AmsBackendMock::get_endless_spool_capabilities();
+@@ -80,6 +88,7 @@ class SwitchableEndlessMock : public AmsBackendMock {
+     EventCallback listener_;
+     bool switchable_ = false;
+     bool on_ = false;
++    bool ad5x_ = false;
+ };
+ 
+ class DeviceOpsRowsFixture : public LVGLUITestFixture {
+@@ -104,7 +113,9 @@ class DeviceOpsRowsFixture : public LVGLUITestFixture {
+     }
+ 
+     /// Install @p backend, build the overlay through show(), and return it.
+-    SwitchableEndlessMock* show_with(std::unique_ptr<SwitchableEndlessMock> owned) {
++    SwitchableEndlessMock* show_with(std::unique_ptr<SwitchableEndlessMock> owned,
++                                     bool ad5x = false) {
++        owned->report_ad5x(ad5x);
+         owned->set_operation_delay(0);
+         REQUIRE(owned->start().success());
+         SwitchableEndlessMock* raw = owned.get();
+@@ -196,6 +207,28 @@ TEST_CASE_METHOD(DeviceOpsRowsFixture, "one Endless Spool switch follows the cap
+     }
+ }
+ 
++// Kiln OS: on the AD5X IFS the switch is Kiln's auto-refill, named as in
++// Settings; every other backend keeps "Endless Spool".
++TEST_CASE_METHOD(DeviceOpsRowsFixture, "the AD5X's Endless Spool switch reads Auto-Refill",
++                 "[ams][device-ops][rows][endless][kiln]") {
++    auto label_text = [this]() {
++        lv_obj_t* row = find("row_endless_spool");
++        REQUIRE(row != nullptr);
++        lv_obj_t* label = lv_obj_find_by_name(row, "label");
++        REQUIRE(label != nullptr);
++        return std::string(lv_label_get_text(label));
++    };
++
++    SECTION("AD5X IFS") {
++        show_with(std::make_unique<SwitchableEndlessMock>(true, true), /*ad5x=*/true);
++        CHECK(label_text() == lv_tr("Auto-Refill"));
++    }
++    SECTION("any other backend") {
++        show_with(std::make_unique<SwitchableEndlessMock>(true, true));
++        CHECK(label_text() == lv_tr("Endless Spool"));
++    }
++}
++
+ TEST_CASE_METHOD(DeviceOpsRowsFixture, "no vendor-named unload row in the generic overlay",
+                  "[ams][device-ops][rows]") {
+     show_with(std::make_unique<SwitchableEndlessMock>(false, false));
+diff --git a/translations/en.yml b/translations/en.yml
+index 4d311ed..a4c24fe 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -4994,6 +4994,8 @@ translations:
+   'Asks for the time zone and the nozzle size, then runs the self-check and the tuning steps again (PID, bed mesh, vibration, IFS, Z offset). Every step can be skipped. Results are saved at the end and Klipper restarts.': 'Asks for the time zone and the nozzle size, then runs the self-check and the tuning steps again (PID, bed mesh, vibration, IFS, Z offset). Every step can be skipped. Results are saved at the end and Klipper restarts.'
+   'Auto colour': 'Auto colour'
+   'Auto-refill': 'Auto-refill'
++  'Auto-Refill': 'Auto-Refill'
++  'Auto-Refill colour match': 'Auto-Refill colour match'
+   'Auto-refill is off, so no backup spool takes over.': 'Auto-refill is off, so no backup spool takes over.'
+   'Auto-refill is on and {} is a backup, but it did not take over.': 'Auto-refill is on and {} is a backup, but it did not take over.'
+   'Auto-refill is on, but no slot holds a backup for this spool.': 'Auto-refill is on, but no slot holds a backup for this spool.'
+diff --git a/translations/ru.yml b/translations/ru.yml
+index ca1dc76..bd5179e 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -5165,6 +5165,8 @@ translations:
+   'Asks for the time zone and the nozzle size, then runs the self-check and the tuning steps again (PID, bed mesh, vibration, IFS, Z offset). Every step can be skipped. Results are saved at the end and Klipper restarts.': 'Запрашивает часовой пояс и размер сопла, затем снова выполняет самопроверку и шаги настройки (PID, сетка стола, вибрации, IFS, смещение по Z). Любой шаг можно пропустить. В конце результаты сохраняются, и Klipper перезапускается.'
+   'Auto colour': 'Авто по цвету'
+   'Auto-refill': 'Автозамена'
++  'Auto-Refill': 'Автозамена'
++  'Auto-Refill colour match': 'Автозамена: подбор цвета'
+   'Auto-refill is off, so no backup spool takes over.': 'Автозамена выключена, поэтому резервная катушка не подключится.'
+   'Auto-refill is on and {} is a backup, but it did not take over.': 'Автозамена включена и {} — резерв, но замена не произошла.'
+   'Auto-refill is on, but no slot holds a backup for this spool.': 'Автозамена включена, но ни в одном слоте нет резерва для этой катушки.'
+-- 
+2.56.0
+

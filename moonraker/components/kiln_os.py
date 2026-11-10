@@ -24,6 +24,11 @@
 #   POST /machine/kiln_os/kernel_retry  the agent runs "ad5x-kernel retry"
 #                                       and reboots (refused while printing)
 # The "Kiln OS" update entry's status has the same under "kernel".
+# The recovery OS (issue #47):
+#   POST /machine/kiln_os/boot_recovery the agent runs "ad5x-boot-recovery"
+#                                       (boot flag on slot A) and reboots
+#                                       into the recovery OS (refused while
+#                                       printing or still starting up)
 #
 # [kiln_os]
 # server: https://github.com    # or a Gitea server, e.g. http://HOST:3000
@@ -57,6 +62,7 @@ WORK_DIR = pathlib.Path("/data/ad5x/kiln-update")
 AGENT_REQUEST = WORK_DIR / "install"
 AGENT_STATUS = WORK_DIR / "status"
 AGENT_KERNEL_RETRY = WORK_DIR / "kernel-retry"
+AGENT_BOOT_RECOVERY = WORK_DIR / "boot-recovery"
 APPS_DIR = pathlib.Path("/data/ad5x/apps")
 APP_SUB = {"klipper": "klippy", "moonraker": "moonraker"}
 KERNEL_DIR = pathlib.Path("/data/ad5x/kernel")
@@ -574,6 +580,9 @@ class KilnOS:
         self.server.register_endpoint(
             "/machine/kiln_os/kernel_retry", RequestType.POST,
             self._handle_kernel_retry)
+        self.server.register_endpoint(
+            "/machine/kiln_os/boot_recovery", RequestType.POST,
+            self._handle_boot_recovery)
         st = safe_kernel_status()
         notice = kernel_notice(st)
         if notice:
@@ -616,6 +625,16 @@ class KilnOS:
         status = await ask_agent(self.server, AGENT_KERNEL_RETRY, "retry\n",
                                  ("rebooting",), timeout=30)
         self.server.remove_warning(KERNEL_WARNING)
+        return {"result": status}
+
+    async def _handle_boot_recovery(self, web_request: WebRequest
+                                    ) -> Dict[str, Any]:
+        # The agent refuses while printing or starting up, or without the
+        # recovery OS in slot A; otherwise points the boot flag at it and
+        # reboots
+        status = await ask_agent(self.server, AGENT_BOOT_RECOVERY,
+                                 "boot-recovery\n", ("rebooting",),
+                                 timeout=30)
         return {"result": status}
 
 

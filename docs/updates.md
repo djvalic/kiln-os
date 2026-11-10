@@ -69,6 +69,8 @@ sorts below the release, so a printer on it is still offered the release later. 
 is kept in the run's log folder (`update-<version>.zip`). It is never published, and
 `tools/release.sh` refuses it (a test version has a second hyphen). Install one by hand with
 `ad5x-update` from slot B (`docs/recovery-os.md`), passing the zip's sha256. See `docs/builder.md`.
+`ad5x-update` refuses to stage anything until start-up has finished (the boot flag reads
+`ota:kernel2` again); its message shows a loop that waits for that.
 
 ## The printer
 
@@ -98,7 +100,10 @@ is kept in the run's log folder (`update-<version>.zip`). It is never published,
   Moonraker"), or Klipper is ready and its print state is printing, paused
   or unknown. A Klipper that is not ready (startup, shutdown, error,
   disconnected) can't be printing, so a printer with a broken Klipper can
-  still be updated. It stages it with `ad5x-update` (boot flag on the recovery OS)
+  still be updated. It also refuses before start-up has finished ("refused:
+  start-up has not finished yet, try again in a minute"; issue #47): until
+  `S99ad5x-booted` has run, a reboot would count as an unfinished start of
+  our kernel. It stages it with `ad5x-update` (boot flag on the recovery OS)
   and reboots. The recovery OS installs it into slot B, checks it and
   boots it (about 3 minutes). Log: `/data/ad5x/kiln-update/agent.log`.
   The update carries the release's recovery OS too: after the first
@@ -134,3 +139,60 @@ is kept in the run's log folder (`update-<version>.zip`). It is never published,
     recorded as failed, or when the image has no kernel of its own. Example:
     `curl -X POST http://PRINTER/machine/kiln_os/kernel_retry` (through
     Fluidd's nginx) or port 7125.
+- The recovery OS on request (issue #47):
+  `POST /machine/kiln_os/boot_recovery` writes `boot-recovery` in
+  `/data/ad5x/kiln-update`; the agent runs `ad5x-boot-recovery` (boot
+  flag on the recovery OS in slot A) and reboots. Unlike an interrupted
+  start this records nothing against our kernel. Answers
+  `{"result": "rebooting"}`; an error while a print may run (the same rule
+  as installs), before start-up has finished, while the recovery OS is
+  being written into slot A, or when slot A doesn't hold the recovery OS.
+  Example: `curl -X POST http://PRINTER/machine/kiln_os/boot_recovery`.
+  Over SSH: `ad5x-boot-recovery`.
+
+## From a USB stick
+
+For a printer that can't reach the network (or Fluidd), a release can be
+installed from a USB stick. The stick is read only by the **recovery OS**,
+when the printer starts it: putting the stick in and restarting the
+printer normally does nothing, because a normal start runs the main
+system, which ignores the stick.
+
+1. Format the stick FAT32 or ext4 (not exFAT).
+2. Copy the release's `kiln-os-vX.Y.Z-update.zip` into its top directory,
+   unchanged (not unpacked).
+3. Next to it, create an empty file named `ad5x-autoupdate` (no
+   extension; on Windows check that it isn't saved as
+   `ad5x-autoupdate.txt`).
+4. Put the stick in the printer and start the recovery OS (below). It
+   installs the update (about 3 minutes, progress on the touch screen),
+   writes `ad5x-autoupdate.log` on the stick and starts the new system.
+   Each zip is installed only once (its sha256 goes to
+   `/data/ad5x/update/applied.list`), so a stick left in doesn't install
+   it again; take it out anyway.
+
+Without `ad5x-autoupdate` the recovery OS only offers what is on the
+stick: its touch screen's **Install update** page lists it.
+
+Getting into the recovery OS:
+
+- **From the network**, if it still works for a moment:
+  `curl -X POST http://PRINTER/machine/kiln_os/boot_recovery` (or
+  `ad5x-boot-recovery` over SSH). It is refused while printing and in the
+  first minute after power-on, until start-up has finished. With the
+  network up, Fluidd's own update (Settings → Software Updates → Kiln OS)
+  is simpler than a stick.
+- **From the touch screen** (no network needed): Settings → System →
+  **Boot into recovery**, then Restart. It sends the same request, so it is
+  refused the same way while printing or still starting.
+- **Last resort: interrupt a start.** Switch the printer off while it is
+  still starting (the Kiln OS logo, before the touch screen comes up) and
+  on again: a start that didn't finish lands in the recovery OS. Side
+  effect: the interrupted start counts against Kiln's own kernel, so the
+  next start of the main system may use the stock kernel (Fluidd then
+  warns "Running the stock kernel"). Fix it with `ad5x-kernel retry` over
+  SSH, or `POST /machine/kiln_os/kernel_retry` (see "The kernel" above),
+  which reboots the printer.
+
+The recovery OS's other ways to install an update (its web page on port
+8080, the drop folder): `docs/recovery-os.md`, "Updates (SWUpdate)".

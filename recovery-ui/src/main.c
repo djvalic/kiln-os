@@ -12,6 +12,7 @@
 #include "commands.h"
 #include "job.h"
 #include "swu.h"
+#include "touch_cal.h"
 #include "ui.h"
 
 #include <dirent.h>
@@ -168,8 +169,7 @@ static int run_shots(const char *dir)
 	lv_display_set_buffers(hdisp, buf, NULL, sz, LV_DISPLAY_RENDER_MODE_FULL);
 	lv_display_set_flush_cb(hdisp, headless_flush);
 	ui_init(hdisp);
-	ui_run_shots(shot);
-	return 0;
+	return ui_run_shots(shot) ? 1 : 0;
 }
 
 /* ---------------------------------------------------------------- panel */
@@ -227,13 +227,19 @@ static void touch_try(lv_timer_t *t)
 	if (!touch)
 		return;
 	slog("touch: %s (%s)", p, rui_get(PATH_TOUCH_NAME));
-	/* Overrides if the panel's mapping ever needs it:
-	 * AD5X_RUI_TOUCH_CAL="minx miny maxx maxy" (swap min/max to invert),
-	 * AD5X_RUI_TOUCH_SWAP=1 to swap X and Y */
+	/* The calibration (touch_cal.h): AD5X_RUI_TOUCH_CAL="minx miny maxx
+	 * maxy" from S80ad5x-recovery-ui (swap min/max to invert), else the
+	 * panel's usual range; AD5X_RUI_TOUCH_SWAP=1 swaps X and Y */
 	const char *cal = getenv("AD5X_RUI_TOUCH_CAL");
-	int a, b, c, d;
-	if (cal && sscanf(cal, "%d %d %d %d", &a, &b, &c, &d) == 4)
-		lv_evdev_set_calibration(touch, a, b, c, d);
+	int v[4];
+	bool from_env = touch_cal_from_env(cal, v);
+	lv_evdev_set_calibration(touch, v[0], v[1], v[2], v[3]);
+	if (from_env)
+		slog("touch calibration: X %d..%d Y %d..%d (AD5X_RUI_TOUCH_CAL)",
+		     v[0], v[2], v[1], v[3]);
+	else
+		slog("touch calibration: X %d..%d Y %d..%d (default; AD5X_RUI_TOUCH_CAL %s)",
+		     v[0], v[2], v[1], v[3], cal ? "not usable" : "not set");
 	const char *sw = getenv("AD5X_RUI_TOUCH_SWAP");
 	if (sw && *sw == '1')
 		lv_evdev_set_swap_axes(touch, true);

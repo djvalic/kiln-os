@@ -1,0 +1,196 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Mon, 9 Nov 2026 16:00:00 -0500
+Subject: [PATCH] wifi: a saved "Wi-Fi off" is applied at start without
+ Ethernet on the AD5X (issue #44)
+
+At its start HelixScreen applies a saved "off" only when a wired path is
+up; on a Wi-Fi-only printer it left the radio on and saved "on" again,
+so Wi-Fi switched off on the screen came back after every reboot. That
+guard keeps a headless device from being cut off the network. The AD5X
+always has its touch screen, where Wi-Fi can be switched back on (the
+switch already warns so when there is no Ethernet), so on Kiln OS
+builds (HELIX_KILN_AD5X) a saved "off" is applied without Ethernet too.
+A saved "on", the rule that a block on a Wi-Fi HelixScreen never set up
+is not cleared (#1697), and other builds stay as they were. Kiln's
+S42ad5x-wifi still starts wpa_supplicant whatever the switch says, so
+switching it back on works.
+
+Upstream: not applicable (AD5X OS specific)
+---
+ include/wifi_manager.h                        |  6 ++
+ src/api/wifi_manager.cpp                      | 19 ++++-
+ tests/test_helpers/wifi_manager_test_access.h |  8 +++
+ tests/unit/test_wifi_manager.cpp              | 72 +++++++++++++++++++
+ 4 files changed, 103 insertions(+), 2 deletions(-)
+
+diff --git a/include/wifi_manager.h b/include/wifi_manager.h
+index c786969..c588781 100644
+--- a/include/wifi_manager.h
++++ b/include/wifi_manager.h
+@@ -810,6 +810,12 @@ class WiFiManager {
+     // only network path is that radio). Defaults to "/sys"; tests point it at
+     // a fixture tree via WiFiManagerTestAccess.
+     static std::string sys_root_;
++
++    // Kiln OS (AD5X): the printer's own touch screen is a way back to a radio
++    // switched off, so the stored-radio-state reassert applies a stored "off"
++    // without a non-WiFi network path too (djvalic/kiln-os#44). True on
++    // HELIX_KILN_AD5X builds; tests set it via WiFiManagerTestAccess.
++    static bool local_screen_fallback_;
+ };
+ 
+ /**
+diff --git a/src/api/wifi_manager.cpp b/src/api/wifi_manager.cpp
+index 65d710c..e76599c 100644
+--- a/src/api/wifi_manager.cpp
++++ b/src/api/wifi_manager.cpp
+@@ -69,6 +69,14 @@ bool WiFiManager::in_association_grace() const {
+ // can be pointed at a fixture tree instead of the real /sys.
+ std::string WiFiManager::sys_root_ = "/sys";
+ 
++// Kiln OS: the AD5X always has its touch screen, where Wi-Fi can be switched
++// back on (HELIX_KILN_AD5X, set in buildroot/package/helixscreen/helixscreen.mk).
++#if defined(HELIX_KILN_AD5X)
++bool WiFiManager::local_screen_fallback_ = true;
++#else
++bool WiFiManager::local_screen_fallback_ = false;
++#endif
++
+ // ============================================================================
+ // Constructor / Destructor
+ // ============================================================================
+@@ -165,6 +173,9 @@ void WiFiManager::register_backend_callbacks(bool silent) {
+         // network path (wired or otherwise) is actually up. When resolution of
+         // the WiFi interface itself is inconclusive, fail safe: treat it the
+         // same as "no known wired fallback" and do not disable the radio.
++        // Kiln OS: on the AD5X the printer's own touch screen is that way back
++        // (local_screen_fallback_), so a stored "off" is reasserted there
++        // without a wired path too (djvalic/kiln-os#44).
+         async_lifetime_.defer("WiFiManager::apply_stored_country",
+                               [this]() { apply_stored_country(); });
+         async_lifetime_.defer("WiFiManager::reassert_stored_radio_state", [this]() {
+@@ -200,12 +211,16 @@ void WiFiManager::register_backend_callbacks(bool silent) {
+             };
+             if (!want_on && backend_) {
+                 const auto iface = backend_->resolved_interface();
+-                const bool safe_to_disable =
++                const bool wired_path =
+                     iface.has_value() &&
+                     helix::wifi::detail::has_non_wifi_network_path(sys_root_, iface->netdev);
++                const bool safe_to_disable = wired_path || local_screen_fallback_;
+ 
+                 if (safe_to_disable) {
+-                    spdlog::info("[WiFiManager] Stored setting is WiFi off — reasserting");
++                    spdlog::info("[WiFiManager] Stored setting is WiFi off — reasserting{}",
++                                 wired_path ? ""
++                                            : " (no non-WiFi network path; the touch screen can "
++                                              "switch it back on)");
+                     set_radio(false);
+                 } else if (!wifi_configured && !backend_->is_radio_enabled()) {
+                     // No HelixScreen WiFi configuration and the radio is
+diff --git a/tests/test_helpers/wifi_manager_test_access.h b/tests/test_helpers/wifi_manager_test_access.h
+index ccd9dd9..ab40ced 100644
+--- a/tests/test_helpers/wifi_manager_test_access.h
++++ b/tests/test_helpers/wifi_manager_test_access.h
+@@ -118,6 +118,14 @@ class WiFiManagerTestAccess {
+         WiFiManager::sys_root_ = "/sys";
+     }
+ 
++    /// Kiln OS: whether the touch screen counts as the way back to a radio
++    /// switched off (true on HELIX_KILN_AD5X builds). Returns the old value.
++    static bool set_local_screen_fallback(bool on) {
++        const bool old = WiFiManager::local_screen_fallback_;
++        WiFiManager::local_screen_fallback_ = on;
++        return old;
++    }
++
+     static void set_os_link_probe(std::function<bool()> probe) {
+         WiFiManager::os_link_probe_ = std::move(probe);
+     }
+diff --git a/tests/unit/test_wifi_manager.cpp b/tests/unit/test_wifi_manager.cpp
+index d8b44c0..ba77a52 100644
+--- a/tests/unit/test_wifi_manager.cpp
++++ b/tests/unit/test_wifi_manager.cpp
+@@ -1127,6 +1127,78 @@ TEST_CASE("READY refuses to disable the radio when interface resolution is incon
+     WiFiManagerTestAccess::reset_sys_root();
+ }
+ 
++// Kiln OS (djvalic/kiln-os#44): the AD5X always has its touch screen, where
++// the user can switch WiFi back on, so a stored "off" is applied at startup
++// without a wired path too. The local-screen fallback is on in HELIX_KILN_AD5X
++// builds; here it is switched on by hand.
++TEST_CASE("Kiln OS: READY reasserts a stored WiFi-off with no wired path when the screen is "
++          "the way back",
++          "[wifi][manager][radio][persistence][kiln]") {
++    Config::get_instance();
++    SystemSettingsManager::instance().init_subjects();
++    SystemSettingsManager::instance().set_wifi_enabled(false);
++    const bool old_fallback = WiFiManagerTestAccess::set_local_screen_fallback(true);
++
++    // No interface besides the radio.
++    SysFixture sys;
++    WiFiManagerTestAccess::set_sys_root(sys.sys_root());
++
++    auto backend = std::make_unique<WifiBackendMock>();
++    WifiBackendMock* raw = backend.get();
++
++    SECTION("interface resolved") {
++        helix::wifi::WifiInterface iface;
++        iface.netdev = "wlan0";
++        raw->set_resolved_interface_for_test(iface);
++    }
++    SECTION("interface resolution inconclusive") {
++        // The screen is the way back whatever the interface is called.
++        REQUIRE_FALSE(raw->resolved_interface().has_value());
++    }
++    REQUIRE(raw->is_radio_enabled());
++
++    WiFiManager manager(std::move(backend));
++    REQUIRE(WiFiManagerTestAccess::settle(manager));
++
++    CHECK_FALSE(raw->is_radio_enabled());
++    // The user's "off" stays saved: no correction to "on".
++    CHECK_FALSE(SystemSettingsManager::instance().get_wifi_enabled());
++
++    WiFiManagerTestAccess::set_local_screen_fallback(old_fallback);
++    SystemSettingsManager::instance().set_wifi_enabled(true);
++    SystemSettingsManager::instance().deinit_subjects();
++    WiFiManagerTestAccess::reset_sys_root();
++}
++
++// A stored "on" is untouched by the fallback: the radio stays on.
++TEST_CASE("Kiln OS: the screen fallback leaves a stored WiFi-on radio on",
++          "[wifi][manager][radio][persistence][kiln]") {
++    Config::get_instance();
++    SystemSettingsManager::instance().init_subjects();
++    SystemSettingsManager::instance().set_wifi_enabled(true);
++    const bool old_fallback = WiFiManagerTestAccess::set_local_screen_fallback(true);
++
++    SysFixture sys;
++    WiFiManagerTestAccess::set_sys_root(sys.sys_root());
++
++    auto backend = std::make_unique<WifiBackendMock>();
++    WifiBackendMock* raw = backend.get();
++    helix::wifi::WifiInterface iface;
++    iface.netdev = "wlan0";
++    raw->set_resolved_interface_for_test(iface);
++    REQUIRE(raw->is_radio_enabled());
++
++    WiFiManager manager(std::move(backend));
++    REQUIRE(WiFiManagerTestAccess::settle(manager));
++
++    CHECK(raw->is_radio_enabled());
++    CHECK(SystemSettingsManager::instance().get_wifi_enabled());
++
++    WiFiManagerTestAccess::set_local_screen_fallback(old_fallback);
++    SystemSettingsManager::instance().deinit_subjects();
++    WiFiManagerTestAccess::reset_sys_root();
++}
++
+ // The mirror-image gap this task closes: a device whose stored preference is
+ // WiFi ON but whose radio carries a stale soft rfkill block (e.g. one this
+ // app itself applied before commit 8aaac4e78 made a soft block non-fatal at
+-- 
+2.56.0
+
