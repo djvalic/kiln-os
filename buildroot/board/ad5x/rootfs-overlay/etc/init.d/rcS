@@ -11,6 +11,11 @@
 # loses at most the last 2 s of lines.
 #
 
+# The services' files are readable by klipper and www-data (issue #31):
+# the kernel's 022, stated here. Kiln's own scripts set it too, for a
+# restart from a root SSH session with another umask.
+umask 022
+
 : > /run/ad5x-boot.log 2>/dev/null
 trace() { read -r up _ < /proc/uptime; echo "$up $*" >> /run/ad5x-boot.log; }
 ad5x-bootlog "rcS start $(cat /etc/ad5x-release 2>/dev/null)"

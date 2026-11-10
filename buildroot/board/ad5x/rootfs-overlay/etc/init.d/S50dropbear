@@ -2,8 +2,10 @@
 #
 # Starts dropbear sshd.
 #
-# Kiln OS: as the stock script, plus the umask from /data/ad5x/umask-root
-# (ad5x-umask on|off). Changes apply to SSH services started after the change.
+# Kiln OS: as the stock script, but root's SSH sessions get umask 022 (as
+# root's interactive logins and the services do), or 077 when the owner
+# chose private files with ad5x-umask off (/data/ad5x/umask-ssh). Changes
+# apply to SSH services started after the change.
 #
 
 # Allow a few customizations from a config file
@@ -30,11 +32,17 @@ start() {
 	fi
 
 	printf "Starting dropbear sshd: "
-	# Umask for root's SSH sessions: 077 (private), or 022 when the owner
-	# set it with ad5x-umask on. Anything else in the file is 077.
-	UMASK=077
-	if [ "$(cat /data/ad5x/umask-root 2>/dev/null)" = 022 ]; then
-		UMASK=022
+	# Umask for root's SSH sessions (issue #31). Stock sets 077 here; files
+	# a script or command over SSH created were then unreadable to klipper
+	# (plugins) and www-data, and so were the files of a service restarted
+	# over SSH. dropbear makes its host keys 0600 itself, and files with
+	# secrets get their modes where they are written. 077 only when the
+	# file says so. /data/ad5x/umask-root was the old switch (077 by
+	# default) and is dropped.
+	rm -f /data/ad5x/umask-root
+	UMASK=022
+	if [ "$(cat /data/ad5x/umask-ssh 2>/dev/null)" = 077 ]; then
+		UMASK=077
 	fi
 	umask $UMASK
 

@@ -6,6 +6,11 @@
 # answers, disabled when SCREEN=off or it does not answer (so it is not a
 # dead tile). It is set at boot, in the background, like the USB cameras.
 # /data/ad5x/screen.conf (optional): SCREEN=off, FPS=2, QUALITY=70.
+
+# Files this creates are readable by klipper and www-data, whoever started
+# it (a root SSH session may run with umask 077; issue #31)
+umask 022
+
 BIN=/usr/bin/ad5x-fbstream
 PID=/run/ad5x-screen.pid
 CONF=/data/ad5x/screen.conf

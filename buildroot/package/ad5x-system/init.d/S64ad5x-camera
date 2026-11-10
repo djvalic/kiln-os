@@ -9,6 +9,11 @@
 #   RESOLUTION=1280x720   all cameras (default 1280x720)
 #   FPS=15                all cameras (default 15)
 #   RESOLUTION_2=640x480  camera 2 only (same for FPS_2, ...)
+
+# Files this creates are readable by klipper and www-data, whoever started
+# it (a root SSH session may run with umask 077; issue #31)
+umask 022
+
 USTREAMER=/usr/bin/ustreamer
 CONF=/data/ad5x/camera.conf
 # UVC devices that are not printer cameras, as vendor:product (space separated)
@@ -84,15 +89,16 @@ load_conf() {
 		echo "camera: $f is not a plain file, not read"
 		return 0
 	fi
-	[ "$(stat -c %u "$f")" = "$(id -u)" ] || {
+	# BusyBox here has no stat (issue #30): find tests owner and mode. Both
+	# tests pass only when find prints the name, so an error refuses the file.
+	[ -n "$(find "$f" -maxdepth 0 -user "$(id -u)")" ] || {
 		echo "camera: $f is not owned by root, not read"
 		return 0
 	}
-	case "$(stat -c %A "$f")" in
-	?????w????|????????w?)
+	[ -n "$(find "$f" -maxdepth 0 ! -perm /022)" ] || {
 		echo "camera: $f is writable by group or others, not read"
-		return 0 ;;
-	esac
+		return 0
+	}
 	while IFS= read -r line || [ -n "$line" ]; do
 		line=${line%"$(printf '\r')"}
 		case "$line" in ''|'#'*) continue ;; esac

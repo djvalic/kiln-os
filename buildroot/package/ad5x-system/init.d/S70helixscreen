@@ -13,6 +13,11 @@
 # back. printer_data/comms/run-setup-wizard (SETUP_WIZARD) runs it once more on
 # the next start; HelixScreen deletes the flag. In USB test mode the stock
 # app is not running, so nothing else draws on fb0.
+
+# Files this creates are readable by klipper and www-data, whoever started
+# it (a root SSH session may run with umask 077; issue #31)
+umask 022
+
 D=/data/ad5x/helixscreen
 LOG=/data/ad5x/printer_data/logs/helixscreen.log
 PID=/var/run/helixscreen.pid

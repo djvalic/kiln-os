@@ -29,6 +29,11 @@
 # a new one, so the screen can still join a network. Any other failure
 # (the adapter or its driver, issue #45) keeps the config: two more tries,
 # then Wi-Fi stays down until the next start.
+
+# Files this creates are readable by klipper and www-data, whoever started
+# it (a root SSH session may run with umask 077; issue #31)
+umask 022
+
 CONF=/data/ad5x/wpa_supplicant.conf
 LOG=/data/ad5x/printer_data/logs/wifi.log
 OFF=/data/ad5x/wifi.disable
@@ -56,15 +61,34 @@ stock_conf() {
 	done
 }
 
+# The saved networks' passwords: $CONF, its temp file and the copies put
+# aside (.bad-*) are 0600, set here, not left to the umask (issue #31).
+# wpa_supplicant rewrites $CONF when the screen saves a network, with the
+# mode its umask gives (wpa_config_write: fopen of $CONF.tmp, then
+# rename), so it runs with umask 077 (start_wpa). Older versions ran it
+# with 022, so a network saved on the screen left $CONF 0644:
+# private_conf, at each start, puts that right.
+private_conf() {
+	for f in $CONF $CONF.bad-*; do
+		[ -f "$f" ] && chmod 600 "$f"
+	done
+	return 0
+}
+
+# private_write: stdin to $CONF.tmp, 0600 from the start
+private_write() {
+	rm -f $CONF.tmp
+	(umask 077; cat > $CONF.tmp) && chmod 600 $CONF.tmp
+}
+
 make_conf() {
 	nets=$(stock_conf)
-	umask 077
 	{
 		echo "# Wi-Fi networks (HelixScreen saves here; see S42ad5x-wifi)"
 		echo "ctrl_interface=$CTRL"
 		echo "update_config=1"
 		[ -n "$nets" ] && printf '\n%s\n' "$nets"
-	} > $CONF.tmp && mv $CONF.tmp $CONF
+	} | private_write && mv $CONF.tmp $CONF
 	if [ -n "$nets" ]; then
 		log "new $CONF with stock's saved networks"
 	else
@@ -80,11 +104,11 @@ probe_hidden() {
 	/^[[:space:]]*network[[:space:]]*=[[:space:]]*\{/ { inb = 1; seen = 0 }
 	inb && /^[[:space:]]*scan_ssid[[:space:]]*=/ { seen = 1 }
 	inb && /^[[:space:]]*\}/ { if (!seen) print "\tscan_ssid=1"; inb = 0 }
-	{ print }' $CONF > $CONF.tmp
+	{ print }' $CONF | private_write
 	if cmp -s $CONF $CONF.tmp; then
 		rm -f $CONF.tmp
 	else
-		chmod 600 $CONF.tmp && mv $CONF.tmp $CONF
+		mv $CONF.tmp $CONF
 	fi
 }
 
@@ -94,8 +118,8 @@ nets() {
 
 # start_wpa: wpa_supplicant on $CONF, up when its control socket is
 start_wpa() {
-	wpa_supplicant -B -i wlan0 -c $CONF -P /var/run/wpa_supplicant.pid \
-		> $OUT 2>&1
+	(umask 077; exec wpa_supplicant -B -i wlan0 -c $CONF \
+		-P /var/run/wpa_supplicant.pid) > $OUT 2>&1
 	rc=$?
 	# -B returns after the interface is set up: a failure leaves no
 	# daemon whose socket could still come
@@ -218,6 +242,7 @@ start)
 	power_save_off start
 	[ -f $CONF ] || make_conf
 	probe_hidden
+	private_conf
 	if grep -Eq '"wifi_enabled"[[:space:]]*:[[:space:]]*(false|0)' $HELIX 2>/dev/null; then
 		log "switched off on the screen: radio not blocked at start (HelixScreen blocks it when Ethernet is up)"
 	else
@@ -238,7 +263,7 @@ start)
 			echo "# Wi-Fi networks (HelixScreen saves here; see S42ad5x-wifi)"
 			echo "ctrl_interface=$CTRL"
 			echo "update_config=1"
-		} > $CONF.tmp && chmod 600 $CONF.tmp && mv $CONF.tmp $CONF
+		} | private_write && mv $CONF.tmp $CONF
 		start_wpa || { log "wpa_supplicant fails with a new config too"; exit 0; }
 	fi
 	log "wpa_supplicant running, $(nets) saved network(s)"

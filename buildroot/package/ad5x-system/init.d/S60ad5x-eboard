@@ -4,6 +4,11 @@
 # start after the install, or after an update with newer board firmware),
 # then start the eboard's application (stock checkEboard handshake) before
 # Klipper connects. /data/ad5x/mcu.disable: start only, no flashing.
+
+# Files this creates are readable by klipper and www-data, whoever started
+# it (a root SSH session may run with umask 077; issue #31)
+umask 022
+
 case "$1" in
 start)
 	ad5x-mcu boot || echo "ad5x-eboard: boards not ready (ad5x-mcu status, /data/ad5x/mcu/log)"
