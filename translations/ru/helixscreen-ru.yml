@@ -151,7 +151,7 @@ translations:
   1 profile: '1 профиль'
   '1 unit': '1 ед.'
   1. Each nozzle is heated, wiped and parked at the front for you to brush clean: 1. Каждое сопло нагревается, протирается и паркуется спереди, чтобы вы его почистили щёткой
-  1. Printer homes all axes (~1 minute): 1. Принтер паркует все оси (~1 минута)
+  1. Printer homes all axes (~1 minute): 1. Принтер паркуется по всем осям (~1 минута)
   1. Printer homes and probes the bed: 1. Принтер паркуется и зондирует стол
   1. Printer will home and probe each screw: 1. Принтер запаркуется и проверит каждый
     винт
@@ -226,7 +226,7 @@ translations:
   A newer version of the helper macros is available: 'Доступна более новая версия вспомогательных макросов'
   A picture of your printer: Изображение вашего принтера
   A print is already running.: Печать уже идёт.
-  A print is in progress - restart still pending: 'Идёт печать – перезапуск ещё отложен'
+  A print is in progress - restart still pending: 'Идёт печать - перезапуск ещё отложен'
   A print is running on this gate. HelixScreen cleared its own copy; clear it again once the print finishes.: На этом шлюзе идёт печать. HelixScreen очистил свою копию; после окончания печати очистите его снова.
   A print is running. Apply the result after it ends.: Идёт печать. Примените результат после её завершения.
   A print started: 'Началась печать'
@@ -652,7 +652,7 @@ translations:
   Calibration and system configuration: 'Калибровка и настройка системы'
   Calibration canceled.: Калибровка отменена.
   Calibration complete: Калибровка завершена
-  Calibration complete - save to keep the offsets: Калибровка завершена – сохраните, чтобы оставить смещения
+  Calibration complete - save to keep the offsets: Калибровка завершена - сохраните, чтобы оставить смещения
   Calibration complete!: Калибровка завершена!
   Calibration complete! Press 'Next' to continue.: Калибровка завершена! Нажмите «Далее»
     для продолжения.
@@ -856,7 +856,7 @@ translations:
   Cleared: Очищено
   Cleared from settings — system unpair failed, may need OS Bluetooth: Удалено из
     настроек; не удалось отменить сопряжение в системе, возможно нужен Bluetooth ОС
-  Clipboard unavailable - use SSH: Буфер обмена недоступен – используйте SSH
+  Clipboard unavailable - use SSH: Буфер обмена недоступен - используйте SSH
   Clog: Засор
   Clog Auto: 'Засор: авто'
   Clog Detection: Обнаружение засора
@@ -912,7 +912,7 @@ translations:
   Configuration added successfully.: Конфигурация успешно добавлена.
   Configuration already present.: Конфигурация уже присутствует.
   Configuration not available: 'Конфигурация недоступна'
-  Configuration saved - restarting: Конфигурация сохранена – перезапуск
+  Configuration saved - restarting: Конфигурация сохранена - перезапуск
   Configure: Настроить
   Configure Fan Widget: Настроить виджет вентилятора
   Configure G10/G11 firmware retraction: Настроить аппаратный ретракт G10/G11
@@ -985,7 +985,7 @@ translations:
   Connection restored: Соединение восстановлено
   Connection successful!: Соединение успешно!
   Connection timeout: Тайм-аут соединения
-  Connection to printer lost - attempting to reconnect...: Соединение с принтером потеряно – переподключение...
+  Connection to printer lost - attempting to reconnect...: Соединение с принтером потеряно - переподключение...
   Connection to printer lost — operation may still be running: 'Связь с принтером потеряна – операция может ещё выполняться'
   Connection to printer lost.: Соединение с принтером потеряно.
   Connects: Подключения
@@ -1013,7 +1013,7 @@ translations:
   Copy: "Копировать"
   Copy Command: Копировать команду
   Copy Layout From Printer?: "Скопировать раскладку с принтера?"
-  Copy failed - use SSH manually: Ошибка копирования – используйте SSH вручную
+  Copy failed - use SSH manually: Ошибка копирования - используйте SSH вручную
   Copy it into this filament's slicer profile. The printer keeps nothing.: 'Перепишите его в профиль слайсера для этого филамента. Принтер ничего не сохраняет.'
   Copy layout from printer: "Копировать раскладку с принтера"
   Copying from USB: 'Копирование с USB'
@@ -1659,7 +1659,7 @@ translations:
   Filament operation failed: Операция с филаментом не удалась
   Filament operation timed out: Операция с филаментом – время ожидания истекло
   Filament ran out: Филамент закончился
-  Filament ran out - nothing at the toolhead and the print is paused.: 'Филамент закончился – у печатающей головки ничего нет, печать приостановлена.'
+  Filament ran out - nothing at the toolhead and the print is paused.: 'Филамент закончился - у печатающей головки ничего нет, печать приостановлена.'
   ? Filament ran out and the CFS found no matching spool to switch to. Load a spool of the same material and color, then resume.
   : 'Филамент закончился, и CFS не нашла подходящей катушки для замены. Загрузите катушку того же материала и цвета и продолжите печать.'
   Filament ran out at the toolhead: 'Филамент закончился у печатающей головки'
@@ -2050,7 +2050,7 @@ translations:
     плагин HelixPrint для быстрой модификации G-code. Выполните эту команду через
     SSH на вашем принтере:'
   ? "Install the timelapse plugin via SSH,\nthen tap \"Check Again\"."
-  : "Установите плагин таймлапс через SSH,\nзатем нажмите «Проверить снова»."
+  : "Установите плагин таймлапс через SSH,\nзатем нажмите \"Проверить снова\"."
   Install timelapse plugin: Установить плагин таймлапса
   Installation Failed: Ошибка установки
   Installation failed: Ошибка установки
@@ -2159,7 +2159,7 @@ translations:
   Klipper is halted — restart firmware to continue: Klipper остановлен – перезапустите прошивку, чтобы продолжить
   Klipper ready: Klipper готов
   Klipper reserves 'default' for new calibrations. Choose another name.: "Klipper резервирует 'default' для новых калибровок. Выберите другое имя."
-  Klipper restarting - macros activating: 'Перезапуск Klipper – активация макросов'
+  Klipper restarting - macros activating: 'Перезапуск Klipper - активация макросов'
   Klipper shut down: Klipper остановлен
   ? Klipper stopped reporting progress. Its analysis can run out of memory on small printers and leave Klipper stuck, where a firmware restart cannot reach it. Power-cycle the printer (or restart Klipper over SSH), then try again.
   : "Klipper перестал сообщать о ходе. На небольших принтерах его анализу может не хватить памяти, и Klipper зависнет так, что перезапуск прошивки до него не дойдёт. Выключите и снова включите принтер (или перезапустите Klipper по SSH), затем повторите попытку."
@@ -2366,7 +2366,7 @@ translations:
   Macro to resume a paused print: Макрос для возобновления приостановленной печати
   Macro to unload filament from extruder: Макрос для выгрузки филамента из экструдера
   Macros: Макросы
-  Macros installed - restart pending: 'Макросы установлены – ожидается перезапуск'
+  Macros installed - restart pending: 'Макросы установлены - ожидается перезапуск'
   Macros installed. Restart Klipper after the print to activate them.: 'Макросы установлены. Перезапустите Klipper после печати, чтобы активировать их.'
   Macros updated. Restart Klipper after the print to activate them.: 'Макросы обновлены. Перезапустите Klipper после печати, чтобы активировать их.'
   'Macros, G-code console, calibration tools (PID, input shaper, z-offset), firmware updates, and developer utilities.': 'Макросы, консоль G-code, инструменты калибровки (PID, компенсация вибраций, смещение по Z), обновления прошивки и утилиты для разработчиков.'
@@ -2427,7 +2427,7 @@ translations:
   Measure pressure advance automatically: 'Автоматически измеряет Pressure Advance'
   Measure this zone first: "Сначала измерьте эту зону"
   ? Measure up from the plate. Sharp corners with no bulge and no gap mark the right K. Each row is a height range and the K the printer reported while it printed.
-  : Отсчитывайте высоту от стола. Острые углы без наплывов и пропусков означают верный K. Каждая строка – диапазон высот и K, который принтер сообщал во время его печати.
+  : Отсчитывайте высоту от стола. Острые углы без наплывов и пропусков означают верный K. Каждая строка - диапазон высот и K, который принтер сообщал во время его печати.
   Measured (shaper off): Измерено (шейпер выключен)
   Measured by the HelixPrint plugin: 'Измерено плагином HelixPrint'
   Measured filament diameter: Измеренный диаметр филамента
@@ -2963,7 +2963,7 @@ translations:
     Moonraker перезапускается...
   ? "Plugin not responding after restart.\nIt may need more time to load."
   : "Плагин не отвечает после перезапуска.\nВозможно, ему нужно больше времени для загрузки."
-  Plugin removed. A config file needs attention - check the HelixScreen log for details.: Плагин удалён. Конфигурационный файл требует внимания – подробности смотрите в журнале HelixScreen.
+  Plugin removed. A config file needs attention - check the HelixScreen log for details.: Плагин удалён. Конфигурационный файл требует внимания - подробности смотрите в журнале HelixScreen.
   Plugin uninstalled successfully.: Плагин успешно удалён.
   Plugins: Плагины
   Point camera at QR code on spool: Наведите камеру на QR-код на катушке
@@ -3736,7 +3736,7 @@ translations:
   Settling belts: 'Приработка ремней'
   Setup: 'Настройка'
   Setup Timelapse: Настроить таймлапс
-  Several printers match - choose yours: Подходят несколько принтеров – выберите свой
+  Several printers match - choose yours: Подходят несколько принтеров - выберите свой
   Shadow Intensity: Интенсивность тени
   Shake&Tune: 'Shake&Tune'
   Shakes the toolhead along each diagonal and overlays the two responses. Matched belts peak together.: Раскачивает печатающую головку вдоль каждой диагонали и накладывает два отклика. У одинаково натянутых ремней пики совпадают.
@@ -3766,7 +3766,7 @@ translations:
   Show up/down buttons on long lists: Показывать кнопки вверх/вниз в длинных списках
   Show whatever curves you last had visible on the full graph.: Показывать те кривые,
     что были видны на полном графике в последний раз.
-  Showing the 50 newest files. See more in the printer's web UI.: 'Показаны 50 последних файлов. Остальные – в веб-интерфейсе принтера.'
+  Showing the 50 newest files. See more in the printer's web UI.: 'Показаны 50 последних файлов. Остальные - в веб-интерфейсе принтера.'
   Shut down or restart the host: Выключение или перезагрузка хоста
   Shutdown: Выключение
   Shutdown / Reboot: Выключение / Перезагрузка
@@ -3955,7 +3955,7 @@ translations:
 
   Stop failed: Ошибка остановки
   ? "Stop printing \"{}\"?\n\nThis cannot be undone after 5 seconds."
-  : "Остановить печать «{}»?\n\nЭто нельзя будет отменить через 5 секунд."
+  : "Остановить печать \"{}\"?\n\nЭто нельзя будет отменить через 5 секунд."
   Stop reloading the saved bed mesh?: Больше не загружать сохранённую сетку?
   Stop the check?: Остановить проверку?
   Stop the running cycle before starting another: 'Остановите текущий цикл, прежде чем запускать новый'
@@ -5029,7 +5029,7 @@ translations:
   '{} is due: {} h reached': '{}: пора обслуживать, {} ч достигнуто'
   '{} is feeding the current print. Clear it after the print ends.': '{}: подаёт филамент для текущей печати. Удалите катушку после завершения печати.'
   '{} is installed but its Endless Spool setting is turned off, so nothing will switch on runout.': '{} установлен, но его настройка бесконечной катушки выключена, поэтому при обрыве ничего не переключится.'
-  '{} is installed, but its Endless Spool setting could not be read - do not count on Endless Spool.': '{} установлен, но прочитать его настройку бесконечной катушки не удалось – не рассчитывайте на бесконечную катушку.'
+  '{} is installed, but its Endless Spool setting could not be read - do not count on Endless Spool.': '{} установлен, но прочитать его настройку бесконечной катушки не удалось - не рассчитывайте на бесконечную катушку.'
   '{} is still printing. The print keeps running after you switch.': '{} ещё печатает. Печать продолжится после переключения.'
   '{} is looser': "{} слабее"
   '{} is not available on this device. Printing original file.': '{} недоступно на этом устройстве. Будет напечатан исходный файл.'
@@ -5139,6 +5139,8 @@ translations:
   'Asks for the time zone and the nozzle size, then runs the self-check and the tuning steps again (PID, bed mesh, vibration, IFS, Z offset). Every step can be skipped. Results are saved at the end and Klipper restarts.': 'Запрашивает часовой пояс и размер сопла, затем снова выполняет самопроверку и шаги настройки (PID, сетка стола, вибрации, IFS, смещение по Z). Любой шаг можно пропустить. В конце результаты сохраняются, и Klipper перезапускается.'
   'Auto colour': 'Авто по цвету'
   'Auto-refill': 'Автозамена'
+  'Auto-Refill': 'Автозамена'
+  'Auto-Refill colour match': 'Автозамена: подбор цвета'
   'Auto-refill is off, so no backup spool takes over.': 'Автозамена выключена, поэтому резервная катушка не подключится.'
   'Auto-refill is on and {} is a backup, but it did not take over.': 'Автозамена включена и {} – резерв, но замена не произошла.'
   'Auto-refill is on, but no slot holds a backup for this spool.': 'Автозамена включена, но ни в одном слоте нет резерва для этой катушки.'
@@ -5154,6 +5156,8 @@ translations:
   'Bed soak': 'Прогрев стола'
   'Bed soak at {} °C calibrated.': 'Прогрев стола при {} °C откалиброван.'
   'Bed temperature': 'Температура стола'
+  'Boot into recovery': 'Загрузить систему восстановления'
+  'Boot into recovery?': 'Загрузить систему восстановления?'
   'Built-in': 'Встроенный'
   'CALIBRATE': 'КАЛИБРОВАТЬ'
   'Calibrate the bed soak at {} °C?': 'Откалибровать прогрев стола при {} °C?'
@@ -5161,6 +5165,7 @@ translations:
   'Calibrates the bed heat soak: how long the bed keeps warming after it reaches 60 °C, so the first layer stays flat. Takes about 15 minutes and starts from a cold bed. Skip it if you don''t need it.': 'Калибрует прогрев стола: сколько стол ещё прогревается после достижения 60 °C, чтобы первый слой оставался ровным. Занимает около 15 минут и начинается с холодного стола. Если это не нужно, пропустите шаг.'
   'CALIBRATING': 'ИДЁТ КАЛИБРОВКА'
   'Calibration stopped. Heaters off, nothing saved.': 'Калибровка остановлена. Нагреватели выключены, ничего не сохранено.'
+  'Can''t boot into recovery: {}': 'Не удалось загрузить систему восстановления: {}'
   'Can''t calibrate now': 'Сейчас калибровка невозможна'
   'Change the nozzle size to {}?': 'Изменить размер сопла на {}?'
   'Changing filament': 'Смена филамента'
@@ -5197,6 +5202,7 @@ translations:
   'Heats the bed to 60 °C and probes the whole bed to measure its shape. Keep the bed clear. The bed stays warm for the Z offset test that follows.': 'Нагревает стол до 60 °C и проходит датчиком по всему столу, чтобы измерить его форму. Стол должен быть пустым. Стол остаётся тёплым для следующего теста смещения по Z.'
   'Homing and heating...': 'Парковка и нагрев...'
   'Homing the IFS': 'Парковка IFS'
+  'HUB': 'ХАБ'
   'IFS driver error': 'Ошибка драйвера IFS'
   'IFS tuning': 'Настройка IFS'
   'Input shaping against ringing': 'Компенсация вибраций против звона'
@@ -5267,6 +5273,8 @@ translations:
   'Purge Box': 'Лоток для отходов'
   'Purge box': 'Лоток для отходов'
   'Remove {}?': 'Удалить {}?'
+  'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': 'Перезапуск в систему восстановления (установка обновления с USB-флешки или через веб-страницу на порту 8080)'
+  'Restarting into the recovery OS...': 'Перезапуск в систему восстановления...'
   'Retracting filament': 'Втягивание филамента'
   'Retracting {}': 'Втягивание: {}'
   'Run Again': 'Ещё раз'
@@ -5279,6 +5287,7 @@ translations:
   'Selecting a slot': 'Выбор слота'
   'Selecting the slot': 'Выбор слота'
   'Selecting {}': 'Выбор: {}'
+  'SELECTOR': 'СЕЛЕКТОР'
   'Self-check': 'Самопроверка'
   'Self-check, PID, bed mesh, vibration, IFS, Z offset': 'Самопроверка, PID, сетка стола, вибрации, IFS, смещение по Z'
   'Similar': 'Похожий'
@@ -5287,7 +5296,7 @@ translations:
   'Skip keeps the nozzle size Klipper runs with now.': '«Пропустить» оставит размер сопла, с которым Klipper работает сейчас.'
   'Skip leaves this step out; you can run it later from Settings.': '«Пропустить» пропускает этот шаг; его можно запустить позже из настроек.'
   'Slot per file': 'Слот из файла'
-  'Slot per file: the file''s own slot for each tool. Auto colour: each tool uses the loaded slot with the same material and the nearest colour, so a file made before can still print.': 'Слот из файла: для каждого инструмента — слот, указанный в файле. Авто по цвету: каждый инструмент берёт загруженный слот с тем же материалом и ближайшим цветом, поэтому можно напечатать и ранее подготовленный файл.'
+  'Slot per file: the file''s own slot for each tool. Auto colour: each tool uses the loaded slot with the same material and the nearest colour, so a file made before can still print.': 'Слот из файла: для каждого инструмента – слот, указанный в файле. Авто по цвету: каждый инструмент берёт загруженный слот с тем же материалом и ближайшим цветом, поэтому можно напечатать и ранее подготовленный файл.'
   'Slot {}': 'Слот {}'
   'Slot {} · {} — {}': 'Слот {} · {} – {}'
   'Slots {}': 'Слоты {}'
@@ -5308,6 +5317,7 @@ translations:
   'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it.': 'Сопло, установленное на принтере. От него зависят ширина линий, длина продувки и тест первого слоя.'
   'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.': 'Сопло, установленное на принтере. От него зависят ширина линий, длина продувки и тест первого слоя. Изменить его можно позже в настройках.'
   'The nozzle size can''t change during a print': 'Размер сопла нельзя изменить во время печати'
+  'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'Принтер перезапустится в систему восстановления, где печать недоступна. Чтобы вернуться, нажмите на её экране «Запустить ОС».'
   'The results of the tuning so far. Check them, then Save.': 'Результаты настройки на данный момент. Проверьте их, затем сохраните.'
   'The results so far, before Save': 'Результаты на данный момент, до сохранения'
   'The temperature to measure, from a cold bed': 'Температура для измерения, начиная с холодного стола'
