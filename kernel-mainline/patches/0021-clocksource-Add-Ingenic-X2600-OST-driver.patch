@@ -1,0 +1,430 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sun, 8 Nov 2026 11:30:18 -0700
+Subject: [PATCH 21/74] clocksource: Add Ingenic X2600 OST driver
+
+The Ingenic X2600 has no system timer that mainline supports: the MIPS
+CP0 counter is not implemented in XBurst cores, and the OST differs from
+the X1000 SYSOST. It is split in two register blocks: a global 64-bit
+counter shared by the cores, and a 32-bit compare timer per core that
+interrupts its own core on CPU interrupt line 4.
+
+Use the global counter as clocksource and sched_clock, and each core's
+compare timer as that core's clock event device, set up as the core
+starts.
+
+The register layout follows Ingenic's X2600 SDK kernel.
+---
+ MAINTAINERS                             |   7 +
+ drivers/clocksource/Kconfig             |  11 +
+ drivers/clocksource/Makefile            |   1 +
+ drivers/clocksource/ingenic-x2600-ost.c | 332 ++++++++++++++++++++++++
+ include/linux/cpuhotplug.h              |   1 +
+ 5 files changed, 352 insertions(+)
+ create mode 100644 drivers/clocksource/ingenic-x2600-ost.c
+
+diff --git a/MAINTAINERS b/MAINTAINERS
+index 782389bd5..0660833a1 100644
+--- a/MAINTAINERS
++++ b/MAINTAINERS
+@@ -12874,6 +12874,13 @@ F:	include/linux/mfd/ingenic-tcu.h
+ F:	sound/soc/codecs/jz47*
+ F:	sound/soc/jz4740/
+ 
++INGENIC X2600 OST DRIVER
++M:	Hunter Laux <hunterlaux@gmail.com>
++L:	linux-mips@vger.kernel.org
++S:	Maintained
++F:	Documentation/devicetree/bindings/timer/ingenic,x2600-ost.yaml
++F:	drivers/clocksource/ingenic-x2600-ost.c
++
+ INJOINIC IP5xxx POWER BANK IC DRIVER
+ M:	Samuel Holland <samuel@sholland.org>
+ S:	Maintained
+diff --git a/drivers/clocksource/Kconfig b/drivers/clocksource/Kconfig
+index d9c76dd44..e967ae8f4 100644
+--- a/drivers/clocksource/Kconfig
++++ b/drivers/clocksource/Kconfig
+@@ -729,6 +729,17 @@ config INGENIC_SYSOST
+ 	help
+ 	  Support for the SYSOST of the Ingenic X Series SoCs.
+ 
++config INGENIC_X2600_OST
++	bool "Clocksource/timer using the OST in the Ingenic X2600"
++	depends on MIPS || COMPILE_TEST
++	depends on COMMON_CLK
++	select TIMER_OF
++	help
++	  Support for the operating system timer of the Ingenic X2600: the
++	  64-bit global counter as clocksource and sched_clock, and the
++	  per-core compare timers as clock event devices. The X2600 has no
++	  other usable system timer, so say Y when building for it.
++
+ config INGENIC_OST
+ 	bool "Clocksource using the OST in Ingenic JZ SoCs"
+ 	depends on MIPS || COMPILE_TEST
+diff --git a/drivers/clocksource/Makefile b/drivers/clocksource/Makefile
+index b46376af6..807143648 100644
+--- a/drivers/clocksource/Makefile
++++ b/drivers/clocksource/Makefile
+@@ -79,6 +79,7 @@ obj-$(CONFIG_TIMER_IMX_SYS_CTR)		+= timer-imx-sysctr.o
+ obj-$(CONFIG_ASM9260_TIMER)		+= asm9260_timer.o
+ obj-$(CONFIG_INGENIC_OST)		+= ingenic-ost.o
+ obj-$(CONFIG_INGENIC_SYSOST)	+= ingenic-sysost.o
++obj-$(CONFIG_INGENIC_X2600_OST)	+= ingenic-x2600-ost.o
+ obj-$(CONFIG_INGENIC_TIMER)		+= ingenic-timer.o
+ obj-$(CONFIG_CLKSRC_ST_LPC)		+= clksrc_st_lpc.o
+ obj-$(CONFIG_X86_NUMACHIP)		+= numachip.o
+diff --git a/drivers/clocksource/ingenic-x2600-ost.c b/drivers/clocksource/ingenic-x2600-ost.c
+new file mode 100644
+index 000000000..b57bcbcd4
+--- /dev/null
++++ b/drivers/clocksource/ingenic-x2600-ost.c
+@@ -0,0 +1,332 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Ingenic X2600 operating system timer (OST) driver
++ *
++ * The global OST is a 64-bit counter shared by all cores: the clocksource
++ * and sched_clock. Each core has a 32-bit compare timer of its own in the
++ * core OST, interrupting that core on CPU interrupt line 4: the clockevent
++ * device of that core.
++ *
++ * Register layout from Ingenic's X2600 SDK (Linux 6.6) timer driver.
++ */
++
++#include <linux/bitops.h>
++#include <linux/clk.h>
++#include <linux/clockchips.h>
++#include <linux/clocksource.h>
++#include <linux/cpuhotplug.h>
++#include <linux/interrupt.h>
++#include <linux/io.h>
++#include <linux/of.h>
++#include <linux/of_address.h>
++#include <linux/of_irq.h>
++#include <linux/percpu.h>
++#include <linux/sched_clock.h>
++#include <linux/slab.h>
++
++/* Global OST registers */
++#define GOST_REG_CCR		0x00	/* clock control: prescaler */
++#define GOST_REG_ER		0x04	/* enable */
++#define GOST_REG_CR		0x08	/* clear */
++#define GOST_REG_CNTH		0x0c	/* counter, high word */
++#define GOST_REG_CNTL		0x10	/* counter, low word */
++
++/* Core OST registers, in each core's bank */
++#define COST_REG_CCR		0x00	/* clock control: prescaler */
++#define COST_REG_ER		0x04	/* enable */
++#define COST_REG_CR		0x08	/* clear the counter */
++#define COST_REG_FR		0x0c	/* compare match flag */
++#define COST_REG_MR		0x10	/* interrupt mask */
++#define COST_REG_DFR		0x14	/* compare value */
++
++#define COST_BANK_SIZE		0x100
++
++#define OST_ER_EN		BIT(0)
++#define OST_CR_CLR		BIT(0)
++#define COST_FR_FLAG		BIT(0)
++#define COST_MR_MASK		BIT(0)
++#define OST_CCR_DIV1		0
++
++struct x2600_ost_cevt {
++	struct clock_event_device cevt;
++	void __iomem *base;
++	char name[16];
++};
++
++struct x2600_ost {
++	void __iomem *global;
++	void __iomem *core;
++	struct resource global_res;
++	struct resource core_res;
++	struct clk *clk;
++	unsigned long rate;
++	unsigned int irq;
++	struct x2600_ost_cevt __percpu *cevt;
++};
++
++static struct x2600_ost *x2600_ost;
++
++static u64 x2600_ost_read_counter(void __iomem *global)
++{
++	u32 hi, lo;
++
++	/* Read the high word again until the low word did not wrap */
++	do {
++		hi = readl(global + GOST_REG_CNTH);
++		lo = readl(global + GOST_REG_CNTL);
++	} while (hi != readl(global + GOST_REG_CNTH));
++
++	return ((u64)hi << 32) | lo;
++}
++
++static u64 notrace x2600_ost_read_sched_clock(void)
++{
++	return x2600_ost_read_counter(x2600_ost->global);
++}
++
++static u64 x2600_ost_clocksource_read(struct clocksource *cs)
++{
++	return x2600_ost_read_counter(x2600_ost->global);
++}
++
++static struct clocksource x2600_ost_clocksource = {
++	.name	= "x2600-ost",
++	.rating	= 400,
++	.read	= x2600_ost_clocksource_read,
++	.mask	= CLOCKSOURCE_MASK(64),
++	.flags	= CLOCK_SOURCE_IS_CONTINUOUS,
++};
++
++static inline struct x2600_ost_cevt *
++to_x2600_ost_cevt(struct clock_event_device *evt)
++{
++	return container_of(evt, struct x2600_ost_cevt, cevt);
++}
++
++static void x2600_ost_cevt_stop(void __iomem *base)
++{
++	writel(0, base + COST_REG_ER);
++	writel(0, base + COST_REG_FR);
++}
++
++/*
++ * The counter counts up from 0 to the compare value, raises the flag and
++ * starts again from 0.
++ */
++static void x2600_ost_cevt_start(void __iomem *base, u32 delta)
++{
++	x2600_ost_cevt_stop(base);
++	writel(delta, base + COST_REG_DFR);
++	writel(OST_CR_CLR, base + COST_REG_CR);
++	writel(OST_ER_EN, base + COST_REG_ER);
++}
++
++static int x2600_ost_cevt_set_next_event(unsigned long delta,
++					 struct clock_event_device *evt)
++{
++	x2600_ost_cevt_start(to_x2600_ost_cevt(evt)->base, delta);
++
++	return 0;
++}
++
++static int x2600_ost_cevt_set_periodic(struct clock_event_device *evt)
++{
++	x2600_ost_cevt_start(to_x2600_ost_cevt(evt)->base,
++			     DIV_ROUND_CLOSEST(x2600_ost->rate, HZ));
++
++	return 0;
++}
++
++static int x2600_ost_cevt_shutdown(struct clock_event_device *evt)
++{
++	x2600_ost_cevt_stop(to_x2600_ost_cevt(evt)->base);
++
++	return 0;
++}
++
++static irqreturn_t x2600_ost_cevt_interrupt(int irq, void *dev_id)
++{
++	struct x2600_ost_cevt *cevt = this_cpu_ptr(x2600_ost->cevt);
++
++	if (!(readl(cevt->base + COST_REG_FR) & COST_FR_FLAG))
++		return IRQ_NONE;
++
++	if (clockevent_state_periodic(&cevt->cevt))
++		writel(0, cevt->base + COST_REG_FR);
++	else
++		x2600_ost_cevt_stop(cevt->base);
++
++	cevt->cevt.event_handler(&cevt->cevt);
++
++	return IRQ_HANDLED;
++}
++
++static int x2600_ost_starting_cpu(unsigned int cpu)
++{
++	struct x2600_ost_cevt *cevt = per_cpu_ptr(x2600_ost->cevt, cpu);
++	resource_size_t offset = (resource_size_t)cpu * COST_BANK_SIZE;
++
++	if (offset + COST_BANK_SIZE > resource_size(&x2600_ost->core_res)) {
++		pr_err("x2600-ost: no core OST bank for CPU%u\n", cpu);
++		return -ENODEV;
++	}
++
++	cevt->base = x2600_ost->core + offset;
++	snprintf(cevt->name, sizeof(cevt->name), "x2600-ost%u", cpu);
++
++	writel(0, cevt->base + COST_REG_ER);
++	writel(OST_CCR_DIV1, cevt->base + COST_REG_CCR);
++	writel(OST_CR_CLR, cevt->base + COST_REG_CR);
++	writel(0, cevt->base + COST_REG_FR);
++	writel(0, cevt->base + COST_REG_MR);
++
++	cevt->cevt.name = cevt->name;
++	cevt->cevt.features = CLOCK_EVT_FEAT_ONESHOT | CLOCK_EVT_FEAT_PERIODIC;
++	cevt->cevt.rating = 400;
++	cevt->cevt.irq = x2600_ost->irq;
++	cevt->cevt.cpumask = cpumask_of(cpu);
++	cevt->cevt.set_next_event = x2600_ost_cevt_set_next_event;
++	cevt->cevt.set_state_periodic = x2600_ost_cevt_set_periodic;
++	cevt->cevt.set_state_oneshot = x2600_ost_cevt_shutdown;
++	cevt->cevt.set_state_oneshot_stopped = x2600_ost_cevt_shutdown;
++	cevt->cevt.set_state_shutdown = x2600_ost_cevt_shutdown;
++
++	clockevents_config_and_register(&cevt->cevt, x2600_ost->rate,
++					0xf, 0xffffffff);
++
++	return 0;
++}
++
++static int x2600_ost_dying_cpu(unsigned int cpu)
++{
++	struct x2600_ost_cevt *cevt = per_cpu_ptr(x2600_ost->cevt, cpu);
++
++	x2600_ost_cevt_stop(cevt->base);
++	writel(COST_MR_MASK, cevt->base + COST_REG_MR);
++
++	return 0;
++}
++
++static void __iomem *__init x2600_ost_map(struct device_node *np, int index,
++					  struct resource *res)
++{
++	void __iomem *base;
++
++	if (of_address_to_resource(np, index, res))
++		return NULL;
++
++	if (!request_mem_region(res->start, resource_size(res), res->name))
++		return NULL;
++
++	base = ioremap(res->start, resource_size(res));
++	if (!base)
++		release_mem_region(res->start, resource_size(res));
++
++	return base;
++}
++
++static void __init x2600_ost_unmap(void __iomem *base, struct resource *res)
++{
++	iounmap(base);
++	release_mem_region(res->start, resource_size(res));
++}
++
++static int __init x2600_ost_init(struct device_node *np)
++{
++	struct x2600_ost *ost;
++	int ret;
++
++	ost = kzalloc_obj(*ost);
++	if (!ost)
++		return -ENOMEM;
++
++	ret = -ENXIO;
++	ost->global = x2600_ost_map(np, 0, &ost->global_res);
++	if (!ost->global)
++		goto err_free;
++
++	ost->core = x2600_ost_map(np, 1, &ost->core_res);
++	if (!ost->core)
++		goto err_unmap_global;
++
++	ost->clk = of_clk_get_by_name(np, "ost");
++	if (IS_ERR(ost->clk)) {
++		ret = PTR_ERR(ost->clk);
++		goto err_unmap_core;
++	}
++
++	ret = clk_prepare_enable(ost->clk);
++	if (ret)
++		goto err_put_clk;
++
++	ost->rate = clk_get_rate(ost->clk);
++	if (!ost->rate) {
++		ret = -EINVAL;
++		goto err_disable_clk;
++	}
++
++	ost->irq = irq_of_parse_and_map(np, 0);
++	if (!ost->irq) {
++		ret = -EINVAL;
++		goto err_disable_clk;
++	}
++
++	ost->cevt = alloc_percpu(struct x2600_ost_cevt);
++	if (!ost->cevt) {
++		ret = -ENOMEM;
++		goto err_dispose_irq;
++	}
++
++	x2600_ost = ost;
++
++	/* The global counter: start it from 0 */
++	writel(0, ost->global + GOST_REG_ER);
++	writel(OST_CCR_DIV1, ost->global + GOST_REG_CCR);
++	writel(OST_CR_CLR, ost->global + GOST_REG_CR);
++	writel(OST_ER_EN, ost->global + GOST_REG_ER);
++
++	ret = clocksource_register_hz(&x2600_ost_clocksource, ost->rate);
++	if (ret)
++		goto err_free_percpu;
++
++	/* Each core's line 4 has the same IRQ number: one handler for all */
++	ret = request_irq(ost->irq, x2600_ost_cevt_interrupt,
++			  IRQF_PERCPU | IRQF_TIMER, "x2600-ost", NULL);
++	if (ret)
++		goto err_unregister_cs;
++
++	ret = cpuhp_setup_state(CPUHP_AP_INGENIC_X2600_OST_STARTING,
++				"clockevents/ingenic/x2600-ost:starting",
++				x2600_ost_starting_cpu, x2600_ost_dying_cpu);
++	if (ret < 0)
++		goto err_free_irq;
++
++	/* Last: sched_clock cannot be unregistered */
++	sched_clock_register(x2600_ost_read_sched_clock, 64, ost->rate);
++
++	return 0;
++
++err_free_irq:
++	free_irq(ost->irq, NULL);
++err_unregister_cs:
++	clocksource_unregister(&x2600_ost_clocksource);
++err_free_percpu:
++	x2600_ost = NULL;
++	free_percpu(ost->cevt);
++err_dispose_irq:
++	irq_dispose_mapping(ost->irq);
++err_disable_clk:
++	clk_disable_unprepare(ost->clk);
++err_put_clk:
++	clk_put(ost->clk);
++err_unmap_core:
++	x2600_ost_unmap(ost->core, &ost->core_res);
++err_unmap_global:
++	x2600_ost_unmap(ost->global, &ost->global_res);
++err_free:
++	kfree(ost);
++	pr_err("x2600-ost: failed to initialise: %d\n", ret);
++	return ret;
++}
++
++TIMER_OF_DECLARE(x2600_ost, "ingenic,x2600-ost", x2600_ost_init);
+diff --git a/include/linux/cpuhotplug.h b/include/linux/cpuhotplug.h
+index feb32949a..ab68e5ee3 100644
+--- a/include/linux/cpuhotplug.h
++++ b/include/linux/cpuhotplug.h
+@@ -169,6 +169,7 @@ enum cpuhp_state {
+ 	CPUHP_AP_ARMADA_TIMER_STARTING,
+ 	CPUHP_AP_LOONGARCH_ARCH_TIMER_STARTING,
+ 	CPUHP_AP_MIPS_GIC_TIMER_STARTING,
++	CPUHP_AP_INGENIC_X2600_OST_STARTING,
+ 	CPUHP_AP_ARC_TIMER_STARTING,
+ 	CPUHP_AP_REALTEK_TIMER_STARTING,
+ 	CPUHP_AP_RISCV_TIMER_STARTING,
+-- 
+2.43.0
+

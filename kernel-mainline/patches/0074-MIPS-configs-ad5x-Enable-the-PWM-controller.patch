@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Mon, 9 Nov 2026 17:06:17 -0700
+Subject: [PATCH 74/74] MIPS: configs: ad5x: Enable the PWM controller
+
+For the speaker.
+---
+ arch/mips/configs/ad5x_defconfig | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/arch/mips/configs/ad5x_defconfig b/arch/mips/configs/ad5x_defconfig
+index 76d85fcb7..e0301ea6f 100644
+--- a/arch/mips/configs/ad5x_defconfig
++++ b/arch/mips/configs/ad5x_defconfig
+@@ -72,6 +72,8 @@ CONFIG_DMA_JZ4780=y
+ # CONFIG_INGENIC_TIMER is not set
+ CONFIG_INGENIC_X2600_OST=y
+ # CONFIG_IOMMU_SUPPORT is not set
++CONFIG_PWM=y
++CONFIG_PWM_INGENIC_X2600=y
+ CONFIG_PHY_INGENIC_USB=y
+ CONFIG_PHY_ROCKCHIP_INNO_DSIDPHY=y
+ CONFIG_EXT4_FS=y
+-- 
+2.43.0
+

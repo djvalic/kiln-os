@@ -1,0 +1,96 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sun, 8 Nov 2026 19:42:37 -0700
+Subject: [PATCH 47/74] MIPS: dts: ingenic: x2600: Add the USB controllers
+
+Add the two DWC2 USB controllers and their PHYs. Ingenic's SDK runs the
+second controller as a host only; boards choose with dr_mode.
+---
+ arch/mips/boot/dts/ingenic/x2600.dtsi | 59 ++++++++++++++++++++++++++-
+ 1 file changed, 58 insertions(+), 1 deletion(-)
+
+diff --git a/arch/mips/boot/dts/ingenic/x2600.dtsi b/arch/mips/boot/dts/ingenic/x2600.dtsi
+index c2d6c5f17..541f83277 100644
+--- a/arch/mips/boot/dts/ingenic/x2600.dtsi
++++ b/arch/mips/boot/dts/ingenic/x2600.dtsi
+@@ -71,12 +71,37 @@ cgu: clock-controller@10000000 {
+ 		reg = <0x10000000 0x100>;
+ 		#address-cells = <1>;
+ 		#size-cells = <1>;
+-		ranges = <0x0 0x10000000 0x100>;
++		ranges = <0x0 0x10000000 0x100>,
++			 <0x78000 0x10078000 0x800>;
+ 
+ 		#clock-cells = <1>;
+ 
+ 		clocks = <&exclk>, <&rtclk>;
+ 		clock-names = "ext", "rtc";
++
++		otg_phy: usb-phy@3c {
++			compatible = "ingenic,x2600-phy";
++			reg = <0x3c 0x8>, <0x48 0x4>, <0x78000 0x100>;
++
++			clocks = <&cgu X2600_CLK_OTGPHY>, <&cgu X2600_CLK_OTG>;
++			clock-names = "phy", "bus";
++
++			#phy-cells = <0>;
++
++			status = "disabled";
++		};
++
++		usb_phy: usb-phy@4c {
++			compatible = "ingenic,x2600-phy";
++			reg = <0x4c 0x8>, <0xe8 0x4>, <0x78400 0x100>;
++
++			clocks = <&cgu X2600_CLK_USBPHY>, <&cgu X2600_CLK_USB>;
++			clock-names = "phy", "bus";
++
++			#phy-cells = <0>;
++
++			status = "disabled";
++		};
+ 	};
+ 
+ 	ost: timer@12000000 {
+@@ -214,6 +239,38 @@ msc1: mmc@13460000 {
+ 		status = "disabled";
+ 	};
+ 
++	otg: usb@13500000 {
++		compatible = "ingenic,x2600-otg", "ingenic,x2000-otg";
++		reg = <0x13500000 0x40000>;
++
++		interrupt-parent = <&intc>;
++		interrupts = <1>;
++
++		clocks = <&cgu X2600_CLK_OTG>;
++		clock-names = "otg";
++
++		phys = <&otg_phy>;
++		phy-names = "usb2-phy";
++
++		status = "disabled";
++	};
++
++	usb: usb@13540000 {
++		compatible = "ingenic,x2600-otg", "ingenic,x2000-otg";
++		reg = <0x13540000 0x40000>;
++
++		interrupt-parent = <&intc>;
++		interrupts = <2>;
++
++		clocks = <&cgu X2600_CLK_USB>;
++		clock-names = "otg";
++
++		phys = <&usb_phy>;
++		phy-names = "usb2-phy";
++
++		status = "disabled";
++	};
++
+ 	uart0: serial@10030000 {
+ 		compatible = "ingenic,x2600-uart", "ingenic,x1000-uart";
+ 		reg = <0x10030000 0x100>;
+-- 
+2.43.0
+

@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Mon, 9 Nov 2026 10:04:37 -0700
+Subject: [PATCH 56/74] dt-bindings: display: panel-lvds: Add the Flashforge
+ Adventurer 5X panel
+
+The Flashforge Adventurer 5X 3D printer has a 7" 800x480 LVDS panel
+with VESA 24-bit data mapping. Its maker is unknown; it is named after
+the printer, as the panel of the TBS A711 is.
+---
+ Documentation/devicetree/bindings/display/panel/panel-lvds.yaml | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/Documentation/devicetree/bindings/display/panel/panel-lvds.yaml b/Documentation/devicetree/bindings/display/panel/panel-lvds.yaml
+index 8382d4920..c7281f32a 100644
+--- a/Documentation/devicetree/bindings/display/panel/panel-lvds.yaml
++++ b/Documentation/devicetree/bindings/display/panel/panel-lvds.yaml
+@@ -52,6 +52,8 @@ properties:
+           - edt,etml0700z8dha
+           # EDT ETML0700Z9NDHA 7.0" WSVGA (1024x600) color TFT LCD LVDS panel
+           - edt,etml0700z9ndha
++          # Flashforge Adventurer 5X 7" WVGA (800x480) TFT LCD LVDS panel
++          - flashforge,ad5x-panel
+           # HannStar Display Corp. HSD101PWW2 10.1" WXGA (1280x800) LVDS panel
+           - hannstar,hsd101pww2
+           # Hydis Technologies 7" WXGA (800x1280) TFT LCD LVDS panel
+-- 
+2.43.0
+

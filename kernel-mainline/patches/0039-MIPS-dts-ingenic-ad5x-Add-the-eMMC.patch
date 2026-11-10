@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sun, 8 Nov 2026 16:17:42 -0700
+Subject: [PATCH 39/74] MIPS: dts: ingenic: ad5x: Add the eMMC
+
+The printer boots from an 8-bit eMMC on MSC0. Run it at 25 MHz for now,
+the rate the stock firmware uses.
+---
+ arch/mips/boot/dts/ingenic/ad5x.dts | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/arch/mips/boot/dts/ingenic/ad5x.dts b/arch/mips/boot/dts/ingenic/ad5x.dts
+index 9680565c7..21baa3562 100644
+--- a/arch/mips/boot/dts/ingenic/ad5x.dts
++++ b/arch/mips/boot/dts/ingenic/ad5x.dts
+@@ -9,6 +9,7 @@ / {
+ 	model = "Flashforge Adventurer 5X";
+ 
+ 	aliases {
++		mmc0 = &msc0;
+ 		serial0 = &uart0;
+ 		serial2 = &uart2;
+ 		serial4 = &uart4;
+@@ -48,7 +49,26 @@ &exclk {
+ 	clock-frequency = <24000000>;
+ };
+ 
++/* eMMC */
++&msc0 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pins_mmc0>;
++
++	bus-width = <8>;
++	max-frequency = <25000000>;
++	non-removable;
++	no-sd;
++	no-sdio;
++
++	status = "okay";
++};
++
+ &pinctrl {
++	pins_mmc0: mmc0 {
++		function = "mmc0";
++		groups = "mmc0-4bit", "mmc0-8bit";
++	};
++
+ 	pins_uart0: uart0 {
+ 		function = "uart0";
+ 		groups = "uart0-e";
+-- 
+2.43.0
+

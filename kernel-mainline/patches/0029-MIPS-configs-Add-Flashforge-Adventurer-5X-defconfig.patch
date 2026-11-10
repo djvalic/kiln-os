@@ -1,0 +1,75 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sun, 8 Nov 2026 11:37:10 -0700
+Subject: [PATCH 29/74] MIPS: configs: Add Flashforge Adventurer 5X defconfig
+
+A configuration for the Flashforge Adventurer 5X with what mainline
+supports of its Ingenic X2600 so far: the timer, clocks, pins, the DMA
+controller and the debug console. The compressed kernel is linked at
+0x80f00000, where the printer's boot loader places a kernel.
+
+The printer's userspace is built for the o32 FP64 ABI (-mfp64), as
+Ingenic's toolchain does for this SoC, so enable O32_FP64_SUPPORT:
+without it such binaries run with FR=0 and get wrong doubles.
+---
+ arch/mips/configs/ad5x_defconfig | 48 ++++++++++++++++++++++++++++++++
+ 1 file changed, 48 insertions(+)
+ create mode 100644 arch/mips/configs/ad5x_defconfig
+
+diff --git a/arch/mips/configs/ad5x_defconfig b/arch/mips/configs/ad5x_defconfig
+new file mode 100644
+index 000000000..20b9ff27d
+--- /dev/null
++++ b/arch/mips/configs/ad5x_defconfig
+@@ -0,0 +1,48 @@
++CONFIG_SYSVIPC=y
++CONFIG_NO_HZ_IDLE=y
++CONFIG_HIGH_RES_TIMERS=y
++CONFIG_PREEMPT=y
++CONFIG_IKCONFIG=y
++CONFIG_IKCONFIG_PROC=y
++CONFIG_CC_OPTIMIZE_FOR_SIZE=y
++CONFIG_EXPERT=y
++CONFIG_KALLSYMS_ALL=y
++CONFIG_MACH_INGENIC_SOC=y
++CONFIG_X2600_FLASHFORGE_AD5X=y
++CONFIG_ZBOOT_LOAD_ADDRESS=0x80f00000
++CONFIG_HIGHMEM=y
++CONFIG_HZ_100=y
++CONFIG_MIPS_O32_FP64_SUPPORT=y
++CONFIG_MIPS_CMDLINE_BUILTIN_EXTEND=y
++# CONFIG_SUSPEND is not set
++# CONFIG_SECCOMP is not set
++CONFIG_DEVTMPFS=y
++CONFIG_DEVTMPFS_MOUNT=y
++# CONFIG_INPUT_KEYBOARD is not set
++# CONFIG_INPUT_MOUSE is not set
++# CONFIG_SERIO is not set
++# CONFIG_VT is not set
++CONFIG_SERIAL_8250=y
++CONFIG_SERIAL_8250_CONSOLE=y
++CONFIG_SERIAL_8250_NR_UARTS=8
++CONFIG_SERIAL_8250_RUNTIME_UARTS=8
++CONFIG_SERIAL_8250_INGENIC=y
++CONFIG_SERIAL_OF_PLATFORM=y
++CONFIG_GPIO_SYSFS=y
++# CONFIG_HWMON is not set
++# CONFIG_HID is not set
++# CONFIG_USB_SUPPORT is not set
++CONFIG_DMADEVICES=y
++CONFIG_DMA_JZ4780=y
++# CONFIG_INGENIC_TIMER is not set
++CONFIG_INGENIC_X2600_OST=y
++# CONFIG_IOMMU_SUPPORT is not set
++CONFIG_TMPFS=y
++CONFIG_PRINTK_TIME=y
++CONFIG_CONSOLE_LOGLEVEL_DEFAULT=15
++CONFIG_MESSAGE_LOGLEVEL_DEFAULT=7
++CONFIG_MAGIC_SYSRQ=y
++CONFIG_PANIC_TIMEOUT=10
++# CONFIG_FTRACE is not set
++CONFIG_CMDLINE_BOOL=y
++CONFIG_CMDLINE="earlycon"
+-- 
+2.43.0
+

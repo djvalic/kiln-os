@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Mon, 9 Nov 2026 02:44:43 -0700
-Subject: [PATCH 05/68] MIPS: ingenic: XBurst II has a physically tagged icache
+Subject: [PATCH 05/74] MIPS: ingenic: XBurst II has a physically tagged icache
 
 The Ingenic CPU support treats every XBurst instruction cache as
 virtually tagged: the feature overrides, written for the first XBurst

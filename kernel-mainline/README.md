@@ -39,15 +39,18 @@ Each patch must be acceptable to a mainline reviewer:
 3. I2C (touch), USB OTG and PHY (Wi-Fi), Ethernet, DMA, watchdog/restart:
    done.
 4. RS-485 for the IFS (`8250_ingenic` + `serial8250_em485`): done.
-5. PWM (speaker).
+5. PWM (speaker): done.
 6. Display: a DRM driver for the DPU, the LVDS PHY, the KX070 panel on
    `panel-lvds`: done.
 7. SMP (second XBurst2 core): done.
 
 ## Status
 
-**On the printer** (2026-11-09): 68 patches, checkpatch `--strict` clean,
-every commit builds with `W=1`, `dt_binding_check` and `dtbs_check` clean.
+**On the printer** (2026-11-09): 74 patches, checkpatch `--strict` clean,
+every commit builds with `W=1`, `dt_binding_check` and `dtbs_check` clean,
+sparse (v0.6.5-rc1, `C=2` on every C file the series touches) clean apart
+from code it doesn't change (`asm/mips-cm.h`, three 32-bit constants in
+`phy-rockchip-inno-dsidphy.c` as in v7.3.3).
 Kiln OS runs on it (`build.sh` adds `kiln.config`: Wi-Fi with its firmware
 built in, webcams, zram) and it has printed: a 2 h 10 min PETG print
 through Klipper, Happy Hare and the IFS, every layer, no kernel warnings.
@@ -132,7 +135,17 @@ through Klipper, Happy Hare and the IFS, every layer, no kernel warnings.
   watchdog registers in a block of their own, cleared with TCSR.CLRZ
   since its counter ignores writes) restarts the board; `reboot` used to
   hang. A 10 s timeout fires when its pinger is killed, and not while it
-  pings.
+  pings. With it, the chainload's `panic=10` reboots instead of hanging.
+- **Speaker:** a new driver for the X2600's PWM controller
+  (`pwm-ingenic-x2600`, 16 channels apart from the TCU, the waveform
+  callbacks), the piezo on PC12 = channel 13. Measured on the printer
+  first, with the channel driven by hand: a period starts with the phase
+  INL picks, the high and low counts and INL are shadowed until UPT and
+  the period's end, the prescaler is not, and a stop finishes the phase in
+  progress. Checked with `PWM_DEBUG` and a pin trace (normal and inverted
+  polarity, 0%, 100%, stop); `ad5x-sound`'s tones and MIDI files play.
+- **Not needed:** cpufreq, thermal and an RTC driver; Kiln's 6.6 has none
+  of them either (the board has no battery-backed clock: `ad5x-clock`).
 
 Generic fixes this SoC needed, in the series:
 
@@ -192,23 +205,30 @@ Open points:
   bus. The UART counts no framing, parity or overrun errors, and does not
   receive our own bytes back.
 
-- **sparse** has not run on the series (it could not be installed here).
 - **eMMC above 25 MHz.** HS200 at its full rate needs the sample clock
   tuning; the stock kernel runs at 25 MHz too, so it stays there for now.
 - **Wi-Fi under load.** The USB disconnects (-71) seen in some early
   boots with the camera plugged in have not come back since the L2 fix,
   and stale reads turning into wrong register writes would explain them;
-  not proven. rtw88 still never checks for short register reads
-  (`ret < len`).
-- **Ingenic's SoC code not yet compared:** the SDK's X2600 setup
-  (`arch/mips/xburst2/soc-x2600/`) and its idle routine (a SYNC before
-  WAIT, which mainline's `r4k_wait` lacks).
-- **USB PHY from cold.** The tests chainload from the stock kernel, which
-  has set the PHY registers already; that our driver sets them from their
-  reset values is still to be seen (a direct boot).
-- **MAC address.** stmmac takes the address the stock kernel left in the
-  MAC; booted directly by the boot loader the MAC gets a random one
-  unless the DT or the boot loader provides it.
+  not proven. rtw88 returned an earlier read's value when a register read
+  failed or came back short; the series fixes that.
+- **Idle (compared, left as mainline).** Ingenic's kernels idle XBurst
+  with interrupts off, a SYNC, then WAIT; mainline uses `r4k_wait`
+  (interrupts on, no SYNC). Nothing documents why the SYNC is there, so
+  the series doesn't change it. The rest of the SDK's X2600 setup
+  (`arch/mips/xburst2/soc-x2600/`) has nothing mainline lacks: the DRAM
+  size, the I/O base, a bus priority write left in `#if 0`, and suspend.
+- **One unexplained hang.** Once, about a minute into a boot (the first
+  boot with the PWM driver), the printer stopped answering on the network
+  and the serial console, with nothing in the log. It hasn't come back:
+  a 10 minute soak with tones and MIDI, and five boot rounds (boot, 3 min
+  watched, reboot) were clean.
+- **Direct boot (not Kiln's path).** Kiln never puts its kernel in a boot
+  slot: `S00ad5x-kernel` chainloads it from stock at every boot, as the
+  tests do. Booted straight by the boot loader, the USB PHY would start
+  from its reset values (untested), and the MAC would get a random
+  address; on Kiln `S41ad5x-eth` sets the one stock assigns (usershare
+  `/MAC`) on any kernel.
 - **From Ingenic's SDK, not documentation:** the PLL VCO range (672-2400
   MHz, the range of Ingenic's PLL table; the boot loader's settings are
   inside it), which pins have pull resistors (all allowed), and the X2600
@@ -261,5 +281,5 @@ mounts `/data` read-write (the boot flag is safe: `ad5x.noslot`).
 
 ## Tools
 
-`check.sh` needs `sparse`, and `dt-validate`/`yamllint` (pip: `dtschema`,
+`check.sh` needs `sparse` (0.6.4 is too old for 7.3: `__typeof_unqual__`; v0.6.5-rc1 built from git.kernel.org works), and `dt-validate`/`yamllint` (pip: `dtschema`,
 `yamllint`) on `PATH`.

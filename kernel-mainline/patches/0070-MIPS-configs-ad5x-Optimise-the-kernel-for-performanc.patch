@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Mon, 9 Nov 2026 02:45:00 -0700
+Subject: [PATCH 70/74] MIPS: configs: ad5x: Optimise the kernel for
+ performance
+
+The defconfig had the kernel built for size (-Os). On this printer the
+kernel's hot paths (networking, fork, context switches) run measurably
+faster at -O2, for a compressed kernel 12% larger (6.4 instead of
+5.7 MB), well within what the boot loader loads:
+
+  fork               690 -> 510 us
+  fork + exec       1946 -> 1534 us
+  loopback TCP       306 -> 365 MB/s
+  pipe round trip   17.0 -> 15.5 us
+  system call        289 -> 278 ns
+
+Build it for performance, the default.
+---
+ arch/mips/configs/ad5x_defconfig | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/arch/mips/configs/ad5x_defconfig b/arch/mips/configs/ad5x_defconfig
+index 495621263..234ade8ca 100644
+--- a/arch/mips/configs/ad5x_defconfig
++++ b/arch/mips/configs/ad5x_defconfig
+@@ -4,7 +4,6 @@ CONFIG_HIGH_RES_TIMERS=y
+ CONFIG_PREEMPT=y
+ CONFIG_IKCONFIG=y
+ CONFIG_IKCONFIG_PROC=y
+-CONFIG_CC_OPTIMIZE_FOR_SIZE=y
+ CONFIG_EXPERT=y
+ CONFIG_KALLSYMS_ALL=y
+ CONFIG_MACH_INGENIC_SOC=y
+-- 
+2.43.0
+

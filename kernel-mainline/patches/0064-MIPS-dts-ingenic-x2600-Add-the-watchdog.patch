@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Mon, 9 Nov 2026 13:53:23 -0700
+Subject: [PATCH 64/74] MIPS: dts: ingenic: x2600: Add the watchdog
+
+The watchdog block at 0x13630000, counting the RTC clock, set to EXCLK
+divided by 512 so that no 32.768 kHz crystal is needed. It is also how
+the SoC restarts.
+---
+ arch/mips/boot/dts/ingenic/x2600.dtsi | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/arch/mips/boot/dts/ingenic/x2600.dtsi b/arch/mips/boot/dts/ingenic/x2600.dtsi
+index f042ecf23..fefe31282 100644
+--- a/arch/mips/boot/dts/ingenic/x2600.dtsi
++++ b/arch/mips/boot/dts/ingenic/x2600.dtsi
+@@ -275,6 +275,21 @@ gpe: gpio@4 {
+ 		};
+ 	};
+ 
++	watchdog: watchdog@13630000 {
++		compatible = "ingenic,x2600-watchdog";
++		reg = <0x13630000 0x40>;
++
++		interrupt-parent = <&intc>;
++		interrupts = <26>;
++
++		clocks = <&cgu X2600_CLK_TCU0>, <&cgu X2600_CLK_RTC>;
++		clock-names = "bus", "wdt";
++
++		/* EXCLK / 512: no 32.768 kHz crystal is needed */
++		assigned-clocks = <&cgu X2600_CLK_RTC>;
++		assigned-clock-parents = <&cgu X2600_CLK_EXCLK_DIV512>;
++	};
++
+ 	dpu: display-controller@13050000 {
+ 		compatible = "ingenic,x2600-dpu";
+ 		reg = <0x13050000 0x10000>;
+-- 
+2.43.0
+

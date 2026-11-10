@@ -1,0 +1,432 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Mon, 9 Nov 2026 17:06:17 -0700
+Subject: [PATCH 66/74] pwm: Add Ingenic X2600 PWM driver
+
+Add a driver for the 16-channel PWM controller of the Ingenic X2600,
+using the waveform callbacks. Each channel counts a high and a low phase
+of up to 65535 ticks of its prescaled clock (1 to 65536); INL picks the
+phase a period starts with, which gives the duty offsets 0 and
+period - duty, and IDL the level a stopped channel rests at, which gives
+the 0% and 100% duty cycles the counters can't produce.
+
+The behaviour the driver relies on was measured on an X2600 (a
+Flashforge Adventurer 5X), Ingenic's SDK driver being the only other
+reference: the counts and INL of a running channel are shadowed until
+UPT and the end of the period, the prescaler is not, and stopping a
+channel finishes the phase in progress first. The DMA modes and the
+capture unit are not supported.
+---
+ drivers/pwm/Kconfig             |  12 ++
+ drivers/pwm/Makefile            |   1 +
+ drivers/pwm/pwm-ingenic-x2600.c | 363 ++++++++++++++++++++++++++++++++
+ 3 files changed, 376 insertions(+)
+ create mode 100644 drivers/pwm/pwm-ingenic-x2600.c
+
+diff --git a/drivers/pwm/Kconfig b/drivers/pwm/Kconfig
+index 729776086..36c860665 100644
+--- a/drivers/pwm/Kconfig
++++ b/drivers/pwm/Kconfig
+@@ -336,6 +336,18 @@ config PWM_IMX_TPM
+ 	  To compile this driver as a module, choose M here: the module
+ 	  will be called pwm-imx-tpm.
+ 
++config PWM_INGENIC_X2600
++	tristate "Ingenic X2600 PWM support"
++	depends on MACH_INGENIC || COMPILE_TEST
++	depends on COMMON_CLK && OF
++	select REGMAP_MMIO
++	help
++	  Generic PWM framework driver for the PWM controller of the Ingenic
++	  X2600, a block of 16 channels apart from the TCU.
++
++	  To compile this driver as a module, choose M here: the module
++	  will be called pwm-ingenic-x2600.
++
+ config PWM_INTEL_LGM
+ 	tristate "Intel LGM PWM support"
+ 	depends on HAS_IOMEM
+diff --git a/drivers/pwm/Makefile b/drivers/pwm/Makefile
+index 5630a521a..806d1c477 100644
+--- a/drivers/pwm/Makefile
++++ b/drivers/pwm/Makefile
+@@ -28,6 +28,7 @@ obj-$(CONFIG_PWM_IMG)		+= pwm-img.o
+ obj-$(CONFIG_PWM_IMX1)		+= pwm-imx1.o
+ obj-$(CONFIG_PWM_IMX27)		+= pwm-imx27.o
+ obj-$(CONFIG_PWM_IMX_TPM)	+= pwm-imx-tpm.o
++obj-$(CONFIG_PWM_INGENIC_X2600)	+= pwm-ingenic-x2600.o
+ obj-$(CONFIG_PWM_INTEL_LGM)	+= pwm-intel-lgm.o
+ obj-$(CONFIG_PWM_IPQ)		+= pwm-ipq.o
+ obj-$(CONFIG_PWM_IQS620A)	+= pwm-iqs620a.o
+diff --git a/drivers/pwm/pwm-ingenic-x2600.c b/drivers/pwm/pwm-ingenic-x2600.c
+new file mode 100644
+index 000000000..e0a4f1433
+--- /dev/null
++++ b/drivers/pwm/pwm-ingenic-x2600.c
+@@ -0,0 +1,363 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Ingenic X2600 PWM controller
++ *
++ * Copyright (C) 2026 Hunter Laux <hunterlaux@gmail.com>
++ *
++ * Sixteen channels, each with its own clock prescaler (1 to 65536) and a
++ * high and a low count of 16 bits each. INL picks which of the two phases
++ * a period starts with, IDL the level a stopped channel rests at.
++ *
++ * Limitations:
++ * - The high and low counts, INL and IDL of a running channel are
++ *   shadowed: they take effect at the end of the period after UPT is
++ *   written, and BUSY is set until then. The prescaler is not shadowed:
++ *   a new prescaler stretches or shortens the phase in progress, so the
++ *   driver changes it only when the period needs another one.
++ * - Stopping a channel finishes the phase in progress before the output
++ *   goes to the IDL level.
++ * - A 0% or 100% duty cycle cannot be counted (both phases are at least
++ *   one tick long): the channel is stopped at a low or high IDL level.
++ * - Only the duty offsets 0 (INL high) and period - duty (INL low) exist.
++ * - The DMA modes and the capture unit are not supported.
++ */
++
++#include <linux/bitfield.h>
++#include <linux/bits.h>
++#include <linux/clk.h>
++#include <linux/err.h>
++#include <linux/io.h>
++#include <linux/math64.h>
++#include <linux/mod_devicetable.h>
++#include <linux/module.h>
++#include <linux/platform_device.h>
++#include <linux/pwm.h>
++#include <linux/regmap.h>
++
++#define X2600_PWM_ENS		0x00	/* enable set */
++#define X2600_PWM_ENC		0x04	/* enable clear */
++#define X2600_PWM_EN		0x08
++#define X2600_PWM_UPT		0x10	/* load the shadowed settings */
++#define X2600_PWM_BUSY		0x14	/* a load is pending */
++#define X2600_PWM_MS		0x20	/* 0: counters, 1: DMA */
++#define X2600_PWM_INL		0x24	/* 1: a period starts high */
++#define X2600_PWM_IDL		0x28	/* level of a stopped channel */
++#define X2600_PWM_CCFG(ch)	(0x40 + 4 * (ch))	/* prescaler - 1 */
++#define X2600_PWM_WCFG(ch)	(0x80 + 4 * (ch))
++#define   X2600_PWM_WCFG_HIGH	GENMASK(31, 16)
++#define   X2600_PWM_WCFG_LOW	GENMASK(15, 0)
++
++#define X2600_PWM_NUM_CHANNELS	16
++#define X2600_PWM_MAX_COUNT	0xffff
++#define X2600_PWM_MAX_PRESCALE	0x10000
++
++struct x2600_pwm {
++	struct regmap *map;
++	unsigned long rate;
++};
++
++enum x2600_pwm_mode {
++	X2600_PWM_OFF,		/* stopped, low */
++	X2600_PWM_LOW,		/* 0% duty: stopped, low; period in .low */
++	X2600_PWM_HIGH,		/* 100% duty: stopped, high; period in .high */
++	X2600_PWM_RUN,		/* counting, a period starts high */
++	X2600_PWM_RUN_INV,	/* counting, a period starts low */
++};
++
++struct x2600_pwm_wfhw {
++	u32 prescale;
++	u16 high;
++	u16 low;
++	u8 mode;
++};
++
++static const struct regmap_config x2600_pwm_regmap_config = {
++	.reg_bits = 32,
++	.val_bits = 32,
++	.reg_stride = 4,
++	.max_register = X2600_PWM_WCFG(X2600_PWM_NUM_CHANNELS - 1),
++};
++
++static u64 x2600_pwm_ticks(const struct x2600_pwm *priv, u64 ns, u32 prescale)
++{
++	return mul_u64_u64_div_u64(ns, priv->rate, (u64)prescale * NSEC_PER_SEC);
++}
++
++static u64 x2600_pwm_ns(const struct x2600_pwm *priv, u64 ticks, u32 prescale)
++{
++	return DIV64_U64_ROUND_UP(ticks * prescale * NSEC_PER_SEC, priv->rate);
++}
++
++static int x2600_pwm_round_waveform_tohw(struct pwm_chip *chip,
++					 struct pwm_device *pwm,
++					 const struct pwm_waveform *wf,
++					 void *_wfhw)
++{
++	struct x2600_pwm *priv = pwmchip_get_drvdata(chip);
++	struct x2600_pwm_wfhw *wfhw = _wfhw;
++	u64 period_ns, full, period, duty, offset;
++	u32 prescale;
++
++	if (!wf->period_length_ns) {
++		*wfhw = (struct x2600_pwm_wfhw){ .mode = X2600_PWM_OFF };
++		return 0;
++	}
++
++	period_ns = min(wf->period_length_ns,
++			x2600_pwm_ns(priv, X2600_PWM_MAX_COUNT,
++				     X2600_PWM_MAX_PRESCALE));
++
++	/* The smallest prescaler that lets the period fit the counters */
++	full = x2600_pwm_ticks(priv, period_ns, 1);
++	prescale = clamp(DIV_ROUND_UP_ULL(full, X2600_PWM_MAX_COUNT), 1ULL,
++			 X2600_PWM_MAX_PRESCALE);
++
++	period = x2600_pwm_ticks(priv, period_ns, prescale);
++	if (period < 2) {
++		/* Too short: the shortest period, at 0% */
++		*wfhw = (struct x2600_pwm_wfhw){
++			.prescale = 1,
++			.low = 2,
++			.mode = X2600_PWM_LOW,
++		};
++		return 1;
++	}
++
++	duty = x2600_pwm_ticks(priv, min(wf->duty_length_ns, period_ns), prescale);
++
++	wfhw->prescale = prescale;
++	if (!duty) {
++		wfhw->high = 0;
++		wfhw->low = period;
++		wfhw->mode = X2600_PWM_LOW;
++	} else if (duty >= period) {
++		wfhw->high = period;
++		wfhw->low = 0;
++		wfhw->mode = X2600_PWM_HIGH;
++	} else {
++		wfhw->high = duty;
++		wfhw->low = period - duty;
++		/*
++		 * Round the offset down to one the hardware has: period - duty
++		 * (as round_waveform_fromhw() reports it) if that is no more
++		 * than the one asked for, else 0.
++		 */
++		offset = x2600_pwm_ns(priv, wfhw->low, prescale);
++		wfhw->mode = offset <= wf->duty_offset_ns ? X2600_PWM_RUN_INV :
++			     X2600_PWM_RUN;
++	}
++
++	return 0;
++}
++
++static int x2600_pwm_round_waveform_fromhw(struct pwm_chip *chip,
++					   struct pwm_device *pwm,
++					   const void *_wfhw,
++					   struct pwm_waveform *wf)
++{
++	struct x2600_pwm *priv = pwmchip_get_drvdata(chip);
++	const struct x2600_pwm_wfhw *wfhw = _wfhw;
++	u32 prescale = wfhw->prescale;
++
++	*wf = (struct pwm_waveform){ };
++
++	switch (wfhw->mode) {
++	case X2600_PWM_OFF:
++		break;
++	case X2600_PWM_LOW:
++		wf->period_length_ns = x2600_pwm_ns(priv, wfhw->low, prescale);
++		break;
++	case X2600_PWM_HIGH:
++		wf->period_length_ns = x2600_pwm_ns(priv, wfhw->high, prescale);
++		wf->duty_length_ns = wf->period_length_ns;
++		break;
++	case X2600_PWM_RUN:
++	case X2600_PWM_RUN_INV:
++		wf->period_length_ns = x2600_pwm_ns(priv, wfhw->high + wfhw->low,
++						    prescale);
++		wf->duty_length_ns = x2600_pwm_ns(priv, wfhw->high, prescale);
++		if (wfhw->mode == X2600_PWM_RUN_INV)
++			wf->duty_offset_ns = x2600_pwm_ns(priv, wfhw->low, prescale);
++		break;
++	}
++
++	return 0;
++}
++
++static int x2600_pwm_read_waveform(struct pwm_chip *chip,
++				   struct pwm_device *pwm, void *_wfhw)
++{
++	struct x2600_pwm *priv = pwmchip_get_drvdata(chip);
++	struct x2600_pwm_wfhw *wfhw = _wfhw;
++	unsigned int ch = pwm->hwpwm;
++	unsigned int en, inl, idl, ccfg, wcfg;
++	int ret;
++
++	ret = regmap_read(priv->map, X2600_PWM_EN, &en);
++	if (!ret)
++		ret = regmap_read(priv->map, X2600_PWM_INL, &inl);
++	if (!ret)
++		ret = regmap_read(priv->map, X2600_PWM_IDL, &idl);
++	if (!ret)
++		ret = regmap_read(priv->map, X2600_PWM_CCFG(ch), &ccfg);
++	if (!ret)
++		ret = regmap_read(priv->map, X2600_PWM_WCFG(ch), &wcfg);
++	if (ret)
++		return ret;
++
++	wfhw->prescale = (ccfg & 0xffff) + 1;
++	wfhw->high = FIELD_GET(X2600_PWM_WCFG_HIGH, wcfg);
++	wfhw->low = FIELD_GET(X2600_PWM_WCFG_LOW, wcfg);
++
++	if (en & BIT(ch)) {
++		wfhw->mode = inl & BIT(ch) ? X2600_PWM_RUN : X2600_PWM_RUN_INV;
++		if (!wfhw->high || !wfhw->low)
++			wfhw->mode = wfhw->high ? X2600_PWM_HIGH : X2600_PWM_LOW;
++	} else if (idl & BIT(ch)) {
++		wfhw->mode = X2600_PWM_HIGH;
++		wfhw->high = min(wfhw->high + wfhw->low, X2600_PWM_MAX_COUNT);
++		wfhw->low = 0;
++	} else if (!wfhw->high && wfhw->low) {
++		wfhw->mode = X2600_PWM_LOW;
++	} else {
++		wfhw->mode = X2600_PWM_OFF;
++	}
++
++	return 0;
++}
++
++static int x2600_pwm_wait_update(struct x2600_pwm *priv, unsigned int ch)
++{
++	unsigned int ccfg, wcfg, busy;
++	u64 period_us;
++
++	regmap_read(priv->map, X2600_PWM_CCFG(ch), &ccfg);
++	regmap_read(priv->map, X2600_PWM_WCFG(ch), &wcfg);
++	period_us = div_u64(x2600_pwm_ns(priv, FIELD_GET(X2600_PWM_WCFG_HIGH, wcfg) +
++					 FIELD_GET(X2600_PWM_WCFG_LOW, wcfg),
++					 (ccfg & 0xffff) + 1), NSEC_PER_USEC);
++
++	/* A load completes at the end of the period in progress */
++	return regmap_read_poll_timeout(priv->map, X2600_PWM_BUSY, busy,
++					!(busy & BIT(ch)), 100,
++					period_us + 1000);
++}
++
++static int x2600_pwm_write_waveform(struct pwm_chip *chip,
++				    struct pwm_device *pwm, const void *_wfhw)
++{
++	struct x2600_pwm *priv = pwmchip_get_drvdata(chip);
++	const struct x2600_pwm_wfhw *wfhw = _wfhw;
++	unsigned int ch = pwm->hwpwm;
++	unsigned int en, ccfg;
++	u32 wcfg;
++	int ret;
++
++	ret = regmap_read(priv->map, X2600_PWM_EN, &en);
++	if (ret)
++		return ret;
++
++	wcfg = FIELD_PREP(X2600_PWM_WCFG_HIGH, wfhw->high) |
++	       FIELD_PREP(X2600_PWM_WCFG_LOW, wfhw->low);
++
++	if (wfhw->mode != X2600_PWM_RUN && wfhw->mode != X2600_PWM_RUN_INV) {
++		regmap_assign_bits(priv->map, X2600_PWM_IDL, BIT(ch),
++				   wfhw->mode == X2600_PWM_HIGH);
++		regmap_write(priv->map, X2600_PWM_ENC, BIT(ch));
++		/* Kept for read_waveform(); a stopped channel doesn't count */
++		regmap_write(priv->map, X2600_PWM_CCFG(ch), wfhw->prescale ?
++			     wfhw->prescale - 1 : 0);
++		return regmap_write(priv->map, X2600_PWM_WCFG(ch), wcfg);
++	}
++
++	if (en & BIT(ch)) {
++		ret = x2600_pwm_wait_update(priv, ch);
++		if (ret)
++			return ret;
++	}
++
++	regmap_read(priv->map, X2600_PWM_CCFG(ch), &ccfg);
++	if ((ccfg & 0xffff) != wfhw->prescale - 1)
++		regmap_write(priv->map, X2600_PWM_CCFG(ch), wfhw->prescale - 1);
++	regmap_write(priv->map, X2600_PWM_WCFG(ch), wcfg);
++	regmap_assign_bits(priv->map, X2600_PWM_INL, BIT(ch),
++			   wfhw->mode == X2600_PWM_RUN);
++	regmap_clear_bits(priv->map, X2600_PWM_IDL, BIT(ch));
++	regmap_clear_bits(priv->map, X2600_PWM_MS, BIT(ch));
++
++	if (en & BIT(ch))
++		return regmap_write(priv->map, X2600_PWM_UPT, BIT(ch));
++
++	return regmap_write(priv->map, X2600_PWM_ENS, BIT(ch));
++}
++
++static const struct pwm_ops x2600_pwm_ops = {
++	.sizeof_wfhw = sizeof(struct x2600_pwm_wfhw),
++	.round_waveform_tohw = x2600_pwm_round_waveform_tohw,
++	.round_waveform_fromhw = x2600_pwm_round_waveform_fromhw,
++	.read_waveform = x2600_pwm_read_waveform,
++	.write_waveform = x2600_pwm_write_waveform,
++};
++
++static int x2600_pwm_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct x2600_pwm *priv;
++	struct pwm_chip *chip;
++	void __iomem *base;
++	struct clk *clk;
++	int ret;
++
++	chip = devm_pwmchip_alloc(dev, X2600_PWM_NUM_CHANNELS, sizeof(*priv));
++	if (IS_ERR(chip))
++		return PTR_ERR(chip);
++	priv = pwmchip_get_drvdata(chip);
++
++	base = devm_platform_ioremap_resource(pdev, 0);
++	if (IS_ERR(base))
++		return PTR_ERR(base);
++
++	priv->map = devm_regmap_init_mmio(dev, base, &x2600_pwm_regmap_config);
++	if (IS_ERR(priv->map))
++		return dev_err_probe(dev, PTR_ERR(priv->map), "cannot set up regmap\n");
++
++	clk = devm_clk_get_enabled(dev, NULL);
++	if (IS_ERR(clk))
++		return dev_err_probe(dev, PTR_ERR(clk), "cannot get clock\n");
++
++	ret = devm_clk_rate_exclusive_get(dev, clk);
++	if (ret)
++		return dev_err_probe(dev, ret, "cannot lock the clock rate\n");
++
++	priv->rate = clk_get_rate(clk);
++	if (!priv->rate || priv->rate > NSEC_PER_SEC)
++		return dev_err_probe(dev, -EINVAL, "invalid clock rate %lu\n",
++				     priv->rate);
++
++	chip->ops = &x2600_pwm_ops;
++
++	ret = devm_pwmchip_add(dev, chip);
++	if (ret)
++		return dev_err_probe(dev, ret, "cannot add PWM chip\n");
++
++	return 0;
++}
++
++static const struct of_device_id x2600_pwm_of_match[] = {
++	{ .compatible = "ingenic,x2600-pwm" },
++	{ /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(of, x2600_pwm_of_match);
++
++static struct platform_driver x2600_pwm_driver = {
++	.driver = {
++		.name = "ingenic-x2600-pwm",
++		.of_match_table = x2600_pwm_of_match,
++	},
++	.probe = x2600_pwm_probe,
++};
++module_platform_driver(x2600_pwm_driver);
++
++MODULE_AUTHOR("Hunter Laux <hunterlaux@gmail.com>");
++MODULE_DESCRIPTION("Ingenic X2600 PWM driver");
++MODULE_LICENSE("GPL");
+-- 
+2.43.0
+
