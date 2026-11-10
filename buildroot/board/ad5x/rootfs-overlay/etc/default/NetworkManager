@@ -1,0 +1,3 @@
+# Sourced by /etc/init.d/S45NetworkManager. In USB test mode (AD5X_USB,
+# Kiln beside stock in a chroot) stock runs the network: no NetworkManager.
+[ -n "$AD5X_USB" ] && exit 0

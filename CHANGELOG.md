@@ -10,6 +10,7 @@ the issue: it is closed by hand after the release.
 
 ## Unreleased
 
+- **NetworkManager runs Ethernet and Wi-Fi**: the printer can be on Ethernet and Wi-Fi at once (Ethernet preferred, Wi-Fi as a fallback), roams between access points, and finds hidden networks. Your networks come over by themselves on the first start: Ethernet settings from `network.conf`, Wi-Fi networks from Kiln's `wpa_supplicant.conf` or, on a fresh install, the ones saved on Flashforge's screen. The touch screen joins and saves networks as before, and Wi-Fi switched off on the screen stays off after a reboot. Networks added or changed after the update don't carry back to an older Kiln OS release. Over SSH, `nmcli` shows and changes the network. Details: `docs/networkmanager.md`.
 - **Plugins can no longer steer the update agent's answers** (PR #52 by Hunter Laux): the update agent runs as root and wrote its answer and its log into a folder the `klipper` user owns, so code running as `klipper` (a plugin, for example) could put a link there and make root overwrite or extend another file, or put a FIFO there and stop updates. The answer is now written in a folder only root can open and then moved into place, and the log moved to `/data/ad5x/kiln-log/agent.log` (root actions log there too), which `klipper` can read but not change. The old `/data/ad5x/kiln-update/agent.log` is removed at start-up.
 
 ## v0.0.58

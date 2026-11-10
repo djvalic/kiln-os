@@ -1,4 +1,4 @@
-# Loopback only: eth0 is set up by /etc/init.d/S41ad5x-eth (stock MAC, DHCP),
-# wlan0 by S42ad5x-wifi.
+# Loopback only: eth0 and wlan0 belong to NetworkManager
+# (docs/networkmanager.md).
 auto lo
 iface lo inet loopback

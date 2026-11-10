@@ -35,13 +35,14 @@ printer: it installs every Kiln OS update. Background on the slots and the boot 
 | Script | What |
 |---|---|
 | `rcS` | The main image's rcS (boot trace). Recovery's `ad5x-bootlog` writes its trace into `ota` at **128 KiB**, so the main OS's trace at 64 KiB survives for diagnosis |
-| `S01ad5x-recovery` | Saves the boot flag to `/run/ad5x/flag-at-boot` and creates `/dev/disk/by-partlabel/<GPT name>` links (mdev doesn't). A link is only made when the GPT entry matches the SPL's built-in table |
+| `S01ad5x-recovery` | Saves the boot flag to `/run/ad5x/flag-at-boot` and creates `/dev/disk/by-partlabel/<GPT name>` links. A link is only made when the GPT entry matches the SPL's built-in table (udev makes none here: the recovery image replaces its `60-persistent-storage.rules`) |
 | `S05ad5x-data` | Mounts `userdata` read-write at `/data`. If the mount fails it runs one `e2fsck -p` and tries again; failing that, `/data` is a tmpfs. Stock's root password: usershare `/etc/shadow` hash bound over `/etc/shadow`. SSH host keys bound from `/data/ad5x/ssh/hostkeys`, the same keys as the main OS |
 | `S06ad5x-modules` | The main OS's script (shared, see above): vendor files checked or filled (`ad5x-vendor ensure`), then the drivers from `/data/ad5x/vendor/module_driver`. Without vendor files: no display, touch or Ethernet, a message on the console and in the boot trace, start-up goes on |
 | `S07ad5x-board` | PC11 heartbeat (stock `cmd_gpio`, from `/data/ad5x/vendor` through the `/usr/bin` wrapper), framebuffer on, recovery logo (`/usr/share/ad5x/recovery-logo.jpg`, or `/data/ad5x/recovery/logo.jpg`), backlight |
-| `S10mdev` | The main image's (hotplug, so USB sticks appear) |
-| `S41ad5x-eth` | The main OS's script: stock MAC from usershare `/MAC`, then DHCP or static from `/data/ad5x/network.conf` (`/usr/lib/ad5x/network.sh`) |
-| `S42ad5x-wifi` | The main OS's script: Wi-Fi with the networks in `/data/ad5x/wpa_supplicant.conf` (made from stock's saved networks on the first start), unless `/data/ad5x/wifi.disable` exists. The main OS's Wi-Fi switch (HelixScreen's `wifi_enabled`) is not applied here: recovery has no HelixScreen, so Wi-Fi stays on |
+| `S10udevd` | The main image's eudev (hotplug, so USB sticks appear); network interfaces keep the names `eth0` and `wlan0` |
+| `S44ad5x-network` | The main OS's script: NetworkManager's files on `/data`, and on the first start the import of the older configuration (docs/networkmanager.md); `/data/ad5x/wifi.disable` leaves `wlan0` unmanaged |
+| `S45NetworkManager` | NetworkManager, with the connections in `/data/ad5x/NetworkManager/system-connections`, shared with the main OS |
+| `S46ad5x-wifi` | The main OS's script: `printer_data/logs/wifi.log`, and the radio turned back on when the main OS's Wi-Fi switch left it off and there is no Ethernet (recovery has no screen to turn it on) |
 | `S50dropbear` | SSH, root login (stock's password, or a key in `/data/ad5x/ssh/authorized_keys`) |
 | `S70swupdate` | SWUpdate daemon: web upload on **port 8080**, control socket `/tmp/sockinstctrl`, progress socket `/tmp/swupdateprog`, log `/run/ad5x/swupdate.log` |
 | `S80ad5x-recovery-ui` | Starts `/usr/bin/ad5x-recovery-ui` (the touch UI, a separate package) if it is installed, and restarts it if it exits, with the main OS's touch calibration from `/data/ad5x/recovery/touch-cal` when it is usable (see Touch UI). Log `/run/ad5x/ui.log` |
@@ -50,18 +51,20 @@ printer: it installs every Kiln OS update. Background on the slots and the boot 
 
 ### Network configuration (shared with the main OS)
 
-`/data/ad5x/network.conf`, a shell-sourceable file:
+NetworkManager's connections in `/data/ad5x/NetworkManager/system-connections`
+(docs/networkmanager.md), the same for both: change them with `nmcli`, e.g.
+a static address:
 
 ```
-MODE=dhcp|static          # dhcp when the file or MODE is missing
-ADDRESS=192.168.1.50/24   # static: address/prefix
-GATEWAY=192.168.1.1       # static, optional
-DNS="192.168.1.1 1.1.1.1" # static, optional; written to /run/resolv.conf
-IFACE=eth0                # optional
+nmcli connection modify Ethernet ipv4.method manual \
+    ipv4.addresses 192.168.1.50/24 ipv4.gateway 192.168.1.1 \
+    ipv4.dns "192.168.1.1 1.1.1.1"
+nmcli connection up Ethernet
 ```
 
-An invalid static setup falls back to DHCP and logs it. The stock MAC is
-always set first.
+Releases before NetworkManager used `/data/ad5x/network.conf`
+(`MODE=dhcp|static`, `ADDRESS`, `GATEWAY`, `DNS`, `IFACE`); it is imported
+once and left in place. The Ethernet connection carries stock's MAC.
 
 ## Updates (SWUpdate)
 

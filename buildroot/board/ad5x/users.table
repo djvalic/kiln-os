@@ -1,2 +1,2 @@
-# Klipper runs as its own user; dialout for the board UARTs (etc/mdev.conf)
+# Klipper runs as its own user; dialout for the board UARTs (udev)
 klipper -1 klipper -1 * /home/klipper /bin/sh dialout,tty Klipper

@@ -75,7 +75,7 @@ From the stock kernel image and root filesystem (3.1.0 updater):
 
 - Toolchain: glibc, GCC 14, kernel headers 5.10, `-march=mips32r5
   -mfp64 -mnan=2008` (stock userspace is r2 code; the CPU is r5).
-- BusyBox init and mdev (as stock), read-only squashfs root.
+- BusyBox init (as stock) and eudev, read-only squashfs root.
 - Python 3 with Klipper's dependencies; mainline Klipper at the same commit
   as the MCU images, `c_helper.so` cross-compiled, this project's extras and
   default `printer.cfg` / `ifs.cfg`.
@@ -102,18 +102,18 @@ From the stock kernel image and root filesystem (3.1.0 updater):
   system or a stock slot when missing) and loads the stock drivers from
   there, `S07ad5x-board` runs the PC11 heartbeat and the boot logo with
   stock's board tools (`/usr/bin/cmd_*` are wrappers that run them from
-  `/data/ad5x/vendor` with their own libraries), `S42ad5x-wifi` runs
-  wpa_supplicant on `/data/ad5x/wpa_supplicant.conf` (stock's saved
-  networks on the first start; HelixScreen joins and saves networks, its
+  `/data/ad5x/vendor` with their own libraries), NetworkManager
+  (`S44ad5x-network`, `S45NetworkManager`, `S46ad5x-wifi`,
+  docs/networkmanager.md) runs Ethernet and Wi-Fi (stock's saved networks
+  imported on the first start; HelixScreen joins and saves networks, its
   switch turns the radio off; `/data/ad5x/wifi.disable`: no Wi-Fi), `S60ad5x-eboard` starts the
   toolhead board (`tools/boot_eboard.py`), `S61klipper` runs klippy as user
   `klipper` at nice -10. Both start only when `/data/ad5x/klipper.enable`
   exists: the boards still run stock firmware until they are reflashed.
-- `S41ad5x-eth`: Ethernet with stock's MAC (`usershare` `/MAC`), then DHCP
-  or a static address from `/data/ad5x/network.conf` (`MODE=dhcp|static`,
-  `ADDRESS=a.b.c.d/nn`, `GATEWAY=`, `DNS="..."`; shared with the recovery OS,
-  helper `/usr/lib/ad5x/network.sh`; an invalid static setup falls back to
-  DHCP).
+- Ethernet: NetworkManager with stock's MAC (`usershare` `/MAC`); on the
+  first start `S44ad5x-network` imports DHCP or the static address from
+  `/data/ad5x/network.conf` (`MODE=dhcp|static`, `ADDRESS=a.b.c.d/nn`,
+  `GATEWAY=`, `DNS="..."`), shared with the recovery OS.
 - HelixScreen v1.1.0-beta.9 (`package/helixscreen`), the touch screen UI,
   built from source (git tag with its vendored submodules: LVGL, libhv,
   spdlog, libnl, wpa client, Lua) with our toolchain: upstream's MIPS
@@ -181,7 +181,7 @@ scripts under qemu (`AD5X_USB=1`):
   stock bind-mounts from `/usr/prog/etc` only *after* the stick hook. The
   script does that bind first, so SSH works as it does today.
 - Stock already runs `mdev -df` on the shared `/dev`; ours stays off and
-  only gives `/dev/ttyS*` group `dialout` (`S10mdev` in the overlay).
+  only gives `/dev/ttyS*` group `dialout` (`S10udevd` in the overlay).
 - DNS: stock also runs dhcpcd, which leaves no nameservers; the script hands the lease's DNS servers to our `/run/resolv.conf`.
 - eth0 stays stock's (no second DHCP client; `/etc/network/interfaces` is
   loopback only). Our dropbear finds port 22 taken and stays off.

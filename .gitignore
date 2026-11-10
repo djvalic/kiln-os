@@ -2,7 +2,7 @@
 buildroot/src/
 buildroot/dl/
 buildroot/output/
-buildroot/output-recovery/
+buildroot/output-*/
 
 # Stock firmware downloads, MCU builds and backups stay local (firmware/)
 firmware/

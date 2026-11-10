@@ -1,0 +1,4 @@
+# Replaces eudev's rule of the same name (docs/networkmanager.md): the
+# network interfaces keep the kernel's names, eth0 and wlan0, which Kiln's
+# scripts, HelixScreen and the user's habits all use. Stock's command line
+# has no net.ifnames=0, which would do the same.
