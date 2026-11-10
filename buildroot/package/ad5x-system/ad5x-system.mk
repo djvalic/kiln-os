@@ -60,6 +60,8 @@ define AD5X_SYSTEM_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/usr/bin/ad5x-sound
 	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-update \
 		$(TARGET_DIR)/usr/bin/ad5x-update
+	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-boot-recovery \
+		$(TARGET_DIR)/usr/bin/ad5x-boot-recovery
 	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-restore-stock \
 		$(TARGET_DIR)/usr/bin/ad5x-restore-stock
 	$(INSTALL) -D -m 0755 $(@D)/ad5x-fbstream \

@@ -3,12 +3,55 @@
 # LVGL on /dev/fb0 and evdev) when it is installed, and restarts it if it
 # exits. It reads progress from SWUpdate's socket (/tmp/swupdateprog) and
 # calls the ad5x-* tools (docs/recovery-os.md). Log: /run/ad5x/ui.log.
+# Touch calibration (issue #47): /data/ad5x/recovery/touch-cal, written by
+# the main OS's S70helixscreen from HelixScreen's calibration, "min_x min_y
+# max_x max_y" in stock-kernel units (0-800 x 0-480), goes to the UI as
+# AD5X_RUI_TOUCH_CAL. A missing or odd file (not four whole numbers, a min
+# not below its max, out of range, a span under a quarter of the screen)
+# is left out: the UI then uses its own default. "S80ad5x-recovery-ui
+# touch-cal" prints what the UI would get (AD5X_RUI_TOUCH_CAL_FILE
+# overrides the file, for tests).
 UI=/usr/bin/ad5x-recovery-ui
 PIDFILE=/var/run/ad5x-recovery-ui.pid
+CALFILE=${AD5X_RUI_TOUCH_CAL_FILE:-/data/ad5x/recovery/touch-cal}
+
+# touch_cal: the file's "min_x min_y max_x max_y" on stdout when usable,
+# else why not on stderr and false
+touch_cal() {
+	[ -f "$CALFILE" ] || { echo "no $CALFILE" >&2; return 1; }
+	a= b= c= d= rest=
+	read -r a b c d rest < "$CALFILE" || :
+	if [ -z "$d" ] || [ -n "$rest" ]; then
+		echo "$CALFILE: not four numbers" >&2; return 1
+	fi
+	for v in "$a" "$b" "$c" "$d"; do
+		case $v in
+		0|[1-9]|[1-9][0-9]|[1-9][0-9][0-9]|[1-9][0-9][0-9][0-9]) ;;
+		*) echo "$CALFILE: '$v' is not a whole number 0-9999" >&2; return 1 ;;
+		esac
+	done
+	if [ "$a" -ge "$c" ] || [ "$b" -ge "$d" ]; then
+		echo "$CALFILE: a min is not below its max ($a $b $c $d)" >&2; return 1
+	fi
+	if [ "$c" -gt 800 ] || [ "$d" -gt 480 ]; then
+		echo "$CALFILE: out of the stock range 0-800 x 0-480 ($a $b $c $d)" >&2; return 1
+	fi
+	if [ $((c - a)) -lt 200 ] || [ $((d - b)) -lt 120 ]; then
+		echo "$CALFILE: span too small ($a $b $c $d)" >&2; return 1
+	fi
+	echo "$a $b $c $d"
+}
+
 case "$1" in
 start)
 	[ -x $UI ] || { echo "ui: $UI not installed"; exit 0; }
 	mkdir -p /run/ad5x
+	if cal=$(touch_cal 2>>/run/ad5x/ui.log); then
+		export AD5X_RUI_TOUCH_CAL="$cal"
+		echo "S80: touch calibration $cal from $CALFILE" >> /run/ad5x/ui.log
+	else
+		echo "S80: touch calibration from $CALFILE not used" >> /run/ad5x/ui.log
+	fi
 	start-stop-daemon -S -b -m -p $PIDFILE -x /bin/sh -- -c \
 		"while true; do $UI >> /run/ad5x/ui.log 2>&1; echo \"ui exited: \$?\" >> /run/ad5x/ui.log; sleep 2; done"
 	echo "ui: started"
@@ -20,6 +63,10 @@ stop)
 	;;
 restart)
 	"$0" stop; sleep 1; "$0" start
+	;;
+touch-cal)
+	touch_cal
+	exit
 	;;
 esac
 exit 0

@@ -165,7 +165,10 @@ come back in line, see [docs/ifs-troubleshooting.md](docs/ifs-troubleshooting.md
   stick, or over SSH. The installer saves the stock system first:
   [docs/install.md](docs/install.md).
 - **Update** from Fluidd (Settings → Software Updates → Kiln OS), or with a
-  release `.zip` on a USB stick: [docs/updates.md](docs/updates.md).
+  release `.zip` and an empty `ad5x-autoupdate` file on a USB stick, which
+  the recovery OS installs when the printer starts it (a normal restart
+  doesn't read the stick): [docs/updates.md](docs/updates.md), "From a USB
+  stick".
 - **Recover**: [docs/recovery-os.md](docs/recovery-os.md). A failed start
   lands in the recovery OS, which has SSH, an update page on port 8080,
   backup and restore, and USB rescue.

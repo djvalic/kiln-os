@@ -16,11 +16,17 @@
 #       to /data/ad5x/stock first (ad5x-restore-stock puts them back).
 #
 #   -   read the file from stdin (e.g. piped over ssh)
+#
+# Staging an update, and --install-recovery --reboot, are refused until
+# start-up has finished (S99ad5x-booted points the boot flag back at slot
+# B): a reboot before that leaves our kernel's start marker behind, which
+# counts as an unfinished start of it (issue #47).
+# AD5X_LIB overrides /usr/lib/ad5x (tests).
 set -e
-. /usr/lib/ad5x/slot.sh
+. ${AD5X_LIB:-/usr/lib/ad5x}/slot.sh
 
 die() { echo "ad5x-update: $*" >&2; exit 1; }
-usage() { sed -n '2,19p' "$0"; exit ${1:-2}; }
+usage() { sed -n '2,24p' "$0"; exit ${1:-2}; }
 SLOTA_MSG="this printer runs the main OS from slot A (root=/dev/mmcblk0p2). Updates don't support that layout: see docs/recovery-os.md, section 'Main OS in slot A'."
 
 mode=swu reboot_after= replace_stock=
@@ -40,6 +46,12 @@ FILE=$1 WANT=$2
 
 if [ "$SLOT" = A ]; then die "$SLOTA_MSG"; fi
 [ "$SLOT" = B ] || die "run from the main OS in slot B (this is slot '${SLOT:-?}')"
+if [ $mode = swu ] || [ -n "$reboot_after" ]; then
+	flag=$(read_flag)
+	[ "$flag" = "$(flag_for B)" ] || die "start-up has not finished yet (boot flag '$flag'; \
+S99ad5x-booted sets $(flag_for B) when it has); nothing done. Wait for it and run this again, e.g.:
+  until [ \"\$(head -c 11 $(part ota))\" = $(flag_for B) ]; do sleep 5; done"
+fi
 AROOT=$(rootfs_of A) AKERN=$(kernel_of A) BKERN=$(kernel_of B)
 MNT=/run/ad5x-target
 mkdir -p $MNT

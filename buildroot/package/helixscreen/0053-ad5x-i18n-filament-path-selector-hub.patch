@@ -1,0 +1,94 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Mon, 9 Nov 2026 16:20:00 -0500
+Subject: [PATCH] i18n: the filament path's SELECTOR and HUB boxes are
+ translated
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The IFS screen's path drawing labels its boxes SELECTOR and HUB. They
+were drawn as fixed English text in every language; they now go through
+lv_tr(). Russian: СЕЛЕКТОР and ХАБ, the words ru.yml already uses for
+Selector and Hub. Other languages show them in English as before.
+---
+ src/ui/ui_filament_path_topology.cpp | 7 ++++---
+ translations/en.yml                  | 2 ++
+ translations/ru.yml                  | 2 ++
+ 3 files changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/src/ui/ui_filament_path_topology.cpp b/src/ui/ui_filament_path_topology.cpp
+index 801fde7..5785576 100644
+--- a/src/ui/ui_filament_path_topology.cpp
++++ b/src/ui/ui_filament_path_topology.cpp
+@@ -333,7 +333,7 @@ void render_mixed(lv_obj_t* obj, lv_layer_t* layer, FilamentPathData* data) {
+ 
+     if (f.hub_count > 0) {
+         draw_hub_box(ctx, f.hub_cx, f.hub_cy, f.hub_w, f.hub_h, data->theme.color_hub_bg,
+-                     data->theme.color_hub_border, "HUB");
++                     data->theme.color_hub_border, lv_tr("HUB"));
+     }
+     paint_box_bands(layer, plan, pal);
+ 
+@@ -416,7 +416,8 @@ void draw_hub_section(const RenderCtx& ctx, const LinearHubFrame& f) {
+     const lv_color_t hub_bg_tinted = hub_tint.bg;
+     const lv_color_t hub_border_final = hub_tint.border;
+ 
+-    const char* hub_label = (data->topology == 0) ? "SELECTOR" : "HUB";
++    // Translated: the box label is on screen in every language (Kiln OS, issue #23).
++    const char* hub_label = (data->topology == 0) ? lv_tr("SELECTOR") : lv_tr("HUB");
+ 
+     // For LINEAR topology, hub box spans the full slot area width.
+     // slot_x values are slot centers, so we add half a slot width on each
+@@ -438,7 +439,7 @@ void draw_hub_section(const RenderCtx& ctx, const LinearHubFrame& f) {
+             sel_w = (last_slot_x - first_slot_x) + slot_pad;
+         }
+         sel_w = draw_hub_box(ctx, f.center_x, f.selector_y, sel_w, f.hub_h, hub_bg_tinted,
+-                             hub_border_final, "SELECTOR", LV_OPA_60,
++                             hub_border_final, lv_tr("SELECTOR"), LV_OPA_60,
+                              /*interactive=*/data->hub_callback != nullptr);
+         // The unit's own box is the management target; the hub on the head is
+         // not a separate control.
+diff --git a/translations/en.yml b/translations/en.yml
+index a4c24fe..3cd2fee 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -5055,6 +5055,7 @@ translations:
+   'Heats the bed to 60 °C and probes the whole bed to measure its shape. Keep the bed clear. The bed stays warm for the Z offset test that follows.': 'Heats the bed to 60 °C and probes the whole bed to measure its shape. Keep the bed clear. The bed stays warm for the Z offset test that follows.'
+   'Homing and heating...': 'Homing and heating...'
+   'Homing the IFS': 'Homing the IFS'
++  'HUB': 'HUB'
+   'IFS driver error': 'IFS driver error'
+   'IFS tuning': 'IFS tuning'
+   'Input shaping against ringing': 'Input shaping against ringing'
+@@ -5138,6 +5139,7 @@ translations:
+   'Selecting a slot': 'Selecting a slot'
+   'Selecting the slot': 'Selecting the slot'
+   'Selecting {}': 'Selecting {}'
++  'SELECTOR': 'SELECTOR'
+   'Self-check': 'Self-check'
+   'Self-check, PID, bed mesh, vibration, IFS, Z offset': 'Self-check, PID, bed mesh, vibration, IFS, Z offset'
+   'Short': 'Short'
+diff --git a/translations/ru.yml b/translations/ru.yml
+index bd5179e..9c1995c 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -5226,6 +5226,7 @@ translations:
+   'Heats the bed to 60 °C and probes the whole bed to measure its shape. Keep the bed clear. The bed stays warm for the Z offset test that follows.': 'Нагревает стол до 60 °C и проходит датчиком по всему столу, чтобы измерить его форму. Стол должен быть пустым. Стол остаётся тёплым для следующего теста смещения по Z.'
+   'Homing and heating...': 'Парковка и нагрев...'
+   'Homing the IFS': 'Парковка IFS'
++  'HUB': 'ХАБ'
+   'IFS driver error': 'Ошибка драйвера IFS'
+   'IFS tuning': 'Настройка IFS'
+   'Input shaping against ringing': 'Компенсация вибраций против звона'
+@@ -5309,6 +5310,7 @@ translations:
+   'Selecting a slot': 'Выбор слота'
+   'Selecting the slot': 'Выбор слота'
+   'Selecting {}': 'Выбор: {}'
++  'SELECTOR': 'СЕЛЕКТОР'
+   'Self-check': 'Самопроверка'
+   'Self-check, PID, bed mesh, vibration, IFS, Z offset': 'Самопроверка, PID, сетка стола, вибрации, IFS, смещение по Z'
+   'Short': 'Краткий'
+-- 
+2.56.0
+

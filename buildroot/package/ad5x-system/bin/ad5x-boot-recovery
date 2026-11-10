@@ -1,0 +1,64 @@
+#!/bin/sh
+# Boot into the recovery OS on request (issue #47): points the boot flag at
+# slot A and reboots. Unlike an interrupted boot this records no unfinished
+# start of our kernel, so the next main OS start still uses it.
+#
+#   ad5x-boot-recovery [--no-reboot]
+#
+# Refused unless this is the main OS in slot B, slot A holds the recovery
+# OS, no recovery OS write is running (S99ad5x-update-recovery) and
+# start-up has finished (S99ad5x-booted has pointed the boot flag back at
+# slot B: before that, our kernel's start marker is still there and a
+# reboot counts as an unfinished start). --no-reboot sets the flag and
+# leaves the reboot to the caller (S68ad5x-update-agent answers Moonraker
+# first). Prints are not checked here: the update agent refuses while one
+# may run (POST /machine/kiln_os/boot_recovery, docs/updates.md).
+# AD5X_LIB overrides /usr/lib/ad5x (tests).
+. ${AD5X_LIB:-/usr/lib/ad5x}/slot.sh
+
+die() { echo "ad5x-boot-recovery: $*" >&2; exit 1; }
+
+reboot_after=1
+case "$1" in
+'') ;;
+--no-reboot) reboot_after= ;;
+-h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+*) die "unknown option $1 (usage: ad5x-boot-recovery [--no-reboot])" ;;
+esac
+
+[ "$SLOT" = B ] || die "run from the main OS in slot B (this is slot '${SLOT:-?}')"
+
+# The same test as ad5x-update's
+AROOT=$(rootfs_of A)
+MNT=/run/ad5x-target
+mkdir -p $MNT
+slot_a_holds() {
+	holds=unknown
+	if mount -t squashfs -o ro $AROOT $MNT 2>/dev/null; then
+		if [ -f $MNT/etc/ad5x-recovery ]; then holds=recovery
+		elif [ -f $MNT/etc/ad5x-release ]; then holds=main
+		elif [ -d $MNT/usr/prog ] || [ -f $MNT/etc/ota_bin/ota_local_method.sh ]; then holds=stock
+		fi
+		umount $MNT
+	fi
+	echo $holds
+}
+
+WLOCK=/run/ad5x-recovery-write.pid
+if [ -f $WLOCK ] && kill -0 "$(cat $WLOCK)" 2>/dev/null; then
+	die "the recovery OS is being written into slot A (S99ad5x-update-recovery); try again in a few minutes"
+fi
+flag=$(read_flag)
+[ "$flag" = "$(flag_for B)" ] || \
+	die "start-up has not finished yet (boot flag '$flag'); try again in a minute"
+holds=$(slot_a_holds)
+[ "$holds" = recovery ] || die "slot A doesn't hold the recovery OS (it holds: $holds)"
+
+set_flag A && [ "$(read_flag)" = "$(flag_for A)" ] || die "can't write the boot flag"
+sync
+echo "boot flag on the recovery OS ($(read_flag))"
+if [ -n "$reboot_after" ]; then
+	echo "rebooting into the recovery OS"
+	reboot
+fi
+exit 0

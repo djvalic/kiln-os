@@ -44,7 +44,7 @@ printer: it installs every Kiln OS update. Background on the slots and the boot 
 | `S42ad5x-wifi` | The main OS's script: Wi-Fi with the networks in `/data/ad5x/wpa_supplicant.conf` (made from stock's saved networks on the first start), unless `/data/ad5x/wifi.disable` exists. The main OS's Wi-Fi switch (HelixScreen's `wifi_enabled`) is not applied here: recovery has no HelixScreen, so Wi-Fi stays on |
 | `S50dropbear` | SSH, root login (stock's password, or a key in `/data/ad5x/ssh/authorized_keys`) |
 | `S70swupdate` | SWUpdate daemon: web upload on **port 8080**, control socket `/tmp/sockinstctrl`, progress socket `/tmp/swupdateprog`, log `/run/ad5x/swupdate.log` |
-| `S80ad5x-recovery-ui` | Starts `/usr/bin/ad5x-recovery-ui` (the touch UI, a separate package) if it is installed, and restarts it if it exits. Log `/run/ad5x/ui.log` |
+| `S80ad5x-recovery-ui` | Starts `/usr/bin/ad5x-recovery-ui` (the touch UI, a separate package) if it is installed, and restarts it if it exits, with the main OS's touch calibration from `/data/ad5x/recovery/touch-cal` when it is usable (see Touch UI). Log `/run/ad5x/ui.log` |
 | `S85ad5x-auto` | Starts `ad5x-recovery-auto` in the background (below). A file `/data/ad5x/recovery/noauto` turns it off |
 | `S99ad5x-recovery-ready` | Writes `/run/ad5x/ready` |
 
@@ -103,9 +103,12 @@ rescue-system updater that writes the *other* slot (B):
      OS does when it stages an update). The result goes to
      `/data/ad5x/update/last.log`. After a success the printer reboots into
      the main OS.
-  3. **USB stick**: `.swu` files in the top directory of a FAT/ext4/exFAT
-     partition. With a file named `ad5x-autoupdate` on the stick they are
-     installed at boot. Each stick image is installed only once (its sha256
+  3. **USB stick**: `.swu` files or release `.zip` files in the top
+     directory of a FAT32 or ext4 partition (not exFAT). With a file named
+     `ad5x-autoupdate` on the stick they are installed at boot of the
+     recovery OS; the main OS never reads the stick, so the printer has to
+     start the recovery OS first (`docs/updates.md`, "From a USB stick",
+     says how). Each stick image is installed only once (its sha256
      goes to `/data/ad5x/update/applied.list`), so a bad image can't start
      an update-reboot loop. A log `ad5x-autoupdate.log` is written on the
      stick. Without the marker they are only offered: `ad5x-usb list`, the
@@ -450,10 +453,19 @@ environment (for example `AD5X_RUI_CMD_BACKUP='ad5x-backup --no-boot
   when SWUpdate is in the image; otherwise (laptop builds) a copy of the
   same small protocol (progress API 2.0, `src/swu_ipc_compat.h`). The
   connection is retried every second while the socket is missing.
-- Touch: LVGL's evdev driver scales the device's ABS range to 800x480;
-  stock's `tsc2007_touch` parameters already flip Y. If the mapping is off:
-  `AD5X_RUI_TOUCH_CAL="minx miny maxx maxy"` (swap a pair to invert) and
-  `AD5X_RUI_TOUCH_SWAP=1`. Display: page 0 of the double buffer is panned
+- Touch: stock's `tsc2007_touch` parameters scale to 0-800 x 0-480 and
+  already flip Y, but the panel never reports its edges, so the driver's
+  full range would put taps off target away from the middle (Back in the
+  top left corner unreachable, issue #47). The UI maps the calibrated range
+  instead: `AD5X_RUI_TOUCH_CAL="minx miny maxx maxy"` (swap a pair to
+  invert), which `S80ad5x-recovery-ui` takes from
+  `/data/ad5x/recovery/touch-cal`. The main OS's `S70helixscreen` writes
+  that file from HelixScreen's touch calibration (`ad5x-touch-units
+  --recovery-cal`, in stock units; HelixScreen's affine correction is left
+  out). A missing or odd file gives the seed range `60 72 723 404`
+  (`src/touch_cal.h`); `ui.log` names the range used. `S80ad5x-recovery-ui
+  touch-cal` prints what the UI gets. `AD5X_RUI_TOUCH_SWAP=1` swaps X and
+  Y. Display: page 0 of the double buffer is panned
   in at start (yoffset 0); LVGL draws XRGB8888 into it.
 
 ### Laptop builds and screenshots
@@ -475,7 +487,8 @@ qemu-user (`QEMU_LD_PREFIX=buildroot/output-recovery/target`).
 ### Open items (UI)
 
 - Not run on the panel yet: colour order of the 32 bpp framebuffer, the
-  touch mapping and the speed of a full redraw on the X2600 are unchecked.
+  touch mapping from HelixScreen's calibration (issue #47) and the speed
+  of a full redraw on the X2600 are unchecked.
 - No percentage for backups/restores until the tools print `@progress`.
 - USB rescue (`ad5x-usb-rescue boot|flash`) is shown, not offered as a
   button.

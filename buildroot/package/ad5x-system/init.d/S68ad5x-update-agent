@@ -17,7 +17,15 @@
 # reboots; status "rebooting", or "refused: ..." while a print runs or
 # before start-up has finished (the boot flag still on the other slot, see
 # S01ad5x-tryboot: a reboot then would start the recovery OS).
-# Installs and kernel-retry are refused while a print may run: Moonraker
+# Also: "boot-recovery" (POST /machine/kiln_os/boot_recovery, issue #47):
+# runs "ad5x-boot-recovery --no-reboot" (boot flag on the recovery OS in
+# slot A) and reboots; refused as kernel-retry is. The recovery OS then
+# installs what is waiting (an update zip on a stick with ad5x-autoupdate,
+# docs/updates.md) or shows its touch UI.
+# A Kiln OS update is also refused before start-up has finished: the
+# reboot would leave our kernel's start marker behind, which counts as an
+# unfinished start of it (issue #47).
+# Installs, kernel-retry and boot-recovery are refused while a print may run: Moonraker
 # gives no answer at all, or Klipper is ready and its print state is
 # printing, paused or unknown. A Klipper that is not ready (startup,
 # shutdown, error, disconnected) can't be printing: allowed, so a printer
@@ -138,6 +146,25 @@ agent_once() {
 			echo "failed: $out" > $D/status
 		fi
 	fi
+	if [ -f $D/boot-recovery ]; then
+		rm -f $D/boot-recovery
+		if busy "boot into recovery"; then
+			:
+		elif ! started_up; then
+			log "boot into recovery refused: start-up not finished"
+			echo "refused: start-up has not finished yet, try again in a minute" > $D/status
+		elif out=$(ad5x-boot-recovery --no-reboot 2>&1); then
+			log "boot into recovery: $out; rebooting"
+			echo "rebooting" > $D/status
+			sync
+			sleep 2
+			reboot
+			exit 0
+		else
+			log "boot into recovery refused: $out"
+			echo "refused: ${out#ad5x-boot-recovery: }" > $D/status
+		fi
+	fi
 	if [ -f $D/install ]; then
 		f=$(sed -n 1p $D/install)
 		sum=$(sed -n 2p $D/install)
@@ -151,6 +178,9 @@ agent_once() {
 		esac
 		if [ -n "$f" ] && busy "$f"; then
 			:
+		elif [ -n "$f" ] && ! started_up; then
+			log "$f refused: start-up not finished"
+			echo "refused: start-up has not finished yet, try again in a minute" > $D/status
 		elif [ -n "$f" ]; then
 			log "staging $f"
 			if ad5x-update "$D/$f" "$sum" >> $LOG 2>&1; then
@@ -186,7 +216,7 @@ start)
 	[ -f /data/ad5x/kiln-os.token ] &&
 		chown root:klipper /data/ad5x/kiln-os.token &&
 		chmod 640 /data/ad5x/kiln-os.token
-	rm -f $D/install $D/kernel-retry $D/status
+	rm -f $D/install $D/kernel-retry $D/boot-recovery $D/status
 	start-stop-daemon -S -b -m -p $PID -x /bin/sh -- $0 run
 	;;
 run)

@@ -63,5 +63,5 @@ PyYAML, `pip install pyyaml`):
 python3 -c "import sys, yaml; d = yaml.safe_load(open(sys.argv[1], encoding='utf-8')); print('OK,', len(d['translations']), 'keys')" helixscreen-ru.yml
 ```
 
-It prints `OK, 4815 keys`. An error message names the line
+It prints `OK, 4825 keys`. An error message names the line
 to fix.

@@ -111,7 +111,7 @@
           "heater_fan heat_fan",
           "fan_generic chamber_fan",
           "fan_generic pcb_fan",
-          "filament_switch_sensor head_switch_sensor"
+          "filament_switch_sensor toolhead"
         ],
         "optional": []
       },

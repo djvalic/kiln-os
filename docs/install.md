@@ -60,7 +60,8 @@ For a printer that already runs the main OS from slot A, see
   starts with the networks saved on stock's screen (switched off ones stay
   off); join or change one on the touch screen (setup wizard, or any time
   in Settings > Connection > Network Settings), where the Wi-Fi switch
-  also turns it off for good if you only use Ethernet. Saved in `/data/ad5x/wpa_supplicant.conf`;
+  also turns it off for good (it stays off after a restart, also without
+  Ethernet, until you switch it back on there). Saved in `/data/ad5x/wpa_supplicant.conf`;
   `/data/ad5x/wifi.disable` turns Wi-Fi off completely.
 
 ## Method 1: USB stick (recommended)
