@@ -30,11 +30,18 @@ An older driver without these fields keeps the plain activity mapping
 
 Upstream: not applicable (AD5X OS specific)
 ---
+ include/ams_backend_ad5x_ifs.h            |  49 +++
+ src/printer/ams_backend_ad5x_ifs.cpp      | 368 ++++++++++++++++++++--
+ tests/test_helpers/ad5x_ifs_test_access.h |   9 +
+ tests/unit/test_ams_ad5x_kiln_ifs.cpp     | 294 +++++++++++++++++
+ 4 files changed, 687 insertions(+), 33 deletions(-)
+ create mode 100644 tests/unit/test_ams_ad5x_kiln_ifs.cpp
+
 diff --git a/include/ams_backend_ad5x_ifs.h b/include/ams_backend_ad5x_ifs.h
-index 705aa6a..2e80112 100644
+index 98209c950f..ecec379a09 100644
 --- a/include/ams_backend_ad5x_ifs.h
 +++ b/include/ams_backend_ad5x_ifs.h
-@@ -597,6 +597,27 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
+@@ -596,6 +596,27 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
      [[nodiscard]] OperationStepModel get_operation_step_model(StepOperationType op) const override;
      [[nodiscard]] lv_subject_t* get_operation_step_index_subject(StepOperationType op) override;
  
@@ -62,7 +69,7 @@ index 705aa6a..2e80112 100644
      // User-initiated state refresh. Re-reads Adventurer5M.json (the JSON poll
      // is the primary truth source on both old and new zmod) and schedules a
      // GET_ZCOLOR SILENT=1 follow-up to refresh the active-slot view. Both
-@@ -1150,6 +1171,16 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
+@@ -1066,6 +1087,16 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
      /// @return true if the frame carried either object.
      bool apply_ifs_module_objects(const nlohmann::json& status);
  
@@ -79,7 +86,7 @@ index 705aa6a..2e80112 100644
      /// Z-Mod's change macro keeps the target tool in
      /// `gcode_macro END_CHANGE_FILAMENT`.last_data.channel from the start of a
      /// filament change to its end, and 99 otherwise. Its runout auto-swap and
-@@ -1830,6 +1861,24 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
+@@ -1727,6 +1758,24 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
      /// none), re-supplied into Ports-only diff frames for the same reason
      /// zmod_last_chan_ exists. Guarded by mutex_.
      std::optional<int> module_last_chan_;
@@ -105,10 +112,10 @@ index 705aa6a..2e80112 100644
      /// apply_zmod_change_macro, so only that source clears it. Guarded by mutex_.
      bool zmod_change_owns_action_ = false;
 diff --git a/src/printer/ams_backend_ad5x_ifs.cpp b/src/printer/ams_backend_ad5x_ifs.cpp
-index 84a3f9d..46124cd 100644
+index 6e41a9c633..9b8da6d799 100644
 --- a/src/printer/ams_backend_ad5x_ifs.cpp
 +++ b/src/printer/ams_backend_ad5x_ifs.cpp
-@@ -798,6 +798,13 @@ void AmsBackendAd5xIfs::handle_status(const json& status_obj) {
+@@ -758,6 +758,13 @@ void AmsBackendAd5xIfs::handle_status(const json& status_obj) {
              if (system_info_.action != before || system_info_.operation_detail != detail_before) {
                  state_changed = true;
              }
@@ -122,7 +129,7 @@ index 84a3f9d..46124cd 100644
          }
      }
  
-@@ -2885,6 +2892,11 @@ AmsError AmsBackendAd5xIfs::cancel() {
+@@ -2594,6 +2601,11 @@ AmsError AmsBackendAd5xIfs::cancel() {
          } else {
              system_info_.operation_phase = -1;
          }
@@ -134,7 +141,7 @@ index 84a3f9d..46124cd 100644
      }
      return execute_gcode(cancel_cmd);
  }
-@@ -5497,6 +5509,12 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+@@ -4999,6 +5011,12 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
      bool saw_module_content = false;
      std::string activity;
      std::string error_text;
@@ -147,7 +154,7 @@ index 84a3f9d..46124cd 100644
  
      if (auto it = status.find("ifs"); it != status.end() && it->is_object()) {
          const auto& obj = *it;
-@@ -5539,6 +5557,25 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+@@ -5041,6 +5059,25 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
          }
          if (auto e = obj.find("error"); e != obj.end() && e->is_string()) {
              error_text = e->get<std::string>();
@@ -173,7 +180,7 @@ index 84a3f9d..46124cd 100644
              saw_module_content = true;
          }
      }
-@@ -5607,48 +5644,290 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+@@ -5109,48 +5146,290 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
      // freshly pushed-in lane. Those set no tracker and install no ack callback;
      // the board's activity is the only Moonraker-visible signal they produce.
      // Transitions are deliberately one-directional per frame (busy only from
@@ -497,7 +504,7 @@ index 84a3f9d..46124cd 100644
  }
  
  void AmsBackendAd5xIfs::apply_zcolor_result(const ZColorSilentResult& result) {
-@@ -6614,6 +6893,8 @@ void AmsBackendAd5xIfs::begin_phase_tracking_locked(bool is_unload) {
+@@ -6099,6 +6378,8 @@ void AmsBackendAd5xIfs::begin_phase_tracking_locked(bool is_unload) {
      phase_tracker_ = IfsPhaseTracker{};
      phase_tracker_.active = true;
      phase_tracker_.is_unload = is_unload;
@@ -506,7 +513,7 @@ index 84a3f9d..46124cd 100644
      // Seed the indeterminate detector: op just started, so the no-progress clock
      // starts now and the last-progress temp baseline is cleared so the first real
      // extruder frame counts as a value change (#1065 row 14).
-@@ -6636,6 +6917,16 @@ void AmsBackendAd5xIfs::on_klipper_restarted() {
+@@ -6121,6 +6402,16 @@ void AmsBackendAd5xIfs::on_klipper_restarted() {
              end_phase_tracking_locked();
          }
          system_info_.operation_indeterminate = false;
@@ -523,7 +530,7 @@ index 84a3f9d..46124cd 100644
      }
      AmsSubscriptionBackend::on_klipper_restarted();
  }
-@@ -6833,6 +7124,11 @@ void AmsBackendAd5xIfs::detect_load_unload_completion(bool head_detected) {
+@@ -6318,6 +6609,11 @@ void AmsBackendAd5xIfs::detect_load_unload_completion(bool head_detected) {
      if (phase_tracker_.active) {
          return;
      }
@@ -535,7 +542,7 @@ index 84a3f9d..46124cd 100644
  
      // Legacy / external / firmware-initiated path: a head transition completes
      // the operation directly. Preserved exactly for backward compatibility.
-@@ -7280,6 +7576,12 @@ void AmsBackendAd5xIfs::check_action_timeout() {
+@@ -6765,6 +7061,12 @@ void AmsBackendAd5xIfs::check_action_timeout() {
          }
      }
  
@@ -549,10 +556,10 @@ index 84a3f9d..46124cd 100644
      // Cover every non-idle operation phase: the legacy LOADING/UNLOADING plus
      // the synthesized HEATING/CUTTING/PURGING the phase tracker drives. Without
 diff --git a/tests/test_helpers/ad5x_ifs_test_access.h b/tests/test_helpers/ad5x_ifs_test_access.h
-index 91c1e9f..b4c7129 100644
+index 59998eb28f..93fe66bf96 100644
 --- a/tests/test_helpers/ad5x_ifs_test_access.h
 +++ b/tests/test_helpers/ad5x_ifs_test_access.h
-@@ -118,6 +118,15 @@ class Ad5xIfsTestAccess {
+@@ -120,6 +120,15 @@ class Ad5xIfsTestAccess {
          b.system_info_.action = a;
          b.action_start_time_ = std::chrono::steady_clock::now();
      }
@@ -570,7 +577,7 @@ index 91c1e9f..b4c7129 100644
      // exercising a public action method (load/unload/eject) that runs the
 diff --git a/tests/unit/test_ams_ad5x_kiln_ifs.cpp b/tests/unit/test_ams_ad5x_kiln_ifs.cpp
 new file mode 100644
-index 0000000..177bdca
+index 0000000000..177bdcabea
 --- /dev/null
 +++ b/tests/unit/test_ams_ad5x_kiln_ifs.cpp
 @@ -0,0 +1,294 @@
@@ -868,3 +875,6 @@ index 0000000..177bdca
 +    CHECK_FALSE(Ad5xIfsTestAccess::runout_active(backend));
 +    CHECK(Ad5xIfsTestAccess::action(backend) == AmsAction::HEATING);
 +}
+-- 
+2.56.0
+

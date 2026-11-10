@@ -9,10 +9,10 @@ Subject: [PATCH] ams: AD5X IFS ports count as prep sensors (open the slot
  1 file changed, 8 insertions(+)
 
 diff --git a/include/ams_backend_ad5x_ifs.h b/include/ams_backend_ad5x_ifs.h
-index b6ff580..340d71b 100644
+index 70d166637b..20e220119d 100644
 --- a/include/ams_backend_ad5x_ifs.h
 +++ b/include/ams_backend_ad5x_ifs.h
-@@ -350,6 +350,14 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
+@@ -423,6 +423,14 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
          return true;
      }
  

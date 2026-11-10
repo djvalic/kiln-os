@@ -22,15 +22,16 @@ follow it, except one being changed and while a change is unanswered.
 Upstream: not applicable (AD5X OS specific)
 ---
  Makefile                                   |   6 +-
- include/ui_settings_sound.h                |  66 ++++-
+ include/ui_settings_sound.h                |  66 +++-
  src/api/moonraker_discovery_sequence.cpp   |   9 +
- src/ui/ui_settings_sound.cpp               | 388 +++++++++++++++++++++++++++
- ui_xml/components/ad5x_sound_event_row.xml |  35 +++
- ui_xml/settings_sound_overlay.xml          |  71 +++++
+ src/ui/ui_settings_sound.cpp               | 388 +++++++++++++++++++++
+ ui_xml/components/ad5x_sound_event_row.xml |  35 ++
+ ui_xml/settings_sound_overlay.xml          |  71 ++++
  6 files changed, 573 insertions(+), 2 deletions(-)
+ create mode 100644 ui_xml/components/ad5x_sound_event_row.xml
 
 diff --git a/Makefile b/Makefile
-index 2980ca7..9afe7eb 100644
+index 811d1af9b5..398fc97713 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -501,11 +501,15 @@ endif
@@ -51,7 +52,7 @@ index 2980ca7..9afe7eb 100644
      # Auto-export: the stock AD5M kernel ships the beeper channel unexported
      # and nothing materializes pwm6, so initialize() writes the channel to
 diff --git a/include/ui_settings_sound.h b/include/ui_settings_sound.h
-index 83591f4..41804ed 100644
+index 83591f4e3c..41804ed2bf 100644
 --- a/include/ui_settings_sound.h
 +++ b/include/ui_settings_sound.h
 @@ -5,21 +5,42 @@
@@ -163,10 +164,10 @@ index 83591f4..41804ed 100644
  
  inline SoundSettingsOverlay& get_sound_settings_overlay() {
 diff --git a/src/api/moonraker_discovery_sequence.cpp b/src/api/moonraker_discovery_sequence.cpp
-index 1b5220f..1e58015 100644
+index 5a9f2d619b..ab4f192d84 100644
 --- a/src/api/moonraker_discovery_sequence.cpp
 +++ b/src/api/moonraker_discovery_sequence.cpp
-@@ -1502,6 +1502,15 @@ json MoonrakerDiscoverySequence::build_subscription_objects(
+@@ -1515,6 +1515,15 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
          }
      }
  
@@ -183,7 +184,7 @@ index 1b5220f..1e58015 100644
      // Other variables on these macros (slicer args, profile names, etc.) are
      // irrelevant to the start-detection logic.
 diff --git a/src/ui/ui_settings_sound.cpp b/src/ui/ui_settings_sound.cpp
-index a87ea22..b7581de 100644
+index a87ea22b1e..b7581de2c8 100644
 --- a/src/ui/ui_settings_sound.cpp
 +++ b/src/ui/ui_settings_sound.cpp
 @@ -4,18 +4,33 @@
@@ -622,7 +623,7 @@ index a87ea22..b7581de 100644
 +} // namespace helix::settings
 diff --git a/ui_xml/components/ad5x_sound_event_row.xml b/ui_xml/components/ad5x_sound_event_row.xml
 new file mode 100644
-index 0000000..c34ac6a
+index 0000000000..c34ac6af63
 --- /dev/null
 +++ b/ui_xml/components/ad5x_sound_event_row.xml
 @@ -0,0 +1,35 @@
@@ -662,7 +663,7 @@ index 0000000..c34ac6a
 +  </view>
 +</component>
 diff --git a/ui_xml/settings_sound_overlay.xml b/ui_xml/settings_sound_overlay.xml
-index a78d838..9616741 100644
+index a78d838c8d..96167413a8 100644
 --- a/ui_xml/settings_sound_overlay.xml
 +++ b/ui_xml/settings_sound_overlay.xml
 @@ -2,6 +2,7 @@
@@ -759,3 +760,4 @@ index a78d838..9616741 100644
          <bind_style_if_eq name="spacer_micro" subject="ui_breakpoint" ref_value="0"/>
 -- 
 2.56.0
+

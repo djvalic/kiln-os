@@ -1,6 +1,14 @@
+
+---
+ translations/ko.yml | 4666 +++++++++++++++++++++++++++++++++++++++++++
+ translations/tr.yml | 4666 +++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 9332 insertions(+)
+ create mode 100644 translations/ko.yml
+ create mode 100644 translations/tr.yml
+
 diff --git a/translations/ko.yml b/translations/ko.yml
 new file mode 100644
-index 0000000..ce19ddb
+index 0000000000..ce19ddb20c
 --- /dev/null
 +++ b/translations/ko.yml
 @@ -0,0 +1,4666 @@
@@ -4672,7 +4680,7 @@ index 0000000..ce19ddb
 +  ~{:.1f} Hz / turn: ~{:.1f} Hz / 회전
 diff --git a/translations/tr.yml b/translations/tr.yml
 new file mode 100644
-index 0000000..2bdc8ec
+index 0000000000..2bdc8ecbed
 --- /dev/null
 +++ b/translations/tr.yml
 @@ -0,0 +1,4666 @@
@@ -9342,3 +9350,6 @@ index 0000000..2bdc8ec
 +  Basic: Temel
 +  Recycled: Geri dönüştürülmüş
 +  ~{:.1f} Hz / turn: ~{:.1f} Hz / tur
+-- 
+2.56.0
+

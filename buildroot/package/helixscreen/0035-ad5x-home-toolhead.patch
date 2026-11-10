@@ -22,8 +22,11 @@ layout is left alone.
 
 Upstream: not applicable (AD5X OS specific)
 ---
+ assets/config/panel_widgets/ad5x/home.json | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
 diff --git a/assets/config/panel_widgets/ad5x/home.json b/assets/config/panel_widgets/ad5x/home.json
-index e7c2971..2b5f2e3 100644
+index e7c297118c..2b5f2e383a 100644
 --- a/assets/config/panel_widgets/ad5x/home.json
 +++ b/assets/config/panel_widgets/ad5x/home.json
 @@ -1,6 +1,6 @@
@@ -54,3 +57,6 @@ index e7c2971..2b5f2e3 100644
      ]
    }
  }
+-- 
+2.56.0
+

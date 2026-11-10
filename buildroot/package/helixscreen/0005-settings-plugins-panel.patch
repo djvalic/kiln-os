@@ -26,9 +26,15 @@ Upstream: not applicable (AD5X OS specific)
  ui_xml/settings_ad5x_plugins_overlay.xml  |  68 +++
  ui_xml/settings_panel.xml                 |   6 +
  10 files changed, 988 insertions(+)
+ create mode 100644 include/ui_settings_ad5x_plugins.h
+ create mode 100644 src/ui/ui_settings_ad5x_plugins.cpp
+ create mode 100644 tests/unit/test_settings_ad5x_plugins.cpp
+ create mode 100644 ui_xml/components/ad5x_catalog_row.xml
+ create mode 100644 ui_xml/components/ad5x_plugin_row.xml
+ create mode 100644 ui_xml/settings_ad5x_plugins_overlay.xml
 
 diff --git a/include/ui_panel_settings.h b/include/ui_panel_settings.h
-index e132344..fce561f 100644
+index e132344a4a..fce561fe88 100644
 --- a/include/ui_panel_settings.h
 +++ b/include/ui_panel_settings.h
 @@ -137,6 +137,8 @@ class SettingsPanel : public PanelBase {
@@ -42,7 +48,7 @@ index e132344..fce561f 100644
      // refreshed by refresh_status_lines().
 diff --git a/include/ui_settings_ad5x_plugins.h b/include/ui_settings_ad5x_plugins.h
 new file mode 100644
-index 0000000..cc80efa
+index 0000000000..cc80efa509
 --- /dev/null
 +++ b/include/ui_settings_ad5x_plugins.h
 @@ -0,0 +1,144 @@
@@ -191,10 +197,10 @@ index 0000000..cc80efa
 +
 +} // namespace helix::settings
 diff --git a/src/api/moonraker_discovery_sequence.cpp b/src/api/moonraker_discovery_sequence.cpp
-index ccdbf28..1b5220f 100644
+index d45828e225..5a9f2d619b 100644
 --- a/src/api/moonraker_discovery_sequence.cpp
 +++ b/src/api/moonraker_discovery_sequence.cpp
-@@ -1493,6 +1493,15 @@ json MoonrakerDiscoverySequence::build_subscription_objects(
+@@ -1506,6 +1506,15 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
          }
      }
  
@@ -211,7 +217,7 @@ index ccdbf28..1b5220f 100644
      // Other variables on these macros (slicer args, profile names, etc.) are
      // irrelevant to the start-detection logic.
 diff --git a/src/ui/ui_panel_settings.cpp b/src/ui/ui_panel_settings.cpp
-index 681b526..c9827bf 100644
+index 681b526b57..c9827bf55a 100644
 --- a/src/ui/ui_panel_settings.cpp
 +++ b/src/ui/ui_panel_settings.cpp
 @@ -13,6 +13,7 @@
@@ -249,7 +255,7 @@ index 681b526..c9827bf 100644
  #else
 diff --git a/src/ui/ui_settings_ad5x_plugins.cpp b/src/ui/ui_settings_ad5x_plugins.cpp
 new file mode 100644
-index 0000000..787788c
+index 0000000000..787788cc18
 --- /dev/null
 +++ b/src/ui/ui_settings_ad5x_plugins.cpp
 @@ -0,0 +1,550 @@
@@ -805,7 +811,7 @@ index 0000000..787788c
 +} // namespace helix::settings
 diff --git a/tests/unit/test_settings_ad5x_plugins.cpp b/tests/unit/test_settings_ad5x_plugins.cpp
 new file mode 100644
-index 0000000..976830a
+index 0000000000..976830a8e5
 --- /dev/null
 +++ b/tests/unit/test_settings_ad5x_plugins.cpp
 @@ -0,0 +1,84 @@
@@ -895,7 +901,7 @@ index 0000000..976830a
 +}
 diff --git a/ui_xml/components/ad5x_catalog_row.xml b/ui_xml/components/ad5x_catalog_row.xml
 new file mode 100644
-index 0000000..093eca3
+index 0000000000..093eca3c5b
 --- /dev/null
 +++ b/ui_xml/components/ad5x_catalog_row.xml
 @@ -0,0 +1,43 @@
@@ -944,7 +950,7 @@ index 0000000..093eca3
 +</component>
 diff --git a/ui_xml/components/ad5x_plugin_row.xml b/ui_xml/components/ad5x_plugin_row.xml
 new file mode 100644
-index 0000000..77b15d3
+index 0000000000..77b15d3784
 --- /dev/null
 +++ b/ui_xml/components/ad5x_plugin_row.xml
 @@ -0,0 +1,77 @@
@@ -1027,7 +1033,7 @@ index 0000000..77b15d3
 +</component>
 diff --git a/ui_xml/settings_ad5x_plugins_overlay.xml b/ui_xml/settings_ad5x_plugins_overlay.xml
 new file mode 100644
-index 0000000..28c8693
+index 0000000000..28c8693668
 --- /dev/null
 +++ b/ui_xml/settings_ad5x_plugins_overlay.xml
 @@ -0,0 +1,68 @@
@@ -1100,7 +1106,7 @@ index 0000000..28c8693
 +  </view>
 +</component>
 diff --git a/ui_xml/settings_panel.xml b/ui_xml/settings_panel.xml
-index f6cb809..0f16557 100644
+index f6cb809b94..0f16557e7a 100644
 --- a/ui_xml/settings_panel.xml
 +++ b/ui_xml/settings_panel.xml
 @@ -51,6 +51,12 @@

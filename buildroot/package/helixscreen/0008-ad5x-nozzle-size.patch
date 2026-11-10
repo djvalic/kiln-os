@@ -43,7 +43,7 @@ Upstream: not applicable (AD5X OS specific)
 
 diff --git a/include/ui_ad5x_nozzle.h b/include/ui_ad5x_nozzle.h
 new file mode 100644
-index 00000000..309eca4c
+index 0000000000..309eca4c49
 --- /dev/null
 +++ b/include/ui_ad5x_nozzle.h
 @@ -0,0 +1,167 @@
@@ -215,7 +215,7 @@ index 00000000..309eca4c
 +
 +} // namespace helix::ui
 diff --git a/include/ui_panel_settings.h b/include/ui_panel_settings.h
-index fce561fe..80687627 100644
+index fce561fe88..8068762783 100644
 --- a/include/ui_panel_settings.h
 +++ b/include/ui_panel_settings.h
 @@ -139,6 +139,8 @@ class SettingsPanel : public PanelBase {
@@ -228,7 +228,7 @@ index fce561fe..80687627 100644
      // Live status line shown under each stateful root row (settings_panel.xml),
      // refreshed by refresh_status_lines().
 diff --git a/include/ui_wizard.h b/include/ui_wizard.h
-index e23f8f8b..7dc7d351 100644
+index e23f8f8bb8..7dc7d3512b 100644
 --- a/include/ui_wizard.h
 +++ b/include/ui_wizard.h
 @@ -109,6 +109,14 @@ lv_obj_t* ui_wizard_create(lv_obj_t* parent);
@@ -247,7 +247,7 @@ index e23f8f8b..7dc7d351 100644
   * Set wizard title
   *
 diff --git a/include/ui_wizard_ad5x_setup.h b/include/ui_wizard_ad5x_setup.h
-index 9fa918eb..9f8840f0 100644
+index 9fa918ebe1..9f8840f038 100644
 --- a/include/ui_wizard_ad5x_setup.h
 +++ b/include/ui_wizard_ad5x_setup.h
 @@ -3,12 +3,13 @@
@@ -375,7 +375,7 @@ index 9fa918eb..9f8840f0 100644
 +
 +WizardAd5xNozzleStep* get_wizard_ad5x_nozzle_step();
 diff --git a/include/wizard_step.h b/include/wizard_step.h
-index 472918c5..59fbe40f 100644
+index 472918c5bf..59fbe40f8b 100644
 --- a/include/wizard_step.h
 +++ b/include/wizard_step.h
 @@ -22,9 +22,10 @@ enum class StepId {
@@ -413,10 +413,10 @@ index 472918c5..59fbe40f 100644
  
  const char* to_string(StepId); // for logs/debug
 diff --git a/src/api/moonraker_discovery_sequence.cpp b/src/api/moonraker_discovery_sequence.cpp
-index 1e58015c..0787994b 100644
+index ab4f192d84..9549589f09 100644
 --- a/src/api/moonraker_discovery_sequence.cpp
 +++ b/src/api/moonraker_discovery_sequence.cpp
-@@ -1511,6 +1511,15 @@ json MoonrakerDiscoverySequence::build_subscription_objects(
+@@ -1524,6 +1524,15 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
          }
      }
  
@@ -433,7 +433,7 @@ index 1e58015c..0787994b 100644
      // Other variables on these macros (slicer args, profile names, etc.) are
      // irrelevant to the start-detection logic.
 diff --git a/src/system/wizard_step.cpp b/src/system/wizard_step.cpp
-index bee685ad..0b356eb6 100644
+index bee685ad99..0b356eb648 100644
 --- a/src/system/wizard_step.cpp
 +++ b/src/system/wizard_step.cpp
 @@ -27,6 +27,8 @@ const char* to_string(StepId id) {
@@ -447,7 +447,7 @@ index bee685ad..0b356eb6 100644
      case StepId::Ad5xPid:
 diff --git a/src/ui/ui_ad5x_nozzle.cpp b/src/ui/ui_ad5x_nozzle.cpp
 new file mode 100644
-index 00000000..dfa5236b
+index 0000000000..dfa5236bd7
 --- /dev/null
 +++ b/src/ui/ui_ad5x_nozzle.cpp
 @@ -0,0 +1,370 @@
@@ -822,7 +822,7 @@ index 00000000..dfa5236b
 +
 +} // namespace helix::ui
 diff --git a/src/ui/ui_panel_settings.cpp b/src/ui/ui_panel_settings.cpp
-index 3e1fdfad..57c2b469 100644
+index 3e1fdfadaf..57c2b46995 100644
 --- a/src/ui/ui_panel_settings.cpp
 +++ b/src/ui/ui_panel_settings.cpp
 @@ -10,6 +10,7 @@
@@ -877,10 +877,10 @@ index 3e1fdfad..57c2b469 100644
          // Restart prompt and the shared header back button
          {"on_restart_later_clicked",
 diff --git a/src/ui/ui_wizard.cpp b/src/ui/ui_wizard.cpp
-index 2f5fa795..296528ca 100644
+index 5e7e4b2df2..9fa1f2e5cc 100644
 --- a/src/ui/ui_wizard.cpp
 +++ b/src/ui/ui_wizard.cpp
-@@ -521,6 +521,7 @@ void ui_wizard_container_register_responsive_constants() {
+@@ -530,6 +530,7 @@ void ui_wizard_container_register_responsive_constants() {
          "wizard_ams_identify",
          "wizard_led_select",
          "wizard_filament_sensor_select",
@@ -888,7 +888,7 @@ index 2f5fa795..296528ca 100644
          "wizard_ad5x_setup",
          "wizard_input_shaper",
          "wizard_language_chooser",
-@@ -1216,6 +1217,14 @@ static void on_next_clicked(lv_event_t* e) {
+@@ -1239,6 +1240,14 @@ static void on_next_clicked(lv_event_t* e) {
      navigating = true;
      auto current = static_cast<StepId>(lv_subject_get_int(&current_step));
  
@@ -903,7 +903,7 @@ index 2f5fa795..296528ca 100644
      // Targeted (subset) session: advance only within the requested subset; the
      // last subset step finishes via ui_wizard_complete_targeted() (which does
      // NOT set wizard_completed).
-@@ -1306,3 +1315,7 @@ static void on_next_clicked(lv_event_t* e) {
+@@ -1329,3 +1338,7 @@ static void on_next_clicked(lv_event_t* e) {
      schedule_navigate_to_step(*next);
      spdlog::debug("[Wizard] Next button clicked, step: {}", helix::wizard::to_string(*next));
  }
@@ -912,7 +912,7 @@ index 2f5fa795..296528ca 100644
 +    on_next_clicked(nullptr);
 +}
 diff --git a/src/ui/ui_wizard_ad5x_setup.cpp b/src/ui/ui_wizard_ad5x_setup.cpp
-index 60779cbc..9c152525 100644
+index 60779cbc65..9c152525c9 100644
 --- a/src/ui/ui_wizard_ad5x_setup.cpp
 +++ b/src/ui/ui_wizard_ad5x_setup.cpp
 @@ -2,6 +2,7 @@
@@ -1217,7 +1217,7 @@ index 60779cbc..9c152525 100644
 +    lv_subject_set_int(&connection_test_passed, view == View::Applying ? 0 : 1);
 +}
 diff --git a/src/ui/wizard_step_registry.cpp b/src/ui/wizard_step_registry.cpp
-index 4fdd84e6..9053e4f9 100644
+index 4fdd84e6e4..9053e4f93e 100644
 --- a/src/ui/wizard_step_registry.cpp
 +++ b/src/ui/wizard_step_registry.cpp
 @@ -44,6 +44,7 @@ std::vector<Step*> steps() {
@@ -1230,7 +1230,7 @@ index 4fdd84e6..9053e4f9 100644
      }
 diff --git a/ui_xml/ad5x_nozzle_modal.xml b/ui_xml/ad5x_nozzle_modal.xml
 new file mode 100644
-index 00000000..11599c8c
+index 0000000000..11599c8cba
 --- /dev/null
 +++ b/ui_xml/ad5x_nozzle_modal.xml
 @@ -0,0 +1,55 @@
@@ -1290,7 +1290,7 @@ index 00000000..11599c8c
 +  </view>
 +</component>
 diff --git a/ui_xml/settings_panel.xml b/ui_xml/settings_panel.xml
-index 0f16557e..184249b4 100644
+index 0f16557e7a..184249b4ba 100644
 --- a/ui_xml/settings_panel.xml
 +++ b/ui_xml/settings_panel.xml
 @@ -51,6 +51,12 @@
@@ -1308,7 +1308,7 @@ index 0f16557e..184249b4 100644
                            label="Plugins" icon="puzzle_outline" callback="on_ad5x_plugins_clicked"
 diff --git a/ui_xml/wizard_ad5x_nozzle.xml b/ui_xml/wizard_ad5x_nozzle.xml
 new file mode 100644
-index 00000000..21fb8ca9
+index 0000000000..21fb8ca9a4
 --- /dev/null
 +++ b/ui_xml/wizard_ad5x_nozzle.xml
 @@ -0,0 +1,69 @@

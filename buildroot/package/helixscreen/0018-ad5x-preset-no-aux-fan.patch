@@ -1,5 +1,10 @@
+
+---
+ assets/config/presets/ad5x.json | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
 diff --git a/assets/config/presets/ad5x.json b/assets/config/presets/ad5x.json
-index 01e5033..1afd7ca 100644
+index bfd4baf6f5..d9a0d7df7f 100644
 --- a/assets/config/presets/ad5x.json
 +++ b/assets/config/presets/ad5x.json
 @@ -24,7 +24,7 @@
@@ -11,3 +16,6 @@ index 01e5033..1afd7ca 100644
      },
      "filament_sensors": {
        "master_enabled": true,
+-- 
+2.56.0
+

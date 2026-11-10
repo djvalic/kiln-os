@@ -1,8 +1,14 @@
+
+---
+ src/printer/ams_state.cpp | 8 +++++---
+ ui_xml/ams_slot_view.xml  | 6 +++---
+ 2 files changed, 8 insertions(+), 6 deletions(-)
+
 diff --git a/src/printer/ams_state.cpp b/src/printer/ams_state.cpp
-index 0e72d12..d05d0f5 100644
+index 96efa70fbb..0387acf453 100644
 --- a/src/printer/ams_state.cpp
 +++ b/src/printer/ams_state.cpp
-@@ -1482,9 +1482,11 @@ bool AmsState::write_slot_subjects(AmsBackend& backend, int slot_index, const Sl
+@@ -1503,9 +1503,11 @@ bool AmsState::write_slot_subjects(AmsBackend& backend, int slot_index, const Sl
          changed = true;
      }
  
@@ -18,7 +24,7 @@ index 0e72d12..d05d0f5 100644
          lv_subject_copy_string(&slot_remaining_[slot_index], remaining.c_str());
      }
 diff --git a/ui_xml/ams_slot_view.xml b/ui_xml/ams_slot_view.xml
-index f2b5a08..dea6c6c 100644
+index 1e818ed9c9..fcaceb367f 100644
 --- a/ui_xml/ams_slot_view.xml
 +++ b/ui_xml/ams_slot_view.xml
 @@ -15,7 +15,7 @@
@@ -29,7 +35,7 @@ index f2b5a08..dea6c6c 100644
 +    - lane_remaining: remaining grams (Spoolman-linked) or measured length, under the spool
      - spool_container: holds the lane spool widget and the badges
      - lane_spool: ams_lane_spool widget (spool graphic, empty placeholder,
-       error dot; renders itself from AmsState's per-slot subjects - C++ only
+       error glow or dot; renders itself from AmsState's per-slot subjects - C++ only
 @@ -139,8 +139,8 @@
        </lv_obj>
  
@@ -41,3 +47,6 @@ index f2b5a08..dea6c6c 100644
      <text_small name="lane_remaining"
                  text="" translation_tag="" style_text_color="#text_muted" hidden="true" clickable="false"
                  event_bubble="true"/>
+-- 
+2.56.0
+

@@ -1,5 +1,41 @@
+
+---
+ include/display_settings_manager.h      |  14 ++++
+ include/led/led_screen_light.h          |  59 ++++++++++++++
+ src/application/application.cpp         |   8 ++
+ src/application/printer_session.cpp     |   2 +
+ src/led/led_screen_light.cpp            | 101 ++++++++++++++++++++++++
+ src/printer/printer_discovery.cpp       |   2 +
+ src/system/display_settings_manager.cpp |   3 +
+ src/ui/ui_settings_display.cpp          |   4 +
+ tests/unit/test_persisted_setting.cpp   |   4 +
+ tests/unit/test_settings_page_rows.cpp  |   2 +-
+ translations/de.yml                     |   2 +
+ translations/en.yml                     |   2 +
+ translations/es.yml                     |   2 +
+ translations/fr.yml                     |   2 +
+ translations/it.yml                     |   2 +
+ translations/ja.yml                     |   2 +
+ translations/pt.yml                     |   2 +
+ translations/ru.yml                     |   2 +
+ translations/zh.yml                     |   2 +
+ ui_xml/settings_display_overlay.xml     |   5 ++
+ ui_xml/translations/de.xml              |   2 +
+ ui_xml/translations/en.xml              |   2 +
+ ui_xml/translations/es.xml              |   2 +
+ ui_xml/translations/fr.xml              |   2 +
+ ui_xml/translations/it.xml              |   2 +
+ ui_xml/translations/ja.xml              |   2 +
+ ui_xml/translations/pt.xml              |   2 +
+ ui_xml/translations/ru.xml              |   2 +
+ ui_xml/translations/translations.xml    |   2 +
+ ui_xml/translations/zh.xml              |   2 +
+ 30 files changed, 241 insertions(+), 1 deletion(-)
+ create mode 100644 include/led/led_screen_light.h
+ create mode 100644 src/led/led_screen_light.cpp
+
 diff --git a/include/display_settings_manager.h b/include/display_settings_manager.h
-index 7fe3713..ba5a83c 100644
+index 7fe3713758..ba5a83c34c 100644
 --- a/include/display_settings_manager.h
 +++ b/include/display_settings_manager.h
 @@ -162,6 +162,14 @@ class DisplaySettingsManager {
@@ -39,7 +75,7 @@ index 7fe3713..ba5a83c 100644
      settings::PersistedSettings<Key, static_cast<size_t>(Key::COUNT)> settings_;
 diff --git a/include/led/led_screen_light.h b/include/led/led_screen_light.h
 new file mode 100644
-index 0000000..0f5b1d6
+index 0000000000..0f5b1d6d81
 --- /dev/null
 +++ b/include/led/led_screen_light.h
 @@ -0,0 +1,59 @@
@@ -103,7 +139,7 @@ index 0000000..0f5b1d6
 +
 +} // namespace helix::led
 diff --git a/src/application/application.cpp b/src/application/application.cpp
-index 02af6ef..6bf7f50 100644
+index b2c8e54f1a..25b22eb3fb 100644
 --- a/src/application/application.cpp
 +++ b/src/application/application.cpp
 @@ -45,6 +45,7 @@
@@ -114,7 +150,7 @@ index 02af6ef..6bf7f50 100644
  #include "light_button_config.h"
  #include "moonraker_manager.h"
  #include "page_scroll_auto_inject.h"
-@@ -1437,6 +1438,13 @@ bool Application::init_display() {
+@@ -1426,6 +1427,13 @@ bool Application::init_display() {
      });
  #endif
  
@@ -129,7 +165,7 @@ index 02af6ef..6bf7f50 100644
      // Must be after lv_init() because it resets global state and clears callbacks
      helix::logging::register_lvgl_log_handler();
 diff --git a/src/application/printer_session.cpp b/src/application/printer_session.cpp
-index 664991c..210128d 100644
+index 664991ca2c..210128d9ad 100644
 --- a/src/application/printer_session.cpp
 +++ b/src/application/printer_session.cpp
 @@ -44,6 +44,7 @@
@@ -150,7 +186,7 @@ index 664991c..210128d 100644
  
 diff --git a/src/led/led_screen_light.cpp b/src/led/led_screen_light.cpp
 new file mode 100644
-index 0000000..8837118
+index 0000000000..8837118a8d
 --- /dev/null
 +++ b/src/led/led_screen_light.cpp
 @@ -0,0 +1,101 @@
@@ -256,18 +292,18 @@ index 0000000..8837118
 +
 +} // namespace helix::led
 diff --git a/src/printer/printer_discovery.cpp b/src/printer/printer_discovery.cpp
-index db7af8a..427af28 100644
+index dc833baedd..8d72dddd99 100644
 --- a/src/printer/printer_discovery.cpp
 +++ b/src/printer/printer_discovery.cpp
-@@ -10,6 +10,7 @@
- #include "i_moonraker_client.h"
+@@ -13,6 +13,7 @@
  #include "led/led_auto_state.h"
  #include "led/led_controller.h"
+ #include "legacy_spool_import.h"
 +#include "led/led_screen_light.h"
  #include "moonraker_api.h"
  #include "printer_name_sync.h"
  #include "printer_state.h"
-@@ -114,6 +115,7 @@ void init_subsystems_from_hardware(const PrinterDiscovery& hardware, IMoonrakerA
+@@ -119,6 +120,7 @@ void init_subsystems_from_hardware(const PrinterDiscovery& hardware, IMoonrakerA
      // invoked inside a queue_update() drain), so the observe<int> subscriptions
      // are main-thread-safe.
      helix::led::LedAutoState::instance().init(printer_state);
@@ -276,7 +312,7 @@ index db7af8a..427af28 100644
  
      spdlog::info("[PrinterDiscovery] Subsystem initialization complete");
 diff --git a/src/system/display_settings_manager.cpp b/src/system/display_settings_manager.cpp
-index 20383f5..a475e51 100644
+index 20383f536a..a475e517e0 100644
 --- a/src/system/display_settings_manager.cpp
 +++ b/src/system/display_settings_manager.cpp
 @@ -238,6 +238,9 @@ static constexpr settings::PersistedSetting kDisplaySettings[] = {
@@ -290,7 +326,7 @@ index 20383f5..a475e51 100644
  
  DisplaySettingsManager& DisplaySettingsManager::instance() {
 diff --git a/src/ui/ui_settings_display.cpp b/src/ui/ui_settings_display.cpp
-index b7a56f7..d74e51b 100644
+index b7a56f7dfb..d74e51b662 100644
 --- a/src/ui/ui_settings_display.cpp
 +++ b/src/ui/ui_settings_display.cpp
 @@ -103,6 +103,10 @@ void DisplaySettingsOverlay::register_callbacks() {
@@ -305,7 +341,7 @@ index b7a56f7..d74e51b 100644
          {"on_screensaver_changed",
           [](lv_event_t* e) {
 diff --git a/tests/unit/test_persisted_setting.cpp b/tests/unit/test_persisted_setting.cpp
-index 70b2572..5adfd8f 100644
+index c5046e528c..2e261ea0e9 100644
 --- a/tests/unit/test_persisted_setting.cpp
 +++ b/tests/unit/test_persisted_setting.cpp
 @@ -201,6 +201,10 @@ const std::vector<Row>& rows() {
@@ -320,7 +356,7 @@ index 70b2572..5adfd8f 100644
          // SystemSettingsManager
          {"update_channel", Mgr::System, false, "/update/channel", false, 0, 0, 2, "update_channel",
 diff --git a/tests/unit/test_settings_page_rows.cpp b/tests/unit/test_settings_page_rows.cpp
-index 83309d0..4a2128b 100644
+index b2de7cb157..e8be59a21b 100644
 --- a/tests/unit/test_settings_page_rows.cpp
 +++ b/tests/unit/test_settings_page_rows.cpp
 @@ -77,7 +77,7 @@ TEST_CASE_METHOD(PageRowsFixture, "settings pages: every row lives on its page",
@@ -333,7 +369,7 @@ index 83309d0..4a2128b 100644
           {"row_dark_mode", "row_theme_settings", "row_animations", "row_widget_labels",
            "row_bed_mesh_mode"}},
 diff --git a/translations/de.yml b/translations/de.yml
-index 7e03c96..2917546 100644
+index 405e317326..1bc0705bd0 100644
 --- a/translations/de.yml
 +++ b/translations/de.yml
 @@ -49,6 +49,8 @@ translations:
@@ -346,7 +382,7 @@ index 7e03c96..2917546 100644
    "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' und '{}' existieren bereits. Gespeicherte Netze ersetzen?"
    (different grade): (andere Klasse)
 diff --git a/translations/en.yml b/translations/en.yml
-index b9c1833..eefa58f 100644
+index c9f85dc4f6..734da3e186 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
 @@ -49,6 +49,8 @@ translations:
@@ -359,7 +395,7 @@ index b9c1833..eefa58f 100644
    "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' and '{}' already exist. Replace the stored meshes?"
    (different grade): (different grade)
 diff --git a/translations/es.yml b/translations/es.yml
-index 8d0d397..31fbf22 100644
+index b648d0b900..51217f943b 100644
 --- a/translations/es.yml
 +++ b/translations/es.yml
 @@ -49,6 +49,8 @@ translations:
@@ -372,7 +408,7 @@ index 8d0d397..31fbf22 100644
    "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' y '{}' ya existen. ¿Reemplazar las mallas guardadas?"
    (different grade): (grado diferente)
 diff --git a/translations/fr.yml b/translations/fr.yml
-index 91ae2b1..1b15481 100644
+index 6927aaf836..a339fbfcf5 100644
 --- a/translations/fr.yml
 +++ b/translations/fr.yml
 @@ -49,6 +49,8 @@ translations:
@@ -385,7 +421,7 @@ index 91ae2b1..1b15481 100644
    "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' et '{}' existent déjà. Remplacer les maillages enregistrés ?"
    (different grade): (grade différent)
 diff --git a/translations/it.yml b/translations/it.yml
-index b0eaf46..9056e3e 100644
+index 449f51d2e7..61d2416bdd 100644
 --- a/translations/it.yml
 +++ b/translations/it.yml
 @@ -49,6 +49,8 @@ translations:
@@ -398,7 +434,7 @@ index b0eaf46..9056e3e 100644
    "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' e '{}' esistono già. Sostituire le mesh salvate?"
    (different grade): (grado diverso)
 diff --git a/translations/ja.yml b/translations/ja.yml
-index 04bd35c..1236078 100644
+index bc32882a6d..d4c96e91a9 100644
 --- a/translations/ja.yml
 +++ b/translations/ja.yml
 @@ -49,6 +49,8 @@ translations:
@@ -411,7 +447,7 @@ index 04bd35c..1236078 100644
    "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' と '{}' は既に存在します。保存されたメッシュを置き換えますか？"
    (different grade): (グレード違い)
 diff --git a/translations/pt.yml b/translations/pt.yml
-index ca6629b..8e4feb3 100644
+index 90dc53bbbf..9418c3550e 100644
 --- a/translations/pt.yml
 +++ b/translations/pt.yml
 @@ -49,6 +49,8 @@ translations:
@@ -424,7 +460,7 @@ index ca6629b..8e4feb3 100644
    "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' e '{}' já existem. Substituir as malhas salvas?"
    (different grade): (grau diferente)
 diff --git a/translations/ru.yml b/translations/ru.yml
-index 13c6866..edc3f47 100644
+index 772948d848..5d3cd13ee2 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
 @@ -93,6 +93,8 @@ translations:
@@ -437,7 +473,7 @@ index 13c6866..edc3f47 100644
    "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' и '{}' уже существуют. Заменить сохранённые сетки?"
    (different grade): (другая марка)
 diff --git a/translations/zh.yml b/translations/zh.yml
-index dc3fa9a..463b785 100644
+index cceed1d60c..03667ab292 100644
 --- a/translations/zh.yml
 +++ b/translations/zh.yml
 @@ -49,6 +49,8 @@ translations:
@@ -450,7 +486,7 @@ index dc3fa9a..463b785 100644
    "'{}' and '{}' already exist. Replace the stored meshes?": "'{}' 和 '{}' 已存在。替换已保存的网格？"
    (different grade): （等级不同）
 diff --git a/ui_xml/settings_display_overlay.xml b/ui_xml/settings_display_overlay.xml
-index 08d7b0d..662699c 100644
+index 08d7b0d1c3..662699cfce 100644
 --- a/ui_xml/settings_display_overlay.xml
 +++ b/ui_xml/settings_display_overlay.xml
 @@ -123,6 +123,11 @@
@@ -466,10 +502,10 @@ index 08d7b0d..662699c 100644
          <info_note icon="info"
                     text="Touch screen to wake from sleep" style_pad_left="#space_lg" style_pad_right="#space_lg"/>
 diff --git a/ui_xml/translations/de.xml b/ui_xml/translations/de.xml
-index c7539d9..82a6ff6 100644
+index 529a5c10b6..7508a60f4c 100644
 --- a/ui_xml/translations/de.xml
 +++ b/ui_xml/translations/de.xml
-@@ -637,6 +637,8 @@
+@@ -640,6 +640,8 @@
    <translation tag="Chamber heater didn&apos;t start. {}" de="Kammerheizung ist nicht gestartet. {}"/>
    <translation tag="Chamber heating to %d°C..." de="Kammer heizt auf %d°C auf..."/>
    <translation tag="Chamber light fitted" de="Kammerlicht eingebaut"/>
@@ -479,10 +515,10 @@ index c7539d9..82a6ff6 100644
    <translation tag="Chamber temp must be 0-%d°C" de="Kammertemperatur muss 0-%d°C betragen"/>
    <translation tag="Chamber too hot" de="Kammer zu heiß"/>
 diff --git a/ui_xml/translations/en.xml b/ui_xml/translations/en.xml
-index a037063..e4b3f5c 100644
+index b3df26b349..814e8d22f7 100644
 --- a/ui_xml/translations/en.xml
 +++ b/ui_xml/translations/en.xml
-@@ -637,6 +637,8 @@
+@@ -640,6 +640,8 @@
    <translation tag="Chamber heater didn&apos;t start. {}" en="Chamber heater didn&apos;t start. {}"/>
    <translation tag="Chamber heating to %d°C..." en="Chamber heating to %d°C..."/>
    <translation tag="Chamber light fitted" en="Chamber light fitted"/>
@@ -492,10 +528,10 @@ index a037063..e4b3f5c 100644
    <translation tag="Chamber temp must be 0-%d°C" en="Chamber temp must be 0-%d°C"/>
    <translation tag="Chamber too hot" en="Chamber too hot"/>
 diff --git a/ui_xml/translations/es.xml b/ui_xml/translations/es.xml
-index e7984f0..617a40a 100644
+index f8ebf09210..60fabe6fe3 100644
 --- a/ui_xml/translations/es.xml
 +++ b/ui_xml/translations/es.xml
-@@ -637,6 +637,8 @@
+@@ -640,6 +640,8 @@
    <translation tag="Chamber heater didn&apos;t start. {}" es="El calentador de la cámara no arrancó. {}"/>
    <translation tag="Chamber heating to %d°C..." es="Calentando cámara a %d°C..."/>
    <translation tag="Chamber light fitted" es="Luz de cámara instalada"/>
@@ -505,10 +541,10 @@ index e7984f0..617a40a 100644
    <translation tag="Chamber temp must be 0-%d°C" es="La temperatura de la cámara debe ser 0-%d°C"/>
    <translation tag="Chamber too hot" es="Cámara demasiado caliente"/>
 diff --git a/ui_xml/translations/fr.xml b/ui_xml/translations/fr.xml
-index fee29d8..8c50dbd 100644
+index 818bf63e99..8664b6e8c6 100644
 --- a/ui_xml/translations/fr.xml
 +++ b/ui_xml/translations/fr.xml
-@@ -637,6 +637,8 @@
+@@ -640,6 +640,8 @@
    <translation tag="Chamber heater didn&apos;t start. {}" fr="Le chauffage de la chambre n&apos;a pas démarré. {}"/>
    <translation tag="Chamber heating to %d°C..." fr="Chauffe de la chambre à %d°C..."/>
    <translation tag="Chamber light fitted" fr="Éclairage de chambre installé"/>
@@ -518,10 +554,10 @@ index fee29d8..8c50dbd 100644
    <translation tag="Chamber temp must be 0-%d°C" fr="La température de l&apos;enceinte doit être entre 0 et %d°C"/>
    <translation tag="Chamber too hot" fr="Chambre trop chaude"/>
 diff --git a/ui_xml/translations/it.xml b/ui_xml/translations/it.xml
-index 9a17e72..74ec2b0 100644
+index 86a83d8190..9e095fa249 100644
 --- a/ui_xml/translations/it.xml
 +++ b/ui_xml/translations/it.xml
-@@ -637,6 +637,8 @@
+@@ -640,6 +640,8 @@
    <translation tag="Chamber heater didn&apos;t start. {}" it="Il riscaldatore della camera non si è avviato. {}"/>
    <translation tag="Chamber heating to %d°C..." it="Riscaldamento camera a %d°C..."/>
    <translation tag="Chamber light fitted" it="Luce della camera installata"/>
@@ -531,10 +567,10 @@ index 9a17e72..74ec2b0 100644
    <translation tag="Chamber temp must be 0-%d°C" it="La temperatura della camera deve essere 0-%d°C"/>
    <translation tag="Chamber too hot" it="Camera troppo calda"/>
 diff --git a/ui_xml/translations/ja.xml b/ui_xml/translations/ja.xml
-index 4ba65ee..d93de96 100644
+index 44786c4c7f..a6d3323289 100644
 --- a/ui_xml/translations/ja.xml
 +++ b/ui_xml/translations/ja.xml
-@@ -637,6 +637,8 @@
+@@ -640,6 +640,8 @@
    <translation tag="Chamber heater didn&apos;t start. {}" ja="チャンバーヒーターが起動しませんでした。{}"/>
    <translation tag="Chamber heating to %d°C..." ja="チャンバーを%d°Cに加熱中..."/>
    <translation tag="Chamber light fitted" ja="チャンバーライト搭載"/>
@@ -544,10 +580,10 @@ index 4ba65ee..d93de96 100644
    <translation tag="Chamber temp must be 0-%d°C" ja="チャンバー温度は 0〜%d°C にしてください"/>
    <translation tag="Chamber too hot" ja="チャンバーが高温です"/>
 diff --git a/ui_xml/translations/pt.xml b/ui_xml/translations/pt.xml
-index 5610291..d814b8a 100644
+index 45db23a076..d1a38bfc54 100644
 --- a/ui_xml/translations/pt.xml
 +++ b/ui_xml/translations/pt.xml
-@@ -637,6 +637,8 @@
+@@ -640,6 +640,8 @@
    <translation tag="Chamber heater didn&apos;t start. {}" pt="O aquecedor da câmara não ligou. {}"/>
    <translation tag="Chamber heating to %d°C..." pt="Aquecendo câmara a %d°C..."/>
    <translation tag="Chamber light fitted" pt="Luz da câmara instalada"/>
@@ -557,10 +593,10 @@ index 5610291..d814b8a 100644
    <translation tag="Chamber temp must be 0-%d°C" pt="A temperatura da câmara deve ser 0-%d°C"/>
    <translation tag="Chamber too hot" pt="Câmara demasiado quente"/>
 diff --git a/ui_xml/translations/ru.xml b/ui_xml/translations/ru.xml
-index 348a243..c5c0983 100644
+index 0da2c463b7..adba1b61a6 100644
 --- a/ui_xml/translations/ru.xml
 +++ b/ui_xml/translations/ru.xml
-@@ -676,6 +676,8 @@
+@@ -679,6 +679,8 @@
    <translation tag="Chamber heater didn&apos;t start. {}" ru="Нагреватель камеры не запустился. {}"/>
    <translation tag="Chamber heating to %d°C..." ru="Нагрев камеры до %d°C..."/>
    <translation tag="Chamber light fitted" ru="Подсветка камеры установлена"/>
@@ -570,10 +606,10 @@ index 348a243..c5c0983 100644
    <translation tag="Chamber temp must be 0-%d°C" ru="Температура камеры должна быть 0-%d°C"/>
    <translation tag="Chamber too hot" ru="Камера перегрета"/>
 diff --git a/ui_xml/translations/translations.xml b/ui_xml/translations/translations.xml
-index 72e3e83..f89acf6 100644
+index 02f333dbe6..c8cb5a4370 100644
 --- a/ui_xml/translations/translations.xml
 +++ b/ui_xml/translations/translations.xml
-@@ -676,6 +676,8 @@
+@@ -679,6 +679,8 @@
    <translation tag="Chamber heater didn&apos;t start. {}" de="Kammerheizung ist nicht gestartet. {}" en="Chamber heater didn&apos;t start. {}" es="El calentador de la cámara no arrancó. {}" fr="Le chauffage de la chambre n&apos;a pas démarré. {}" it="Il riscaldatore della camera non si è avviato. {}" ja="チャンバーヒーターが起動しませんでした。{}" pt="O aquecedor da câmara não ligou. {}" ru="Нагреватель камеры не запустился. {}" zh="腔体加热器未启动。{}"/>
    <translation tag="Chamber heating to %d°C..." de="Kammer heizt auf %d°C auf..." en="Chamber heating to %d°C..." es="Calentando cámara a %d°C..." fr="Chauffe de la chambre à %d°C..." it="Riscaldamento camera a %d°C..." ja="チャンバーを%d°Cに加熱中..." pt="Aquecendo câmara a %d°C..." ru="Нагрев камеры до %d°C..." zh="腔体加热至 %d°C..."/>
    <translation tag="Chamber light fitted" de="Kammerlicht eingebaut" en="Chamber light fitted" es="Luz de cámara instalada" fr="Éclairage de chambre installé" it="Luce della camera installata" ja="チャンバーライト搭載" pt="Luz da câmara instalada" ru="Подсветка камеры установлена" zh="已安装腔体灯"/>
@@ -583,10 +619,10 @@ index 72e3e83..f89acf6 100644
    <translation tag="Chamber temp must be 0-%d°C" de="Kammertemperatur muss 0-%d°C betragen" en="Chamber temp must be 0-%d°C" es="La temperatura de la cámara debe ser 0-%d°C" fr="La température de l&apos;enceinte doit être entre 0 et %d°C" it="La temperatura della camera deve essere 0-%d°C" ja="チャンバー温度は 0〜%d°C にしてください" pt="A temperatura da câmara deve ser 0-%d°C" ru="Температура камеры должна быть 0-%d°C" zh="腔体温度必须为 0-%d°C"/>
    <translation tag="Chamber too hot" de="Kammer zu heiß" en="Chamber too hot" es="Cámara demasiado caliente" fr="Chambre trop chaude" it="Camera troppo calda" ja="チャンバーが高温です" pt="Câmara demasiado quente" ru="Камера перегрета" zh="腔体温度过高"/>
 diff --git a/ui_xml/translations/zh.xml b/ui_xml/translations/zh.xml
-index 200331e..59c55f1 100644
+index 73d6cc0bdf..d39b945490 100644
 --- a/ui_xml/translations/zh.xml
 +++ b/ui_xml/translations/zh.xml
-@@ -637,6 +637,8 @@
+@@ -640,6 +640,8 @@
    <translation tag="Chamber heater didn&apos;t start. {}" zh="腔体加热器未启动。{}"/>
    <translation tag="Chamber heating to %d°C..." zh="腔体加热至 %d°C..."/>
    <translation tag="Chamber light fitted" zh="已安装腔体灯"/>
@@ -595,3 +631,6 @@ index 200331e..59c55f1 100644
    <translation tag="Chamber target set to {}°C" zh="腔体目标温度设置为 {}°C"/>
    <translation tag="Chamber temp must be 0-%d°C" zh="腔体温度必须为 0-%d°C"/>
    <translation tag="Chamber too hot" zh="腔体温度过高"/>
+-- 
+2.56.0
+

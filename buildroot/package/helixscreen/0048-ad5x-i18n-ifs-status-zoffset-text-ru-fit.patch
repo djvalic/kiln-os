@@ -21,10 +21,10 @@ Content-Transfer-Encoding: 8bit
  4 files changed, 9 insertions(+), 7 deletions(-)
 
 diff --git a/src/printer/ams_backend_ad5x_ifs.cpp b/src/printer/ams_backend_ad5x_ifs.cpp
-index 8d7a80d5e7..b53e836810 100644
+index e548433b4b..7eda2c146c 100644
 --- a/src/printer/ams_backend_ad5x_ifs.cpp
 +++ b/src/printer/ams_backend_ad5x_ifs.cpp
-@@ -2851,7 +2851,7 @@ void AmsBackendAd5xIfs::apply_zmod_change_macro(const json& status) {
+@@ -2558,7 +2558,7 @@ void AmsBackendAd5xIfs::apply_zmod_change_macro(const json& status) {
                  system_info_.action == AmsAction::IDLE) {
                  system_info_.action = AmsAction::SELECTING;
                  action_start_time_ = std::chrono::steady_clock::now();
@@ -47,10 +47,10 @@ index 1a323beb4f..4f7c831024 100644
      {StepId::Ad5xSoak, "soak", "wizard_ad5x_soak",
       "Calibrates the bed heat soak: how long the bed keeps warming after it reaches 60 \xC2\xB0"
 diff --git a/translations/en.yml b/translations/en.yml
-index f8d26592f2..f59cd54c17 100644
+index 87f607bd0c..5977e8eb48 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -4977,6 +4977,7 @@ translations:
+@@ -5018,6 +5018,7 @@ translations:
    'Calibration stopped. Heaters off, nothing saved.': 'Calibration stopped. Heaters off, nothing saved.'
    'Can''t calibrate now': 'Can''t calibrate now'
    'Change the nozzle size to {}?': 'Change the nozzle size to {}?'
@@ -58,7 +58,7 @@ index f8d26592f2..f59cd54c17 100644
    'Changing the nozzle size... Klipper will restart.': 'Changing the nozzle size... Klipper will restart.'
    'Check that every part of the printer answers': 'Check that every part of the printer answers'
    'Check the nozzle is over the trash bin': 'Check the nozzle is over the trash bin'
-@@ -5076,7 +5077,7 @@ translations:
+@@ -5117,7 +5118,7 @@ translations:
    'PRINTER SOUNDS': 'PRINTER SOUNDS'
    'Printer Sounds': 'Printer Sounds'
    'Printer Volume': 'Printer Volume'
@@ -68,10 +68,10 @@ index f8d26592f2..f59cd54c17 100644
    'Purge box': 'Purge box'
    'Remove {}?': 'Remove {}?'
 diff --git a/translations/ru.yml b/translations/ru.yml
-index d75af902fa..ad9f986c74 100644
+index d1a7a4bc8d..050760b399 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -3538,7 +3538,7 @@ translations:
+@@ -3555,7 +3555,7 @@ translations:
    Samples: Образцы
    Samples Tolerance: Допуск образцов
    Save: Сохранить
@@ -80,7 +80,7 @@ index d75af902fa..ad9f986c74 100644
    Save As New: Сохранить как новый
    Save Hardware: Сохранить оборудование
    Save Printer Configuration: Сохранить конфигурацию принтера
-@@ -5157,6 +5157,7 @@ translations:
+@@ -5189,6 +5189,7 @@ translations:
    'Calibration stopped. Heaters off, nothing saved.': 'Калибровка остановлена. Нагреватели выключены, ничего не сохранено.'
    'Can''t calibrate now': 'Сейчас калибровка невозможна'
    'Change the nozzle size to {}?': 'Изменить размер сопла на {}?'
@@ -88,7 +88,7 @@ index d75af902fa..ad9f986c74 100644
    'Changing the nozzle size... Klipper will restart.': 'Смена размера сопла... Klipper перезапустится.'
    'Check that every part of the printer answers': 'Проверка, что все узлы принтера отвечают'
    'Check the nozzle is over the trash bin': 'Проверьте, что сопло над лотком для отходов'
-@@ -5251,12 +5252,12 @@ translations:
+@@ -5283,12 +5284,12 @@ translations:
    'Printer Setup: Save': 'Настройка принтера: сохранение'
    'Printer Setup: Self-Check': 'Настройка принтера: самопроверка'
    'Printer Setup: Summary': 'Настройка принтера: итоги'

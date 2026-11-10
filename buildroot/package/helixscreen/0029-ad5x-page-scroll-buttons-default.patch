@@ -1,7 +1,13 @@
+
+---
+ src/system/display_settings_manager.cpp | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
 diff --git a/src/system/display_settings_manager.cpp b/src/system/display_settings_manager.cpp
+index a9693aca8e..20383f536a 100644
 --- a/src/system/display_settings_manager.cpp
 +++ b/src/system/display_settings_manager.cpp
-@@ -196,8 +196,10 @@
+@@ -196,8 +196,10 @@ static int validate_timeout_option(int value, const int (&options)[N], int defau
  }
  
  // Page-scroll buttons: opt-in on desktop/embedded Linux; on by default on ESP32,
@@ -14,3 +20,6 @@ diff --git a/src/system/display_settings_manager.cpp b/src/system/display_settin
  static constexpr int kPageScrollDefault = 1;
  #else
  static constexpr int kPageScrollDefault = 0;
+-- 
+2.56.0
+

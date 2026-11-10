@@ -24,11 +24,16 @@ changes on other firmware.
 
 Upstream: not applicable (AD5X OS specific)
 ---
+ include/ams_backend_ad5x_ifs.h        |  29 +++
+ src/printer/ams_backend_ad5x_ifs.cpp  | 288 ++++++++++++++++++++++++++
+ tests/unit/test_ams_ad5x_kiln_ifs.cpp | 121 +++++++++++
+ 3 files changed, 438 insertions(+)
+
 diff --git a/include/ams_backend_ad5x_ifs.h b/include/ams_backend_ad5x_ifs.h
-index d4bbe82..a607d14 100644
+index aa1014d403..f7ee4b8e3e 100644
 --- a/include/ams_backend_ad5x_ifs.h
 +++ b/include/ams_backend_ad5x_ifs.h
-@@ -605,7 +605,21 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
+@@ -604,7 +604,21 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
      /// mode get_endless_spool_capabilities() reports switchable.
      AmsError apply_endless_spool_enabled(bool enabled) override;
  
@@ -50,7 +55,7 @@ index d4bbe82..a607d14 100644
      // Backend-driven step model for the right-side vertical operation tracker.
      // The AD5X synthesizes 3 firmware phases (HEATING→CUTTING→UNLOADING /
      // HEATING→LOADING→PURGING) from extruder temp + head sensor in
-@@ -1930,6 +1944,21 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
+@@ -1827,6 +1841,21 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
          bool ran = false;
      };
      KilnRefill kiln_refill_;
@@ -73,7 +78,7 @@ index d4bbe82..a607d14 100644
      /// apply_zmod_change_macro, so only that source clears it. Guarded by mutex_.
      bool zmod_change_owns_action_ = false;
 diff --git a/src/printer/ams_backend_ad5x_ifs.cpp b/src/printer/ams_backend_ad5x_ifs.cpp
-index 1d9381c..3c6ac1f 100644
+index 502d5133d7..e548433b4b 100644
 --- a/src/printer/ams_backend_ad5x_ifs.cpp
 +++ b/src/printer/ams_backend_ad5x_ifs.cpp
 @@ -8,6 +8,8 @@
@@ -85,7 +90,7 @@ index 1d9381c..3c6ac1f 100644
  #include "ams_fault_event.h"
  #include "ams_state.h"
  #include "app_globals.h"
-@@ -5519,6 +5521,10 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+@@ -5021,6 +5023,10 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
      std::optional<bool> auto_refill;
      std::optional<std::string> refill_match;
      std::optional<std::array<std::vector<int>, kNumPorts>> refill_backups;
@@ -96,7 +101,7 @@ index 1d9381c..3c6ac1f 100644
  
      if (auto it = status.find("ifs"); it != status.end() && it->is_object()) {
          const auto& obj = *it;
-@@ -5611,6 +5617,43 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+@@ -5113,6 +5119,43 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
              refill_backups = std::move(lists);
              saw_module_content = true;
          }
@@ -140,7 +145,7 @@ index 1d9381c..3c6ac1f 100644
      }
      if (auto it = status.find("ifs_materials"); it != status.end() && it->is_object()) {
          if (read_ifs_materials_object(*it, result)) {
-@@ -5736,6 +5779,37 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+@@ -5238,6 +5281,37 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
          }
      }
  
@@ -178,7 +183,7 @@ index 1d9381c..3c6ac1f 100644
      if (action_changed) {
          emit_event(EVENT_STATE_CHANGED);
      }
-@@ -7552,6 +7626,220 @@ AmsError AmsBackendAd5xIfs::apply_endless_spool_enabled(bool enabled) {
+@@ -7037,6 +7111,220 @@ AmsError AmsBackendAd5xIfs::apply_endless_spool_enabled(bool enabled) {
                                               : "IFS_AUTO_REFILL ENABLE=0");
  }
  
@@ -400,7 +405,7 @@ index 1d9381c..3c6ac1f 100644
      std::string detail =
          lv_tr("Filament ran out - nothing at the toolhead and the print is paused.");
 diff --git a/tests/unit/test_ams_ad5x_kiln_ifs.cpp b/tests/unit/test_ams_ad5x_kiln_ifs.cpp
-index 06dc81f..486fc84 100644
+index 06dc81fc51..486fc84b7b 100644
 --- a/tests/unit/test_ams_ad5x_kiln_ifs.cpp
 +++ b/tests/unit/test_ams_ad5x_kiln_ifs.cpp
 @@ -9,11 +9,14 @@
@@ -540,3 +545,6 @@ index 06dc81f..486fc84 100644
 +            backend.execute_device_action("kiln_map_mode", std::string("sideways")).success());
 +    }
 +}
+-- 
+2.56.0
+

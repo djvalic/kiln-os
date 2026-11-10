@@ -15,10 +15,10 @@ Upstream: not applicable (AD5X OS specific)
  1 file changed, 23 insertions(+), 1 deletion(-)
 
 diff --git a/src/application/application.cpp b/src/application/application.cpp
-index e80080c..4d042d1 100644
+index 0b380d3c92..b2c8e54f1a 100644
 --- a/src/application/application.cpp
 +++ b/src/application/application.cpp
-@@ -207,6 +207,8 @@
+@@ -210,6 +210,8 @@
  #include "action_prompt_manager.h"
  #include "action_prompt_modal.h"
  #include "app_globals.h"
@@ -27,7 +27,7 @@ index e80080c..4d042d1 100644
  #include "detection_manager.h"
  #include "filament_sensor_manager.h"
  #include "gcode_file_modifier.h"
-@@ -1780,8 +1782,24 @@ bool Application::init_translations() {
+@@ -1813,8 +1815,24 @@ bool Application::init_translations() {
  }
  
  bool Application::run_wizard() {
@@ -53,7 +53,7 @@ index e80080c..4d042d1 100644
  
      if (!wizard_required) {
          return false;
-@@ -1834,6 +1852,10 @@ bool Application::run_wizard() {
+@@ -1867,6 +1885,10 @@ bool Application::run_wizard() {
          spdlog::error("[Application] Failed to create wizard");
          return false;
      }

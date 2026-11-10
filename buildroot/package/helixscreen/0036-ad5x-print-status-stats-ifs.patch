@@ -23,8 +23,12 @@ With no ps_printer_area in the tree, PrintStatusTiles already publishes
 the ps_chip_* subjects without a callout layout; there the fans now
 publish without their label, as each stat has its own caption.
 ---
+ src/ui/ui_print_status_tiles.cpp              |   6 +-
+ .../components/print_status_printer_tile.xml  | 360 +++++++++++-------
+ 2 files changed, 237 insertions(+), 129 deletions(-)
+
 diff --git a/src/ui/ui_print_status_tiles.cpp b/src/ui/ui_print_status_tiles.cpp
-index 3052d45..3752753 100644
+index 3052d45f83..3752753bd0 100644
 --- a/src/ui/ui_print_status_tiles.cpp
 +++ b/src/ui/ui_print_status_tiles.cpp
 @@ -515,9 +515,13 @@ void PrintStatusTiles::update_now() {
@@ -43,7 +47,7 @@ index 3052d45..3752753 100644
          return;
      }
 diff --git a/ui_xml/components/print_status_printer_tile.xml b/ui_xml/components/print_status_printer_tile.xml
-index 2d5188e..1ed8f4e 100644
+index 2d5188eaff..1ed8f4e4a5 100644
 --- a/ui_xml/components/print_status_printer_tile.xml
 +++ b/ui_xml/components/print_status_printer_tile.xml
 @@ -1,143 +1,247 @@
@@ -422,3 +426,6 @@ index 2d5188e..1ed8f4e 100644
      <lv_obj name="chamber_fault_banner_slot"
              width="100%" height="content" ignore_layout="true" align="top_mid" style_pad_all="#space_xs"
              style_border_width="0" style_bg_opa="0" scrollable="false">
+-- 
+2.56.0
+

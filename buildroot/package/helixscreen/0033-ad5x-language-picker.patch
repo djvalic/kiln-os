@@ -1,5 +1,12 @@
+
+---
+ src/system/system_settings_manager.cpp | 22 +++++++-----
+ src/ui/ui_wizard_language_chooser.cpp  | 10 +++---
+ ui_xml/wizard_language_chooser.xml     | 48 +++++++++++++-------------
+ 3 files changed, 42 insertions(+), 38 deletions(-)
+
 diff --git a/src/system/system_settings_manager.cpp b/src/system/system_settings_manager.cpp
-index 3f09350..d1d31d4 100644
+index 5948d86b94..00931c6719 100644
 --- a/src/system/system_settings_manager.cpp
 +++ b/src/system/system_settings_manager.cpp
 @@ -50,16 +50,20 @@ static int spdlog_level_to_index(spdlog::level::level_enum level) {
@@ -33,7 +40,7 @@ index 3f09350..d1d31d4 100644
  using settings::Scope;
  // Row order is SystemSettingsManager::Key.
 diff --git a/src/ui/ui_wizard_language_chooser.cpp b/src/ui/ui_wizard_language_chooser.cpp
-index dad2639..914f33b 100644
+index dad2639565..914f33b627 100644
 --- a/src/ui/ui_wizard_language_chooser.cpp
 +++ b/src/ui/ui_wizard_language_chooser.cpp
 @@ -37,19 +37,19 @@ extern lv_subject_t connection_test_passed;
@@ -62,7 +69,7 @@ index dad2639..914f33b 100644
  // Timer period for cycling welcome text
  static constexpr uint32_t kWelcomeCycleMs = 2500;
 diff --git a/ui_xml/wizard_language_chooser.xml b/ui_xml/wizard_language_chooser.xml
-index 0b5ef19..caff598 100644
+index 0b5ef19ade..caff598e3b 100644
 --- a/ui_xml/wizard_language_chooser.xml
 +++ b/ui_xml/wizard_language_chooser.xml
 @@ -36,67 +36,67 @@
@@ -157,3 +164,6 @@ index 0b5ef19..caff598 100644
            <event_cb trigger="clicked" callback="on_language_selected" user_data="8"/>
          </lv_button>
  
+-- 
+2.56.0
+

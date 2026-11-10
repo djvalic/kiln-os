@@ -150,10 +150,10 @@ index 23e4602f6c..2345b2e294 100644
  
      /// The Performance row's action: open the Performance overlay.
 diff --git a/src/api/moonraker_discovery_sequence.cpp b/src/api/moonraker_discovery_sequence.cpp
-index 412beddc21..9a8dd98004 100644
+index 5b991c7c66..a1a193a871 100644
 --- a/src/api/moonraker_discovery_sequence.cpp
 +++ b/src/api/moonraker_discovery_sequence.cpp
-@@ -1524,6 +1524,15 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
+@@ -1543,6 +1543,15 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
          }
      }
  
@@ -170,7 +170,7 @@ index 412beddc21..9a8dd98004 100644
      // auto_refill, refill_match, refill_backups and refill_notice, which the
      // Settings screen and the "No backup spool" pop-up read; `ifs_materials`
 diff --git a/src/application/discovery_steps.cpp b/src/application/discovery_steps.cpp
-index 0ed4f03d94..d407a8e243 100644
+index 130cf34fff..78b14326e8 100644
 --- a/src/application/discovery_steps.cpp
 +++ b/src/application/discovery_steps.cpp
 @@ -10,6 +10,7 @@
@@ -181,7 +181,7 @@ index 0ed4f03d94..d407a8e243 100644
  #include "ui_settings_ad5x_refill.h"
  #include "ui_update_queue.h"
  #include "ui_wizard.h"
-@@ -175,6 +176,12 @@ void ad5x_refill_watch_step(DiscoveryContext& ctx) {
+@@ -181,6 +182,12 @@ void ad5x_refill_watch_step(DiscoveryContext& ctx) {
      ad5x_refill::model().attach(&ctx.api, ctx.status);
  }
  
@@ -194,7 +194,7 @@ index 0ed4f03d94..d407a8e243 100644
  constexpr DiscoveryStep kTailSteps[] = {
      {"update_checker_connected", false, update_checker_connected_step, nullptr},
      {"about_print_hours", false, about_print_hours_step, nullptr},
-@@ -192,6 +199,7 @@ constexpr DiscoveryStep kTailSteps[] = {
+@@ -198,6 +205,7 @@ constexpr DiscoveryStep kTailSteps[] = {
      {"remote_screen_webcam", false, remote_screen_webcam_step, nullptr},
      {"manual_probe_autoopen", false, manual_probe_autoopen_step, nullptr},
      {"ad5x_refill_watch", false, ad5x_refill_watch_step, nullptr},
@@ -509,10 +509,10 @@ index 5f7c74189f..ab72aa6a27 100644
           [](lv_event_t*) {
               get_storage_settings_overlay().show(get_system_settings_overlay().parent_screen_);
 diff --git a/tests/unit/test_discovery_steps.cpp b/tests/unit/test_discovery_steps.cpp
-index 7eb4861ed7..e8efe353fe 100644
+index 4dec3dd9f5..3f5886865b 100644
 --- a/tests/unit/test_discovery_steps.cpp
 +++ b/tests/unit/test_discovery_steps.cpp
-@@ -155,6 +155,7 @@ TEST_CASE("the tail discovery steps run in this order", "[discovery_steps]") {
+@@ -156,6 +156,7 @@ TEST_CASE("the tail discovery steps run in this order", "[discovery_steps]") {
          "remote_screen_webcam",
          "manual_probe_autoopen",
          "ad5x_refill_watch",
@@ -521,10 +521,10 @@ index 7eb4861ed7..e8efe353fe 100644
      CHECK(tail == expected);
  }
 diff --git a/translations/en.yml b/translations/en.yml
-index f59cd54c17..c6bc2a23e4 100644
+index 5977e8eb48..4d311ed8a5 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -4994,6 +4994,7 @@ translations:
+@@ -5035,6 +5035,7 @@ translations:
    'Exact': 'Exact'
    'Exact colour': 'Exact colour'
    'Exact: the same colour code. Similar: close shades. Any colour: the same material is enough.': 'Exact: the same colour code. Similar: close shades. Any colour: the same material is enough.'
@@ -532,7 +532,7 @@ index f59cd54c17..c6bc2a23e4 100644
    'Factory': 'Factory'
    'FAIL': 'FAIL'
    'Faster, reliable filament swaps': 'Faster, reliable filament swaps'
-@@ -5028,6 +5029,7 @@ translations:
+@@ -5069,6 +5070,7 @@ translations:
    'Loading {}': 'Loading {}'
    'Local time for this screen': 'Local time for this screen'
    'local.cfg sets the nozzle size; edit it there': 'local.cfg sets the nozzle size; edit it there'
@@ -540,7 +540,7 @@ index f59cd54c17..c6bc2a23e4 100644
    'material not set': 'material not set'
    'Measure the shape of the bed': 'Measure the shape of the bed'
    'Measures how long the bed keeps moving at that temperature. Takes 20-35 minutes; the bed must be empty and below 40 °C.': 'Measures how long the bed keeps moving at that temperature. Takes 20-35 minutes; the bed must be empty and below 40 °C.'
-@@ -5095,6 +5097,8 @@ translations:
+@@ -5136,6 +5138,8 @@ translations:
    'Selecting {}': 'Selecting {}'
    'Self-check': 'Self-check'
    'Self-check, PID, bed mesh, vibration, IFS, Z offset': 'Self-check, PID, bed mesh, vibration, IFS, Z offset'
@@ -550,10 +550,10 @@ index f59cd54c17..c6bc2a23e4 100644
    'Similar colour': 'Similar colour'
    'Since the bed was hot, one round a minute:': 'Since the bed was hot, one round a minute:'
 diff --git a/translations/ru.yml b/translations/ru.yml
-index ad9f986c74..3e29a69f67 100644
+index 050760b399..ca1dc76616 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -5174,6 +5174,7 @@ translations:
+@@ -5206,6 +5206,7 @@ translations:
    'Exact': 'Точный'
    'Exact colour': 'Точный цвет'
    'Exact: the same colour code. Similar: close shades. Any colour: the same material is enough.': 'Точный: тот же код цвета. Похожий: близкие оттенки. Любой цвет: достаточно того же материала.'
@@ -561,7 +561,7 @@ index ad9f986c74..3e29a69f67 100644
    'Factory': 'Сброс'
    'FAIL': 'СБОЙ'
    'Faster, reliable filament swaps': 'Быстрая и надёжная смена филамента'
-@@ -5208,6 +5209,7 @@ translations:
+@@ -5240,6 +5241,7 @@ translations:
    'Loading {}': 'Загрузка: {}'
    'Local time for this screen': 'Местное время для этого экрана'
    'local.cfg sets the nozzle size; edit it there': 'Размер сопла задаётся в local.cfg; измените его там'
@@ -569,7 +569,7 @@ index ad9f986c74..3e29a69f67 100644
    'material not set': 'материал не указан'
    'Measure the shape of the bed': 'Измерение формы стола'
    'Measures how long the bed keeps moving at that temperature. Takes 20-35 minutes; the bed must be empty and below 40 °C.': 'Измеряет, как долго стол смещается при этой температуре. Занимает 20-35 минут; стол должен быть пустым и холоднее 40 °C.'
-@@ -5275,6 +5277,8 @@ translations:
+@@ -5307,6 +5309,8 @@ translations:
    'Selecting {}': 'Выбор: {}'
    'Self-check': 'Самопроверка'
    'Self-check, PID, bed mesh, vibration, IFS, Z offset': 'Самопроверка, PID, сетка стола, вибрации, IFS, смещение по Z'

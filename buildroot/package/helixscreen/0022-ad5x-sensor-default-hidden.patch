@@ -1,6 +1,13 @@
+
+---
+ src/sensors/temperature_sensor_manager.cpp | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/src/sensors/temperature_sensor_manager.cpp b/src/sensors/temperature_sensor_manager.cpp
+index b9706bd556..a5aba03437 100644
 --- a/src/sensors/temperature_sensor_manager.cpp
 +++ b/src/sensors/temperature_sensor_manager.cpp
-@@ -185,6 +185,15 @@ void TemperatureSensorManager::on_discovered(const PrinterDiscovery& /*hw*/) {
+@@ -190,6 +190,15 @@ void TemperatureSensorManager::on_discovered(const PrinterDiscovery& /*hw*/) {
              continue;
          }
          e.role = role_for_name(e.display_name, e.klipper_name);
@@ -16,3 +23,6 @@
          spdlog::debug("[TemperatureSensorManager] Discovered {} (role {})", e.klipper_name,
                        enum_id(kTemperatureSensorRoles, static_cast<TemperatureSensorRole>(e.role)));
      }
+-- 
+2.56.0
+

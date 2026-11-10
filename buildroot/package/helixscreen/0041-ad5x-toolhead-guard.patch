@@ -17,6 +17,16 @@ The census in test_job_holds_machine.cpp lists our XML files: the four
 with guards and their counts, and the six that command nothing (the
 setup wizard pages run outside a print).
 ---
+ src/ui/ui_ad5x_nozzle.cpp              |  6 ++++--
+ src/ui/ui_panel_settings.cpp           | 15 +++++++++++++--
+ src/ui/ui_settings_ad5x_soak.cpp       |  5 ++++-
+ tests/unit/test_job_holds_machine.cpp  | 14 ++++++++++++++
+ ui_xml/ad5x_nozzle_modal.xml           |  6 +++---
+ ui_xml/components/ad5x_catalog_row.xml |  4 ++--
+ ui_xml/components/ad5x_plugin_row.xml  | 12 ++++++------
+ ui_xml/settings_ad5x_soak_overlay.xml  |  4 ++--
+ 8 files changed, 48 insertions(+), 18 deletions(-)
+
 diff --git a/src/ui/ui_ad5x_nozzle.cpp b/src/ui/ui_ad5x_nozzle.cpp
 index e5385d1dc2..501a9b2e35 100644
 --- a/src/ui/ui_ad5x_nozzle.cpp
@@ -91,7 +101,7 @@ index c0d81d2f4e..5b5a1d0e8d 100644
                                 lv_tr("The bed soak can't be calibrated during a print."),
                                 ModalSeverity::Warning);
 diff --git a/tests/unit/test_job_holds_machine.cpp b/tests/unit/test_job_holds_machine.cpp
-index d6c03a682f..23366ff4d2 100644
+index eed6c7b750..5d2eaa62e4 100644
 --- a/tests/unit/test_job_holds_machine.cpp
 +++ b/tests/unit/test_job_holds_machine.cpp
 @@ -359,6 +359,12 @@ constexpr GuardedFile kGuardedFiles[] = {
@@ -107,7 +117,7 @@ index d6c03a682f..23366ff4d2 100644
  };
  
  /// Control-bearing files that command nothing on the printer. A guard appearing
-@@ -687,6 +693,14 @@ constexpr const char* kNoMachineControlFiles[] = {
+@@ -688,6 +694,14 @@ constexpr const char* kNoMachineControlFiles[] = {
      "ui_xml/wizard_touch_calibration.xml",
      "ui_xml/wizard_vendor_row.xml",
      "ui_xml/wizard_wifi_setup.xml",
@@ -210,3 +220,6 @@ index f5780e3c8b..4f7d8126f3 100644
              <event_cb trigger="clicked" callback="on_ad5x_soak_calibrate"/>
            </ui_button>
          </lv_obj>
+-- 
+2.56.0
+

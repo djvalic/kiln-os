@@ -44,7 +44,7 @@ Upstream: not applicable (AD5X OS specific)
 
 diff --git a/include/ui_wizard_ad5x_setup.h b/include/ui_wizard_ad5x_setup.h
 new file mode 100644
-index 0000000..1878754
+index 0000000000..18787541ad
 --- /dev/null
 +++ b/include/ui_wizard_ad5x_setup.h
 @@ -0,0 +1,175 @@
@@ -224,7 +224,7 @@ index 0000000..1878754
 +/// The step instance for @p id (one of the AD5X tuning step ids).
 +WizardAd5xSetupStep* get_wizard_ad5x_setup_step(helix::wizard::StepId id);
 diff --git a/include/ui_wizard_telemetry.h b/include/ui_wizard_telemetry.h
-index 10c4d7a..309f8c4 100644
+index 7e61136949..3eff1bbac2 100644
 --- a/include/ui_wizard_telemetry.h
 +++ b/include/ui_wizard_telemetry.h
 @@ -4,6 +4,10 @@
@@ -249,7 +249,7 @@ index 10c4d7a..309f8c4 100644
  
      void init_subjects() override;
 diff --git a/include/wizard_step.h b/include/wizard_step.h
-index f02b9d9..5b223c5 100644
+index f02b9d9d02..5b223c5797 100644
 --- a/include/wizard_step.h
 +++ b/include/wizard_step.h
 @@ -22,12 +22,20 @@ enum class StepId {
@@ -275,10 +275,10 @@ index f02b9d9..5b223c5 100644
  // Plain data needed to decide skips — no LVGL, constructible in tests.
  struct StepContext {
 diff --git a/src/api/moonraker_discovery_sequence.cpp b/src/api/moonraker_discovery_sequence.cpp
-index f2c9842..8fd0a6d 100644
+index 7442569f76..d45828e225 100644
 --- a/src/api/moonraker_discovery_sequence.cpp
 +++ b/src/api/moonraker_discovery_sequence.cpp
-@@ -1463,6 +1463,15 @@ json MoonrakerDiscoverySequence::build_subscription_objects(
+@@ -1497,6 +1497,15 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
              {"retract_length", "retract_speed", "unretract_extra_length", "unretract_speed"});
      }
  
@@ -295,7 +295,7 @@ index f2c9842..8fd0a6d 100644
      // Other variables on these macros (slicer args, profile names, etc.) are
      // irrelevant to the start-detection logic.
 diff --git a/src/system/wizard_step.cpp b/src/system/wizard_step.cpp
-index 4c1e950..5dbe78a 100644
+index 4c1e95037f..5dbe78a577 100644
 --- a/src/system/wizard_step.cpp
 +++ b/src/system/wizard_step.cpp
 @@ -25,6 +25,20 @@ const char* to_string(StepId id) {
@@ -320,10 +320,10 @@ index 4c1e950..5dbe78a 100644
          return "InputShaper";
      case StepId::Summary:
 diff --git a/src/ui/ui_wizard.cpp b/src/ui/ui_wizard.cpp
-index a316de2..2f5fa79 100644
+index aaf5a87089..5e7e4b2df2 100644
 --- a/src/ui/ui_wizard.cpp
 +++ b/src/ui/ui_wizard.cpp
-@@ -521,6 +521,7 @@ void ui_wizard_container_register_responsive_constants() {
+@@ -530,6 +530,7 @@ void ui_wizard_container_register_responsive_constants() {
          "wizard_ams_identify",
          "wizard_led_select",
          "wizard_filament_sensor_select",
@@ -333,7 +333,7 @@ index a316de2..2f5fa79 100644
          "wizard_preferences",
 diff --git a/src/ui/ui_wizard_ad5x_setup.cpp b/src/ui/ui_wizard_ad5x_setup.cpp
 new file mode 100644
-index 0000000..ef16628
+index 0000000000..c8333e7ac3
 --- /dev/null
 +++ b/src/ui/ui_wizard_ad5x_setup.cpp
 @@ -0,0 +1,775 @@
@@ -1113,7 +1113,7 @@ index 0000000..ef16628
 +    root_ = nullptr;
 +}
 diff --git a/src/ui/wizard_step_registry.cpp b/src/ui/wizard_step_registry.cpp
-index b188b0a..5a84cd8 100644
+index c887cfe2ed..58c83b5299 100644
 --- a/src/ui/wizard_step_registry.cpp
 +++ b/src/ui/wizard_step_registry.cpp
 @@ -1,6 +1,7 @@
@@ -1136,7 +1136,7 @@ index b188b0a..5a84cd8 100644
      v.push_back(get_wizard_summary_step());                    // Summary
 diff --git a/ui_xml/wizard_ad5x_finish.xml b/ui_xml/wizard_ad5x_finish.xml
 new file mode 100644
-index 0000000..8747264
+index 0000000000..8747264ddd
 --- /dev/null
 +++ b/ui_xml/wizard_ad5x_finish.xml
 @@ -0,0 +1,15 @@
@@ -1157,7 +1157,7 @@ index 0000000..8747264
 +</component>
 diff --git a/ui_xml/wizard_ad5x_ifs.xml b/ui_xml/wizard_ad5x_ifs.xml
 new file mode 100644
-index 0000000..3e57ed1
+index 0000000000..3e57ed1644
 --- /dev/null
 +++ b/ui_xml/wizard_ad5x_ifs.xml
 @@ -0,0 +1,15 @@
@@ -1178,7 +1178,7 @@ index 0000000..3e57ed1
 +</component>
 diff --git a/ui_xml/wizard_ad5x_mesh.xml b/ui_xml/wizard_ad5x_mesh.xml
 new file mode 100644
-index 0000000..8839e0c
+index 0000000000..8839e0cca6
 --- /dev/null
 +++ b/ui_xml/wizard_ad5x_mesh.xml
 @@ -0,0 +1,15 @@
@@ -1199,7 +1199,7 @@ index 0000000..8839e0c
 +</component>
 diff --git a/ui_xml/wizard_ad5x_pid.xml b/ui_xml/wizard_ad5x_pid.xml
 new file mode 100644
-index 0000000..549c0e3
+index 0000000000..549c0e3f10
 --- /dev/null
 +++ b/ui_xml/wizard_ad5x_pid.xml
 @@ -0,0 +1,15 @@
@@ -1220,7 +1220,7 @@ index 0000000..549c0e3
 +</component>
 diff --git a/ui_xml/wizard_ad5x_selfcheck.xml b/ui_xml/wizard_ad5x_selfcheck.xml
 new file mode 100644
-index 0000000..bff47a4
+index 0000000000..bff47a4dff
 --- /dev/null
 +++ b/ui_xml/wizard_ad5x_selfcheck.xml
 @@ -0,0 +1,15 @@
@@ -1241,7 +1241,7 @@ index 0000000..bff47a4
 +</component>
 diff --git a/ui_xml/wizard_ad5x_setup.xml b/ui_xml/wizard_ad5x_setup.xml
 new file mode 100644
-index 0000000..75bd4e9
+index 0000000000..75bd4e9cf7
 --- /dev/null
 +++ b/ui_xml/wizard_ad5x_setup.xml
 @@ -0,0 +1,103 @@
@@ -1350,7 +1350,7 @@ index 0000000..75bd4e9
 +</component>
 diff --git a/ui_xml/wizard_ad5x_shaper.xml b/ui_xml/wizard_ad5x_shaper.xml
 new file mode 100644
-index 0000000..52f4943
+index 0000000000..52f4943fa9
 --- /dev/null
 +++ b/ui_xml/wizard_ad5x_shaper.xml
 @@ -0,0 +1,15 @@
@@ -1371,7 +1371,7 @@ index 0000000..52f4943
 +</component>
 diff --git a/ui_xml/wizard_ad5x_zoffset.xml b/ui_xml/wizard_ad5x_zoffset.xml
 new file mode 100644
-index 0000000..0c1a779
+index 0000000000..0c1a779d56
 --- /dev/null
 +++ b/ui_xml/wizard_ad5x_zoffset.xml
 @@ -0,0 +1,15 @@

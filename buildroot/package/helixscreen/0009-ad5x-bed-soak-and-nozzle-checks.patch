@@ -47,7 +47,7 @@ Upstream: not applicable (AD5X OS specific)
  create mode 100644 ui_xml/settings_ad5x_soak_overlay.xml
 
 diff --git a/include/ui_ad5x_nozzle.h b/include/ui_ad5x_nozzle.h
-index 309eca4c..08ba55c1 100644
+index 309eca4c49..08ba55c1e4 100644
 --- a/include/ui_ad5x_nozzle.h
 +++ b/include/ui_ad5x_nozzle.h
 @@ -12,7 +12,9 @@
@@ -74,7 +74,7 @@ index 309eca4c..08ba55c1 100644
  
  namespace helix::ui {
 diff --git a/include/ui_panel_settings.h b/include/ui_panel_settings.h
-index 80687627..4df6629b 100644
+index 8068762783..4df6629b1b 100644
 --- a/include/ui_panel_settings.h
 +++ b/include/ui_panel_settings.h
 @@ -141,6 +141,8 @@ class SettingsPanel : public PanelBase {
@@ -88,7 +88,7 @@ index 80687627..4df6629b 100644
      // refreshed by refresh_status_lines().
 diff --git a/include/ui_settings_ad5x_soak.h b/include/ui_settings_ad5x_soak.h
 new file mode 100644
-index 00000000..fa8cb308
+index 0000000000..fa8cb30819
 --- /dev/null
 +++ b/include/ui_settings_ad5x_soak.h
 @@ -0,0 +1,233 @@
@@ -326,7 +326,7 @@ index 00000000..fa8cb308
 +
 +} // namespace helix::settings
 diff --git a/include/ui_wizard_ad5x_setup.h b/include/ui_wizard_ad5x_setup.h
-index 9f8840f0..994dcbbf 100644
+index 9f8840f038..994dcbbfee 100644
 --- a/include/ui_wizard_ad5x_setup.h
 +++ b/include/ui_wizard_ad5x_setup.h
 @@ -20,6 +20,10 @@
@@ -390,10 +390,10 @@ index 9f8840f0..994dcbbf 100644
  /// `// action:ad5x_setup_wizard`, and drop the start-up flag file it wrote
  /// (HELIX_WIZARD_FLAG_FILE), which this run then answers. Idempotent per client.
 diff --git a/src/api/moonraker_discovery_sequence.cpp b/src/api/moonraker_discovery_sequence.cpp
-index 0787994b..922685d7 100644
+index 9549589f09..ebe150003d 100644
 --- a/src/api/moonraker_discovery_sequence.cpp
 +++ b/src/api/moonraker_discovery_sequence.cpp
-@@ -1520,6 +1520,16 @@ json MoonrakerDiscoverySequence::build_subscription_objects(
+@@ -1533,6 +1533,16 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
          }
      }
  
@@ -411,7 +411,7 @@ index 0787994b..922685d7 100644
      // Other variables on these macros (slicer args, profile names, etc.) are
      // irrelevant to the start-detection logic.
 diff --git a/src/ui/ui_ad5x_nozzle.cpp b/src/ui/ui_ad5x_nozzle.cpp
-index dfa5236b..e5385d1d 100644
+index dfa5236bd7..e5385d1dc2 100644
 --- a/src/ui/ui_ad5x_nozzle.cpp
 +++ b/src/ui/ui_ad5x_nozzle.cpp
 @@ -4,6 +4,8 @@
@@ -527,7 +527,7 @@ index dfa5236b..e5385d1d 100644
                    });
  }
 diff --git a/src/ui/ui_panel_settings.cpp b/src/ui/ui_panel_settings.cpp
-index 57c2b469..1c8bc694 100644
+index 57c2b46995..1c8bc694c3 100644
 --- a/src/ui/ui_panel_settings.cpp
 +++ b/src/ui/ui_panel_settings.cpp
 @@ -15,6 +15,7 @@
@@ -570,7 +570,7 @@ index 57c2b469..1c8bc694 100644
  #else
 diff --git a/src/ui/ui_settings_ad5x_soak.cpp b/src/ui/ui_settings_ad5x_soak.cpp
 new file mode 100644
-index 00000000..c0d81d2f
+index 0000000000..c0d81d2f4e
 --- /dev/null
 +++ b/src/ui/ui_settings_ad5x_soak.cpp
 @@ -0,0 +1,729 @@
@@ -1304,7 +1304,7 @@ index 00000000..c0d81d2f
 +
 +} // namespace helix::settings
 diff --git a/src/ui/ui_wizard_ad5x_setup.cpp b/src/ui/ui_wizard_ad5x_setup.cpp
-index 9c152525..fadaa994 100644
+index 9c152525c9..fadaa9940d 100644
 --- a/src/ui/ui_wizard_ad5x_setup.cpp
 +++ b/src/ui/ui_wizard_ad5x_setup.cpp
 @@ -85,6 +85,12 @@ const std::vector<StepSpec> k_specs = {
@@ -1423,7 +1423,7 @@ index 9c152525..fadaa994 100644
  void watch_wizard_requests() {
 diff --git a/tests/unit/test_settings_ad5x_soak.cpp b/tests/unit/test_settings_ad5x_soak.cpp
 new file mode 100644
-index 00000000..136f3e8c
+index 0000000000..136f3e8cd7
 --- /dev/null
 +++ b/tests/unit/test_settings_ad5x_soak.cpp
 @@ -0,0 +1,94 @@
@@ -1523,7 +1523,7 @@ index 00000000..136f3e8c
 +}
 diff --git a/ui_xml/settings_ad5x_soak_overlay.xml b/ui_xml/settings_ad5x_soak_overlay.xml
 new file mode 100644
-index 00000000..f5780e3c
+index 0000000000..f5780e3c8b
 --- /dev/null
 +++ b/ui_xml/settings_ad5x_soak_overlay.xml
 @@ -0,0 +1,126 @@
@@ -1654,7 +1654,7 @@ index 00000000..f5780e3c
 +  </view>
 +</component>
 diff --git a/ui_xml/settings_panel.xml b/ui_xml/settings_panel.xml
-index 184249b4..6286f575 100644
+index 184249b4ba..6286f575e4 100644
 --- a/ui_xml/settings_panel.xml
 +++ b/ui_xml/settings_panel.xml
 @@ -57,6 +57,12 @@

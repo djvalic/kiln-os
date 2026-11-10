@@ -24,7 +24,7 @@ Upstream: not applicable (AD5X OS specific)
  create mode 100644 ui_xml/wizard_ad5x_timezone.xml
 
 diff --git a/include/ui_wizard_ad5x_setup.h b/include/ui_wizard_ad5x_setup.h
-index 1878754..9fa918e 100644
+index 18787541ad..9fa918ebe1 100644
 --- a/include/ui_wizard_ad5x_setup.h
 +++ b/include/ui_wizard_ad5x_setup.h
 @@ -3,10 +3,13 @@
@@ -90,7 +90,7 @@ index 1878754..9fa918e 100644
 +
 +WizardAd5xTimezoneStep* get_wizard_ad5x_timezone_step();
 diff --git a/include/wizard_step.h b/include/wizard_step.h
-index 5b223c5..472918c 100644
+index 5b223c5797..472918c5bf 100644
 --- a/include/wizard_step.h
 +++ b/include/wizard_step.h
 @@ -22,7 +22,9 @@ enum class StepId {
@@ -114,7 +114,7 @@ index 5b223c5..472918c 100644
  // Plain data needed to decide skips — no LVGL, constructible in tests.
  struct StepContext {
 diff --git a/src/system/wizard_step.cpp b/src/system/wizard_step.cpp
-index 5dbe78a..bee685a 100644
+index 5dbe78a577..bee685ad99 100644
 --- a/src/system/wizard_step.cpp
 +++ b/src/system/wizard_step.cpp
 @@ -25,6 +25,8 @@ const char* to_string(StepId id) {
@@ -127,7 +127,7 @@ index 5dbe78a..bee685a 100644
          return "Ad5xSelfcheck";
      case StepId::Ad5xPid:
 diff --git a/src/ui/ui_panel_settings.cpp b/src/ui/ui_panel_settings.cpp
-index c9827bf..3e1fdfa 100644
+index c9827bf55a..3e1fdfadaf 100644
 --- a/src/ui/ui_panel_settings.cpp
 +++ b/src/ui/ui_panel_settings.cpp
 @@ -344,9 +344,9 @@ void SettingsPanel::handle_ad5x_setup_clicked() {
@@ -144,7 +144,7 @@ index c9827bf..3e1fdfa 100644
          [this]() { helix::ad5x_setup::launch_targeted(parent_screen_); }, opts);
  }
 diff --git a/src/ui/ui_wizard_ad5x_setup.cpp b/src/ui/ui_wizard_ad5x_setup.cpp
-index c8333e7..60779cb 100644
+index c8333e7ac3..60779cbc65 100644
 --- a/src/ui/ui_wizard_ad5x_setup.cpp
 +++ b/src/ui/ui_wizard_ad5x_setup.cpp
 @@ -7,11 +7,13 @@
@@ -241,7 +241,7 @@ index c8333e7..60779cb 100644
 +    root_ = nullptr;
 +}
 diff --git a/src/ui/wizard_step_registry.cpp b/src/ui/wizard_step_registry.cpp
-index 58c83b5..4fdd84e 100644
+index 58c83b5299..4fdd84e6e4 100644
 --- a/src/ui/wizard_step_registry.cpp
 +++ b/src/ui/wizard_step_registry.cpp
 @@ -43,8 +43,9 @@ std::vector<Step*> steps() {
@@ -258,7 +258,7 @@ index 58c83b5..4fdd84e 100644
      v.push_back(helix::wizard::get_wizard_preferences_step()); // Preferences
 diff --git a/ui_xml/wizard_ad5x_timezone.xml b/ui_xml/wizard_ad5x_timezone.xml
 new file mode 100644
-index 0000000..bf9cdf2
+index 0000000000..bf9cdf2556
 --- /dev/null
 +++ b/ui_xml/wizard_ad5x_timezone.xml
 @@ -0,0 +1,28 @@

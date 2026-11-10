@@ -12,8 +12,13 @@ screen sleeps" (0011, 0031) on every fresh install. Without it the led
 capability follows detection, as before beta.17; Settings > Devices >
 "Chamber light fitted" still turns it off.
 ---
+ assets/config/presets/ad5x.json           | 3 ---
+ tests/unit/test_config_preset.cpp         | 6 +++---
+ tests/unit/test_preset_database_links.cpp | 9 ++++-----
+ 3 files changed, 7 insertions(+), 11 deletions(-)
+
 diff --git a/assets/config/presets/ad5x.json b/assets/config/presets/ad5x.json
-index d9a0d7d..56721b6 100644
+index d9a0d7df7f..56721b602d 100644
 --- a/assets/config/presets/ad5x.json
 +++ b/assets/config/presets/ad5x.json
 @@ -50,9 +50,6 @@
@@ -27,10 +32,10 @@ index d9a0d7d..56721b6 100644
        "cooldown": "SET_HEATER_TEMPERATURE HEATER=extruder TARGET=0\nSET_HEATER_TEMPERATURE HEATER=heater_bed TARGET=0",
        "load_filament": { "label": "Load", "gcode": "LOAD_FILAMENT" },
 diff --git a/tests/unit/test_config_preset.cpp b/tests/unit/test_config_preset.cpp
-index 688bd49..561f404 100644
+index 18de36b089..6bbc5ae6fc 100644
 --- a/tests/unit/test_config_preset.cpp
 +++ b/tests/unit/test_config_preset.cpp
-@@ -1045,14 +1045,14 @@ TEST_CASE_METHOD(PresetConfigFixture, "snapmaker_u1 preset carries no home panel
+@@ -1077,14 +1077,14 @@ TEST_CASE_METHOD(PresetConfigFixture, "snapmaker_u1 preset carries no home panel
  }
  
  TEST_CASE_METHOD(PresetConfigFixture,
@@ -49,7 +54,7 @@ index 688bd49..561f404 100644
  
      SECTION("a set-up printer keeps its capabilities") {
 diff --git a/tests/unit/test_preset_database_links.cpp b/tests/unit/test_preset_database_links.cpp
-index 29e16aa..a3dbb69 100644
+index 29e16aaa02..a3dbb693e1 100644
 --- a/tests/unit/test_preset_database_links.cpp
 +++ b/tests/unit/test_preset_database_links.cpp
 @@ -269,14 +269,13 @@ TEST_CASE("the OpenCreator Creator 5 presets name the hardware OpenCreator has",
@@ -71,3 +76,6 @@ index 29e16aa..a3dbb69 100644
      const json& expected = printer["hardware"]["expected"];
      REQUIRE(expected.is_array());
      CHECK(std::find(expected.begin(), expected.end(), "led chamber_light") != expected.end());
+-- 
+2.56.0
+

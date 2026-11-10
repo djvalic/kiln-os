@@ -1,3 +1,11 @@
+
+---
+ include/ui_utils.h         | 26 ++++++++++++++++++++++++++
+ src/ui/ui_panel_common.cpp |  1 +
+ 2 files changed, 27 insertions(+)
+
+diff --git a/include/ui_utils.h b/include/ui_utils.h
+index f8356034b5..daaf16e5b4 100644
 --- a/include/ui_utils.h
 +++ b/include/ui_utils.h
 @@ -11,6 +11,7 @@
@@ -8,7 +16,7 @@
  #include <string_view>
  
  // ============================================================================
-@@ -499,6 +500,31 @@
+@@ -499,6 +500,31 @@ inline void set_event_bubble_recursive(lv_obj_t* obj) {
      }
  }
  
@@ -40,9 +48,11 @@
  /// Marks an object whose CLICKABLE disable_widget_clicks_recursive() removed,
  /// so enable_widget_clicks_recursive() restores exactly those and leaves an
  /// object that was never clickable alone.
+diff --git a/src/ui/ui_panel_common.cpp b/src/ui/ui_panel_common.cpp
+index 5fd7592b55..3a6c6ae637 100644
 --- a/src/ui/ui_panel_common.cpp
 +++ b/src/ui/ui_panel_common.cpp
-@@ -161,6 +161,7 @@
+@@ -161,6 +161,7 @@ lv_obj_t* create_xml_hidden(lv_obj_t* parent, const char* component, const char*
      if (root) {
          lv_obj_add_flag(root, LV_OBJ_FLAG_HIDDEN); // XML_HIDDEN_OK: built under the holder
          lv_obj_set_parent(root, parent);
@@ -50,3 +60,6 @@
      }
      lv_obj_delete(holder);
      return root;
+-- 
+2.56.0
+

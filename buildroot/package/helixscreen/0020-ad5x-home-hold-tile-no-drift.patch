@@ -1,3 +1,10 @@
+
+---
+ src/ui/ui_carousel.cpp | 28 ++++++++++++++++++++++++++++
+ 1 file changed, 28 insertions(+)
+
+diff --git a/src/ui/ui_carousel.cpp b/src/ui/ui_carousel.cpp
+index 861eb133cf..ec734dc736 100644
 --- a/src/ui/ui_carousel.cpp
 +++ b/src/ui/ui_carousel.cpp
 @@ -2,6 +2,7 @@
@@ -16,10 +23,11 @@
  #include "theme_manager.h"
  
  #include <spdlog/spdlog.h>
-@@ -186,6 +188,25 @@
+@@ -185,6 +187,25 @@ bool swiped_by_pointer(lv_obj_t* scroll) {
+     return false;
  }
  
- /**
++/**
 + * @brief True when the press under @p indev began on a tile and has been held
 + * long enough for LVGL's long press to fire (400 ms).
 + *
@@ -38,11 +46,10 @@
 +    return false;
 +}
 +
-+/**
+ /**
   * @brief SCROLL_BEGIN event handler: only a swipe or a goto moves the page
   *
-  * Any other animated scroll of the scroll container is aimed at the current
-@@ -205,6 +226,13 @@
+@@ -205,6 +226,13 @@ void carousel_scroll_begin_cb(lv_event_t* e) {
      // an offset set outright.
      auto* anim = static_cast<lv_anim_t*>(lv_event_get_param(e));
      if (!anim) {
@@ -56,3 +63,6 @@
          return;
      }
      CarouselState* state = ui_carousel_get_state(lv_obj_get_parent(scroll));
+-- 
+2.56.0
+

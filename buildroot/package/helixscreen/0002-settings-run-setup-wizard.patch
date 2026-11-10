@@ -15,7 +15,7 @@ Upstream: not applicable (AD5X OS specific)
  3 files changed, 34 insertions(+)
 
 diff --git a/include/ui_panel_settings.h b/include/ui_panel_settings.h
-index 011fb2e..e132344 100644
+index 011fb2e90a..e132344a4a 100644
 --- a/include/ui_panel_settings.h
 +++ b/include/ui_panel_settings.h
 @@ -135,6 +135,8 @@ class SettingsPanel : public PanelBase {
@@ -38,10 +38,10 @@ index 011fb2e..e132344 100644
      // and reaches the handlers above.
      friend void register_settings_panel_callbacks();
 diff --git a/src/ui/ui_panel_settings.cpp b/src/ui/ui_panel_settings.cpp
-index a480514..b603b9a 100644
+index fb61624ca0..681b526b57 100644
 --- a/src/ui/ui_panel_settings.cpp
 +++ b/src/ui/ui_panel_settings.cpp
-@@ -30,6 +30,7 @@
+@@ -31,6 +31,7 @@
  #include "ui_toast_manager.h"
  #include "ui_update_queue.h"
  #include "ui_utils.h"
@@ -49,7 +49,7 @@ index a480514..b603b9a 100644
  #include "ui_wizard_hardware_selector.h"
  
  #include "app_globals.h"
-@@ -133,6 +134,9 @@ void SettingsPanel::init_subjects() {
+@@ -134,6 +135,9 @@ void SettingsPanel::init_subjects() {
      // stays hidden until there is something to show
      UI_MANAGED_SUBJECT_INT(plugins_available_subject_, 0, "settings_plugins_available", subjects_);
  
@@ -59,7 +59,7 @@ index a480514..b603b9a 100644
      // Live status line under each stateful root row; refresh_status_lines()
      // fills these in, first from setup() and then on every return to the root.
      UI_MANAGED_SUBJECT_STRING(settings_status_display_subject_, settings_status_display_buf_, "",
-@@ -214,6 +218,8 @@ std::string status_string_subject(const char* name, const char* fallback) {
+@@ -215,6 +219,8 @@ std::string status_string_subject(const char* name, const char* fallback) {
  void SettingsPanel::refresh_status_lines() {
      using namespace helix::settings::status;
  
@@ -68,7 +68,7 @@ index a480514..b603b9a 100644
      // Formatted here rather than once at init, so it is in the language of the
      // latest return to the settings root.
      lv_subject_copy_string(&settings_status_display_subject_,
-@@ -325,6 +331,21 @@ void SettingsPanel::handle_hardware_health_clicked() {
+@@ -326,6 +332,21 @@ void SettingsPanel::handle_hardware_health_clicked() {
      overlay.show(parent_screen_);
  }
  
@@ -90,7 +90,7 @@ index a480514..b603b9a 100644
  // ============================================================================
  // GLOBAL INSTANCE
  // ============================================================================
-@@ -380,6 +401,8 @@ void register_settings_panel_callbacks() {
+@@ -382,6 +403,8 @@ void register_settings_panel_callbacks() {
          // Devices page
          {"on_hardware_health_clicked",
           [](lv_event_t*) { get_global_settings_panel().handle_hardware_health_clicked(); }},
@@ -100,10 +100,10 @@ index a480514..b603b9a 100644
          // Restart prompt and the shared header back button
          {"on_restart_later_clicked",
 diff --git a/ui_xml/settings_panel.xml b/ui_xml/settings_panel.xml
-index 101e712..ddbee5a 100644
+index 55af05a536..f6cb809b94 100644
 --- a/ui_xml/settings_panel.xml
 +++ b/ui_xml/settings_panel.xml
-@@ -42,6 +42,12 @@
+@@ -45,6 +45,12 @@
        <setting_action_row name="row_connection"
                            label="Connection" icon="lan" callback="on_connection_clicked"
                            bind_description="settings_status_connection" description_min_bp="0"/>

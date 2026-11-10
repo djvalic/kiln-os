@@ -13,7 +13,7 @@ A chip that isn't there is now skipped.
  1 file changed, 12 insertions(+), 6 deletions(-)
 
 diff --git a/src/ui/ui_panel_print_status.cpp b/src/ui/ui_panel_print_status.cpp
-index b65f5d3f6e..2c691dde81 100644
+index 452e6af241..67e77493e7 100644
 --- a/src/ui/ui_panel_print_status.cpp
 +++ b/src/ui/ui_panel_print_status.cpp
 @@ -1136,12 +1136,18 @@ lv_obj_t* PrintStatusPanel::create(lv_obj_t* parent) {

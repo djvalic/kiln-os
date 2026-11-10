@@ -1,3 +1,34 @@
+
+---
+ src/ui/ui_wizard_ad5x_setup.cpp | 10 ++++----
+ ui_xml/wizard_ad5x_setup.xml    | 42 +++++++++------------------------
+ 2 files changed, 15 insertions(+), 37 deletions(-)
+
+diff --git a/src/ui/ui_wizard_ad5x_setup.cpp b/src/ui/ui_wizard_ad5x_setup.cpp
+index f39084d146..1a323beb4f 100644
+--- a/src/ui/ui_wizard_ad5x_setup.cpp
++++ b/src/ui/ui_wizard_ad5x_setup.cpp
+@@ -75,14 +75,12 @@ const std::vector<StepSpec> k_specs = {
+      "load and unload distances. Load filament into the slots you use first.",
+      false},
+     {StepId::Ad5xTrash, "trash", "wizard_ad5x_trash",
+-     "Moves the nozzle over the purge box (the trash bin) at the back. Check it is over the "
+-     "box, use the arrows to move the box if it isn't, then press Accept.",
++     "Moves the nozzle over the purge box at the back. If the box isn't under the nozzle, "
++     "move it with the arrows, then Accept.",
+      false},
+     {StepId::Ad5xZoffset, "zoffset", "wizard_ad5x_zoffset",
+-     "Heats for the loaded filament, purges and prints a 30 mm test patch at the centre. While "
+-     "it prints, press - or + until the lines are flat and just touch each other, then press "
+-     "Accept. Start again prints another patch beside it. With the load cell estimate, the "
+-     "patch starts from a measured offset instead of a guess.",
++     "Prints a 30 mm test patch. While it prints, press Closer or Away until the lines are "
++     "flat and just touch, then Accept. Start again prints another patch beside it.",
+      false},
+     {StepId::Ad5xSoak, "soak", "wizard_ad5x_soak",
+      "Calibrates the bed heat soak: how long the bed keeps warming after it reaches 60 \xC2\xB0"
+diff --git a/ui_xml/wizard_ad5x_setup.xml b/ui_xml/wizard_ad5x_setup.xml
+index bd37899c48..888bbfc879 100644
 --- a/ui_xml/wizard_ad5x_setup.xml
 +++ b/ui_xml/wizard_ad5x_setup.xml
 @@ -35,22 +35,20 @@
@@ -80,24 +111,6 @@
        </lv_obj>
  
        <!-- Actions -->
---- a/src/ui/ui_wizard_ad5x_setup.cpp
-+++ b/src/ui/ui_wizard_ad5x_setup.cpp
-@@ -75,14 +75,12 @@
-      "load and unload distances. Load filament into the slots you use first.",
-      false},
-     {StepId::Ad5xTrash, "trash", "wizard_ad5x_trash",
--     "Moves the nozzle over the purge box (the trash bin) at the back. Check it is over the "
--     "box, use the arrows to move the box if it isn't, then press Accept.",
-+     "Moves the nozzle over the purge box at the back. If the box isn't under the nozzle, "
-+     "move it with the arrows, then Accept.",
-      false},
-     {StepId::Ad5xZoffset, "zoffset", "wizard_ad5x_zoffset",
--     "Heats for the loaded filament, purges and prints a 30 mm test patch at the centre. While "
--     "it prints, press - or + until the lines are flat and just touch each other, then press "
--     "Accept. Start again prints another patch beside it. With the load cell estimate, the "
--     "patch starts from a measured offset instead of a guess.",
-+     "Prints a 30 mm test patch. While it prints, press Closer or Away until the lines are "
-+     "flat and just touch, then Accept. Start again prints another patch beside it.",
-      false},
-     {StepId::Ad5xSoak, "soak", "wizard_ad5x_soak",
-      "Calibrates the bed heat soak: how long the bed keeps warming after it reaches 60 \xC2\xB0"
+-- 
+2.56.0
+

@@ -1,8 +1,14 @@
+
+---
+ src/printer/hardware_validator.cpp | 32 ++----------------------------
+ src/ui/ui_wizard_led_select.cpp    | 19 +++---------------
+ 2 files changed, 5 insertions(+), 46 deletions(-)
+
 diff --git a/src/printer/hardware_validator.cpp b/src/printer/hardware_validator.cpp
-index e0c0b17..97a586f 100644
+index 50ce48d033..fd4404283b 100644
 --- a/src/printer/hardware_validator.cpp
 +++ b/src/printer/hardware_validator.cpp
-@@ -658,36 +658,8 @@ void HardwareValidator::validate_new_hardware(Config* config,
+@@ -665,36 +665,8 @@ void HardwareValidator::validate_new_hardware(Config* config,
          expected_hardware = config->get_string_array(config->df() + "hardware/expected");
      }
  
@@ -42,7 +48,7 @@ index e0c0b17..97a586f 100644
      // Check for fans not assigned to any role
      const auto& discovered_fans = hardware.fans();
 diff --git a/src/ui/ui_wizard_led_select.cpp b/src/ui/ui_wizard_led_select.cpp
-index 6426af2..aafae5c 100644
+index 6426af2c62..aafae5cede 100644
 --- a/src/ui/ui_wizard_led_select.cpp
 +++ b/src/ui/ui_wizard_led_select.cpp
 @@ -190,20 +190,7 @@ bool WizardLedSelectStep::is_validated() const {
@@ -69,3 +75,6 @@ index 6426af2..aafae5c 100644
 +    // would ask everyone. Strips are set up in Settings > LED Settings.
 +    return true;
  }
+-- 
+2.56.0
+

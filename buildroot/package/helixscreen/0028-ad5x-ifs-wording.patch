@@ -1,5 +1,22 @@
+
+---
+ src/ui/ui_notification_history.cpp    |  2 +-
+ src/ui/ui_settings_telemetry_data.cpp |  2 +-
+ src/ui/ui_wizard_telemetry.cpp        |  2 +-
+ ui_xml/translations/de.xml            | 18 +++++++++---------
+ ui_xml/translations/en.xml            | 16 ++++++++--------
+ ui_xml/translations/es.xml            | 18 +++++++++---------
+ ui_xml/translations/fr.xml            | 18 +++++++++---------
+ ui_xml/translations/it.xml            | 18 +++++++++---------
+ ui_xml/translations/ja.xml            | 18 +++++++++---------
+ ui_xml/translations/pt.xml            | 18 +++++++++---------
+ ui_xml/translations/ru.xml            | 18 +++++++++---------
+ ui_xml/translations/translations.xml  | 18 +++++++++---------
+ ui_xml/translations/zh.xml            | 18 +++++++++---------
+ 13 files changed, 92 insertions(+), 92 deletions(-)
+
 diff --git a/src/ui/ui_notification_history.cpp b/src/ui/ui_notification_history.cpp
-index f25291b..f8a86f5 100644
+index f25291b08e..f8a86f56a5 100644
 --- a/src/ui/ui_notification_history.cpp
 +++ b/src/ui/ui_notification_history.cpp
 @@ -164,7 +164,7 @@ void NotificationHistory::seed_test_data() {
@@ -12,7 +29,7 @@ index f25291b..f8a86f5 100644
      warning_entry.was_modal = false;
      warning_entry.was_read = false;
 diff --git a/src/ui/ui_settings_telemetry_data.cpp b/src/ui/ui_settings_telemetry_data.cpp
-index f7ea74a..171e364 100644
+index f7ea74a76d..171e3642e8 100644
 --- a/src/ui/ui_settings_telemetry_data.cpp
 +++ b/src/ui/ui_settings_telemetry_data.cpp
 @@ -508,7 +508,7 @@ void TelemetryDataOverlay::populate_events() {
@@ -25,7 +42,7 @@ index f7ea74a..171e364 100644
                      line += " " + a["type"].get<std::string>();
                  }
 diff --git a/src/ui/ui_wizard_telemetry.cpp b/src/ui/ui_wizard_telemetry.cpp
-index 36f48fb..1e537da 100644
+index 36f48fb81a..1e537da625 100644
 --- a/src/ui/ui_wizard_telemetry.cpp
 +++ b/src/ui/ui_wizard_telemetry.cpp
 @@ -51,7 +51,7 @@ void WizardTelemetryStep::init_info_text_subject() {
@@ -38,10 +55,10 @@ index 36f48fb..1e537da 100644
          "- Your name, location, or IP address\n"
          "- File names or G-code content\n"
 diff --git a/ui_xml/translations/de.xml b/ui_xml/translations/de.xml
-index 83dbc67..0ff3372 100644
+index 0d120e973b..529a5c10b6 100644
 --- a/ui_xml/translations/de.xml
 +++ b/ui_xml/translations/de.xml
-@@ -199,10 +199,10 @@
+@@ -201,10 +201,10 @@
    <translation tag="AFC&apos;s remember_spool is retaining spool info in firmware; that takes precedence over this toggle" de="AFCs remember_spool behält Spuleninfos in der Firmware; das hat Vorrang vor diesem Schalter"/>
    <translation tag="AI detection" de="AI-Erkennung"/>
    <translation tag="ALL DEVICES" de="ALLE GERÄTE"/>
@@ -56,7 +73,7 @@ index 83dbc67..0ff3372 100644
    <translation tag="API Key" de="API-Schlüssel"/>
    <translation tag="API Key (if Moonraker requires a login)" de="API-Schlüssel (falls Moonraker eine Anmeldung verlangt)"/>
    <translation tag="API not available" de="API nicht verfügbar"/>
-@@ -286,7 +286,7 @@
+@@ -290,7 +290,7 @@
    <translation tag="Always Show Bypass Spool" de="Bypass-Spule immer anzeigen"/>
    <translation tag="Always show Android navigation bar instead of using gestures" de="Android-Navigationsleiste immer anzeigen statt Gesten zu nutzen"/>
    <translation tag="Ambient Transfer" de="Umgebungswärmeübertragung"/>
@@ -65,7 +82,7 @@ index 83dbc67..0ff3372 100644
    <translation tag="An API key is 32 characters, each 0-9 or a-f." de="Ein API-Schlüssel hat 32 Zeichen, jeweils 0-9 oder a-f."/>
    <translation tag="An accelerometer was detected on your printer." de="Ein Beschleunigungssensor wurde an Ihrem Drucker erkannt."/>
    <translation tag="An app on your network is asking to connect to this printer." de="Eine App in Ihrem Netzwerk möchte sich mit diesem Drucker verbinden."/>
-@@ -492,7 +492,7 @@
+@@ -496,7 +496,7 @@
    <translation tag="Bypass disabled" de="Bypass deaktiviert"/>
    <translation tag="Bypass enabled" de="Bypass aktiviert"/>
    <translation tag="Bypass failed" de="Bypass fehlgeschlagen"/>
@@ -74,7 +91,7 @@ index 83dbc67..0ff3372 100644
    <translation tag="Bypass mode is not currently active" de="Der Bypass-Modus ist derzeit nicht aktiv"/>
    <translation tag="Bypass off macro" de="Bypass-aus-Makro"/>
    <translation tag="Bypass on macro" de="Bypass-ein-Makro"/>
-@@ -2291,7 +2291,7 @@
+@@ -2317,7 +2317,7 @@
    <translation tag="Niimbot (Bluetooth)" de="Niimbot (Bluetooth)"/>
    <translation tag="No" de="Nein"/>
    <translation tag="No ACE unit was found." de="Keine ACE-Einheit gefunden."/>
@@ -83,7 +100,7 @@ index 83dbc67..0ff3372 100644
    <translation tag="No API connection" de="Keine API-Verbindung"/>
    <translation tag="No Bluetooth printer selected — pick one in settings" de="Kein Bluetooth-Drucker ausgewählt — in den Einstellungen auswählen"/>
    <translation tag="No Bluetooth printers found" de="Keine Bluetooth-Drucker gefunden"/>
-@@ -3814,8 +3814,8 @@
+@@ -3866,8 +3866,8 @@
    <translation tag="The timelapse or logs folder overlaps a protected folder, so cleanup is off." de="Der Zeitraffer- oder Protokoll-Ordner überlappt einen geschützten Ordner, daher ist die Bereinigung ausgeschaltet."/>
    <translation tag="The tool change under way finished, and the tool was not parked" de="Der laufende Werkzeugwechsel wurde abgeschlossen, und das Werkzeug wurde nicht geparkt"/>
    <translation tag="The tool change under way finished, and {} was not put back on the carriage" de="Der laufende Werkzeugwechsel wurde abgeschlossen, und {} wurde nicht wieder auf den Wagen gesetzt"/>
@@ -95,10 +112,10 @@ index 83dbc67..0ff3372 100644
    <translation tag="The toolhead sensor indicates filament is already loaded. Proceed with load anyway?" de="Der Werkzeugkopfsensor zeigt an, dass Filament bereits geladen ist. Trotzdem mit dem Laden fortfahren?"/>
    <translation tag="The toolhead sensor indicates no filament is present. Proceed with unload anyway?" de="Der Werkzeugkopfsensor zeigt an, dass kein Filament vorhanden ist. Trotzdem mit dem Entladen fortfahren?"/>
 diff --git a/ui_xml/translations/en.xml b/ui_xml/translations/en.xml
-index daa8fcf..f434065 100644
+index 21a75d6c00..b3df26b349 100644
 --- a/ui_xml/translations/en.xml
 +++ b/ui_xml/translations/en.xml
-@@ -199,10 +199,10 @@
+@@ -201,10 +201,10 @@
    <translation tag="AFC&apos;s remember_spool is retaining spool info in firmware; that takes precedence over this toggle" en="AFC&apos;s remember_spool is retaining spool info in firmware; that takes precedence over this toggle"/>
    <translation tag="AI detection" en="AI detection"/>
    <translation tag="ALL DEVICES" en="ALL DEVICES"/>
@@ -113,7 +130,7 @@ index daa8fcf..f434065 100644
    <translation tag="API Key" en="API Key"/>
    <translation tag="API Key (if Moonraker requires a login)" en="API Key (if Moonraker requires a login)"/>
    <translation tag="API not available" en="API not available"/>
-@@ -492,7 +492,7 @@
+@@ -496,7 +496,7 @@
    <translation tag="Bypass disabled" en="Bypass disabled"/>
    <translation tag="Bypass enabled" en="Bypass enabled"/>
    <translation tag="Bypass failed" en="Bypass failed"/>
@@ -122,7 +139,7 @@ index daa8fcf..f434065 100644
    <translation tag="Bypass mode is not currently active" en="Bypass mode is not currently active"/>
    <translation tag="Bypass off macro" en="Bypass off macro"/>
    <translation tag="Bypass on macro" en="Bypass on macro"/>
-@@ -2291,7 +2291,7 @@
+@@ -2317,7 +2317,7 @@
    <translation tag="Niimbot (Bluetooth)" en="Niimbot (Bluetooth)"/>
    <translation tag="No" en="No"/>
    <translation tag="No ACE unit was found." en="No ACE unit was found."/>
@@ -131,7 +148,7 @@ index daa8fcf..f434065 100644
    <translation tag="No API connection" en="No API connection"/>
    <translation tag="No Bluetooth printer selected — pick one in settings" en="No Bluetooth printer selected — pick one in settings"/>
    <translation tag="No Bluetooth printers found" en="No Bluetooth printers found"/>
-@@ -3814,8 +3814,8 @@
+@@ -3866,8 +3866,8 @@
    <translation tag="The timelapse or logs folder overlaps a protected folder, so cleanup is off." en="The timelapse or logs folder overlaps a protected folder, so cleanup is off."/>
    <translation tag="The tool change under way finished, and the tool was not parked" en="The tool change under way finished, and the tool was not parked"/>
    <translation tag="The tool change under way finished, and {} was not put back on the carriage" en="The tool change under way finished, and {} was not put back on the carriage"/>
@@ -143,10 +160,10 @@ index daa8fcf..f434065 100644
    <translation tag="The toolhead sensor indicates filament is already loaded. Proceed with load anyway?" en="The toolhead sensor indicates filament is already loaded. Proceed with load anyway?"/>
    <translation tag="The toolhead sensor indicates no filament is present. Proceed with unload anyway?" en="The toolhead sensor indicates no filament is present. Proceed with unload anyway?"/>
 diff --git a/ui_xml/translations/es.xml b/ui_xml/translations/es.xml
-index 723fdc1..30974d7 100644
+index 73fe4d3179..f8ebf09210 100644
 --- a/ui_xml/translations/es.xml
 +++ b/ui_xml/translations/es.xml
-@@ -199,10 +199,10 @@
+@@ -201,10 +201,10 @@
    <translation tag="AFC&apos;s remember_spool is retaining spool info in firmware; that takes precedence over this toggle" es="El parámetro remember_spool de AFC retiene la información de la bobina en el firmware; eso tiene prioridad sobre esta opción"/>
    <translation tag="AI detection" es="Detección AI"/>
    <translation tag="ALL DEVICES" es="TODOS LOS DISPOSITIVOS"/>
@@ -161,7 +178,7 @@ index 723fdc1..30974d7 100644
    <translation tag="API Key" es="Clave API"/>
    <translation tag="API Key (if Moonraker requires a login)" es="Clave API (si Moonraker requiere inicio de sesión)"/>
    <translation tag="API not available" es="API no disponible"/>
-@@ -286,7 +286,7 @@
+@@ -290,7 +290,7 @@
    <translation tag="Always Show Bypass Spool" es="Mostrar siempre la bobina de bypass"/>
    <translation tag="Always show Android navigation bar instead of using gestures" es="Mostrar siempre la barra de navegación de Android en lugar de usar gestos"/>
    <translation tag="Ambient Transfer" es="Transferencia ambiente"/>
@@ -170,7 +187,7 @@ index 723fdc1..30974d7 100644
    <translation tag="An API key is 32 characters, each 0-9 or a-f." es="Una clave API tiene 32 caracteres, cada uno 0-9 o a-f."/>
    <translation tag="An accelerometer was detected on your printer." es="Se detectó un acelerómetro en su impresora."/>
    <translation tag="An app on your network is asking to connect to this printer." es="Una aplicación de su red quiere conectarse a esta impresora."/>
-@@ -492,7 +492,7 @@
+@@ -496,7 +496,7 @@
    <translation tag="Bypass disabled" es="Bypass desactivado"/>
    <translation tag="Bypass enabled" es="Bypass activado"/>
    <translation tag="Bypass failed" es="Error en bypass"/>
@@ -179,7 +196,7 @@ index 723fdc1..30974d7 100644
    <translation tag="Bypass mode is not currently active" es="El modo bypass no está activo actualmente"/>
    <translation tag="Bypass off macro" es="Macro de bypass desactivado"/>
    <translation tag="Bypass on macro" es="Macro de bypass activado"/>
-@@ -2291,7 +2291,7 @@
+@@ -2317,7 +2317,7 @@
    <translation tag="Niimbot (Bluetooth)" es="Niimbot (Bluetooth)"/>
    <translation tag="No" es="No"/>
    <translation tag="No ACE unit was found." es="No se encontró ninguna unidad ACE."/>
@@ -188,7 +205,7 @@ index 723fdc1..30974d7 100644
    <translation tag="No API connection" es="Sin conexión a la API"/>
    <translation tag="No Bluetooth printer selected — pick one in settings" es="No hay impresora Bluetooth seleccionada — elige una en ajustes"/>
    <translation tag="No Bluetooth printers found" es="No se encontraron impresoras Bluetooth"/>
-@@ -3814,8 +3814,8 @@
+@@ -3866,8 +3866,8 @@
    <translation tag="The timelapse or logs folder overlaps a protected folder, so cleanup is off." es="La carpeta de timelapse o de registros se solapa con una carpeta protegida, por eso la limpieza está desactivada."/>
    <translation tag="The tool change under way finished, and the tool was not parked" es="El cambio de herramienta en curso terminó y la herramienta no se aparcó"/>
    <translation tag="The tool change under way finished, and {} was not put back on the carriage" es="El cambio de herramienta en curso terminó y {} no se volvió a poner en el carro"/>
@@ -200,10 +217,10 @@ index 723fdc1..30974d7 100644
    <translation tag="The toolhead sensor indicates filament is already loaded. Proceed with load anyway?" es="El sensor del cabezal indica que ya hay filamento cargado. ¿Continuar con la carga de todos modos?"/>
    <translation tag="The toolhead sensor indicates no filament is present. Proceed with unload anyway?" es="El sensor del cabezal indica que no hay filamento presente. ¿Continuar con la descarga de todos modos?"/>
 diff --git a/ui_xml/translations/fr.xml b/ui_xml/translations/fr.xml
-index bafe3eb..7249d11 100644
+index c710b6caf5..818bf63e99 100644
 --- a/ui_xml/translations/fr.xml
 +++ b/ui_xml/translations/fr.xml
-@@ -199,10 +199,10 @@
+@@ -201,10 +201,10 @@
    <translation tag="AFC&apos;s remember_spool is retaining spool info in firmware; that takes precedence over this toggle" fr="Le paramètre remember_spool d&apos;AFC retient les informations de bobine dans le firmware ; il prime sur cette option"/>
    <translation tag="AI detection" fr="Détection AI"/>
    <translation tag="ALL DEVICES" fr="TOUS LES APPAREILS"/>
@@ -218,7 +235,7 @@ index bafe3eb..7249d11 100644
    <translation tag="API Key" fr="Clé API"/>
    <translation tag="API Key (if Moonraker requires a login)" fr="Clé API (si Moonraker exige une connexion)"/>
    <translation tag="API not available" fr="API non disponible"/>
-@@ -286,7 +286,7 @@
+@@ -290,7 +290,7 @@
    <translation tag="Always Show Bypass Spool" fr="Toujours afficher la bobine de bypass"/>
    <translation tag="Always show Android navigation bar instead of using gestures" fr="Toujours afficher la barre de navigation Android au lieu des gestes"/>
    <translation tag="Ambient Transfer" fr="Transfert ambiant"/>
@@ -227,7 +244,7 @@ index bafe3eb..7249d11 100644
    <translation tag="An API key is 32 characters, each 0-9 or a-f." fr="Une clé API compte 32 caractères, chacun 0-9 ou a-f."/>
    <translation tag="An accelerometer was detected on your printer." fr="Un accéléromètre a été détecté sur votre imprimante."/>
    <translation tag="An app on your network is asking to connect to this printer." fr="Une application de votre réseau demande à se connecter à cette imprimante."/>
-@@ -492,7 +492,7 @@
+@@ -496,7 +496,7 @@
    <translation tag="Bypass disabled" fr="Bypass désactivé"/>
    <translation tag="Bypass enabled" fr="Bypass activé"/>
    <translation tag="Bypass failed" fr="Échec du bypass"/>
@@ -236,7 +253,7 @@ index bafe3eb..7249d11 100644
    <translation tag="Bypass mode is not currently active" fr="Le mode bypass n&apos;est pas actif actuellement"/>
    <translation tag="Bypass off macro" fr="Macro de désactivation du bypass"/>
    <translation tag="Bypass on macro" fr="Macro d&apos;activation du bypass"/>
-@@ -2291,7 +2291,7 @@
+@@ -2317,7 +2317,7 @@
    <translation tag="Niimbot (Bluetooth)" fr="Niimbot (Bluetooth)"/>
    <translation tag="No" fr="Non"/>
    <translation tag="No ACE unit was found." fr="Aucune unité ACE trouvée."/>
@@ -245,7 +262,7 @@ index bafe3eb..7249d11 100644
    <translation tag="No API connection" fr="Aucune connexion API"/>
    <translation tag="No Bluetooth printer selected — pick one in settings" fr="Aucune imprimante Bluetooth sélectionnée — choisissez-en une dans les paramètres"/>
    <translation tag="No Bluetooth printers found" fr="Aucune imprimante Bluetooth trouvée"/>
-@@ -3814,8 +3814,8 @@
+@@ -3866,8 +3866,8 @@
    <translation tag="The timelapse or logs folder overlaps a protected folder, so cleanup is off." fr="Le dossier timelapse ou de logs chevauche un dossier protégé, le nettoyage est donc désactivé."/>
    <translation tag="The tool change under way finished, and the tool was not parked" fr="Le changement d&apos;outil en cours s&apos;est terminé et l&apos;outil n&apos;a pas été rangé"/>
    <translation tag="The tool change under way finished, and {} was not put back on the carriage" fr="Le changement d&apos;outil en cours s&apos;est terminé et {} n&apos;a pas été remis sur le chariot"/>
@@ -257,10 +274,10 @@ index bafe3eb..7249d11 100644
    <translation tag="The toolhead sensor indicates filament is already loaded. Proceed with load anyway?" fr="Le capteur de la tête d&apos;outil indique que du filament est déjà chargé. Procéder au chargement quand même ?"/>
    <translation tag="The toolhead sensor indicates no filament is present. Proceed with unload anyway?" fr="Le capteur de la tête d&apos;outil indique qu&apos;aucun filament n&apos;est présent. Procéder au déchargement quand même ?"/>
 diff --git a/ui_xml/translations/it.xml b/ui_xml/translations/it.xml
-index 49584b4..ac3b9f3 100644
+index 5108ebfb5f..86a83d8190 100644
 --- a/ui_xml/translations/it.xml
 +++ b/ui_xml/translations/it.xml
-@@ -199,10 +199,10 @@
+@@ -201,10 +201,10 @@
    <translation tag="AFC&apos;s remember_spool is retaining spool info in firmware; that takes precedence over this toggle" it="remember_spool di AFC conserva le informazioni sulla bobina nel firmware; ha la precedenza su questa opzione"/>
    <translation tag="AI detection" it="Rilevamento AI"/>
    <translation tag="ALL DEVICES" it="TUTTI I DISPOSITIVI"/>
@@ -275,7 +292,7 @@ index 49584b4..ac3b9f3 100644
    <translation tag="API Key" it="Chiave API"/>
    <translation tag="API Key (if Moonraker requires a login)" it="Chiave API (se Moonraker richiede l&apos;accesso)"/>
    <translation tag="API not available" it="API non disponibile"/>
-@@ -286,7 +286,7 @@
+@@ -290,7 +290,7 @@
    <translation tag="Always Show Bypass Spool" it="Mostra sempre bobina di bypass"/>
    <translation tag="Always show Android navigation bar instead of using gestures" it="Mostra sempre la barra di navigazione Android invece dei gesti"/>
    <translation tag="Ambient Transfer" it="Trasferimento ambiente"/>
@@ -284,7 +301,7 @@ index 49584b4..ac3b9f3 100644
    <translation tag="An API key is 32 characters, each 0-9 or a-f." it="Una chiave API ha 32 caratteri, ciascuno 0-9 o a-f."/>
    <translation tag="An accelerometer was detected on your printer." it="È stato rilevato un accelerometro sulla stampante."/>
    <translation tag="An app on your network is asking to connect to this printer." it="Un&apos;app sulla tua rete chiede di connettersi a questa stampante."/>
-@@ -492,7 +492,7 @@
+@@ -496,7 +496,7 @@
    <translation tag="Bypass disabled" it="Bypass disabilitato"/>
    <translation tag="Bypass enabled" it="Bypass abilitato"/>
    <translation tag="Bypass failed" it="Bypass fallito"/>
@@ -293,7 +310,7 @@ index 49584b4..ac3b9f3 100644
    <translation tag="Bypass mode is not currently active" it="La modalità bypass non è attiva"/>
    <translation tag="Bypass off macro" it="Macro di disattivazione bypass"/>
    <translation tag="Bypass on macro" it="Macro di attivazione bypass"/>
-@@ -2291,7 +2291,7 @@
+@@ -2317,7 +2317,7 @@
    <translation tag="Niimbot (Bluetooth)" it="Niimbot (Bluetooth)"/>
    <translation tag="No" it="No"/>
    <translation tag="No ACE unit was found." it="Nessuna unità ACE trovata."/>
@@ -302,7 +319,7 @@ index 49584b4..ac3b9f3 100644
    <translation tag="No API connection" it="Nessuna connessione API"/>
    <translation tag="No Bluetooth printer selected — pick one in settings" it="Nessuna stampante Bluetooth selezionata — sceglierne una nelle impostazioni"/>
    <translation tag="No Bluetooth printers found" it="Nessuna stampante Bluetooth trovata"/>
-@@ -3814,8 +3814,8 @@
+@@ -3866,8 +3866,8 @@
    <translation tag="The timelapse or logs folder overlaps a protected folder, so cleanup is off." it="La cartella timelapse o di log sovrappone una cartella protetta, quindi la pulizia è disattivata."/>
    <translation tag="The tool change under way finished, and the tool was not parked" it="Il cambio utensile in corso è terminato e l&apos;utensile non è stato parcheggiato"/>
    <translation tag="The tool change under way finished, and {} was not put back on the carriage" it="Il cambio utensile in corso è terminato e {} non è stato rimesso sul carrello"/>
@@ -314,10 +331,10 @@ index 49584b4..ac3b9f3 100644
    <translation tag="The toolhead sensor indicates filament is already loaded. Proceed with load anyway?" it="Il sensore della testina indica che il filamento è già caricato. Procedere comunque con il caricamento?"/>
    <translation tag="The toolhead sensor indicates no filament is present. Proceed with unload anyway?" it="Il sensore della testina indica che nessun filamento è presente. Procedere comunque con lo scaricamento?"/>
 diff --git a/ui_xml/translations/ja.xml b/ui_xml/translations/ja.xml
-index bf1fb96..dc37078 100644
+index 8cdf464945..44786c4c7f 100644
 --- a/ui_xml/translations/ja.xml
 +++ b/ui_xml/translations/ja.xml
-@@ -199,10 +199,10 @@
+@@ -201,10 +201,10 @@
    <translation tag="AFC&apos;s remember_spool is retaining spool info in firmware; that takes precedence over this toggle" ja="AFC の remember_spool がファームウェア側でスプール情報を保持しているため、このトグル設定より優先されます"/>
    <translation tag="AI detection" ja="AI 検出"/>
    <translation tag="ALL DEVICES" ja="すべてのデバイス"/>
@@ -332,7 +349,7 @@ index bf1fb96..dc37078 100644
    <translation tag="API Key" ja="APIキー"/>
    <translation tag="API Key (if Moonraker requires a login)" ja="APIキー（Moonrakerがログインを要求する場合）"/>
    <translation tag="API not available" ja="APIが利用できません"/>
-@@ -286,7 +286,7 @@
+@@ -290,7 +290,7 @@
    <translation tag="Always Show Bypass Spool" ja="バイパススプールを常に表示"/>
    <translation tag="Always show Android navigation bar instead of using gestures" ja="ジェスチャーの代わりにAndroidナビゲーションバーを常に表示"/>
    <translation tag="Ambient Transfer" ja="環境熱伝達"/>
@@ -341,7 +358,7 @@ index bf1fb96..dc37078 100644
    <translation tag="An API key is 32 characters, each 0-9 or a-f." ja="APIキーは32文字で、各文字は0-9またはa-fです。"/>
    <translation tag="An accelerometer was detected on your printer." ja="プリンターで加速度センサーが検出されました。"/>
    <translation tag="An app on your network is asking to connect to this printer." ja="ネットワーク上のアプリがこのプリンターへの接続を求めています。"/>
-@@ -492,7 +492,7 @@
+@@ -496,7 +496,7 @@
    <translation tag="Bypass disabled" ja="バイパス無効"/>
    <translation tag="Bypass enabled" ja="バイパス有効"/>
    <translation tag="Bypass failed" ja="バイパスに失敗しました"/>
@@ -350,7 +367,7 @@ index bf1fb96..dc37078 100644
    <translation tag="Bypass mode is not currently active" ja="バイパスモードは現在アクティブではありません"/>
    <translation tag="Bypass off macro" ja="バイパスオフのマクロ"/>
    <translation tag="Bypass on macro" ja="バイパスオンのマクロ"/>
-@@ -2291,7 +2291,7 @@
+@@ -2317,7 +2317,7 @@
    <translation tag="Niimbot (Bluetooth)" ja="Niimbot (Bluetooth)"/>
    <translation tag="No" ja="いいえ"/>
    <translation tag="No ACE unit was found." ja="ACEユニットが見つかりません。"/>
@@ -359,7 +376,7 @@ index bf1fb96..dc37078 100644
    <translation tag="No API connection" ja="API 接続なし"/>
    <translation tag="No Bluetooth printer selected — pick one in settings" ja="Bluetooth プリンターが選択されていません — 設定で選択してください"/>
    <translation tag="No Bluetooth printers found" ja="Bluetooth プリンターが見つかりません"/>
-@@ -3814,8 +3814,8 @@
+@@ -3866,8 +3866,8 @@
    <translation tag="The timelapse or logs folder overlaps a protected folder, so cleanup is off." ja="タイムラプスまたはログのフォルダーが保護されたフォルダーと重なっているため、クリーンアップはオフになっています。"/>
    <translation tag="The tool change under way finished, and the tool was not parked" ja="実行中のツール変更は完了し、ツールは格納されていません"/>
    <translation tag="The tool change under way finished, and {} was not put back on the carriage" ja="実行中のツール変更は完了し、{}はキャリッジに戻されていません"/>
@@ -371,10 +388,10 @@ index bf1fb96..dc37078 100644
    <translation tag="The toolhead sensor indicates filament is already loaded. Proceed with load anyway?" ja="ツールヘッドセンサーがフィラメント装填済みを検出しました。それでも装填を続行しますか？"/>
    <translation tag="The toolhead sensor indicates no filament is present. Proceed with unload anyway?" ja="ツールヘッドセンサーがフィラメント未検出を報告しました。それでもアンロードを続行しますか？"/>
 diff --git a/ui_xml/translations/pt.xml b/ui_xml/translations/pt.xml
-index 98701b6..6e86fbc 100644
+index 50a12ef38c..45db23a076 100644
 --- a/ui_xml/translations/pt.xml
 +++ b/ui_xml/translations/pt.xml
-@@ -199,10 +199,10 @@
+@@ -201,10 +201,10 @@
    <translation tag="AFC&apos;s remember_spool is retaining spool info in firmware; that takes precedence over this toggle" pt="O remember_spool do AFC retém informações do carretel no firmware; isso tem precedência sobre esta opção"/>
    <translation tag="AI detection" pt="Detecção por AI"/>
    <translation tag="ALL DEVICES" pt="TODOS OS DISPOSITIVOS"/>
@@ -389,7 +406,7 @@ index 98701b6..6e86fbc 100644
    <translation tag="API Key" pt="Chave de API"/>
    <translation tag="API Key (if Moonraker requires a login)" pt="Chave de API (se o Moonraker exigir login)"/>
    <translation tag="API not available" pt="API não disponível"/>
-@@ -286,7 +286,7 @@
+@@ -290,7 +290,7 @@
    <translation tag="Always Show Bypass Spool" pt="Sempre Mostrar Carretel de Bypass"/>
    <translation tag="Always show Android navigation bar instead of using gestures" pt="Mostrar sempre a barra de navegação Android em vez de usar gestos"/>
    <translation tag="Ambient Transfer" pt="Transferência Ambiente"/>
@@ -398,7 +415,7 @@ index 98701b6..6e86fbc 100644
    <translation tag="An API key is 32 characters, each 0-9 or a-f." pt="Uma chave de API tem 32 caracteres, cada um 0-9 ou a-f."/>
    <translation tag="An accelerometer was detected on your printer." pt="Um acelerômetro foi detectado na sua impressora."/>
    <translation tag="An app on your network is asking to connect to this printer." pt="Um aplicativo na sua rede quer conectar-se a esta impressora."/>
-@@ -492,7 +492,7 @@
+@@ -496,7 +496,7 @@
    <translation tag="Bypass disabled" pt="Bypass desativado"/>
    <translation tag="Bypass enabled" pt="Bypass ativado"/>
    <translation tag="Bypass failed" pt="Falha no bypass"/>
@@ -407,7 +424,7 @@ index 98701b6..6e86fbc 100644
    <translation tag="Bypass mode is not currently active" pt="O modo bypass não está ativo no momento"/>
    <translation tag="Bypass off macro" pt="Macro de desligar bypass"/>
    <translation tag="Bypass on macro" pt="Macro de ligar bypass"/>
-@@ -2291,7 +2291,7 @@
+@@ -2317,7 +2317,7 @@
    <translation tag="Niimbot (Bluetooth)" pt="Niimbot (Bluetooth)"/>
    <translation tag="No" pt="Não"/>
    <translation tag="No ACE unit was found." pt="Nenhuma unidade ACE encontrada."/>
@@ -416,7 +433,7 @@ index 98701b6..6e86fbc 100644
    <translation tag="No API connection" pt="Sem conexão com a API"/>
    <translation tag="No Bluetooth printer selected — pick one in settings" pt="Nenhuma impressora Bluetooth selecionada — escolha uma nas configurações"/>
    <translation tag="No Bluetooth printers found" pt="Nenhuma impressora Bluetooth encontrada"/>
-@@ -3814,8 +3814,8 @@
+@@ -3866,8 +3866,8 @@
    <translation tag="The timelapse or logs folder overlaps a protected folder, so cleanup is off." pt="A pasta de timelapse ou de logs sobrepõe-se a uma pasta protegida, por isso a limpeza está desligada."/>
    <translation tag="The tool change under way finished, and the tool was not parked" pt="A troca de ferramenta em andamento terminou e a ferramenta não foi estacionada"/>
    <translation tag="The tool change under way finished, and {} was not put back on the carriage" pt="A troca de ferramenta em andamento terminou e {} não foi devolvida ao carro"/>
@@ -428,10 +445,10 @@ index 98701b6..6e86fbc 100644
    <translation tag="The toolhead sensor indicates filament is already loaded. Proceed with load anyway?" pt="O sensor do cabeçote indica que o filamento já está carregado. Prosseguir com o carregamento mesmo assim?"/>
    <translation tag="The toolhead sensor indicates no filament is present. Proceed with unload anyway?" pt="O sensor do cabeçote indica que não há filamento presente. Prosseguir com o descarregamento mesmo assim?"/>
 diff --git a/ui_xml/translations/ru.xml b/ui_xml/translations/ru.xml
-index be8e987..3feffad 100644
+index 1ceb7c1044..0da2c463b7 100644
 --- a/ui_xml/translations/ru.xml
 +++ b/ui_xml/translations/ru.xml
-@@ -232,10 +232,10 @@
+@@ -234,10 +234,10 @@
    <translation tag="AFC&apos;s remember_spool is retaining spool info in firmware; that takes precedence over this toggle" ru="Параметр remember_spool в AFC сохраняет данные катушки в прошивке и имеет приоритет над этим переключателем"/>
    <translation tag="AI detection" ru="AI-детекция"/>
    <translation tag="ALL DEVICES" ru="ВСЕ УСТРОЙСТВА"/>
@@ -446,7 +463,7 @@ index be8e987..3feffad 100644
    <translation tag="API Key" ru="API-ключ"/>
    <translation tag="API Key (if Moonraker requires a login)" ru="API-ключ (если Moonraker требует входа)"/>
    <translation tag="API not available" ru="API недоступен"/>
-@@ -319,7 +319,7 @@
+@@ -323,7 +323,7 @@
    <translation tag="Always Show Bypass Spool" ru="Всегда показывать катушку байпаса"/>
    <translation tag="Always show Android navigation bar instead of using gestures" ru="Всегда показывать панель навигации Android вместо жестов"/>
    <translation tag="Ambient Transfer" ru="Теплообмен с окружающей средой"/>
@@ -455,7 +472,7 @@ index be8e987..3feffad 100644
    <translation tag="An API key is 32 characters, each 0-9 or a-f." ru="API-ключ состоит из 32 символов, каждый 0-9 или a-f."/>
    <translation tag="An accelerometer was detected on your printer." ru="На вашем принтере обнаружен акселерометр."/>
    <translation tag="An app on your network is asking to connect to this printer." ru="Приложение в вашей сети запрашивает подключение к этому принтеру."/>
-@@ -531,7 +531,7 @@
+@@ -535,7 +535,7 @@
    <translation tag="Bypass disabled" ru="Байпас отключён"/>
    <translation tag="Bypass enabled" ru="Байпас включён"/>
    <translation tag="Bypass failed" ru="Ошибка байпаса"/>
@@ -464,7 +481,7 @@ index be8e987..3feffad 100644
    <translation tag="Bypass mode is not currently active" ru="Режим обхода сейчас не активен"/>
    <translation tag="Bypass off macro" ru="Макрос выключения обхода"/>
    <translation tag="Bypass on macro" ru="Макрос включения обхода"/>
-@@ -2336,7 +2336,7 @@
+@@ -2362,7 +2362,7 @@
    <translation tag="Niimbot (Bluetooth)" ru="Niimbot (Bluetooth)"/>
    <translation tag="No" ru="Нет"/>
    <translation tag="No ACE unit was found." ru="Блок ACE не найден."/>
@@ -473,7 +490,7 @@ index be8e987..3feffad 100644
    <translation tag="No API connection" ru="Нет соединения с API"/>
    <translation tag="No Bluetooth printer selected — pick one in settings" ru="Bluetooth-принтер не выбран — выберите его в настройках"/>
    <translation tag="No Bluetooth printers found" ru="Bluetooth-принтеры не найдены"/>
-@@ -3874,8 +3874,8 @@
+@@ -3926,8 +3926,8 @@
    <translation tag="The timelapse or logs folder overlaps a protected folder, so cleanup is off." ru="Папка таймлапсов или журналов пересекается с защищённой папкой, поэтому очистка выключена."/>
    <translation tag="The tool change under way finished, and the tool was not parked" ru="Текущая смена инструмента завершена, инструмент не припаркован"/>
    <translation tag="The tool change under way finished, and {} was not put back on the carriage" ru="Текущая смена инструмента завершена, {} не возвращён на каретку"/>
@@ -485,10 +502,10 @@ index be8e987..3feffad 100644
    <translation tag="The toolhead sensor indicates filament is already loaded. Proceed with load anyway?" ru="Датчик печатающей головки показывает, что филамент уже загружен. Всё равно продолжить загрузку?"/>
    <translation tag="The toolhead sensor indicates no filament is present. Proceed with unload anyway?" ru="Датчик печатающей головки показывает, что филамент отсутствует. Всё равно продолжить выгрузку?"/>
 diff --git a/ui_xml/translations/translations.xml b/ui_xml/translations/translations.xml
-index 6ae1c07..fe30888 100644
+index 84552817fc..02f333dbe6 100644
 --- a/ui_xml/translations/translations.xml
 +++ b/ui_xml/translations/translations.xml
-@@ -232,10 +232,10 @@
+@@ -234,10 +234,10 @@
    <translation tag="AFC&apos;s remember_spool is retaining spool info in firmware; that takes precedence over this toggle" de="AFCs remember_spool behält Spuleninfos in der Firmware; das hat Vorrang vor diesem Schalter" en="AFC&apos;s remember_spool is retaining spool info in firmware; that takes precedence over this toggle" es="El parámetro remember_spool de AFC retiene la información de la bobina en el firmware; eso tiene prioridad sobre esta opción" fr="Le paramètre remember_spool d&apos;AFC retient les informations de bobine dans le firmware ; il prime sur cette option" it="remember_spool di AFC conserva le informazioni sulla bobina nel firmware; ha la precedenza su questa opzione" ja="AFC の remember_spool がファームウェア側でスプール情報を保持しているため、このトグル設定より優先されます" pt="O remember_spool do AFC retém informações do carretel no firmware; isso tem precedência sobre esta opção" ru="Параметр remember_spool в AFC сохраняет данные катушки в прошивке и имеет приоритет над этим переключателем" zh="AFC 的 remember_spool 会在固件中保留料盘信息；其优先级高于此开关"/>
    <translation tag="AI detection" de="AI-Erkennung" en="AI detection" es="Detección AI" fr="Détection AI" it="Rilevamento AI" ja="AI 検出" pt="Detecção por AI" ru="AI-детекция" zh="AI 检测"/>
    <translation tag="ALL DEVICES" de="ALLE GERÄTE" en="ALL DEVICES" es="TODOS LOS DISPOSITIVOS" fr="TOUS LES APPAREILS" it="TUTTI I DISPOSITIVI" ja="すべてのデバイス" pt="TODOS OS DISPOSITIVOS" ru="ВСЕ УСТРОЙСТВА" zh="所有设备"/>
@@ -503,7 +520,7 @@ index 6ae1c07..fe30888 100644
    <translation tag="API Key" de="API-Schlüssel" en="API Key" es="Clave API" fr="Clé API" it="Chiave API" ja="APIキー" pt="Chave de API" ru="API-ключ" zh="API 密钥"/>
    <translation tag="API Key (if Moonraker requires a login)" de="API-Schlüssel (falls Moonraker eine Anmeldung verlangt)" en="API Key (if Moonraker requires a login)" es="Clave API (si Moonraker requiere inicio de sesión)" fr="Clé API (si Moonraker exige une connexion)" it="Chiave API (se Moonraker richiede l&apos;accesso)" ja="APIキー（Moonrakerがログインを要求する場合）" pt="Chave de API (se o Moonraker exigir login)" ru="API-ключ (если Moonraker требует входа)" zh="API 密钥（如果 Moonraker 要求登录）"/>
    <translation tag="API not available" de="API nicht verfügbar" en="API not available" es="API no disponible" fr="API non disponible" it="API non disponibile" ja="APIが利用できません" pt="API não disponível" ru="API недоступен" zh="API 不可用"/>
-@@ -319,7 +319,7 @@
+@@ -323,7 +323,7 @@
    <translation tag="Always Show Bypass Spool" de="Bypass-Spule immer anzeigen" en="Always Show Bypass Spool" es="Mostrar siempre la bobina de bypass" fr="Toujours afficher la bobine de bypass" it="Mostra sempre bobina di bypass" ja="バイパススプールを常に表示" pt="Sempre Mostrar Carretel de Bypass" ru="Всегда показывать катушку байпаса" zh="始终显示旁路料盘"/>
    <translation tag="Always show Android navigation bar instead of using gestures" de="Android-Navigationsleiste immer anzeigen statt Gesten zu nutzen" en="Always show Android navigation bar instead of using gestures" es="Mostrar siempre la barra de navegación de Android en lugar de usar gestos" fr="Toujours afficher la barre de navigation Android au lieu des gestes" it="Mostra sempre la barra di navigazione Android invece dei gesti" ja="ジェスチャーの代わりにAndroidナビゲーションバーを常に表示" pt="Mostrar sempre a barra de navegação Android em vez de usar gestos" ru="Всегда показывать панель навигации Android вместо жестов" zh="始终显示 Android 导航栏而不使用手势"/>
    <translation tag="Ambient Transfer" de="Umgebungswärmeübertragung" en="Ambient Transfer" es="Transferencia ambiente" fr="Transfert ambiant" it="Trasferimento ambiente" ja="環境熱伝達" pt="Transferência Ambiente" ru="Теплообмен с окружающей средой" zh="环境传热"/>
@@ -512,7 +529,7 @@ index 6ae1c07..fe30888 100644
    <translation tag="An API key is 32 characters, each 0-9 or a-f." de="Ein API-Schlüssel hat 32 Zeichen, jeweils 0-9 oder a-f." en="An API key is 32 characters, each 0-9 or a-f." es="Una clave API tiene 32 caracteres, cada uno 0-9 o a-f." fr="Une clé API compte 32 caractères, chacun 0-9 ou a-f." it="Una chiave API ha 32 caratteri, ciascuno 0-9 o a-f." ja="APIキーは32文字で、各文字は0-9またはa-fです。" pt="Uma chave de API tem 32 caracteres, cada um 0-9 ou a-f." ru="API-ключ состоит из 32 символов, каждый 0-9 или a-f." zh="API 密钥为 32 个字符，每个为 0-9 或 a-f。"/>
    <translation tag="An accelerometer was detected on your printer." de="Ein Beschleunigungssensor wurde an Ihrem Drucker erkannt." en="An accelerometer was detected on your printer." es="Se detectó un acelerómetro en su impresora." fr="Un accéléromètre a été détecté sur votre imprimante." it="È stato rilevato un accelerometro sulla stampante." ja="プリンターで加速度センサーが検出されました。" pt="Um acelerômetro foi detectado na sua impressora." ru="На вашем принтере обнаружен акселерометр." zh="在您的打印机上检测到加速度计。"/>
    <translation tag="An app on your network is asking to connect to this printer." de="Eine App in Ihrem Netzwerk möchte sich mit diesem Drucker verbinden." en="An app on your network is asking to connect to this printer." es="Una aplicación de su red quiere conectarse a esta impresora." fr="Une application de votre réseau demande à se connecter à cette imprimante." it="Un&apos;app sulla tua rete chiede di connettersi a questa stampante." ja="ネットワーク上のアプリがこのプリンターへの接続を求めています。" pt="Um aplicativo na sua rede quer conectar-se a esta impressora." ru="Приложение в вашей сети запрашивает подключение к этому принтеру." zh="网络中的某个应用请求连接到此打印机。"/>
-@@ -531,7 +531,7 @@
+@@ -535,7 +535,7 @@
    <translation tag="Bypass disabled" de="Bypass deaktiviert" en="Bypass disabled" es="Bypass desactivado" fr="Bypass désactivé" it="Bypass disabilitato" ja="バイパス無効" pt="Bypass desativado" ru="Байпас отключён" zh="旁通已禁用"/>
    <translation tag="Bypass enabled" de="Bypass aktiviert" en="Bypass enabled" es="Bypass activado" fr="Bypass activé" it="Bypass abilitato" ja="バイパス有効" pt="Bypass ativado" ru="Байпас включён" zh="旁通已启用"/>
    <translation tag="Bypass failed" de="Bypass fehlgeschlagen" en="Bypass failed" es="Error en bypass" fr="Échec du bypass" it="Bypass fallito" ja="バイパスに失敗しました" pt="Falha no bypass" ru="Ошибка байпаса" zh="旁通失败"/>
@@ -521,7 +538,7 @@ index 6ae1c07..fe30888 100644
    <translation tag="Bypass mode is not currently active" de="Der Bypass-Modus ist derzeit nicht aktiv" en="Bypass mode is not currently active" es="El modo bypass no está activo actualmente" fr="Le mode bypass n&apos;est pas actif actuellement" it="La modalità bypass non è attiva" ja="バイパスモードは現在アクティブではありません" pt="O modo bypass não está ativo no momento" ru="Режим обхода сейчас не активен" zh="旁通模式当前未启用"/>
    <translation tag="Bypass off macro" de="Bypass-aus-Makro" en="Bypass off macro" es="Macro de bypass desactivado" fr="Macro de désactivation du bypass" it="Macro di disattivazione bypass" ja="バイパスオフのマクロ" pt="Macro de desligar bypass" ru="Макрос выключения обхода" zh="关闭旁路宏"/>
    <translation tag="Bypass on macro" de="Bypass-ein-Makro" en="Bypass on macro" es="Macro de bypass activado" fr="Macro d&apos;activation du bypass" it="Macro di attivazione bypass" ja="バイパスオンのマクロ" pt="Macro de ligar bypass" ru="Макрос включения обхода" zh="开启旁路宏"/>
-@@ -2336,7 +2336,7 @@
+@@ -2362,7 +2362,7 @@
    <translation tag="Niimbot (Bluetooth)" de="Niimbot (Bluetooth)" en="Niimbot (Bluetooth)" es="Niimbot (Bluetooth)" fr="Niimbot (Bluetooth)" it="Niimbot (Bluetooth)" ja="Niimbot (Bluetooth)" pt="Niimbot (Bluetooth)" ru="Niimbot (Bluetooth)" zh="Niimbot（蓝牙）"/>
    <translation tag="No" de="Nein" en="No" es="No" fr="Non" it="No" ja="いいえ" pt="Não" ru="Нет" zh="否"/>
    <translation tag="No ACE unit was found." de="Keine ACE-Einheit gefunden." en="No ACE unit was found." es="No se encontró ninguna unidad ACE." fr="Aucune unité ACE trouvée." it="Nessuna unità ACE trovata." ja="ACEユニットが見つかりません。" pt="Nenhuma unidade ACE encontrada." ru="Блок ACE не найден." zh="未找到 ACE 单元。"/>
@@ -530,7 +547,7 @@ index 6ae1c07..fe30888 100644
    <translation tag="No API connection" de="Keine API-Verbindung" en="No API connection" es="Sin conexión a la API" fr="Aucune connexion API" it="Nessuna connessione API" ja="API 接続なし" pt="Sem conexão com a API" ru="Нет соединения с API" zh="无 API 连接"/>
    <translation tag="No Bluetooth printer selected — pick one in settings" de="Kein Bluetooth-Drucker ausgewählt — in den Einstellungen auswählen" en="No Bluetooth printer selected — pick one in settings" es="No hay impresora Bluetooth seleccionada — elige una en ajustes" fr="Aucune imprimante Bluetooth sélectionnée — choisissez-en une dans les paramètres" it="Nessuna stampante Bluetooth selezionata — sceglierne una nelle impostazioni" ja="Bluetooth プリンターが選択されていません — 設定で選択してください" pt="Nenhuma impressora Bluetooth selecionada — escolha uma nas configurações" ru="Bluetooth-принтер не выбран — выберите его в настройках" zh="未选择蓝牙打印机 — 请在设置中选择"/>
    <translation tag="No Bluetooth printers found" de="Keine Bluetooth-Drucker gefunden" en="No Bluetooth printers found" es="No se encontraron impresoras Bluetooth" fr="Aucune imprimante Bluetooth trouvée" it="Nessuna stampante Bluetooth trovata" ja="Bluetooth プリンターが見つかりません" pt="Nenhuma impressora Bluetooth encontrada" ru="Bluetooth-принтеры не найдены" zh="未找到蓝牙打印机"/>
-@@ -3874,8 +3874,8 @@
+@@ -3926,8 +3926,8 @@
    <translation tag="The timelapse or logs folder overlaps a protected folder, so cleanup is off." de="Der Zeitraffer- oder Protokoll-Ordner überlappt einen geschützten Ordner, daher ist die Bereinigung ausgeschaltet." en="The timelapse or logs folder overlaps a protected folder, so cleanup is off." es="La carpeta de timelapse o de registros se solapa con una carpeta protegida, por eso la limpieza está desactivada." fr="Le dossier timelapse ou de logs chevauche un dossier protégé, le nettoyage est donc désactivé." it="La cartella timelapse o di log sovrappone una cartella protetta, quindi la pulizia è disattivata." ja="タイムラプスまたはログのフォルダーが保護されたフォルダーと重なっているため、クリーンアップはオフになっています。" pt="A pasta de timelapse ou de logs sobrepõe-se a uma pasta protegida, por isso a limpeza está desligada." ru="Папка таймлапсов или журналов пересекается с защищённой папкой, поэтому очистка выключена." zh="延时摄影或日志文件夹与受保护的文件夹重叠，因此清理功能已关闭。"/>
    <translation tag="The tool change under way finished, and the tool was not parked" de="Der laufende Werkzeugwechsel wurde abgeschlossen, und das Werkzeug wurde nicht geparkt" en="The tool change under way finished, and the tool was not parked" es="El cambio de herramienta en curso terminó y la herramienta no se aparcó" fr="Le changement d&apos;outil en cours s&apos;est terminé et l&apos;outil n&apos;a pas été rangé" it="Il cambio utensile in corso è terminato e l&apos;utensile non è stato parcheggiato" ja="実行中のツール変更は完了し、ツールは格納されていません" pt="A troca de ferramenta em andamento terminou e a ferramenta não foi estacionada" ru="Текущая смена инструмента завершена, инструмент не припаркован" zh="正在进行的换工具已完成，工具未停放"/>
    <translation tag="The tool change under way finished, and {} was not put back on the carriage" de="Der laufende Werkzeugwechsel wurde abgeschlossen, und {} wurde nicht wieder auf den Wagen gesetzt" en="The tool change under way finished, and {} was not put back on the carriage" es="El cambio de herramienta en curso terminó y {} no se volvió a poner en el carro" fr="Le changement d&apos;outil en cours s&apos;est terminé et {} n&apos;a pas été remis sur le chariot" it="Il cambio utensile in corso è terminato e {} non è stato rimesso sul carrello" ja="実行中のツール変更は完了し、{}はキャリッジに戻されていません" pt="A troca de ferramenta em andamento terminou e {} não foi devolvida ao carro" ru="Текущая смена инструмента завершена, {} не возвращён на каретку" zh="正在进行的换工具已完成，{}未放回打印头"/>
@@ -542,10 +559,10 @@ index 6ae1c07..fe30888 100644
    <translation tag="The toolhead sensor indicates filament is already loaded. Proceed with load anyway?" de="Der Werkzeugkopfsensor zeigt an, dass Filament bereits geladen ist. Trotzdem mit dem Laden fortfahren?" en="The toolhead sensor indicates filament is already loaded. Proceed with load anyway?" es="El sensor del cabezal indica que ya hay filamento cargado. ¿Continuar con la carga de todos modos?" fr="Le capteur de la tête d&apos;outil indique que du filament est déjà chargé. Procéder au chargement quand même ?" it="Il sensore della testina indica che il filamento è già caricato. Procedere comunque con il caricamento?" ja="ツールヘッドセンサーがフィラメント装填済みを検出しました。それでも装填を続行しますか？" pt="O sensor do cabeçote indica que o filamento já está carregado. Prosseguir com o carregamento mesmo assim?" ru="Датчик печатающей головки показывает, что филамент уже загружен. Всё равно продолжить загрузку?" zh="工具头传感器显示耗材已装载。仍要继续装载吗？"/>
    <translation tag="The toolhead sensor indicates no filament is present. Proceed with unload anyway?" de="Der Werkzeugkopfsensor zeigt an, dass kein Filament vorhanden ist. Trotzdem mit dem Entladen fortfahren?" en="The toolhead sensor indicates no filament is present. Proceed with unload anyway?" es="El sensor del cabezal indica que no hay filamento presente. ¿Continuar con la descarga de todos modos?" fr="Le capteur de la tête d&apos;outil indique qu&apos;aucun filament n&apos;est présent. Procéder au déchargement quand même ?" it="Il sensore della testina indica che nessun filamento è presente. Procedere comunque con lo scaricamento?" ja="ツールヘッドセンサーがフィラメント未検出を報告しました。それでもアンロードを続行しますか？" pt="O sensor do cabeçote indica que não há filamento presente. Prosseguir com o descarregamento mesmo assim?" ru="Датчик печатающей головки показывает, что филамент отсутствует. Всё равно продолжить выгрузку?" zh="工具头传感器显示无耗材。仍要继续卸载吗？"/>
 diff --git a/ui_xml/translations/zh.xml b/ui_xml/translations/zh.xml
-index 4b69da2..b4d4055 100644
+index 8277d34111..73d6cc0bdf 100644
 --- a/ui_xml/translations/zh.xml
 +++ b/ui_xml/translations/zh.xml
-@@ -199,10 +199,10 @@
+@@ -201,10 +201,10 @@
    <translation tag="AFC&apos;s remember_spool is retaining spool info in firmware; that takes precedence over this toggle" zh="AFC 的 remember_spool 会在固件中保留料盘信息；其优先级高于此开关"/>
    <translation tag="AI detection" zh="AI 检测"/>
    <translation tag="ALL DEVICES" zh="所有设备"/>
@@ -560,7 +577,7 @@ index 4b69da2..b4d4055 100644
    <translation tag="API Key" zh="API 密钥"/>
    <translation tag="API Key (if Moonraker requires a login)" zh="API 密钥（如果 Moonraker 要求登录）"/>
    <translation tag="API not available" zh="API 不可用"/>
-@@ -286,7 +286,7 @@
+@@ -290,7 +290,7 @@
    <translation tag="Always Show Bypass Spool" zh="始终显示旁路料盘"/>
    <translation tag="Always show Android navigation bar instead of using gestures" zh="始终显示 Android 导航栏而不使用手势"/>
    <translation tag="Ambient Transfer" zh="环境传热"/>
@@ -569,7 +586,7 @@ index 4b69da2..b4d4055 100644
    <translation tag="An API key is 32 characters, each 0-9 or a-f." zh="API 密钥为 32 个字符，每个为 0-9 或 a-f。"/>
    <translation tag="An accelerometer was detected on your printer." zh="在您的打印机上检测到加速度计。"/>
    <translation tag="An app on your network is asking to connect to this printer." zh="网络中的某个应用请求连接到此打印机。"/>
-@@ -492,7 +492,7 @@
+@@ -496,7 +496,7 @@
    <translation tag="Bypass disabled" zh="旁通已禁用"/>
    <translation tag="Bypass enabled" zh="旁通已启用"/>
    <translation tag="Bypass failed" zh="旁通失败"/>
@@ -578,7 +595,7 @@ index 4b69da2..b4d4055 100644
    <translation tag="Bypass mode is not currently active" zh="旁通模式当前未启用"/>
    <translation tag="Bypass off macro" zh="关闭旁路宏"/>
    <translation tag="Bypass on macro" zh="开启旁路宏"/>
-@@ -2291,7 +2291,7 @@
+@@ -2317,7 +2317,7 @@
    <translation tag="Niimbot (Bluetooth)" zh="Niimbot（蓝牙）"/>
    <translation tag="No" zh="否"/>
    <translation tag="No ACE unit was found." zh="未找到 ACE 单元。"/>
@@ -587,7 +604,7 @@ index 4b69da2..b4d4055 100644
    <translation tag="No API connection" zh="无 API 连接"/>
    <translation tag="No Bluetooth printer selected — pick one in settings" zh="未选择蓝牙打印机 — 请在设置中选择"/>
    <translation tag="No Bluetooth printers found" zh="未找到蓝牙打印机"/>
-@@ -3814,8 +3814,8 @@
+@@ -3866,8 +3866,8 @@
    <translation tag="The timelapse or logs folder overlaps a protected folder, so cleanup is off." zh="延时摄影或日志文件夹与受保护的文件夹重叠，因此清理功能已关闭。"/>
    <translation tag="The tool change under way finished, and the tool was not parked" zh="正在进行的换工具已完成，工具未停放"/>
    <translation tag="The tool change under way finished, and {} was not put back on the carriage" zh="正在进行的换工具已完成，{}未放回打印头"/>
@@ -598,3 +615,6 @@ index 4b69da2..b4d4055 100644
    <translation tag="The toolhead is not homed, so this would home into the print" zh="工具头尚未归位，归位会使喷嘴碰到打印件"/>
    <translation tag="The toolhead sensor indicates filament is already loaded. Proceed with load anyway?" zh="工具头传感器显示耗材已装载。仍要继续装载吗？"/>
    <translation tag="The toolhead sensor indicates no filament is present. Proceed with unload anyway?" zh="工具头传感器显示无耗材。仍要继续卸载吗？"/>
+-- 
+2.56.0
+

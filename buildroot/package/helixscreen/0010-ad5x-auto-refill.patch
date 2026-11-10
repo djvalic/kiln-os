@@ -44,7 +44,7 @@ Upstream: not applicable (AD5X OS specific)
  create mode 100644 ui_xml/settings_ad5x_refill_overlay.xml
 
 diff --git a/include/ui_panel_settings.h b/include/ui_panel_settings.h
-index 4df6629b..5431a18d 100644
+index 4df6629b1b..5431a18de2 100644
 --- a/include/ui_panel_settings.h
 +++ b/include/ui_panel_settings.h
 @@ -143,6 +143,8 @@ class SettingsPanel : public PanelBase {
@@ -58,7 +58,7 @@ index 4df6629b..5431a18d 100644
      // refreshed by refresh_status_lines().
 diff --git a/include/ui_settings_ad5x_refill.h b/include/ui_settings_ad5x_refill.h
 new file mode 100644
-index 00000000..494f43f5
+index 0000000000..494f43f510
 --- /dev/null
 +++ b/include/ui_settings_ad5x_refill.h
 @@ -0,0 +1,251 @@
@@ -314,10 +314,10 @@ index 00000000..494f43f5
 +
 +} // namespace helix::settings
 diff --git a/src/api/moonraker_discovery_sequence.cpp b/src/api/moonraker_discovery_sequence.cpp
-index 922685d7..2d98fc51 100644
+index ebe150003d..5b991c7c66 100644
 --- a/src/api/moonraker_discovery_sequence.cpp
 +++ b/src/api/moonraker_discovery_sequence.cpp
-@@ -1530,6 +1530,20 @@ json MoonrakerDiscoverySequence::build_subscription_objects(
+@@ -1543,6 +1543,20 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
          }
      }
  
@@ -339,7 +339,7 @@ index 922685d7..2d98fc51 100644
      // Other variables on these macros (slicer args, profile names, etc.) are
      // irrelevant to the start-detection logic.
 diff --git a/src/application/discovery_steps.cpp b/src/application/discovery_steps.cpp
-index 7c98d03e..2c39a616 100644
+index 0afc09f7b2..130cf34fff 100644
 --- a/src/application/discovery_steps.cpp
 +++ b/src/application/discovery_steps.cpp
 @@ -10,6 +10,7 @@
@@ -350,7 +350,7 @@ index 7c98d03e..2c39a616 100644
  #include "ui_update_queue.h"
  #include "ui_wizard.h"
  
-@@ -167,6 +168,13 @@ void remote_screen_webcam_step(DiscoveryContext&) {
+@@ -173,6 +174,13 @@ void remote_screen_webcam_step(DiscoveryContext&) {
      RemoteScreenService::instance().apply_settings();
  }
  
@@ -364,7 +364,7 @@ index 7c98d03e..2c39a616 100644
  constexpr DiscoveryStep kTailSteps[] = {
      {"update_checker_connected", false, update_checker_connected_step, nullptr},
      {"about_print_hours", false, about_print_hours_step, nullptr},
-@@ -183,6 +191,7 @@ constexpr DiscoveryStep kTailSteps[] = {
+@@ -189,6 +197,7 @@ constexpr DiscoveryStep kTailSteps[] = {
      {"filament_temperatures", false, filament_temperatures_step, nullptr},
      {"remote_screen_webcam", false, remote_screen_webcam_step, nullptr},
      {"manual_probe_autoopen", false, manual_probe_autoopen_step, nullptr},
@@ -373,7 +373,7 @@ index 7c98d03e..2c39a616 100644
  
  } // namespace
 diff --git a/src/ui/ui_panel_settings.cpp b/src/ui/ui_panel_settings.cpp
-index 1c8bc694..add00eec 100644
+index 1c8bc694c3..add00eece8 100644
 --- a/src/ui/ui_panel_settings.cpp
 +++ b/src/ui/ui_panel_settings.cpp
 @@ -15,6 +15,7 @@
@@ -416,7 +416,7 @@ index 1c8bc694..add00eec 100644
  #else
 diff --git a/src/ui/ui_settings_ad5x_refill.cpp b/src/ui/ui_settings_ad5x_refill.cpp
 new file mode 100644
-index 00000000..4710785d
+index 0000000000..4710785d91
 --- /dev/null
 +++ b/src/ui/ui_settings_ad5x_refill.cpp
 @@ -0,0 +1,706 @@
@@ -1127,10 +1127,10 @@ index 00000000..4710785d
 +
 +} // namespace helix::settings
 diff --git a/tests/unit/test_discovery_steps.cpp b/tests/unit/test_discovery_steps.cpp
-index 7c98d03e..2c39a616 100644
+index e4ac21f638..4dec3dd9f5 100644
 --- a/tests/unit/test_discovery_steps.cpp
 +++ b/tests/unit/test_discovery_steps.cpp
-@@ -152,6 +152,7 @@ TEST_CASE("the tail discovery steps run in this order", "[discovery_steps]") {
+@@ -155,6 +155,7 @@ TEST_CASE("the tail discovery steps run in this order", "[discovery_steps]") {
          "filament_temperatures",
          "remote_screen_webcam",
          "manual_probe_autoopen",
@@ -1140,7 +1140,7 @@ index 7c98d03e..2c39a616 100644
  }
 diff --git a/tests/unit/test_settings_ad5x_refill.cpp b/tests/unit/test_settings_ad5x_refill.cpp
 new file mode 100644
-index 00000000..6d65baa4
+index 0000000000..6d65baa414
 --- /dev/null
 +++ b/tests/unit/test_settings_ad5x_refill.cpp
 @@ -0,0 +1,102 @@
@@ -1248,7 +1248,7 @@ index 00000000..6d65baa4
 +}
 diff --git a/ui_xml/ad5x_refill_notice_modal.xml b/ui_xml/ad5x_refill_notice_modal.xml
 new file mode 100644
-index 00000000..189888ef
+index 0000000000..189888efdf
 --- /dev/null
 +++ b/ui_xml/ad5x_refill_notice_modal.xml
 @@ -0,0 +1,24 @@
@@ -1278,7 +1278,7 @@ index 00000000..189888ef
 +</component>
 diff --git a/ui_xml/components/ad5x_refill_slot_row.xml b/ui_xml/components/ad5x_refill_slot_row.xml
 new file mode 100644
-index 00000000..a6944a63
+index 0000000000..a6944a63d9
 --- /dev/null
 +++ b/ui_xml/components/ad5x_refill_slot_row.xml
 @@ -0,0 +1,24 @@
@@ -1308,7 +1308,7 @@ index 00000000..a6944a63
 +</component>
 diff --git a/ui_xml/settings_ad5x_refill_overlay.xml b/ui_xml/settings_ad5x_refill_overlay.xml
 new file mode 100644
-index 00000000..cfa10244
+index 0000000000..cfa102443e
 --- /dev/null
 +++ b/ui_xml/settings_ad5x_refill_overlay.xml
 @@ -0,0 +1,67 @@
@@ -1380,7 +1380,7 @@ index 00000000..cfa10244
 +  </view>
 +</component>
 diff --git a/ui_xml/settings_panel.xml b/ui_xml/settings_panel.xml
-index 6286f575..80240b1a 100644
+index 6286f575e4..80240b1aac 100644
 --- a/ui_xml/settings_panel.xml
 +++ b/ui_xml/settings_panel.xml
 @@ -63,6 +63,12 @@

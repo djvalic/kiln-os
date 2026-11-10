@@ -13,12 +13,12 @@ fails with the backend still not running reached no radio: neither
 WiFiManager nor the Network Settings overlay saves anything for it.
 ---
  include/wifi_manager.h                 | 15 +++++++++++++++
- src/api/wifi_manager.cpp               | 13 ++++++++++---
+ src/api/wifi_manager.cpp               | 16 +++++++++++++---
  src/ui/ui_overlay_network_settings.cpp |  8 +++++++-
- 3 files changed, 32 insertions(+), 4 deletions(-)
+ 3 files changed, 35 insertions(+), 4 deletions(-)
 
 diff --git a/include/wifi_manager.h b/include/wifi_manager.h
-index 646e662740..8b7de09ea0 100644
+index 881bb825a0..c7869699c3 100644
 --- a/include/wifi_manager.h
 +++ b/include/wifi_manager.h
 @@ -11,6 +11,7 @@
@@ -52,10 +52,20 @@ index 646e662740..8b7de09ea0 100644
      // connection handlers and grace-timer state (helixscreen#1050).
      friend class WiFiManagerTestAccess;
 diff --git a/src/api/wifi_manager.cpp b/src/api/wifi_manager.cpp
-index d8c123704a..0d9e604485 100644
+index 84bcc0e799..65d710c1e0 100644
 --- a/src/api/wifi_manager.cpp
 +++ b/src/api/wifi_manager.cpp
-@@ -1267,14 +1267,21 @@ void WiFiManager::set_enabled_async(bool enabled, helix::LifetimeToken token,
+@@ -1226,6 +1226,9 @@ void WiFiManager::persist_radio_expectation(bool requested, bool success, bool a
+ void WiFiManager::set_enabled_async(bool enabled, helix::LifetimeToken token,
+                                     helix::SharedCallback<void(bool, bool)> on_complete) {
+     spdlog::debug("[WiFiManager] set_enabled_async({})", enabled);
++    // Kiln OS: this toggle's answer only; a backstop that fires before the
++    // radio answers must not read the previous toggle's (issue #45)
++    switch_on_unstarted_.store(false);
+ 
+     if (!backend_) {
+         // Still answer off the call stack, so callers see one async contract.
+@@ -1263,14 +1266,21 @@ void WiFiManager::set_enabled_async(bool enabled, helix::LifetimeToken token,
          [this, enabled, answer]() -> helix::Callback<void()> {
              WiFiError result = apply_radio_enabled(enabled);
              const bool success = result.success();
@@ -81,10 +91,10 @@ index d8c123704a..0d9e604485 100644
              };
          },
 diff --git a/src/ui/ui_overlay_network_settings.cpp b/src/ui/ui_overlay_network_settings.cpp
-index 38984121fd..39e6e0416f 100644
+index ebb83106bf..e76fbe08bf 100644
 --- a/src/ui/ui_overlay_network_settings.cpp
 +++ b/src/ui/ui_overlay_network_settings.cpp
-@@ -1097,7 +1097,13 @@ void NetworkSettingsOverlay::finish_wlan_toggle(bool requested, bool success, bo
+@@ -1090,7 +1090,13 @@ void NetworkSettingsOverlay::finish_wlan_toggle(bool requested, bool success, bo
      // switch. This save also flushes the expectation WiFiManager stages for the
      // same toggle: it queues that write ahead of this callback, so the pair
      // still costs one write.
