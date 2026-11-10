@@ -17,7 +17,7 @@ its PHY.
  1 file changed, 48 insertions(+)
 
 diff --git a/arch/mips/boot/dts/ingenic/ad5x.dts b/arch/mips/boot/dts/ingenic/ad5x.dts
-index 21baa3562..5e1be6730 100644
+index 3720da1ae..82e638c37 100644
 --- a/arch/mips/boot/dts/ingenic/ad5x.dts
 +++ b/arch/mips/boot/dts/ingenic/ad5x.dts
 @@ -43,6 +43,26 @@ rtos@fc00000 {

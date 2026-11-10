@@ -11,7 +11,7 @@ with the timings the stock firmware uses (31 MHz pixel clock, 60 Hz).
  1 file changed, 50 insertions(+)
 
 diff --git a/arch/mips/boot/dts/ingenic/ad5x.dts b/arch/mips/boot/dts/ingenic/ad5x.dts
-index b5d2f4389..0d037e78d 100644
+index 05b3b4d15..a8216a662 100644
 --- a/arch/mips/boot/dts/ingenic/ad5x.dts
 +++ b/arch/mips/boot/dts/ingenic/ad5x.dts
 @@ -27,6 +27,38 @@ memory@0 {

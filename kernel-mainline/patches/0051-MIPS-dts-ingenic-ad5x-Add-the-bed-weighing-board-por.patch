@@ -12,7 +12,7 @@ Enable the port.
  1 file changed, 14 insertions(+)
 
 diff --git a/arch/mips/boot/dts/ingenic/ad5x.dts b/arch/mips/boot/dts/ingenic/ad5x.dts
-index 2ed7aac6c..b5d2f4389 100644
+index 717b941b0..05b3b4d15 100644
 --- a/arch/mips/boot/dts/ingenic/ad5x.dts
 +++ b/arch/mips/boot/dts/ingenic/ad5x.dts
 @@ -14,6 +14,7 @@ aliases {

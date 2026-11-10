@@ -11,7 +11,7 @@ SoC's own PHY clock output (PC15) as a GPIO.
  1 file changed, 24 insertions(+)
 
 diff --git a/arch/mips/boot/dts/ingenic/ad5x.dts b/arch/mips/boot/dts/ingenic/ad5x.dts
-index 5e1be6730..2ed7aac6c 100644
+index 82e638c37..717b941b0 100644
 --- a/arch/mips/boot/dts/ingenic/ad5x.dts
 +++ b/arch/mips/boot/dts/ingenic/ad5x.dts
 @@ -69,6 +69,25 @@ &exclk {

@@ -73,8 +73,13 @@ through Klipper, Happy Hare and the IFS, every layer, no kernel warnings.
   50 transfers on each of 4 channels at once, no failures. The UART nodes
   list their DMA channels (`8250_ingenic` does not use DMA yet).
 - **eMMC** (`tools/emmc-test.c`, every eMMC block device set read-only
-  first): HS200, 8 bits, 1.8 V signalling at 25 MHz, the settings the stock
-  kernel uses. The GPT and all 7 partitions are found; a full read of the
+  first): HS200, 8 bits, 1.8 V signalling, now at 150 MHz (stock: 25,
+  Kiln's 6.6: 50), the fastest the MSC clock reaches within HS200's 200
+  MHz (the CGU divides by multiples of 4; MPLL / 12), with the standard
+  tuning. Reads of the 100 MiB partition below: 23.6 MB/s at 25 MHz, 46.3
+  at 50, 60.6 at 96, 68.9 at 150, every time with the stock copy's CRC-32;
+  under Kiln, five more passes matched and a 256 MiB file written to
+  `/data` read back intact. The GPT and all 7 partitions are found; a full read of the
   stock root partition (100 MiB, 23.6 MB/s) has the same CRC-32 as a copy
   taken on stock, it mounts as squashfs, and the device counts no writes.
   The controller is a DesignWare MSHC 1.40a, so it is a variant of
@@ -205,8 +210,6 @@ Open points:
   bus. The UART counts no framing, parity or overrun errors, and does not
   receive our own bytes back.
 
-- **eMMC above 25 MHz.** HS200 at its full rate needs the sample clock
-  tuning; the stock kernel runs at 25 MHz too, so it stays there for now.
 - **Wi-Fi under load.** The USB disconnects (-71) seen in some early
   boots with the camera plugged in have not come back since the L2 fix,
   and stale reads turning into wrong register writes would explain them;

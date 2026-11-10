@@ -11,7 +11,7 @@ resistance and pressure limit of the stock firmware.
  1 file changed, 27 insertions(+)
 
 diff --git a/arch/mips/boot/dts/ingenic/ad5x.dts b/arch/mips/boot/dts/ingenic/ad5x.dts
-index 0d037e78d..99d671f04 100644
+index a8216a662..ac92d9cf3 100644
 --- a/arch/mips/boot/dts/ingenic/ad5x.dts
 +++ b/arch/mips/boot/dts/ingenic/ad5x.dts
 @@ -3,6 +3,7 @@

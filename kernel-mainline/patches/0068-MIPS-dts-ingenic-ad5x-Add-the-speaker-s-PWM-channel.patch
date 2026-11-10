@@ -9,7 +9,7 @@ The speaker is a piezo on PC12, PWM channel 13.
  1 file changed, 13 insertions(+)
 
 diff --git a/arch/mips/boot/dts/ingenic/ad5x.dts b/arch/mips/boot/dts/ingenic/ad5x.dts
-index 99d671f04..c5a405cf1 100644
+index ac92d9cf3..8be3650eb 100644
 --- a/arch/mips/boot/dts/ingenic/ad5x.dts
 +++ b/arch/mips/boot/dts/ingenic/ad5x.dts
 @@ -205,6 +205,11 @@ pins_mmc0: mmc0 {
