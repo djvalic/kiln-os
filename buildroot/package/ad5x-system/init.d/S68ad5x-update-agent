@@ -8,7 +8,7 @@
 #                            recovery OS), reboot; the recovery installs it
 #   klipper-*.tar.gz,        daily package: unpacked into /data/ad5x/apps/
 #   moonraker-*.tar.gz       NAME (lib/apps.sh), service restarted
-# Result for Moonraker in "status", log in /data/ad5x/kiln-update/agent.log.
+# Result for Moonraker in "status", log in /data/ad5x/kiln-log/agent.log.
 # Also: "restart-moonraker" (written by Klipper's ad5x_plugins when a
 # plugin switch changes what Moonraker loads): Moonraker is restarted, so it
 # reads the plugins' parts again (not while printing).
@@ -35,22 +35,42 @@
 # $STAGE and used only when it is a plain file there (regular, not a link,
 # one name), so a link or a FIFO klipper puts in $D can't make root read
 # another file or wait forever. Only checked names reach the log.
+# The answers go the other way, into klipper's folder: the status is
+# written in $STAGE and renamed over $D/status (a rename replaces a link or
+# a FIFO klipper put there instead of writing through it), and the log is
+# in a folder of root's, $LOGD, that klipper can only read.
 # "S68ad5x-update-agent once": one round of the loop (tests); AD5X_LIB
-# overrides /usr/lib/ad5x (tools/test_kernel_fallback.sh).
+# overrides /usr/lib/ad5x (tools/test_kernel_fallback.sh), AD5X_DATA /data
+# (tools/test_update_agent_links.sh).
 
 # Files this creates are readable by klipper and www-data, whoever started
 # it (a root SSH session may run with umask 077; issue #31)
 umask 022
 
-D=/data/ad5x/kiln-update
+D=${AD5X_DATA:-/data}/ad5x/kiln-update
 PID=/run/ad5x-update-agent.pid
-LOG=$D/agent.log
+# Root's (0755): klipper reads the log, can't replace it
+LOGD=${AD5X_DATA:-/data}/ad5x/kiln-log
+LOG=$LOGD/agent.log
 # Root-only (0700), on the same file system as $D (a move is a rename)
-STAGE=/data/ad5x/kiln-stage
+STAGE=${AD5X_DATA:-/data}/ad5x/kiln-stage
 . ${AD5X_LIB:-/usr/lib/ad5x}/apps.sh
 . ${AD5X_LIB:-/usr/lib/ad5x}/slot.sh
 
 log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >> $LOG; }
+
+# say TEXT: the status Moonraker waits for, renamed into place from $STAGE
+say() {
+	local t
+	mkdir -p $STAGE && chmod 700 $STAGE && t=$(mktemp $STAGE/s.XXXXXX) || return 1
+	if [ -d $D/status ] && [ ! -L $D/status ]; then
+		rm -f "$t"; log "no status written: $D/status is a folder"; return 1
+	fi
+	# -T: never into a folder klipper links there (BusyBox refuses, GNU
+	# replaces the link)
+	printf '%s\n' "$*" > "$t" && chmod 644 "$t" && mv -T -f "$t" $D/status && return 0
+	rm -f "$t"; log "no status written: $D/status is not a file"; return 1
+}
 
 # S99ad5x-booted has pointed the boot flag back at this slot
 started_up() { [ -z "$SLOT" ] || [ "$(read_flag)" = "$(flag_for $SLOT)" ]; }
@@ -76,7 +96,7 @@ busy() {
 	case "$ks" in
 	'')
 		log "$1 refused: no answer from Moonraker"
-		echo "refused: no answer from Moonraker" > $D/status
+		say "refused: no answer from Moonraker"
 		return 0 ;;
 	ready) ;;
 	*) return 1 ;;	# Klipper not ready: no print can run
@@ -86,10 +106,10 @@ busy() {
 	standby|complete|cancelled|error) return 1 ;;
 	printing|paused)
 		log "$1 refused: printing"
-		echo "refused: a print is running" > $D/status ;;
+		say "refused: a print is running" ;;
 	*)
 		log "$1 refused: print state unknown (${st:-no answer})"
-		echo "refused: the print state is unknown, try again" > $D/status ;;
+		say "refused: the print state is unknown, try again" ;;
 	esac
 	return 0
 }
@@ -145,7 +165,7 @@ install_app() {
 	have=$(sha256sum "$pkg" | cut -d' ' -f1)
 	if [ "$have" != "$sum" ]; then
 		unstage "$pkg"; log "$f: sha256 mismatch"
-		echo "failed: damaged download" > $D/status; return
+		say "failed: damaged download"; return
 	fi
 	# Unpacked by root in the staging folder: out of klipper's reach until
 	# it is checked and handed over. The image's BusyBox tar has no gzip:
@@ -169,7 +189,7 @@ install_app() {
 	   [ -L "$new/$sub" ] || ! plain "$new/$sub/.version"; then
 		rm -rf "$new"; rmdir "$t"
 		log "$f: not a $name package${err:+ (unpack: $err)}"
-		echo "failed: not a $name package" > $D/status; return
+		say "failed: not a $name package"; return
 	fi
 	ver=$(head -c 64 "$new/$sub/.version" | head -n 1)
 	case $ver in ''|*[!A-Za-z0-9._+-]*) ver='?' ;; esac
@@ -182,12 +202,12 @@ install_app() {
 	log "$name $ver installed; runs from $(app_root $name)"
 	if [ "$name" = moonraker ]; then
 		# Moonraker is the one asking: answer first, then restart it
-		echo "restarting moonraker" > $D/status
+		say "restarting moonraker"
 		sleep 2
 		/etc/init.d/S62moonraker restart >> $LOG 2>&1
 	else
 		/etc/init.d/S61klipper restart >> $LOG 2>&1
-		echo "restarted klipper" > $D/status
+		say "restarted klipper"
 	fi
 }
 
@@ -207,17 +227,17 @@ agent_once() {
 			:
 		elif ! started_up; then
 			log "kernel retry refused: start-up not finished"
-			echo "refused: start-up has not finished yet, try again in a minute" > $D/status
+			say "refused: start-up has not finished yet, try again in a minute"
 		elif out=$(ad5x-kernel retry 2>&1); then
 			log "kernel retry: $out; rebooting"
-			echo "rebooting" > $D/status
+			say "rebooting"
 			sync
 			sleep 2
 			reboot
 			exit 0
 		else
 			log "kernel retry failed: $out"
-			echo "failed: $out" > $D/status
+			say "failed: $out"
 		fi
 	fi
 	if [ -f $D/boot-recovery ]; then
@@ -226,17 +246,17 @@ agent_once() {
 			:
 		elif ! started_up; then
 			log "boot into recovery refused: start-up not finished"
-			echo "refused: start-up has not finished yet, try again in a minute" > $D/status
+			say "refused: start-up has not finished yet, try again in a minute"
 		elif out=$(ad5x-boot-recovery --no-reboot 2>&1); then
 			log "boot into recovery: $out; rebooting"
-			echo "rebooting" > $D/status
+			say "rebooting"
 			sync
 			sleep 2
 			reboot
 			exit 0
 		else
 			log "boot into recovery refused: $out"
-			echo "refused: ${out#ad5x-boot-recovery: }" > $D/status
+			say "refused: ${out#ad5x-boot-recovery: }"
 		fi
 	fi
 	if [ -e $D/install ] || [ -L $D/install ]; then
@@ -250,7 +270,7 @@ install_request() {
 	local req r f sum pkg
 	if ! req=$(stage install); then
 		log "ignored an install request that is not a plain file"
-		echo "failed: bad request" > $D/status; return
+		say "failed: bad request"; return
 	fi
 	r=$(head -c 512 "$req")
 	unstage "$req"
@@ -262,14 +282,14 @@ install_request() {
 	esac
 	if ! good_name "$f" || ! good_sum "$sum"; then
 		log "ignored an install request without an update's file name and sha256"
-		echo "failed: bad request" > $D/status; return
+		say "failed: bad request"; return
 	fi
 	case "$f" in
 	klipper-*.tar.gz|moonraker-*.tar.gz)
 		busy "$f" && return
 		if ! pkg=$(stage "$f"); then
 			log "$f: missing or not a plain file"
-			echo "failed: the download is missing or not a plain file" > $D/status; return
+			say "failed: the download is missing or not a plain file"; return
 		fi
 		install_app "$f" "$sum" "$pkg"
 		return ;;
@@ -278,16 +298,16 @@ install_request() {
 		:
 	elif ! started_up; then
 		log "$f refused: start-up not finished"
-		echo "refused: start-up has not finished yet, try again in a minute" > $D/status
+		say "refused: start-up has not finished yet, try again in a minute"
 	elif ! pkg=$(stage "$f"); then
 		log "$f: missing or not a plain file"
-		echo "failed: the download is missing or not a plain file" > $D/status
+		say "failed: the download is missing or not a plain file"
 	else
 		log "staging $f"
 		if ad5x-update "$pkg" "$sum" >> $LOG 2>&1; then
 			unstage "$pkg"
 			log "staged, rebooting"
-			echo "rebooting" > $D/status
+			say "rebooting"
 			sync
 			sleep 2
 			reboot
@@ -295,7 +315,7 @@ install_request() {
 		fi
 		unstage "$pkg"
 		log "ad5x-update failed"
-		echo "failed: ad5x-update, see $LOG" > $D/status
+		say "failed: ad5x-update, see $LOG"
 	fi
 }
 
@@ -308,9 +328,10 @@ agent() {
 
 case "$1" in
 start)
-	mkdir -p $D $APPS
+	mkdir -p $D $APPS $LOGD
 	chown klipper:klipper $D
-	chmod 755 $D $APPS
+	chown root:root $LOGD
+	chmod 755 $D $APPS $LOGD
 	# The read token for a private update server (root's copy is fine;
 	# Moonraker reads it as klipper)
 	[ -f /data/ad5x/kiln-os.token ] &&
@@ -321,7 +342,7 @@ start)
 	# swapped in stays)
 	mkdir -p $STAGE && chown root:root $STAGE && chmod 700 $STAGE
 	rm -rf $STAGE/r.*/klipper $STAGE/r.*/moonraker
-	rm -f $STAGE/r.*/* 2>/dev/null; rmdir $STAGE/r.* 2>/dev/null
+	rm -f $STAGE/r.*/* 2>/dev/null; rmdir $STAGE/r.* 2>/dev/null; rm -f $STAGE/s.*
 	start-stop-daemon -S -b -m -p $PID -x /bin/sh -- $0 run
 	;;
 run)
