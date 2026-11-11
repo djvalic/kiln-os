@@ -73,6 +73,7 @@ import logging
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -138,6 +139,30 @@ MOONRAKER_HEADER = """\
 # Moonraker reads it after moonraker.conf (S62moonraker).
 """
 
+# Most a plugin file or plugins.cfg can hold (read_regular)
+READ_LIMIT = 1 << 20
+
+def read_regular(path, limit=READ_LIMIT):
+    """The text of a regular file, at most limit bytes. Opened without
+    blocking and checked on the open file: plugins.cfg and the plugins'
+    files are klipper's, and root reads them at boot (S61klipper,
+    S62moonraker), so a FIFO there must not stop the boot. OSError when
+    missing, unreadable or not a regular file; ValueError when not UTF-8."""
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError("not a regular file")
+        chunks, size = [], 0
+        while size < limit:
+            chunk = os.read(fd, min(1 << 16, limit - size))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+    finally:
+        os.close(fd)
+    return b"".join(chunks).decode("utf-8")
+
 def parse_version(text):
     """'1.2' -> (1, 2); None if not major.minor numbers."""
     m = re.match(r"^\s*(\d+)\.(\d+)\s*$", str(text or ""))
@@ -159,8 +184,7 @@ def read_metadata(plugin_dir, name):
             'root_actions': [], 'owns_ifs': False, 'error': None}
     path = os.path.join(plugin_dir, 'plugin.json')
     try:
-        with open(path) as f:
-            data = json.load(f)
+        data = json.loads(read_regular(path))
         if not isinstance(data, dict):
             raise ValueError("not a JSON object")
     except FileNotFoundError:
@@ -308,11 +332,15 @@ def scan(shipped_dir=SHIPPED_DIR, user_dir=USER_DIR):
 
 def read_enabled(plugins_file):
     """(enabled names in file order, lines); a missing file is empty
-    (lines None)."""
+    (lines None). Anything but a readable regular file counts as missing,
+    with a warning."""
     try:
-        with open(plugins_file) as f:
-            lines = f.read().splitlines()
-    except OSError:
+        lines = read_regular(plugins_file).splitlines()
+    except FileNotFoundError:
+        return [], None
+    except (OSError, ValueError) as e:
+        logging.warning("ad5x_plugins: %s unusable, no plugins enabled: %s",
+                        plugins_file, e)
         return [], None
     names = []
     for line in lines:
@@ -352,9 +380,9 @@ def moonraker_text(names, found):
             continue
         path = os.path.join(info['dir'], 'moonraker.conf')
         try:
-            with open(path) as f:
-                updates |= "[update_manager" in f.read()
-        except OSError:
+            updates |= "[update_manager" in read_regular(path)
+        except (OSError, ValueError) as e:
+            logging.warning("ad5x_plugins: %s skipped: %s", path, e)
             continue
         lines.append("[include %s]" % (path,))
     if updates:
@@ -419,13 +447,20 @@ def write_if_changed(path, text):
     """Write text atomically unless the file already holds it. True if
     written."""
     try:
-        with open(path) as f:
-            if f.read() == text:
-                return False
-    except OSError:
+        if read_regular(path) == text:
+            return False
+    except (OSError, ValueError):
         pass
+    # A new file, never one that is there (a link or a FIFO in klipper's
+    # folder would be written through, or wait, as root at boot)
     tmp = path + ".tmp"
-    with open(tmp, "w") as f:
+    try:
+        os.unlink(tmp)
+    except FileNotFoundError:
+        pass
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                 0o666)
+    with os.fdopen(fd, "w") as f:
         f.write(text)
     os.replace(tmp, path)
     return True

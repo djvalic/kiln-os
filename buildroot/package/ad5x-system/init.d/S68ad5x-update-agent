@@ -30,6 +30,11 @@
 # printing, paused or unknown. A Klipper that is not ready (startup,
 # shutdown, error, disconnected) can't be printing: allowed, so a printer
 # with a broken Klipper can still be updated.
+# The request and the file it names are klipper's: before root reads,
+# hashes or unpacks them, each is moved into a new root-only folder in
+# $STAGE and used only when it is a plain file there (regular, not a link,
+# one name), so a link or a FIFO klipper puts in $D can't make root read
+# another file or wait forever. Only checked names reach the log.
 # "S68ad5x-update-agent once": one round of the loop (tests); AD5X_LIB
 # overrides /usr/lib/ad5x (tools/test_kernel_fallback.sh).
 
@@ -40,10 +45,12 @@ umask 022
 D=/data/ad5x/kiln-update
 PID=/run/ad5x-update-agent.pid
 LOG=$D/agent.log
+# Root-only (0700), on the same file system as $D (a move is a rename)
+STAGE=/data/ad5x/kiln-stage
 . ${AD5X_LIB:-/usr/lib/ad5x}/apps.sh
 . ${AD5X_LIB:-/usr/lib/ad5x}/slot.sh
 
-log() { echo "$(date '+%F %T') $*" >> $LOG; }
+log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >> $LOG; }
 
 # S99ad5x-booted has pointed the boot flag back at this slot
 started_up() { [ -z "$SLOT" ] || [ "$(read_flag)" = "$(flag_for $SLOT)" ]; }
@@ -87,30 +94,92 @@ busy() {
 	return 0
 }
 
-# install_app FILE SHA256: a daily Klipper/Moonraker package
+# plain FILE: a regular file, not a link, with one name (this kernel lets
+# klipper hard-link root's files: fs.protected_hardlinks is 0)
+plain() {
+	[ -f "$1" ] && [ ! -L "$1" ] && [ "$(ls -ldn "$1" | awk '{print $2}')" = 1 ]
+}
+
+# stage NAME: move $D/NAME into a new root-only folder in $STAGE (a rename:
+# a link or FIFO moves as it is, nothing is opened) and print its new path
+# when it is a plain file there; anything else is removed (a folder is
+# left in $STAGE: root never removes klipper's folders recursively)
+stage() {
+	local t
+	mkdir -p $STAGE && chmod 700 $STAGE && t=$(mktemp -d $STAGE/r.XXXXXX) || return 1
+	if mv "$D/$1" "$t/" 2>/dev/null && plain "$t/$1"; then
+		echo "$t/$1"; return 0
+	fi
+	[ -d "$t/$1" ] && [ ! -L "$t/$1" ] || { rm -f "$t/$1"; rmdir "$t"; }
+	return 1
+}
+
+# unstage PATH: remove a staged file and its folder
+unstage() { rm -f "$1"; rmdir "${1%/*}" 2>/dev/null; return 0; }
+
+# good_name NAME: one plain file name (letters, digits, . _ + -), not
+# starting with a dot or a dash; good_sum SUM: sha256 hex digits
+good_name() {
+	case $1 in ''|.*|-*|*[!A-Za-z0-9._+-]*) return 1 ;; esac
+	[ ${#1} -le 128 ]
+}
+good_sum() {
+	case $1 in ''|*[!0-9a-f]*) return 1 ;; esac
+	[ ${#1} -le 64 ]
+}
+
+# own_links DIR: every regular file in DIR with more than one name has all
+# of them in DIR (no hard link to a file outside it)
+own_links() {
+	find "$1" -type f -exec ls -ldin {} + |
+		awk '$3 > 1 { n[$1]++; l[$1] = $3 } END { for (i in n) if (n[i] != l[i]) exit 1 }'
+}
+
+# install_app FILE SHA256 STAGED: a daily Klipper/Moonraker package, moved
+# into a staging folder (stage) as STAGED
 install_app() {
-	local f=$1 sum=$2 name new have
+	local f=$1 sum=$2 pkg=$3 name sub t new have urc err ver
 	name=${f%%-*}
-	new=$APPS/.new-$name
-	have=$(sha256sum "$D/$f" | cut -d' ' -f1)
+	sub=$(app_sub $name)
+	t=${pkg%/*}
+	have=$(sha256sum "$pkg" | cut -d' ' -f1)
 	if [ "$have" != "$sum" ]; then
-		rm -f "$D/$f"; log "$f: sha256 mismatch"
+		unstage "$pkg"; log "$f: sha256 mismatch"
 		echo "failed: damaged download" > $D/status; return
 	fi
-	rm -rf "$new"; mkdir -p "$new"
-	if ! tar -xzf "$D/$f" -C "$new" ||
-	   ! grep -qx "name=$name" "$new/kiln-app" 2>/dev/null ||
-	   [ ! -f "$new/$(app_sub $name)/.version" ]; then
-		rm -rf "$new" "$D/$f"; log "$f: not a $name package"
+	# Unpacked by root in the staging folder: out of klipper's reach until
+	# it is checked and handed over. The image's BusyBox tar has no gzip:
+	# zcat feeds it. BusyBox tar drops leading "/" and everything up to the
+	# last "../" from names and makes links that point outside (absolute or
+	# with "..") only at the end; hard links out of the package and device
+	# nodes or FIFOs are refused here. Its error output goes to the log,
+	# cut short, anything but printable ASCII replaced (a byte range: the
+	# image's BusyBox tr has no character classes).
+	new=$t/$name
+	mkdir "$new"
+	zcat "$pkg" 2> "$t/zcat.err" | tar -xf - -C "$new" 2> "$t/tar.err"
+	urc=$?
+	[ -s "$t/zcat.err" ] && urc=1
+	err=$(cat "$t/zcat.err" "$t/tar.err" | head -c 2000 |
+		tr -c ' -~' ' ' | tr -s ' ' | head -c 300 | sed 's/^ //; s/ $//')
+	rm -f "$pkg" "$t/zcat.err" "$t/tar.err"
+	if [ $urc != 0 ] || [ -n "$(find "$new" ! -type d ! -type f ! -type l | head -n 1)" ] ||
+	   ! own_links "$new" || ! plain "$new/kiln-app" ||
+	   ! grep -qx "name=$name" "$new/kiln-app" ||
+	   [ -L "$new/$sub" ] || ! plain "$new/$sub/.version"; then
+		rm -rf "$new"; rmdir "$t"
+		log "$f: not a $name package${err:+ (unpack: $err)}"
 		echo "failed: not a $name package" > $D/status; return
 	fi
-	rm -f "$D/$f"
+	ver=$(head -c 64 "$new/$sub/.version" | head -n 1)
+	case $ver in ''|*[!A-Za-z0-9._+-]*) ver='?' ;; esac
 	chown -R klipper:klipper "$new"
 	rm -rf "$APPS/.old-$name"
 	[ -d "$APPS/$name" ] && mv "$APPS/$name" "$APPS/.old-$name"
 	mv "$new" "$APPS/$name" && rm -rf "$APPS/.old-$name"
+	rmdir "$t"
 	sync
-	log "$name $(cat "$APPS/$name/$(app_sub $name)/.version") installed; runs from $(app_root $name)"
+	log "$name $ver installed; runs from $(app_root $name)"
 	if [ "$name" = moonraker ]; then
 		# Moonraker is the one asking: answer first, then restart it
 		echo "restarting moonraker" > $D/status
@@ -170,37 +239,63 @@ agent_once() {
 			echo "refused: ${out#ad5x-boot-recovery: }" > $D/status
 		fi
 	fi
-	if [ -f $D/install ]; then
-		f=$(sed -n 1p $D/install)
-		sum=$(sed -n 2p $D/install)
-		rm -f $D/install
-		case "$f" in
-		kiln-os-*-update.zip) ;;
-		klipper-*.tar.gz|moonraker-*.tar.gz)
-			busy "$f" || install_app "$f" "$sum"
-			f= ;;
-		*) log "ignored request for '$f'"; echo "failed: bad request" > $D/status; f= ;;
-		esac
-		if [ -n "$f" ] && busy "$f"; then
-			:
-		elif [ -n "$f" ] && ! started_up; then
-			log "$f refused: start-up not finished"
-			echo "refused: start-up has not finished yet, try again in a minute" > $D/status
-		elif [ -n "$f" ]; then
-			log "staging $f"
-			if ad5x-update "$D/$f" "$sum" >> $LOG 2>&1; then
-				rm -f "$D/$f"
-				log "staged, rebooting"
-				echo "rebooting" > $D/status
-				sync
-				sleep 2
-				reboot
-				exit 0
-			fi
-			rm -f "$D/$f"
-			log "ad5x-update failed"
-			echo "failed: ad5x-update, see $LOG" > $D/status
+	if [ -e $D/install ] || [ -L $D/install ]; then
+		install_request
+	fi
+}
+
+# install_request: Moonraker's "install" (file name, sha256), read from the
+# staged copy; the download is staged when the install goes ahead
+install_request() {
+	local req r f sum pkg
+	if ! req=$(stage install); then
+		log "ignored an install request that is not a plain file"
+		echo "failed: bad request" > $D/status; return
+	fi
+	r=$(head -c 512 "$req")
+	unstage "$req"
+	f=$(printf '%s\n' "$r" | sed -n 1p)
+	sum=$(printf '%s\n' "$r" | sed -n 2p)
+	case "$f" in
+	kiln-os-*-update.zip|klipper-*.tar.gz|moonraker-*.tar.gz) ;;
+	*) f= ;;
+	esac
+	if ! good_name "$f" || ! good_sum "$sum"; then
+		log "ignored an install request without an update's file name and sha256"
+		echo "failed: bad request" > $D/status; return
+	fi
+	case "$f" in
+	klipper-*.tar.gz|moonraker-*.tar.gz)
+		busy "$f" && return
+		if ! pkg=$(stage "$f"); then
+			log "$f: missing or not a plain file"
+			echo "failed: the download is missing or not a plain file" > $D/status; return
 		fi
+		install_app "$f" "$sum" "$pkg"
+		return ;;
+	esac
+	if busy "$f"; then
+		:
+	elif ! started_up; then
+		log "$f refused: start-up not finished"
+		echo "refused: start-up has not finished yet, try again in a minute" > $D/status
+	elif ! pkg=$(stage "$f"); then
+		log "$f: missing or not a plain file"
+		echo "failed: the download is missing or not a plain file" > $D/status
+	else
+		log "staging $f"
+		if ad5x-update "$pkg" "$sum" >> $LOG 2>&1; then
+			unstage "$pkg"
+			log "staged, rebooting"
+			echo "rebooting" > $D/status
+			sync
+			sleep 2
+			reboot
+			exit 0
+		fi
+		unstage "$pkg"
+		log "ad5x-update failed"
+		echo "failed: ad5x-update, see $LOG" > $D/status
 	fi
 }
 
@@ -222,6 +317,11 @@ start)
 		chown root:klipper /data/ad5x/kiln-os.token &&
 		chmod 640 /data/ad5x/kiln-os.token
 	rm -f $D/install $D/kernel-retry $D/boot-recovery $D/status
+	# Staged files a reboot left behind (root's own; a folder klipper
+	# swapped in stays)
+	mkdir -p $STAGE && chown root:root $STAGE && chmod 700 $STAGE
+	rm -rf $STAGE/r.*/klipper $STAGE/r.*/moonraker
+	rm -f $STAGE/r.*/* 2>/dev/null; rmdir $STAGE/r.* 2>/dev/null
 	start-stop-daemon -S -b -m -p $PID -x /bin/sh -- $0 run
 	;;
 run)

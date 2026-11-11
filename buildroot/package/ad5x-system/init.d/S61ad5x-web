@@ -14,8 +14,12 @@ IMG=/usr/share/fluidd
 WEB=/data/ad5x/web
 F=$WEB/fluidd
 
-# Version from release_info.json ("v1.37.6" -> 1.37.6)
+# Version from release_info.json ("v1.37.6" -> 1.37.6). Read only when it
+# is a regular file, not a link: the copy in $WEB is klipper's, and a FIFO
+# there would stop the boot at this read. Anything else: no version (the
+# copy counts as broken and is made again from the image).
 ver() {
+	[ -f "$1/release_info.json" ] && [ ! -L "$1/release_info.json" ] || return 0
 	sed -n 's/.*"version" *: *"v\{0,1\}\([^"]*\)".*/\1/p' \
 		"$1/release_info.json" 2>/dev/null
 }
