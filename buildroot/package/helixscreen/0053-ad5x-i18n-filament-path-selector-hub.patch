@@ -18,7 +18,7 @@ Selector and Hub. Other languages show them in English as before.
  3 files changed, 8 insertions(+), 3 deletions(-)
 
 diff --git a/src/ui/ui_filament_path_topology.cpp b/src/ui/ui_filament_path_topology.cpp
-index 801fde7..5785576 100644
+index 801fde7acb..5785576a1d 100644
 --- a/src/ui/ui_filament_path_topology.cpp
 +++ b/src/ui/ui_filament_path_topology.cpp
 @@ -333,7 +333,7 @@ void render_mixed(lv_obj_t* obj, lv_layer_t* layer, FilamentPathData* data) {
@@ -50,10 +50,10 @@ index 801fde7..5785576 100644
          // The unit's own box is the management target; the hub on the head is
          // not a separate control.
 diff --git a/translations/en.yml b/translations/en.yml
-index a4c24fe..3cd2fee 100644
+index 3f627b1069..3493bbdb08 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -5055,6 +5055,7 @@ translations:
+@@ -5087,6 +5087,7 @@ translations:
    'Heats the bed to 60 °C and probes the whole bed to measure its shape. Keep the bed clear. The bed stays warm for the Z offset test that follows.': 'Heats the bed to 60 °C and probes the whole bed to measure its shape. Keep the bed clear. The bed stays warm for the Z offset test that follows.'
    'Homing and heating...': 'Homing and heating...'
    'Homing the IFS': 'Homing the IFS'
@@ -61,7 +61,7 @@ index a4c24fe..3cd2fee 100644
    'IFS driver error': 'IFS driver error'
    'IFS tuning': 'IFS tuning'
    'Input shaping against ringing': 'Input shaping against ringing'
-@@ -5138,6 +5139,7 @@ translations:
+@@ -5170,6 +5171,7 @@ translations:
    'Selecting a slot': 'Selecting a slot'
    'Selecting the slot': 'Selecting the slot'
    'Selecting {}': 'Selecting {}'
@@ -70,10 +70,10 @@ index a4c24fe..3cd2fee 100644
    'Self-check, PID, bed mesh, vibration, IFS, Z offset': 'Self-check, PID, bed mesh, vibration, IFS, Z offset'
    'Short': 'Short'
 diff --git a/translations/ru.yml b/translations/ru.yml
-index bd5179e..9c1995c 100644
+index 0d09ccbecf..d66ad156ff 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -5226,6 +5226,7 @@ translations:
+@@ -5258,6 +5258,7 @@ translations:
    'Heats the bed to 60 °C and probes the whole bed to measure its shape. Keep the bed clear. The bed stays warm for the Z offset test that follows.': 'Нагревает стол до 60 °C и проходит датчиком по всему столу, чтобы измерить его форму. Стол должен быть пустым. Стол остаётся тёплым для следующего теста смещения по Z.'
    'Homing and heating...': 'Парковка и нагрев...'
    'Homing the IFS': 'Парковка IFS'
@@ -81,7 +81,7 @@ index bd5179e..9c1995c 100644
    'IFS driver error': 'Ошибка драйвера IFS'
    'IFS tuning': 'Настройка IFS'
    'Input shaping against ringing': 'Компенсация вибраций против звона'
-@@ -5309,6 +5310,7 @@ translations:
+@@ -5341,6 +5342,7 @@ translations:
    'Selecting a slot': 'Выбор слота'
    'Selecting the slot': 'Выбор слота'
    'Selecting {}': 'Выбор: {}'

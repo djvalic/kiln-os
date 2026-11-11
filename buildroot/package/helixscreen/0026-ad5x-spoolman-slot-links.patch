@@ -5,7 +5,7 @@
  2 files changed, 71 insertions(+), 1 deletion(-)
 
 diff --git a/include/ams_backend_ad5x_ifs.h b/include/ams_backend_ad5x_ifs.h
-index 20e220119d..98209c950f 100644
+index 0819eacd93..7e8599e87e 100644
 --- a/include/ams_backend_ad5x_ifs.h
 +++ b/include/ams_backend_ad5x_ifs.h
 @@ -782,6 +782,14 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
@@ -24,10 +24,10 @@ index 20e220119d..98209c950f 100644
      /// place the reverse direction is projected onto the slot model the UI
      /// reads. Shared by both adapters' edges and set_tool_mapping(). Caller
 diff --git a/src/printer/ams_backend_ad5x_ifs.cpp b/src/printer/ams_backend_ad5x_ifs.cpp
-index ecb32a2ef6..6e41a9c633 100644
+index d1c8101cf8..796a65a996 100644
 --- a/src/printer/ams_backend_ad5x_ifs.cpp
 +++ b/src/printer/ams_backend_ad5x_ifs.cpp
-@@ -242,7 +242,10 @@ AmsBackendAd5xIfs::required_status_objects(const helix::PrinterDiscovery& hw) {
+@@ -267,7 +267,10 @@ AmsBackendAd5xIfs::required_status_objects(const helix::PrinterDiscovery& hw) {
      // Klipper's objects/list only carries objects that implement get_status(),
      // so listing them IS the capability check.
      const auto& available = hw.printer_objects();
@@ -39,7 +39,7 @@ index ecb32a2ef6..6e41a9c633 100644
          if (std::find(available.begin(), available.end(), name) != available.end()) {
              objects.emplace_back(name);
          }
-@@ -530,6 +533,58 @@ void AmsBackendAd5xIfs::request_resync() {
+@@ -555,6 +558,58 @@ void AmsBackendAd5xIfs::request_resync() {
  
  // --- Status parsing ---
  
@@ -98,7 +98,7 @@ index ecb32a2ef6..6e41a9c633 100644
  void AmsBackendAd5xIfs::handle_status(const json& status_obj) {
      const json* status = &status_obj;
  
-@@ -567,6 +622,13 @@ void AmsBackendAd5xIfs::handle_status(const json& status_obj) {
+@@ -592,6 +647,13 @@ void AmsBackendAd5xIfs::handle_status(const json& status_obj) {
          }
      }
  

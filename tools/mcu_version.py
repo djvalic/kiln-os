@@ -28,6 +28,7 @@ SYNC = 0x7e
 MSG_ID_IDENTIFY_RESPONSE = 0     # fixed ids in every Klipper firmware
 MSG_ID_IDENTIFY = 1
 CHUNK = 40
+RESEND = 0.02                    # seconds between identify requests
 
 
 def crc16_ccitt(buf):
@@ -126,7 +127,11 @@ def identify(fd, timeout):
         os.write(fd, block(seq, encode_int(MSG_ID_IDENTIFY)
                            + encode_int(len(data)) + encode_int(CHUNK)))
         got = False
-        for blk in link.blocks(min(end, time.monotonic() + 0.3)):
+        # Ask again soon: a half-duplex (RS-485) board sends only when it
+        # gets a block, and a configured one fills its transmit buffer with
+        # reports between two asks; at 0.3 s the reply never had room
+        # (the AD5X IFS with Happy Hare's sensors)
+        for blk in link.blocks(min(end, time.monotonic() + RESEND)):
             payload = blk[2:-3]
             if not payload:
                 # An ack or nak: the board tells us the sequence it expects

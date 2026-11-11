@@ -413,10 +413,10 @@ index 472918c5bf..59fbe40f8b 100644
  
  const char* to_string(StepId); // for logs/debug
 diff --git a/src/api/moonraker_discovery_sequence.cpp b/src/api/moonraker_discovery_sequence.cpp
-index ab4f192d84..9549589f09 100644
+index 3ad69f0def..7cca5bee5c 100644
 --- a/src/api/moonraker_discovery_sequence.cpp
 +++ b/src/api/moonraker_discovery_sequence.cpp
-@@ -1524,6 +1524,15 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
+@@ -1530,6 +1530,15 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
          }
      }
  

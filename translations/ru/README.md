@@ -7,7 +7,7 @@ screen, and the recovery screen is one more file next to it. You don't need to b
 
 | File | What it is |
 |---|---|
-| `helixscreen-ru.yml` | The Russian text of the touch screen, exactly as Kiln OS builds it today (HelixScreen v1.1.0-beta.17 with my patches). This is the file to edit. |
+| `helixscreen-ru.yml` | The Russian text of the touch screen, exactly as Kiln OS builds it today (HelixScreen v1.1.0-rc.1 with my patches). This is the file to edit. |
 | `helixscreen-en.yml` | The English text, with the same keys. Only for reference, please don't edit it. |
 | `missing-ru.md` | What is still open or English, sorted by screen: choices to check, texts that are probably too long, characters the screen can't draw, my own Kiln screens that need a native speaker's check, and the recovery screen. |
 | [`../../recovery-ui/i18n/ru.txt`](../../recovery-ui/i18n/ru.txt) | The recovery screen's Russian text. All lines have a first Russian version that I wrote; please check and correct it. Its English is in [`en.txt`](../../recovery-ui/i18n/en.txt) in the same folder. |
@@ -28,9 +28,9 @@ In `helixscreen-ru.yml` every line is `'English key': 'Russian text'`.
 - Where the stock Flashforge firmware on the AD5X has a Russian name for the same thing, please use it. That is what
   the first round in issue #23 did: "Смещение по Z", "Wi-Fi", "Компенсация вибраций".
 - For terms that come up again and again (стол, сопло, слот, катушка ...), use the word that HelixScreen's
-  [glossary](https://github.com/prestonbrown/helixscreen/blob/v1.1.0-beta.17/translations/GLOSSARY.md) lists for
+  [glossary](https://github.com/prestonbrown/helixscreen/blob/v1.1.0-rc.1/translations/GLOSSARY.md) lists for
   Russian, or the word the rest of the file already uses. HelixScreen's
-  [translator guide](https://github.com/prestonbrown/helixscreen/blob/v1.1.0-beta.17/docs/devel/TRANSLATION_CONTRIBUTOR_GUIDE.md)
+  [translator guide](https://github.com/prestonbrown/helixscreen/blob/v1.1.0-rc.1/docs/devel/TRANSLATION_CONTRIBUTOR_GUIDE.md)
   has more detail.
 - The screen is small. Keep text about as long as the English. `missing-ru.md` lists two texts that are already cut off.
 - The screen font has no `→` and no `№`; both show as an empty box. Please avoid them.
@@ -63,5 +63,5 @@ PyYAML, `pip install pyyaml`):
 python3 -c "import sys, yaml; d = yaml.safe_load(open(sys.argv[1], encoding='utf-8')); print('OK,', len(d['translations']), 'keys')" helixscreen-ru.yml
 ```
 
-It prints `OK, 4825 keys`. An error message names the line
+It prints `OK, 4901 keys`. An error message names the line
 to fix.

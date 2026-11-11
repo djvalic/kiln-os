@@ -36,16 +36,29 @@ every start (`S60ad5x-eboard`), before Klipper:
    older Klipper, no answer): `ad5x-flash-n32` (or stock `NationsCommand`)
    through the chip's ROM bootloader, then identify again. The ROM bootloader
    can't be overwritten, so a failed write is retried at the next start.
-2. **Eboard**: its bootloader accepts firmware only while it waits after
-   power-on ("Ready" on `ttyS5`). If it waits and the last eboard flash on
-   record (`/data/ad5x/mcu/eboard`) isn't this version: `ad5x-flash-iap` (or
-   stock `IAPCommand`), then `A` to start it. If its application already
-   runs with another version (the SoC restarted without a power-cycle, e.g.
-   right after the install), the screen asks to switch the printer off and
-   on; the next start flashes it. Before that screen, the start counts as
-   complete (`S99ad5x-booted`): the try-once boot flag otherwise still
-   points at the recovery OS, and a user who switches off at once lands
-   there instead (found in the 2026-10-19 round trip below).
+2. **Eboard**: its bootloader accepts firmware only while it waits, after
+   power-on or after a reset ("Ready" on `ttyS5`). If it waits and the last
+   eboard flash on record (`/data/ad5x/mcu/eboard`) isn't this version:
+   `ad5x-flash-iap` (or stock `IAPCommand`), then `A` to start it. If its
+   application already runs with another version (the SoC restarted without
+   a power-cycle), it gets Klipper's serial bootloader request (`~ \x1c
+   Request Serial Bootloader!! ~` at 230400; with patch 0002 Kiln OS's
+   Klipper firmware resets into the bootloader), then it is flashed the same
+   way, with no power-cycle (PR #39). Checked on the printer (2026-11-11):
+   after a `FIRMWARE_RESTART` the bootloader still waits after the request
+   (no 0x1234 bypass left in BKP_DR1 skips it). The record is dropped
+   before that write, so a write that is cut off is flashed again at the
+   next power-on. A warm restart can't finish it: the bootloader keeps
+   waiting for the next frame, says nothing and ignores `C`, so the start
+   asks for the power-cycle (below).
+   Only when the request doesn't bring the bootloader (Flashforge's
+   application, e.g. right after the install) or the write fails, the screen
+   asks to switch the printer off and on; the next start flashes it. Before
+   that screen, the start counts as complete (`S99ad5x-booted`): the
+   try-once boot flag otherwise still points at the recovery OS, and a user
+   who switches off at once lands there instead (found in the 2026-10-19
+   round trip below). By hand, with Klipper stopped: `ad5x-mcu flash-eboard`
+   (no request when the bootloader already waits).
 3. When both report the wanted version, `/data/ad5x/klipper.enable` is
    created once and Klipper starts.
 
@@ -251,9 +264,10 @@ Power-cycling usually fixes it; if not, remove the flags over SSH (dropbear star
 
 **B. Stock tools by hand** (AD5M mod `update_stock` pattern). Stop `firmwareExe` and stock
 Klipper first, since they hold the ports. Mainboard: `NationsCommand -c -d --pn /dev/ttyS2 --fn AD5X.bin --v -r`.
-Eboard: get it into its bootloader (power-cycle so nobody sends `A`, or the Klipper `reset`
-command on mainline, below), then `IAPCommand ADM_App.hex /dev/ttyS5`. Run from a directory
-without flag files.
+Eboard: get it into its bootloader (power-cycle so nobody sends `A`, or, while it runs Kiln OS's
+Klipper firmware, the serial bootloader request as `ad5x-mcu flash-eboard` sends it; the Klipper
+`reset` command sets the bypass with patch 0001, below, so it no longer leaves the bootloader
+waiting), then `IAPCommand ADM_App.hex /dev/ttyS5`. Run from a directory without flag files.
 
 **C. Full stock update**: `AD5X-3.1.0-…tgz` on a FAT stick re-installs everything, including the
 control flags. Remove the stick after the update finishes, or it installs again. It may undo
@@ -291,7 +305,10 @@ Risks:
   `bootserial` dialog. A flag-file re-flash fails (`IAPCommand` can't connect) and reboots again.
   Always power-cycle around flashing.
 - **Interrupted eboard flash.** `IAPCommand` retries a frame forever. If killed mid-transfer the
-  app area is partial, but the bootloader is still there: power-cycle and flash again.
+  app area is partial, but the bootloader is still there: power-cycle and flash again. Until the
+  power-cycle it waits for the next frame: silent, `C` ignored, but a frame is ACKed, including
+  the last one again (seen 2026-11-11 after a cut at frame 22 of 41). Whether it places a frame by
+  its number or just after the previous one is unknown, so Kiln OS doesn't resume such a write.
 - **Interrupted mainboard flash**: ROM ISP is always there; run `NationsCommand` again.
 - `IAPCommand` exit 0 with "Update :HD" means nothing was written. Check the output, not just
   the exit code.

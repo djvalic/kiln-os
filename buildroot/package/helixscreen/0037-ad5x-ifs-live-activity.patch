@@ -38,7 +38,7 @@ Upstream: not applicable (AD5X OS specific)
  create mode 100644 tests/unit/test_ams_ad5x_kiln_ifs.cpp
 
 diff --git a/include/ams_backend_ad5x_ifs.h b/include/ams_backend_ad5x_ifs.h
-index 98209c950f..ecec379a09 100644
+index 7e8599e87e..4c0a0df22b 100644
 --- a/include/ams_backend_ad5x_ifs.h
 +++ b/include/ams_backend_ad5x_ifs.h
 @@ -596,6 +596,27 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
@@ -86,7 +86,7 @@ index 98209c950f..ecec379a09 100644
      /// Z-Mod's change macro keeps the target tool in
      /// `gcode_macro END_CHANGE_FILAMENT`.last_data.channel from the start of a
      /// filament change to its end, and 99 otherwise. Its runout auto-swap and
-@@ -1727,6 +1758,24 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
+@@ -1729,6 +1760,24 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
      /// none), re-supplied into Ports-only diff frames for the same reason
      /// zmod_last_chan_ exists. Guarded by mutex_.
      std::optional<int> module_last_chan_;
@@ -112,10 +112,10 @@ index 98209c950f..ecec379a09 100644
      /// apply_zmod_change_macro, so only that source clears it. Guarded by mutex_.
      bool zmod_change_owns_action_ = false;
 diff --git a/src/printer/ams_backend_ad5x_ifs.cpp b/src/printer/ams_backend_ad5x_ifs.cpp
-index 6e41a9c633..9b8da6d799 100644
+index 796a65a996..c5c2f43aab 100644
 --- a/src/printer/ams_backend_ad5x_ifs.cpp
 +++ b/src/printer/ams_backend_ad5x_ifs.cpp
-@@ -758,6 +758,13 @@ void AmsBackendAd5xIfs::handle_status(const json& status_obj) {
+@@ -783,6 +783,13 @@ void AmsBackendAd5xIfs::handle_status(const json& status_obj) {
              if (system_info_.action != before || system_info_.operation_detail != detail_before) {
                  state_changed = true;
              }
@@ -129,7 +129,7 @@ index 6e41a9c633..9b8da6d799 100644
          }
      }
  
-@@ -2594,6 +2601,11 @@ AmsError AmsBackendAd5xIfs::cancel() {
+@@ -2613,6 +2620,11 @@ AmsError AmsBackendAd5xIfs::cancel() {
          } else {
              system_info_.operation_phase = -1;
          }
@@ -141,7 +141,7 @@ index 6e41a9c633..9b8da6d799 100644
      }
      return execute_gcode(cancel_cmd);
  }
-@@ -4999,6 +5011,12 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+@@ -5021,6 +5033,12 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
      bool saw_module_content = false;
      std::string activity;
      std::string error_text;
@@ -154,7 +154,7 @@ index 6e41a9c633..9b8da6d799 100644
  
      if (auto it = status.find("ifs"); it != status.end() && it->is_object()) {
          const auto& obj = *it;
-@@ -5041,6 +5059,25 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+@@ -5063,6 +5081,25 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
          }
          if (auto e = obj.find("error"); e != obj.end() && e->is_string()) {
              error_text = e->get<std::string>();
@@ -180,7 +180,7 @@ index 6e41a9c633..9b8da6d799 100644
              saw_module_content = true;
          }
      }
-@@ -5109,48 +5146,290 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+@@ -5131,48 +5168,290 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
      // freshly pushed-in lane. Those set no tracker and install no ack callback;
      // the board's activity is the only Moonraker-visible signal they produce.
      // Transitions are deliberately one-directional per frame (busy only from
@@ -504,7 +504,7 @@ index 6e41a9c633..9b8da6d799 100644
  }
  
  void AmsBackendAd5xIfs::apply_zcolor_result(const ZColorSilentResult& result) {
-@@ -6099,6 +6378,8 @@ void AmsBackendAd5xIfs::begin_phase_tracking_locked(bool is_unload) {
+@@ -6124,6 +6403,8 @@ void AmsBackendAd5xIfs::begin_phase_tracking_locked(bool is_unload) {
      phase_tracker_ = IfsPhaseTracker{};
      phase_tracker_.active = true;
      phase_tracker_.is_unload = is_unload;
@@ -513,7 +513,7 @@ index 6e41a9c633..9b8da6d799 100644
      // Seed the indeterminate detector: op just started, so the no-progress clock
      // starts now and the last-progress temp baseline is cleared so the first real
      // extruder frame counts as a value change (#1065 row 14).
-@@ -6121,6 +6402,16 @@ void AmsBackendAd5xIfs::on_klipper_restarted() {
+@@ -6146,6 +6427,16 @@ void AmsBackendAd5xIfs::on_klipper_restarted() {
              end_phase_tracking_locked();
          }
          system_info_.operation_indeterminate = false;
@@ -530,7 +530,7 @@ index 6e41a9c633..9b8da6d799 100644
      }
      AmsSubscriptionBackend::on_klipper_restarted();
  }
-@@ -6318,6 +6609,11 @@ void AmsBackendAd5xIfs::detect_load_unload_completion(bool head_detected) {
+@@ -6343,6 +6634,11 @@ void AmsBackendAd5xIfs::detect_load_unload_completion(bool head_detected) {
      if (phase_tracker_.active) {
          return;
      }
@@ -542,7 +542,7 @@ index 6e41a9c633..9b8da6d799 100644
  
      // Legacy / external / firmware-initiated path: a head transition completes
      // the operation directly. Preserved exactly for backward compatibility.
-@@ -6765,6 +7061,12 @@ void AmsBackendAd5xIfs::check_action_timeout() {
+@@ -6798,6 +7094,12 @@ void AmsBackendAd5xIfs::check_action_timeout(bool zmod_change_ending) {
          }
      }
  

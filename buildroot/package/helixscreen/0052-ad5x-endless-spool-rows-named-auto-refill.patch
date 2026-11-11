@@ -26,10 +26,10 @@ Upstream: not applicable (AD5X OS specific)
  6 files changed, 61 insertions(+), 4 deletions(-)
 
 diff --git a/src/printer/ams_backend_ad5x_ifs.cpp b/src/printer/ams_backend_ad5x_ifs.cpp
-index 7eda2c1..b30e793 100644
+index 4322546f23..e7b0d2479f 100644
 --- a/src/printer/ams_backend_ad5x_ifs.cpp
 +++ b/src/printer/ams_backend_ad5x_ifs.cpp
-@@ -7172,8 +7172,12 @@ std::vector<helix::printer::DeviceSection> AmsBackendAd5xIfs::get_device_section
+@@ -7197,8 +7197,12 @@ std::vector<helix::printer::DeviceSection> AmsBackendAd5xIfs::get_device_section
          return sections;
      }
      if (kiln_refill_live_locked()) {
@@ -45,7 +45,7 @@ index 7eda2c1..b30e793 100644
      if (kiln_info_.map_mode.has_value()) {
          sections.push_back(
 diff --git a/src/ui/ui_ams_device_operations_overlay.cpp b/src/ui/ui_ams_device_operations_overlay.cpp
-index 6f343bd..fc77fdc 100644
+index 6f343bd899..fc77fdc9e8 100644
 --- a/src/ui/ui_ams_device_operations_overlay.cpp
 +++ b/src/ui/ui_ams_device_operations_overlay.cpp
 @@ -457,6 +457,19 @@ void AmsDeviceOperationsOverlay::update_from_backend() {
@@ -69,7 +69,7 @@ index 6f343bd..fc77fdc 100644
      // behind either shows the button disabled rather than toasting a refusal.
      lv_subject_set_int(&can_home_subject_, backend->reset_available() ? 1 : 0);
 diff --git a/tests/unit/test_ams_ad5x_kiln_ifs.cpp b/tests/unit/test_ams_ad5x_kiln_ifs.cpp
-index 486fc84..3e92cf1 100644
+index 486fc84b7b..3e92cf1dde 100644
 --- a/tests/unit/test_ams_ad5x_kiln_ifs.cpp
 +++ b/tests/unit/test_ams_ad5x_kiln_ifs.cpp
 @@ -480,7 +480,10 @@ TEST_CASE("AD5X IFS lists Kiln's device operations", "[ams][ad5x_ifs][kiln_ifs][
@@ -85,7 +85,7 @@ index 486fc84..3e92cf1 100644
          CHECK(ids == std::vector<std::string>{"endless_spool", "setup", "calibration", "feeder"});
          // Every action sits in a declared section.
 diff --git a/tests/unit/test_ams_device_ops_rows.cpp b/tests/unit/test_ams_device_ops_rows.cpp
-index 7ec3e3f..d62b3b9 100644
+index 7ec3e3fad2..d62b3b936e 100644
 --- a/tests/unit/test_ams_device_ops_rows.cpp
 +++ b/tests/unit/test_ams_device_ops_rows.cpp
 @@ -43,6 +43,14 @@ class SwitchableEndlessMock : public AmsBackendMock {
@@ -152,10 +152,10 @@ index 7ec3e3f..d62b3b9 100644
                   "[ams][device-ops][rows]") {
      show_with(std::make_unique<SwitchableEndlessMock>(false, false));
 diff --git a/translations/en.yml b/translations/en.yml
-index 4d311ed..a4c24fe 100644
+index dc8e338304..3f627b1069 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -4994,6 +4994,8 @@ translations:
+@@ -5026,6 +5026,8 @@ translations:
    'Asks for the time zone and the nozzle size, then runs the self-check and the tuning steps again (PID, bed mesh, vibration, IFS, Z offset). Every step can be skipped. Results are saved at the end and Klipper restarts.': 'Asks for the time zone and the nozzle size, then runs the self-check and the tuning steps again (PID, bed mesh, vibration, IFS, Z offset). Every step can be skipped. Results are saved at the end and Klipper restarts.'
    'Auto colour': 'Auto colour'
    'Auto-refill': 'Auto-refill'
@@ -165,10 +165,10 @@ index 4d311ed..a4c24fe 100644
    'Auto-refill is on and {} is a backup, but it did not take over.': 'Auto-refill is on and {} is a backup, but it did not take over.'
    'Auto-refill is on, but no slot holds a backup for this spool.': 'Auto-refill is on, but no slot holds a backup for this spool.'
 diff --git a/translations/ru.yml b/translations/ru.yml
-index ca1dc76..bd5179e 100644
+index b6cb33f27a..0d09ccbecf 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -5165,6 +5165,8 @@ translations:
+@@ -5197,6 +5197,8 @@ translations:
    'Asks for the time zone and the nozzle size, then runs the self-check and the tuning steps again (PID, bed mesh, vibration, IFS, Z offset). Every step can be skipped. Results are saved at the end and Klipper restarts.': 'Запрашивает часовой пояс и размер сопла, затем снова выполняет самопроверку и шаги настройки (PID, сетка стола, вибрации, IFS, смещение по Z). Любой шаг можно пропустить. В конце результаты сохраняются, и Klipper перезапускается.'
    'Auto colour': 'Авто по цвету'
    'Auto-refill': 'Автозамена'

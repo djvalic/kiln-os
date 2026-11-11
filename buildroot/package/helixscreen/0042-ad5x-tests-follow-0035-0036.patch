@@ -80,7 +80,7 @@ index 532832b579..70c9c1c234 100644
              CHECK(placed_widget(r, id) == nullptr);
              CHECK(resolved_disabled(r, id));
 diff --git a/tests/unit/test_hardware_validator.cpp b/tests/unit/test_hardware_validator.cpp
-index e0e16a7cb9..c1ef75c7dc 100644
+index 4198408aaa..b59674eecf 100644
 --- a/tests/unit/test_hardware_validator.cpp
 +++ b/tests/unit/test_hardware_validator.cpp
 @@ -344,7 +344,8 @@ TEST_CASE("HardwareValidator - kinematics none skips the extruder check", "[hard
@@ -110,7 +110,7 @@ index e0e16a7cb9..c1ef75c7dc 100644
      }
  }
  
-@@ -1377,7 +1377,7 @@ TEST_CASE_METHOD(ExpectedHardwareSuppressFixture,
+@@ -1398,7 +1398,7 @@ TEST_CASE_METHOD(ExpectedHardwareSuppressFixture,
  }
  
  TEST_CASE_METHOD(ExpectedHardwareSuppressFixture,
@@ -119,7 +119,7 @@ index e0e16a7cb9..c1ef75c7dc 100644
                   "[hardware][validator][expected]") {
      // Printer has LED, expected list has other hardware but not this LED
      client.set_heaters({"extruder", "heater_bed"});
-@@ -1395,8 +1395,8 @@ TEST_CASE_METHOD(ExpectedHardwareSuppressFixture,
+@@ -1416,8 +1416,8 @@ TEST_CASE_METHOD(ExpectedHardwareSuppressFixture,
      HardwareValidator validator;
      auto result = validator.validate(&config, client.hardware());
  

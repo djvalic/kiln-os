@@ -32,7 +32,7 @@ start)
 		&& chmod 755 /run/ad5x/ifs-mcu
 	rm -f /run/ad5x/ifs-mcu/*.cfg /run/ad5x/ifs-klipper
 	if [ -f /data/ad5x/ifs-klipper.enable ] &&
-			ad5x-mcu-version --port /dev/ttyS4 --baud 115200 --timeout 2 >/dev/null 2>&1; then
+			ad5x-mcu-version --port /dev/ttyS4 --baud 115200 --timeout 5 >/dev/null 2>&1; then
 		: > /run/ad5x/ifs-klipper
 		/usr/bin/python3 $KROOT/klippy/extras/ad5x_plugins.py ifs-mcu \
 			$PD/config/plugins.cfg

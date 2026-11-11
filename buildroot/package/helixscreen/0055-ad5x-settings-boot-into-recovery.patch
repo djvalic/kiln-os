@@ -32,7 +32,7 @@ Upstream: not applicable (AD5X OS specific)
 
 diff --git a/include/ui_settings_kiln_recovery.h b/include/ui_settings_kiln_recovery.h
 new file mode 100644
-index 0000000..25e307d
+index 0000000000..25e307d868
 --- /dev/null
 +++ b/include/ui_settings_kiln_recovery.h
 @@ -0,0 +1,81 @@
@@ -118,7 +118,7 @@ index 0000000..25e307d
 +
 +} // namespace helix::kiln_recovery
 diff --git a/include/ui_settings_system.h b/include/ui_settings_system.h
-index 2345b2e..826aa81 100644
+index 2345b2e294..826aa81814 100644
 --- a/include/ui_settings_system.h
 +++ b/include/ui_settings_system.h
 @@ -47,7 +47,7 @@ class SystemSettingsOverlay : public OverlayBase {
@@ -132,7 +132,7 @@ index 2345b2e..826aa81 100644
  
 diff --git a/src/ui/ui_settings_kiln_recovery.cpp b/src/ui/ui_settings_kiln_recovery.cpp
 new file mode 100644
-index 0000000..8916df4
+index 0000000000..8916df45f9
 --- /dev/null
 +++ b/src/ui/ui_settings_kiln_recovery.cpp
 @@ -0,0 +1,141 @@
@@ -278,7 +278,7 @@ index 0000000..8916df4
 +
 +} // namespace helix::kiln_recovery
 diff --git a/src/ui/ui_settings_system.cpp b/src/ui/ui_settings_system.cpp
-index ab72aa6..02c6e2e 100644
+index ab72aa6a27..02c6e2ee09 100644
 --- a/src/ui/ui_settings_system.cpp
 +++ b/src/ui/ui_settings_system.cpp
 @@ -8,6 +8,7 @@
@@ -310,7 +310,7 @@ index ab72aa6..02c6e2e 100644
          {"on_factory_reset_confirm",
 diff --git a/tests/unit/test_settings_kiln_recovery.cpp b/tests/unit/test_settings_kiln_recovery.cpp
 new file mode 100644
-index 0000000..9549ca8
+index 0000000000..9549ca8c1c
 --- /dev/null
 +++ b/tests/unit/test_settings_kiln_recovery.cpp
 @@ -0,0 +1,114 @@
@@ -429,7 +429,7 @@ index 0000000..9549ca8
 +    recovery::set_available_for_test(std::nullopt);
 +}
 diff --git a/tests/unit/test_settings_system_callbacks.cpp b/tests/unit/test_settings_system_callbacks.cpp
-index 6816a5e..c60aef5 100644
+index 6816a5e059..c60aef5fd3 100644
 --- a/tests/unit/test_settings_system_callbacks.cpp
 +++ b/tests/unit/test_settings_system_callbacks.cpp
 @@ -7,6 +7,7 @@
@@ -485,10 +485,10 @@ index 6816a5e..c60aef5 100644
 +    process_lvgl(5);
 +}
 diff --git a/translations/en.yml b/translations/en.yml
-index 3cd2fee..1edc91a 100644
+index 3493bbdb08..5989953c34 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -5011,6 +5011,8 @@ translations:
+@@ -5043,6 +5043,8 @@ translations:
    'Bed soak': 'Bed soak'
    'Bed soak at {} °C calibrated.': 'Bed soak at {} °C calibrated.'
    'Bed temperature': 'Bed temperature'
@@ -497,7 +497,7 @@ index 3cd2fee..1edc91a 100644
    'Built-in': 'Built-in'
    'CALIBRATE': 'CALIBRATE'
    'Calibrate the bed soak at {} °C?': 'Calibrate the bed soak at {} °C?'
-@@ -5018,6 +5020,7 @@ translations:
+@@ -5050,6 +5052,7 @@ translations:
    'Calibrates the bed heat soak: how long the bed keeps warming after it reaches 60 °C, so the first layer stays flat. Takes about 15 minutes and starts from a cold bed. Skip it if you don''t need it.': 'Calibrates the bed heat soak: how long the bed keeps warming after it reaches 60 °C, so the first layer stays flat. Takes about 15 minutes and starts from a cold bed. Skip it if you don''t need it.'
    'CALIBRATING': 'CALIBRATING'
    'Calibration stopped. Heaters off, nothing saved.': 'Calibration stopped. Heaters off, nothing saved.'
@@ -505,7 +505,7 @@ index 3cd2fee..1edc91a 100644
    'Can''t calibrate now': 'Can''t calibrate now'
    'Change the nozzle size to {}?': 'Change the nozzle size to {}?'
    'Changing filament': 'Changing filament'
-@@ -5127,6 +5130,8 @@ translations:
+@@ -5159,6 +5162,8 @@ translations:
    'Purge Box': 'Purge Box'
    'Purge box': 'Purge box'
    'Remove {}?': 'Remove {}?'
@@ -514,7 +514,7 @@ index 3cd2fee..1edc91a 100644
    'Retracting filament': 'Retracting filament'
    'Retracting {}': 'Retracting {}'
    'Run Again': 'Run Again'
-@@ -5171,6 +5176,7 @@ translations:
+@@ -5203,6 +5208,7 @@ translations:
    'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it.': 'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it.'
    'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.': 'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.'
    'The nozzle size can''t change during a print': 'The nozzle size can''t change during a print'
@@ -523,10 +523,10 @@ index 3cd2fee..1edc91a 100644
    'The results so far, before Save': 'The results so far, before Save'
    'The temperature to measure, from a cold bed': 'The temperature to measure, from a cold bed'
 diff --git a/translations/ru.yml b/translations/ru.yml
-index 9c1995c..72dd91f 100644
+index d66ad156ff..cfaeefb669 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -5182,6 +5182,8 @@ translations:
+@@ -5214,6 +5214,8 @@ translations:
    'Bed soak': 'Прогрев стола'
    'Bed soak at {} °C calibrated.': 'Прогрев стола при {} °C откалиброван.'
    'Bed temperature': 'Температура стола'
@@ -535,7 +535,7 @@ index 9c1995c..72dd91f 100644
    'Built-in': 'Встроенный'
    'CALIBRATE': 'КАЛИБРОВАТЬ'
    'Calibrate the bed soak at {} °C?': 'Откалибровать прогрев стола при {} °C?'
-@@ -5189,6 +5191,7 @@ translations:
+@@ -5221,6 +5223,7 @@ translations:
    'Calibrates the bed heat soak: how long the bed keeps warming after it reaches 60 °C, so the first layer stays flat. Takes about 15 minutes and starts from a cold bed. Skip it if you don''t need it.': 'Калибрует прогрев стола: сколько стол ещё прогревается после достижения 60 °C, чтобы первый слой оставался ровным. Занимает около 15 минут и начинается с холодного стола. Если это не нужно, пропустите шаг.'
    'CALIBRATING': 'ИДЁТ КАЛИБРОВКА'
    'Calibration stopped. Heaters off, nothing saved.': 'Калибровка остановлена. Нагреватели выключены, ничего не сохранено.'
@@ -543,7 +543,7 @@ index 9c1995c..72dd91f 100644
    'Can''t calibrate now': 'Сейчас калибровка невозможна'
    'Change the nozzle size to {}?': 'Изменить размер сопла на {}?'
    'Changing filament': 'Смена филамента'
-@@ -5298,6 +5301,8 @@ translations:
+@@ -5330,6 +5333,8 @@ translations:
    'Purge Box': 'Лоток для отходов'
    'Purge box': 'Лоток для отходов'
    'Remove {}?': 'Удалить {}?'
@@ -552,7 +552,7 @@ index 9c1995c..72dd91f 100644
    'Retracting filament': 'Втягивание филамента'
    'Retracting {}': 'Втягивание: {}'
    'Run Again': 'Ещё раз'
-@@ -5342,6 +5347,7 @@ translations:
+@@ -5374,6 +5379,7 @@ translations:
    'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it.': 'Сопло, установленное на принтере. От него зависят ширина линий, длина продувки и тест первого слоя.'
    'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.': 'Сопло, установленное на принтере. От него зависят ширина линий, длина продувки и тест первого слоя. Изменить его можно позже в настройках.'
    'The nozzle size can''t change during a print': 'Размер сопла нельзя изменить во время печати'
@@ -561,7 +561,7 @@ index 9c1995c..72dd91f 100644
    'The results so far, before Save': 'Результаты на данный момент, до сохранения'
    'The temperature to measure, from a cold bed': 'Температура для измерения, начиная с холодного стола'
 diff --git a/ui_xml/settings_system_overlay.xml b/ui_xml/settings_system_overlay.xml
-index ff3e82e..02faeb6 100644
+index ff3e82e353..02faeb6b6e 100644
 --- a/ui_xml/settings_system_overlay.xml
 +++ b/ui_xml/settings_system_overlay.xml
 @@ -2,7 +2,7 @@

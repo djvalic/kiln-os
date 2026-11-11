@@ -46,10 +46,10 @@ home_no_trace	Последний запуск основной ОС: нет за
 home_last_update	Последнее обновление: %s
 home_no_update	Последнее обновление: нет записи
 back_up	Резервная копия
-install_update	Установить обновление
+install_update	Обновление
 network_ssh	Сеть / SSH
 logs	Журналы
-reboot_power	Перезагрузка / питание
+reboot_power	Питание
 update	Обновление
 update_from_browser	Обновление из браузера
 boot_main_what	Проверка слота B, установка флага загрузки, перезапуск

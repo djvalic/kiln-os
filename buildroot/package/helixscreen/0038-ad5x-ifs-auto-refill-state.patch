@@ -30,7 +30,7 @@ Upstream: not applicable (AD5X OS specific)
  3 files changed, 386 insertions(+), 14 deletions(-)
 
 diff --git a/include/ams_backend_ad5x_ifs.h b/include/ams_backend_ad5x_ifs.h
-index ecec379a09..aa1014d403 100644
+index 4c0a0df22b..29d6ce63c7 100644
 --- a/include/ams_backend_ad5x_ifs.h
 +++ b/include/ams_backend_ad5x_ifs.h
 @@ -555,16 +555,30 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
@@ -104,7 +104,7 @@ index ecec379a09..aa1014d403 100644
      /// Read the `variable_*` payload out of a `gcode_macro _ifs_vars`
      /// get_status() dict. Returns true when something we publish changed.
      /// Caller must hold mutex_.
-@@ -1776,6 +1812,21 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
+@@ -1778,6 +1814,21 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
      /// only its idle report clears it, and the action timeout leaves it to the
      /// driver. Guarded by mutex_.
      bool kiln_owns_action_ = false;
@@ -127,10 +127,10 @@ index ecec379a09..aa1014d403 100644
      /// apply_zmod_change_macro, so only that source clears it. Guarded by mutex_.
      bool zmod_change_owns_action_ = false;
 diff --git a/src/printer/ams_backend_ad5x_ifs.cpp b/src/printer/ams_backend_ad5x_ifs.cpp
-index 9b8da6d799..502d5133d7 100644
+index c5c2f43aab..d19b2316ca 100644
 --- a/src/printer/ams_backend_ad5x_ifs.cpp
 +++ b/src/printer/ams_backend_ad5x_ifs.cpp
-@@ -5017,6 +5017,10 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+@@ -5039,6 +5039,10 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
      std::optional<std::string> phase;
      std::optional<int> target_channel;
      std::optional<int> activity_channel;
@@ -141,7 +141,7 @@ index 9b8da6d799..502d5133d7 100644
  
      if (auto it = status.find("ifs"); it != status.end() && it->is_object()) {
          const auto& obj = *it;
-@@ -5080,6 +5084,35 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+@@ -5102,6 +5106,35 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
              activity_channel = m->get<int>();
              saw_module_content = true;
          }
@@ -177,7 +177,7 @@ index 9b8da6d799..502d5133d7 100644
      }
      if (auto it = status.find("ifs_materials"); it != status.end() && it->is_object()) {
          if (read_ifs_materials_object(*it, result)) {
-@@ -5177,6 +5210,34 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+@@ -5199,6 +5232,34 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
          }
          action_changed = apply_kiln_step_locked();
      }
@@ -212,7 +212,7 @@ index 9b8da6d799..502d5133d7 100644
      if (action_changed) {
          emit_event(EVENT_STATE_CHANGED);
      }
-@@ -5386,6 +5447,9 @@ bool AmsBackendAd5xIfs::apply_kiln_step_locked() {
+@@ -5408,6 +5469,9 @@ bool AmsBackendAd5xIfs::apply_kiln_step_locked() {
          if (runout_active_ && !operation.empty()) {
              clear_runout_locked("the IFS driver is changing the filament");
          }
@@ -222,7 +222,7 @@ index 9b8da6d799..502d5133d7 100644
          // Our own ops keep the phase tracker's steps. An op that set an
          // action without the tracker (do_change_tool's T<n>) is the driver's
          // to describe.
-@@ -6640,6 +6704,8 @@ void AmsBackendAd5xIfs::note_head_switch_reading_locked(bool detected) {
+@@ -6665,6 +6729,8 @@ void AmsBackendAd5xIfs::note_head_switch_reading_locked(bool detected) {
  
      if (detected) {
          head_empty_since_.reset();
@@ -231,7 +231,7 @@ index 9b8da6d799..502d5133d7 100644
          if (runout_active_) {
              clear_runout_locked("filament detected at the toolhead again");
          }
-@@ -6677,12 +6743,73 @@ std::chrono::seconds AmsBackendAd5xIfs::runout_confirm_delay_locked() const {
+@@ -6702,12 +6768,73 @@ std::chrono::seconds AmsBackendAd5xIfs::runout_confirm_delay_locked() const {
      // talking over the recovery the printer is already performing. Stock zMod
      // is always-on (no toggle), so the !has_ifs_vars_ path always qualifies;
      // plugins qualify only when variable_backup reads true.
@@ -305,7 +305,7 @@ index 9b8da6d799..502d5133d7 100644
  bool AmsBackendAd5xIfs::evaluate_runout_locked() {
      const bool paused = print_is_paused();
  
-@@ -6735,16 +6862,7 @@ bool AmsBackendAd5xIfs::evaluate_runout_locked() {
+@@ -6760,16 +6887,7 @@ bool AmsBackendAd5xIfs::evaluate_runout_locked() {
      // Which lane ran out. The firmware routinely drops its active pointer on a
      // runout (#995 "Extruder: None"), so fall through every seated authority we
      // have rather than reporting -1.
@@ -323,7 +323,7 @@ index 9b8da6d799..502d5133d7 100644
  
      runout_active_ = true;
      // The cross-backend flag. AmsState gates its runout indicator on
-@@ -6790,6 +6908,14 @@ bool AmsBackendAd5xIfs::backup_eligible_locked(int slot, int candidate) const {
+@@ -6815,6 +6933,14 @@ bool AmsBackendAd5xIfs::backup_eligible_locked(int slot, int candidate) const {
          slot == candidate) {
          return false;
      }
@@ -338,7 +338,7 @@ index 9b8da6d799..502d5133d7 100644
      const auto src = static_cast<size_t>(slot);
      if (materials_[src].empty() || colors_[src].empty()) {
          return false; // Nothing to match against; claim nothing.
-@@ -6807,6 +6933,11 @@ bool AmsBackendAd5xIfs::backup_eligible_locked(int slot, int candidate) const {
+@@ -6832,6 +6958,11 @@ bool AmsBackendAd5xIfs::backup_eligible_locked(int slot, int candidate) const {
  }
  
  int AmsBackendAd5xIfs::find_backup_slot_locked(int runout_slot) const {
@@ -350,7 +350,7 @@ index 9b8da6d799..502d5133d7 100644
      for (int i = 0; i < kNumPorts; ++i) {
          if (backup_eligible_locked(runout_slot, i)) {
              return i;
-@@ -6831,6 +6962,23 @@ helix::printer::EndlessSpoolCapabilities AmsBackendAd5xIfs::get_endless_spool_ca
+@@ -6856,6 +6987,23 @@ helix::printer::EndlessSpoolCapabilities AmsBackendAd5xIfs::get_endless_spool_ca
      using namespace helix::printer;
  
      EndlessSpoolCapabilities caps;
@@ -374,7 +374,7 @@ index 9b8da6d799..502d5133d7 100644
      if (!has_ifs_vars_) {
          // Stock zMod's "Infinite Spool Mode" — `ANALOG_PRUTOK`
          // (zmod_ifs.py:cmd_ANALOG_PRUTOK), wired to head_switch_sensor's
-@@ -6869,6 +7017,26 @@ helix::printer::EndlessSpoolCapabilities AmsBackendAd5xIfs::get_endless_spool_ca
+@@ -6894,6 +7042,26 @@ helix::printer::EndlessSpoolCapabilities AmsBackendAd5xIfs::get_endless_spool_ca
      return caps;
  }
  
@@ -401,7 +401,7 @@ index 9b8da6d799..502d5133d7 100644
  std::string AmsBackendAd5xIfs::build_runout_detail_locked() const {
      std::string detail =
          lv_tr("Filament ran out - nothing at the toolhead and the print is paused.");
-@@ -6903,6 +7071,24 @@ std::string AmsBackendAd5xIfs::build_runout_detail_locked() const {
+@@ -6928,6 +7096,24 @@ std::string AmsBackendAd5xIfs::build_runout_detail_locked() const {
          }
      };
  

@@ -25,7 +25,7 @@ Upstream: not applicable (AD5X OS specific)
  4 files changed, 103 insertions(+), 2 deletions(-)
 
 diff --git a/include/wifi_manager.h b/include/wifi_manager.h
-index c786969..c588781 100644
+index c7869699c3..c588781963 100644
 --- a/include/wifi_manager.h
 +++ b/include/wifi_manager.h
 @@ -810,6 +810,12 @@ class WiFiManager {
@@ -42,7 +42,7 @@ index c786969..c588781 100644
  
  /**
 diff --git a/src/api/wifi_manager.cpp b/src/api/wifi_manager.cpp
-index 65d710c..e76599c 100644
+index 65d710c1e0..e76599c105 100644
 --- a/src/api/wifi_manager.cpp
 +++ b/src/api/wifi_manager.cpp
 @@ -69,6 +69,14 @@ bool WiFiManager::in_association_grace() const {
@@ -90,7 +90,7 @@ index 65d710c..e76599c 100644
                  } else if (!wifi_configured && !backend_->is_radio_enabled()) {
                      // No HelixScreen WiFi configuration and the radio is
 diff --git a/tests/test_helpers/wifi_manager_test_access.h b/tests/test_helpers/wifi_manager_test_access.h
-index ccd9dd9..ab40ced 100644
+index ccd9dd9c39..ab40ced7e8 100644
 --- a/tests/test_helpers/wifi_manager_test_access.h
 +++ b/tests/test_helpers/wifi_manager_test_access.h
 @@ -118,6 +118,14 @@ class WiFiManagerTestAccess {
@@ -109,7 +109,7 @@ index ccd9dd9..ab40ced 100644
          WiFiManager::os_link_probe_ = std::move(probe);
      }
 diff --git a/tests/unit/test_wifi_manager.cpp b/tests/unit/test_wifi_manager.cpp
-index d8b44c0..ba77a52 100644
+index d8b44c0818..ba77a5247c 100644
 --- a/tests/unit/test_wifi_manager.cpp
 +++ b/tests/unit/test_wifi_manager.cpp
 @@ -1127,6 +1127,78 @@ TEST_CASE("READY refuses to disable the radio when interface resolution is incon

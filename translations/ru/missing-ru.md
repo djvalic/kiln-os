@@ -1,15 +1,16 @@
 # Russian translation: what is missing or untranslated
 
-Kiln OS's touch screen is HelixScreen v1.1.0-beta.17 with Kiln's patches. This list was made on 2026-11-09 from
+Kiln OS's touch screen is HelixScreen v1.1.0-rc.1 with Kiln's patches. This list was made on 2026-11-11 from
 [helixscreen-ru.yml](helixscreen-ru.yml) and [helixscreen-en.yml](helixscreen-en.yml) in this folder, and from
 the recovery screen's [en.txt](../../recovery-ui/i18n/en.txt) and [ru.txt](../../recovery-ui/i18n/ru.txt).
 
 ## Summary
 
-- `helixscreen-en.yml` has 4815 keys. `helixscreen-ru.yml` has the same 4815 keys: none is missing.
+- `helixscreen-en.yml` has 4901 keys. `helixscreen-ru.yml` has the same 4901 keys: none is missing.
 - 111 Russian values are the same as the English text. They are names, units and numbers that stay as they are, and `Pressure Advance`, which stays English on purpose (section 4).
 - 7 more values have no Cyrillic but differ from English on purpose (for example `AMS` reads `IFS`, `WiFi` reads `Wi-Fi`).
-- 229 keys belong to Kiln OS's own screens. I wrote their Russian myself, so they need a native speaker's check most (section 5). 21 of them are new in Kiln OS v0.0.52: the setup wizard's step descriptions and summary rows, and one IFS status line.
+- 243 keys belong to Kiln OS's own screens. I wrote their Russian myself, so they need a native speaker's check most (section 5). 14 of them are new since the last list: Boot into recovery, Log detail, the two Auto-Refill rows of the IFS settings, and SELECTOR and HUB on the IFS drawing.
+- 41 keys are new in HelixScreen v1.1.0-rc.1, and the 41 that came with v1.1.0-beta.18 are still unchecked. HelixScreen ships Russian for all of them, so nothing shows in English, but nobody here has checked that Russian yet (section 7). rc.1 also removed 9 older keys whose texts it rewrote (the HelixPrint plugin reasons and the tour).
 - A few open questions and texts that are still English on the screen (section 1).
 - Recovery screen: all 155 lines of `ru.txt` have a first Russian version that needs checking (section 6).
 
@@ -30,7 +31,25 @@ the recovery screen's [en.txt](../../recovery-ui/i18n/en.txt) and [ru.txt](../..
 
 **Recovery screen:** a first Russian version to check (section 6).
 
-## 2. Fixed in Kiln OS v0.0.52
+## 2. Fixed so far
+
+### Kiln OS v0.0.58: alexshev86's fixes (PR #49)
+
+- `Connected ...` = `Подключено ...` in all the connection status lines; `12 Hour` / `24 Hour` = `12-часовой` /
+  `24-часовой`; ё where it was missing (её, ведёт); «» instead of straight quotes (`«Проверить снова»`, `«{}»`,
+  `«Timer Too Close»`); `%d с` instead of `%ds` in the two rotation countdowns.
+- Homing is `паркуется` / `паркует все оси` instead of `ищет ноль`, also in `Home and sweep the cutter...`
+  (`Запарковать оси и прощупать резак, ...`).
+- `BACK`, the rear-edge label of the belt drawing, is `СЗАДИ`.
+- `· Tuned in {} round` / `· Tuned in {} rounds` = `· Настроено за {} раунд` / `· Раундов настройки: {}`. The screen
+  takes the first for 1 and the second for every other number, and does not read plural forms for these two, so
+  the second must fit any number.
+- A dash between words is the long dash with spaces (` — `), not a hyphen ` - ` or ` – `. Hyphens that are signs
+  stay: `нажмите - или +`, the `+ - _ . ( ) /` list and the `PLA - Чёрный` example.
+- Recovery screen: the main menu tiles `install_update` = `Обновление` (`Установить обновление` did not fit) and
+  `reboot_power` = `Питание`.
+
+### Kiln OS v0.0.52
 
 - The setup wizard's step descriptions, the summary rows and the two `... Klipper will restart.` messages are in the
   file now, with my Russian (section 5, setup wizard). Please check them.
@@ -76,8 +95,9 @@ Different from English on purpose, no Cyrillic:
 
 ## 5. Kiln OS's own screens
 
-229 keys come from Kiln OS, not from HelixScreen. All but two are at the end of `helixscreen-ru.yml`, after
-the line `# Kiln OS (AD5X) strings from the Kiln HelixScreen patches`. The other two are the chamber light lines
+243 keys come from Kiln OS, not from HelixScreen. All but two are at the end of `helixscreen-ru.yml`, after
+`~{:.1f} Hz / turn` (in `helixscreen-en.yml` after the line `# Kiln OS (AD5X) strings from the Kiln HelixScreen
+patches`), starting with `, corners {:+.3f} to {:+.3f}`. The other two are the chamber light lines
 near the top (`Chamber light off when the screen sleeps` and the one after it). Keep IFS as IFS: it is the name of
 the filament unit. (The 12 `Ad5x...` step names there are only used in log files; leave them.)
 
@@ -214,7 +234,7 @@ the filament unit. (The 12 `Ad5x...` step names there are only used in log files
 
 </details>
 
-<details><summary>IFS (filament unit) (50)</summary>
+<details><summary>IFS (filament unit) (52)</summary>
 
 - `Auto-refill is off, so no backup spool takes over.`
   = `Автозамена выключена, поэтому резервная катушка не подключится.`
@@ -248,6 +268,8 @@ the filament unit. (The 12 `Ad5x...` step names there are only used in log files
   = `Нагрев сопла до {}°C`
 - `Heating nozzle to {}°C ({}°C)`
   = `Нагрев сопла до {}°C ({}°C)`
+- `HUB`
+  = `ХАБ`
 - `Homing the IFS`
   = `Парковка IFS`
 - `IFS driver error`
@@ -284,6 +306,8 @@ the filament unit. (The 12 `Ad5x...` step names there are only used in log files
   = `Втягивание филамента`
 - `Retracting {}`
   = `Втягивание: {}`
+- `SELECTOR`
+  = `СЕЛЕКТОР`
 - `Selecting a slot`
   = `Выбор слота`
 - `Selecting the slot`
@@ -319,7 +343,7 @@ the filament unit. (The 12 `Ad5x...` step names there are only used in log files
 
 </details>
 
-<details><summary>Auto-refill (28)</summary>
+<details><summary>Auto-refill (30)</summary>
 
 - `Any colour`
   = `Любой цвет`
@@ -327,6 +351,10 @@ the filament unit. (The 12 `Ad5x...` step names there are only used in log files
   = `Авто по цвету`
 - `Auto-refill`
   = `Автозамена`
+- `Auto-Refill`
+  = `Автозамена`
+- `Auto-Refill colour match`
+  = `Автозамена: подбор цвета`
 - `BACKUPS`
   = `РЕЗЕРВЫ`
 - `backups for slot {}`
@@ -560,6 +588,36 @@ the filament unit. (The 12 `Ad5x...` step names there are only used in log files
 
 </details>
 
+<details><summary>Settings > System: Boot into recovery (6)</summary>
+
+- `Boot into recovery`
+  = `Загрузить систему восстановления`
+- `Boot into recovery?`
+  = `Загрузить систему восстановления?`
+- `Can't boot into recovery: {}`
+  = `Не удалось загрузить систему восстановления: {}`
+- `Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)`
+  = `Перезапуск в систему восстановления (установка обновления с USB-флешки или через веб-страницу на порту 8080)`
+- `Restarting into the recovery OS...`
+  = `Перезапуск в систему восстановления...`
+- `The printer restarts into the recovery OS, where it can't print. To come back, tap Boot main OS on its screen.`
+  = `Принтер перезапустится в систему восстановления, где печать недоступна. Чтобы вернуться, нажмите на её экране «Запустить ОС».`
+
+</details>
+
+<details><summary>Settings > System: Log detail (4)</summary>
+
+- `Log detail`
+  = `Детализация журнала`
+- `Short`
+  = `Краткий`
+- `Extended`
+  = `Подробный`
+- `Short: warnings and errors, and Klipper's statistics once a minute. Extended: everything, for troubleshooting; the logs fill faster.`
+  = `Краткий: предупреждения и ошибки, статистика Klipper раз в минуту. Подробный: всё, для поиска неисправностей; журналы заполняются быстрее.`
+
+</details>
+
 ## 6. Recovery screen (recovery-ui/i18n/ru.txt)
 
 The recovery screen is Kiln OS's rescue system. It uses the touch screen's language setting. Its strings are in
@@ -688,13 +746,13 @@ The lines I am least sure of:
 - `back_up`: `Back up`
   = `Резервная копия`
 - `install_update`: `Install update`
-  = `Установить обновление`
+  = `Обновление`
 - `network_ssh`: `Network / SSH`
   = `Сеть / SSH`
 - `logs`: `Logs`
   = `Журналы`
 - `reboot_power`: `Reboot / Power`
-  = `Перезагрузка / питание`
+  = `Питание`
 - `update`: `Update`
   = `Обновление`
 - `update_from_browser`: `Update from browser`
@@ -936,3 +994,249 @@ The lines I am least sure of:
   = `Ошибка обновления (см. журнал)`
 - `job_failed`: `%s: failed (exit %d)`
   = `%s: ошибка (код %d)`
+
+## 7. New in HelixScreen v1.1.0-rc.1 and beta.18
+
+HelixScreen keys that are new since the beta.17 list. HelixScreen ships Russian for all of them, so they do not
+show in English, but nobody here has checked that Russian yet. Some of them only show on other printers; that is
+noted per group.
+
+### v1.1.0-rc.1
+
+41 keys came with rc.1.
+
+<details><summary>What's new tour (10)</summary>
+
+Shows once, on the first start after the update; Help & About replays it.
+
+- `New in 1.1`
+  = `Новое в 1.1`
+- `Here's a quick look at what changed since your last version.`
+  = `Краткий обзор изменений с вашей последней версии.`
+- `Long-press any tile to enter edit mode. The rebuilt grid lets you rearrange, resize, remove, or add widgets, and drag them between pages.`
+  = `Удерживайте плитку, чтобы войти в режим редактирования. Новая сетка позволяет переставлять, менять размер, удалять и добавлять виджеты, а также перетаскивать их между страницами.`
+- `A new Print Status screen`
+  = `Новый экран статуса печати`
+- `During a print, see a chip for each heater, fan, and light, a checklist of the start sequence, and progress with controls in one strip.`
+  = `Во время печати вы видите индикатор каждого нагревателя, вентилятора и подсветки, список шагов запуска, а также прогресс и управление в одной полосе.`
+- `Load, unload, and swap spools, set temperatures, and monitor runout sensors.`
+  = `Загружайте, выгружайте и меняйте катушки, задавайте температуру и следите за датчиками филамента.`
+- `Load and unload`
+  = `Загрузка и выгрузка`
+- `Load, unload, and purge from here. Choose a material to set its temperatures first.`
+  = `Здесь можно загрузить, выгрузить и продуть филамент. Сначала выберите материал, чтобы задать его температуру.`
+- `Your filament system`
+  = `Ваша система филамента`
+- `Tap a slot to load or unload it, pick a spool, or edit its details. Your edits stay in step with the printer and Spoolman.`
+  = `Нажмите на слот, чтобы загрузить или выгрузить его, выбрать катушку или изменить данные. Ваши правки остаются согласованными с принтером и Spoolman.`
+
+</details>
+
+<details><summary>Setup Timelapse (10)</summary>
+
+- `Checking for ffmpeg...`
+  = `Поиск ffmpeg...`
+- `Downloading the timelapse plugin...`
+  = `Загрузка плагина таймлапса...`
+- `Installing the timelapse plugin...`
+  = `Установка плагина таймлапса...`
+- `Adding the timelapse plugin to Moonraker...`
+  = `Добавление плагина таймлапса в Moonraker...`
+- `An earlier install is still finishing...`
+  = `Предыдущая установка ещё завершается...`
+- `Could not download the timelapse plugin. Check the printer's internet connection.`
+  = `Не удалось скачать плагин таймлапса. Проверьте подключение принтера к интернету.`
+- `Could not add the timelapse plugin to Moonraker.`
+  = `Не удалось добавить плагин таймлапса в Moonraker.`
+- `Installing restarts Moonraker, so it waits until the print is finished or cancelled.`
+  = `Установка перезапускает Moonraker, поэтому ждёт, пока печать не завершится или не будет отменена.`
+- `The timelapse plugin is installed. Making videos also needs ffmpeg, which is not installed on this printer.`
+  = `Плагин таймлапса установлен. Для создания видео также нужен ffmpeg, который не установлен на этом принтере.`
+- `To make videos, run this on your printer via SSH:`
+  = `Чтобы создавать видео, выполните это на принтере через SSH:`
+
+</details>
+
+<details><summary>Advanced > HelixPrint Plugin (18)</summary>
+
+The feature list and the reasons a feature can't run, including power loss recovery.
+
+- `RUNNING`
+  = `РАБОТАЕТ`
+- `NOT AVAILABLE HERE`
+  = `ЗДЕСЬ НЕДОСТУПНО`
+- `The plugin didn't say why.`
+  = `Плагин не указал причину.`
+- `Failed to start. See the Moonraker log.`
+  = `Не удалось запустить. См. журнал Moonraker.`
+- `Stopped. Restart Moonraker to start it again.`
+  = `Остановлено. Перезапустите Moonraker, чтобы запустить снова.`
+- `Needs file analysis, which isn't running.`
+  = `Нужен анализ файлов, который не запущен.`
+- `Needs a newer Moonraker to hold uploads.`
+  = `Нужен более новый Moonraker, чтобы задерживать загрузки.`
+- `Timelapse or logs folder overlaps a protected one.`
+  = `Папка таймлапсов или журналов пересекается с защищённой.`
+- `A folder name in moonraker.conf is unsafe.`
+  = `Имя папки в moonraker.conf небезопасно.`
+- `Not set up for this printer model yet.`
+  = `Для этой модели принтера пока не настроено.`
+- `Waiting to read the printer's configuration from Klipper.`
+  = `Ожидание чтения конфигурации принтера из Klipper.`
+- `A delta printer can't home X and Y without moving Z, so a print can't be resumed.`
+  = `Дельта-принтер не может выполнить парковку X и Y без движения Z, поэтому печать нельзя продолжить.`
+- `This printer's gantry drops when the power is cut, so a print can't be resumed.`
+  = `Портал этого принтера опускается при отключении питания, поэтому печать нельзя продолжить.`
+- `This printer's homing override homes Z along with X and Y, so a print can't be resumed.`
+  = `Homing override этого принтера паркует Z вместе с X и Y, поэтому печать нельзя продолжить.`
+- `This printer's homing override sets the Z position when it homes X and Y, so a print can't be resumed.`
+  = `Homing override этого принтера задаёт положение Z при парковке X и Y, поэтому печать нельзя продолжить.`
+- `This printer's homing override runs commands that may move Z, so a print can't be resumed.`
+  = `Homing override этого принтера выполняет команды, которые могут сдвинуть Z, поэтому печать нельзя продолжить.`
+- `This printer's firmware has its own power-loss recovery.`
+  = `Прошивка этого принтера имеет собственное восстановление после отключения питания.`
+- `Reboot the printer to finish the plugin update.`
+  = `Перезагрузите принтер, чтобы завершить обновление плагина.`
+
+</details>
+
+<details><summary>Spool editor (filament slot) (3)</summary>
+
+- `Unlink`
+  = `Отвязать`
+- `Re-apply spool`
+  = `Применить катушку снова`
+- `The linked spool says {}.`
+  = `Привязанная катушка указывает: {}.`
+
+</details>
+
+### v1.1.0-beta.18
+
+41 keys came with beta.18. `Select a valid number ({}-{})` replaces `Select a valid number (1-{})`.
+
+<details><summary>Print start (2)</summary>
+
+- `Heating chamber`
+  = `Нагрев камеры`
+- `Waiting for bed temperature...`
+  = `Ожидание температуры стола...`
+
+</details>
+
+<details><summary>Connecting to the printer (setup wizard) (1)</summary>
+
+- `Connected to Moonraker, but Klipper reported an error. You can continue, and HelixScreen will show it again after setup. Hardware detection stays limited until Klipper starts.`
+  = `Подключено к Moonraker, но Klipper сообщил об ошибке. Можно продолжить, HelixScreen покажет её снова после настройки. Обнаружение оборудования ограничено, пока Klipper не запустится.`
+
+</details>
+
+<details><summary>Klipper configuration error and Moonraker restart (5)</summary>
+
+- `Klipper Config Error`
+  = `Ошибка конфигурации Klipper`
+- `Klipper could not load its configuration. Fix the setting below in the printer's config files, then restart Klipper.`
+  = `Klipper не смог загрузить конфигурацию. Исправьте указанный ниже параметр в файлах конфигурации принтера, затем перезапустите Klipper.`
+- `Restart Moonraker?`
+  = `Перезапустить Moonraker?`
+- `The screen will lose its connection to the printer for a few seconds.`
+  = `Экран потеряет связь с принтером на несколько секунд.`
+- `Cannot restart Moonraker while printing`
+  = `Нельзя перезапустить Moonraker во время печати`
+
+</details>
+
+<details><summary>Z offset (8)</summary>
+
+The tool and head lines only show on printers with several toolheads, not on the AD5X.
+
+- `Saved {} mm`
+  = `Сохранено {} мм`
+- `Saved {} mm, {} mm after Save`
+  = `Сохранено {} мм, {} мм после сохранения`
+- `This printer has no {} command, so the Z-offset cannot be saved.`
+  = `У этого принтера нет команды {}, поэтому Z-смещение нельзя сохранить.`
+- `Calibrate with this tool?`
+  = `Калибровать с этим инструментом?`
+- `No tool is known to be mounted. With one shared probe, calibrate with {}. Continue anyway?`
+  = `Неизвестно, какой инструмент установлен. С общим датчиком калибруйте с {}. Всё равно продолжить?`
+- `{0} is mounted. With one shared probe, calibrate with {1}. Continue with {0}?`
+  = `Установлен {0}. С общим датчиком калибруйте с {1}. Продолжить с {0}?`
+- `Each head keeps its own Z offset on this printer. Use its tool offset calibration instead.`
+  = `У каждой печатающей головки на этом принтере своё Z-смещение. Используйте калибровку смещений инструментов.`
+- `Saved for the mounted head; other heads keep their own`
+  = `Сохранено для установленной печатающей головки; остальные головки сохраняют своё`
+
+</details>
+
+<details><summary>Filament system (IFS slots) and Settings > Printing (9)</summary>
+
+- `Clear Error`
+  = `Сбросить ошибку`
+- `Loading lane details…`
+  = `Загрузка сведений о канале…`
+- `Loading lane details. Try again in a moment.`
+  = `Загрузка сведений о канале. Повторите попытку через минуту.`
+- `Not saved: {}. Try again.`
+  = `Не сохранено: {}. Попробуйте ещё раз.`
+- `the printer did not confirm it`
+  = `принтер не подтвердил`
+- `the printer refused it`
+  = `принтер отклонил`
+- `Select a valid number ({}-{})`
+  = `Выберите корректный номер ({}-{})`
+- `Number slots from 0`
+  = `Нумеровать слоты с 0`
+- `Show slots, lanes, gates and tools counting from 0, matching T0 in G-code`
+  = `Считать слоты, каналы, шлюзы и инструменты с 0, как T0 в G-коде`
+
+</details>
+
+<details><summary>Other filament units (10)</summary>
+
+Shown only with these units, never on the AD5X with its IFS.
+
+- `Change the name or the linked spool in Spoolman.`
+  = `Меняйте название или привязанную катушку в Spoolman.`
+- `OpenAMS keeps this spool in Spoolman, which takes only material, color, brand and weight here`
+  = `OpenAMS хранит эту катушку в Spoolman, который здесь принимает только материал, цвет, бренд и вес`
+- `OpenAMS manages this spool's link`
+  = `Привязкой этой катушки управляет OpenAMS`
+- `AFC has no Spoolman configured`
+  = `В AFC не настроен Spoolman`
+- `Make color, material and spool changes in Spoolman.`
+  = `Меняйте цвет, материал и катушку в Spoolman.`
+- `this printer fills its gates from Spoolman, so change the spool there`
+  = `этот принтер берёт гейты из Spoolman, меняйте катушку там`
+- `the ACE needs a material and its nozzle temperature`
+  = `ACE нужен материал и его температура сопла`
+- `the CFS can't change a slot while a print is running`
+  = `CFS не может изменить слот во время печати`
+- `the QIDI Box filament list has not loaded`
+  = `список филаментов QIDI Box не загружен`
+- `the QIDI Box has no {} in its filament list`
+  = `в списке филаментов QIDI Box нет {}`
+
+</details>
+
+<details><summary>Printing a .3mf file (4)</summary>
+
+- `The queue prints this .3mf's default plate. Print this plate from here instead.`
+  = `Очередь печатает стандартную пластину этого .3mf. Напечатайте эту пластину отсюда.`
+- `The pre-print steps you turned off cannot be applied to this .3mf. Turn them back on to print it.`
+  = `Отключённые шаги подготовки нельзя применить к этому .3mf. Включите их снова, чтобы напечатать.`
+- `Filament Mapping cannot rewrite this .3mf. Print it without remapping.`
+  = `Сопоставление филамента не может переписать этот .3mf. Напечатайте его без переназначения.`
+- `This .3mf's plates are still loading. Try again in a moment.`
+  = `Пластины этого .3mf ещё загружаются. Попробуйте снова через мгновение.`
+
+</details>
+
+<details><summary>Label printers (network) (2)</summary>
+
+- `The printer requires an encrypted connection, but it rejected the encrypted job: HTTP {} {}`
+  = `Принтер требует зашифрованного соединения, но отклонил зашифрованное задание: HTTP {} {}`
+- `The printer requires an encrypted connection, but the encrypted connection to {}:{} failed`
+  = `Принтер требует зашифрованного соединения, но зашифрованное подключение к {}:{} не удалось`
+
+</details>

@@ -1,0 +1,48 @@
+From 4ef3aed2292cb7badb6759cabde948a8c205a7e9 Mon Sep 17 00:00:00 2001
+From: valix <djvalic.wc@gmail.com>
+Date: Wed, 11 Nov 2026 12:00:00 -0500
+Subject: [PATCH] serial: take Flashforge's F37 bootloader request on the IFS
+ build only
+
+The F37 match in console_task() was compiled into every board with
+CONFIG_HAVE_BOOTLOADER_REQUEST (the AD5X mainboard and eboard too). There,
+a received block that fails its check and starts with "F37" would call
+bootloader_request() and reset the MCU. Limit it to CONFIG_FLASHFORGE_IFS,
+the only board whose updater sends it.
+---
+ src/generic/serial_irq.c | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/src/generic/serial_irq.c b/src/generic/serial_irq.c
+index f830d4899..17dc27882 100644
+--- a/src/generic/serial_irq.c
++++ b/src/generic/serial_irq.c
+@@ -29,6 +29,15 @@ DECL_CONSTANT("SERIAL_RS485_TDD", 1);
+ #endif
+ DECL_CONSTANT("RECEIVE_WINDOW", RX_BUFFER_SIZE);
+ 
++// Flashforge's "F37" (its IFS update tool) asks the AD5X IFS for its
++// bootloader. Only the IFS build takes it: on other boards a block that
++// fails its check and happens to start with "F37" would reset the MCU.
++#if CONFIG_FLASHFORGE_IFS
++#define F37_REQUEST 1
++#else
++#define F37_REQUEST 0
++#endif
++
+ DECL_CONSTANT("SERIAL_BAUD", CONFIG_SERIAL_BAUD);
+ 
+ // Rx interrupt - store read data
+@@ -97,7 +106,8 @@ console_task(void)
+             && ((pop_count == 32
+                  && !memcmp(receive_buf,
+                             " \x1c Request Serial Bootloader!! ~", 32))
+-                || (pop_count >= 3 && !memcmp(receive_buf, "F37", 3))))
++                || (F37_REQUEST && pop_count >= 3
++                    && !memcmp(receive_buf, "F37", 3))))
+             bootloader_request();
+         console_pop_input(pop_count);
+         if (ret > 0)
+-- 
+2.56.0
+

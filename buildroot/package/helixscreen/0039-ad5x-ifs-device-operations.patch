@@ -30,7 +30,7 @@ Upstream: not applicable (AD5X OS specific)
  3 files changed, 438 insertions(+)
 
 diff --git a/include/ams_backend_ad5x_ifs.h b/include/ams_backend_ad5x_ifs.h
-index aa1014d403..f7ee4b8e3e 100644
+index 29d6ce63c7..da149b5e7c 100644
 --- a/include/ams_backend_ad5x_ifs.h
 +++ b/include/ams_backend_ad5x_ifs.h
 @@ -604,7 +604,21 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
@@ -55,7 +55,7 @@ index aa1014d403..f7ee4b8e3e 100644
      // Backend-driven step model for the right-side vertical operation tracker.
      // The AD5X synthesizes 3 firmware phases (HEATING→CUTTING→UNLOADING /
      // HEATING→LOADING→PURGING) from extruder temp + head sensor in
-@@ -1827,6 +1841,21 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
+@@ -1829,6 +1843,21 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
          bool ran = false;
      };
      KilnRefill kiln_refill_;
@@ -78,7 +78,7 @@ index aa1014d403..f7ee4b8e3e 100644
      /// apply_zmod_change_macro, so only that source clears it. Guarded by mutex_.
      bool zmod_change_owns_action_ = false;
 diff --git a/src/printer/ams_backend_ad5x_ifs.cpp b/src/printer/ams_backend_ad5x_ifs.cpp
-index 502d5133d7..e548433b4b 100644
+index d19b2316ca..807ba0f30a 100644
 --- a/src/printer/ams_backend_ad5x_ifs.cpp
 +++ b/src/printer/ams_backend_ad5x_ifs.cpp
 @@ -8,6 +8,8 @@
@@ -90,7 +90,7 @@ index 502d5133d7..e548433b4b 100644
  #include "ams_fault_event.h"
  #include "ams_state.h"
  #include "app_globals.h"
-@@ -5021,6 +5023,10 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+@@ -5043,6 +5045,10 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
      std::optional<bool> auto_refill;
      std::optional<std::string> refill_match;
      std::optional<std::array<std::vector<int>, kNumPorts>> refill_backups;
@@ -101,7 +101,7 @@ index 502d5133d7..e548433b4b 100644
  
      if (auto it = status.find("ifs"); it != status.end() && it->is_object()) {
          const auto& obj = *it;
-@@ -5113,6 +5119,43 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+@@ -5135,6 +5141,43 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
              refill_backups = std::move(lists);
              saw_module_content = true;
          }
@@ -145,7 +145,7 @@ index 502d5133d7..e548433b4b 100644
      }
      if (auto it = status.find("ifs_materials"); it != status.end() && it->is_object()) {
          if (read_ifs_materials_object(*it, result)) {
-@@ -5238,6 +5281,37 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+@@ -5260,6 +5303,37 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
          }
      }
  
@@ -183,7 +183,7 @@ index 502d5133d7..e548433b4b 100644
      if (action_changed) {
          emit_event(EVENT_STATE_CHANGED);
      }
-@@ -7037,6 +7111,220 @@ AmsError AmsBackendAd5xIfs::apply_endless_spool_enabled(bool enabled) {
+@@ -7062,6 +7136,220 @@ AmsError AmsBackendAd5xIfs::apply_endless_spool_enabled(bool enabled) {
                                               : "IFS_AUTO_REFILL ENABLE=0");
  }
  

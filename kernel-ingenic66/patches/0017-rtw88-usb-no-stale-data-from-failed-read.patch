@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Mon, 9 Nov 2026 17:06:17 -0700
+Subject: [PATCH] wifi: rtw88: usb: Don't return stale data from a failed
+ register read
+
+[ Kiln OS: from djvalic/kiln-os PR #46 by Hunter Laux (his mainline 7.3
+  port, kernel-mainline/patches/0008-wifi-rtw88-usb-Don-t-return-stale-
+  data-from-a-failed.patch), rebased onto the 6.6 SDK's usb.c after
+  Kiln patches 0010-0016; the change itself is unchanged. Not upstream:
+  wireless-next's rtw_usb_read() (checked 2026-11-11) still returns the
+  buffer whatever the transfer did.
+  On 6.6 the read's buffer is also what rtw_usb_reg_sec() (patch 0011)
+  writes to 0x4e0 for "on" section registers, so after a failed read that
+  write now carries 0 instead of an earlier read's low byte. ]
+
+rtw_usb_read() reads into one of a ring of buffers and returns the
+buffer's contents whatever the transfer did. When the control transfer
+fails or comes back short, that is all or part of the value an earlier
+read left there, returned as if it had just been read from the chip.
+
+Clear the buffer before the transfer, so a failed read returns 0 and a
+short one zeros in the bytes it didn't get, and report short reads as
+well as failed ones.
+---
+ drivers/net/wireless/realtek/rtw88/usb.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+--- a/drivers/net/wireless/realtek/rtw88/usb.c
++++ b/drivers/net/wireless/realtek/rtw88/usb.c
+@@ -80,11 +80,13 @@
+ 	spin_unlock_irqrestore(&rtwusb->usb_lock, flags);
+ 
+ 	data = &rtwusb->usb_data[idx];
++	/* What a failed or short read leaves: not an earlier read's value */
++	*data = 0;
+ 
+ 	ret = usb_control_msg(udev, usb_rcvctrlpipe(udev, 0),
+ 			      RTW_USB_CMD_REQ, RTW_USB_CMD_READ, addr,
+ 			      RTW_USB_VENQT_CMD_IDX, data, len, 1000);
+-	if (ret < 0 && ret != -ENODEV && count++ < 4)
++	if (ret != len && ret != -ENODEV && count++ < 4)
+ 		rtw_err(rtwdev, "read register 0x%x failed with %d\n",
+ 			addr, ret);
+ 

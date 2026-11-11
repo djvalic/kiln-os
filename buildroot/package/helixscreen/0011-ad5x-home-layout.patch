@@ -1380,10 +1380,10 @@ index 51a4923384..1d3212c438 100644
      </text_tiny>
    </view>
 diff --git a/ui_xml/components/print_status_detailed_active.xml b/ui_xml/components/print_status_detailed_active.xml
-index f66445a452..c676ef7373 100644
+index 1a70df07e2..d51397d550 100644
 --- a/ui_xml/components/print_status_detailed_active.xml
 +++ b/ui_xml/components/print_status_detailed_active.xml
-@@ -112,11 +112,14 @@
+@@ -115,11 +115,14 @@
      <!-- Temps: always a full-width row at the bottom of the card. Uses the
           standard temp_display widget so heating-color logic (red=heating up,
           blue=cooling, etc.) matches the rest of the app — DRY with

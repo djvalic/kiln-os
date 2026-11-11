@@ -275,10 +275,10 @@ index f02b9d9d02..5b223c5797 100644
  // Plain data needed to decide skips — no LVGL, constructible in tests.
  struct StepContext {
 diff --git a/src/api/moonraker_discovery_sequence.cpp b/src/api/moonraker_discovery_sequence.cpp
-index 7442569f76..d45828e225 100644
+index 9ee4947458..ca65478ca6 100644
 --- a/src/api/moonraker_discovery_sequence.cpp
 +++ b/src/api/moonraker_discovery_sequence.cpp
-@@ -1497,6 +1497,15 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
+@@ -1503,6 +1503,15 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
              {"retract_length", "retract_speed", "unretract_extra_length", "unretract_speed"});
      }
  

@@ -164,10 +164,10 @@ index 83591f4e3c..41804ed2bf 100644
  
  inline SoundSettingsOverlay& get_sound_settings_overlay() {
 diff --git a/src/api/moonraker_discovery_sequence.cpp b/src/api/moonraker_discovery_sequence.cpp
-index 5a9f2d619b..ab4f192d84 100644
+index eec991227d..3ad69f0def 100644
 --- a/src/api/moonraker_discovery_sequence.cpp
 +++ b/src/api/moonraker_discovery_sequence.cpp
-@@ -1515,6 +1515,15 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
+@@ -1521,6 +1521,15 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
          }
      }
  

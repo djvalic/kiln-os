@@ -390,10 +390,10 @@ index 9f8840f038..994dcbbfee 100644
  /// `// action:ad5x_setup_wizard`, and drop the start-up flag file it wrote
  /// (HELIX_WIZARD_FLAG_FILE), which this run then answers. Idempotent per client.
 diff --git a/src/api/moonraker_discovery_sequence.cpp b/src/api/moonraker_discovery_sequence.cpp
-index 9549589f09..ebe150003d 100644
+index 7cca5bee5c..82c7774b5f 100644
 --- a/src/api/moonraker_discovery_sequence.cpp
 +++ b/src/api/moonraker_discovery_sequence.cpp
-@@ -1533,6 +1533,16 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
+@@ -1539,6 +1539,16 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
          }
      }
  

@@ -35,7 +35,7 @@ Upstream: not applicable (AD5X OS specific)
  create mode 100644 tests/unit/test_config_kiln_head_sensor.cpp
 
 diff --git a/include/config_migrations.h b/include/config_migrations.h
-index c61c30e..74da5d8 100644
+index c61c30ee58..74da5d845f 100644
 --- a/include/config_migrations.h
 +++ b/include/config_migrations.h
 @@ -36,4 +36,19 @@ int migrated_scroll_throw(int stored, int platform_default);
@@ -59,7 +59,7 @@ index c61c30e..74da5d8 100644
 +
  } // namespace helix::config_detail
 diff --git a/src/system/config.cpp b/src/system/config.cpp
-index d01b68f..c577539 100644
+index d01b68f9f1..c577539eba 100644
 --- a/src/system/config.cpp
 +++ b/src/system/config.cpp
 @@ -1083,6 +1083,14 @@ void Config::init(const std::string& config_path) {
@@ -105,7 +105,7 @@ index d01b68f..c577539 100644
      // Deep-merge the "printer" section (hardware, fans, heaters, input, etc.) into
      // the active printer subtree. Guarded by wizard_completed above, so this only
 diff --git a/src/system/config_migrations.cpp b/src/system/config_migrations.cpp
-index 9d20eda..7c2f5e6 100644
+index 9d20edae79..7c2f5e64c0 100644
 --- a/src/system/config_migrations.cpp
 +++ b/src/system/config_migrations.cpp
 @@ -1572,4 +1572,105 @@ int migrated_scroll_throw(int stored, int platform_default) {
@@ -216,7 +216,7 @@ index 9d20eda..7c2f5e6 100644
  } // namespace helix::config_detail
 diff --git a/tests/unit/test_config_kiln_head_sensor.cpp b/tests/unit/test_config_kiln_head_sensor.cpp
 new file mode 100644
-index 0000000..3bc2e02
+index 0000000000..3bc2e028d9
 --- /dev/null
 +++ b/tests/unit/test_config_kiln_head_sensor.cpp
 @@ -0,0 +1,128 @@
