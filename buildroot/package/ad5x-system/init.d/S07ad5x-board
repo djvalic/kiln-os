@@ -9,6 +9,11 @@
 # are wrappers). Our kernel: sysfs GPIO and the backlight class; the logo
 # is written to /dev/fb0 with Python/PIL (the framebuffer is on from boot).
 # In USB test mode stock has already done both.
+
+# Files this creates are readable by klipper and www-data, whoever started
+# it (a root SSH session may run with umask 077; issue #31)
+umask 022
+
 . /usr/lib/ad5x/slot.sh
 . /usr/lib/ad5x/kernel.sh
 

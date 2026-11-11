@@ -12,6 +12,11 @@
 # A private build that bundles /module_driver uses that instead.
 # On our own kernel (6.6) every driver is built in: nothing to load.
 # (shared with the recovery OS, which always runs the stock kernel)
+
+# Files this creates are readable by klipper and www-data, whoever started
+# it (a root SSH session may run with umask 077; issue #31)
+umask 022
+
 KERNEL=stock
 [ -f /usr/lib/ad5x/kernel.sh ] && . /usr/lib/ad5x/kernel.sh
 case "$1" in

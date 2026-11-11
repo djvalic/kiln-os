@@ -1,6 +1,11 @@
 #!/bin/sh
 # Klipper host. Runs as user klipper at nice -10 (stock renices its main
 # thread to -10; the host is a slow MIPS SoC).
+
+# Files this creates are readable by klipper and www-data, whoever started
+# it (a root SSH session may run with umask 077; issue #31)
+umask 022
+
 PD=/home/klipper/printer_data
 PID=/var/run/klipper.pid
 # The image's Klipper or a newer daily package (lib/apps.sh)

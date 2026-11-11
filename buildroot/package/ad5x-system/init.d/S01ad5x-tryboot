@@ -4,6 +4,11 @@
 # slot once start-up has finished. A system (or update) that fails after
 # this point comes back up on the other slot at the next power cycle.
 # Does nothing in USB test mode.
+
+# Files this creates are readable by klipper and www-data, whoever started
+# it (a root SSH session may run with umask 077; issue #31)
+umask 022
+
 . /usr/lib/ad5x/slot.sh
 case "$1" in
 start)

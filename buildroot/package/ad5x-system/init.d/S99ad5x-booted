@@ -4,6 +4,11 @@
 # a start of our own kernel as successful (S00ad5x-kernel): "started"
 # becomes last-ok; pending and the count of unfinished starts go.
 # AD5X_LIB overrides /usr/lib/ad5x (tools/test_kernel_fallback.sh).
+
+# Files this creates are readable by klipper and www-data, whoever started
+# it (a root SSH session may run with umask 077; issue #31)
+umask 022
+
 . ${AD5X_LIB:-/usr/lib/ad5x}/slot.sh
 D=/data/ad5x/kernel
 case "$1" in
