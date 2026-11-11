@@ -392,11 +392,11 @@ index 1617b2077..4e14c0598 100644
  extern int register_cps_smp_ops(void);
  #else
 diff --git a/arch/mips/ingenic/Kconfig b/arch/mips/ingenic/Kconfig
-index bb07c598e..d67d7a426 100644
+index 4bd352a4e..f03bd6ced 100644
 --- a/arch/mips/ingenic/Kconfig
 +++ b/arch/mips/ingenic/Kconfig
-@@ -91,3 +91,9 @@ config MACH_X2600
- 	select MIPS_CPU_SCACHE
+@@ -92,3 +92,9 @@ config MACH_X2600
+ 	select WAR_INGENIC_L2_HIT_CACHEOP
  	select SYS_HAS_CPU_MIPS32_R2
  	select SYS_SUPPORTS_HIGHMEM
 +	select SYS_SUPPORTS_SMP

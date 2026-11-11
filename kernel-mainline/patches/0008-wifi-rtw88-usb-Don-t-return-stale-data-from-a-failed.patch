@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Mon, 9 Nov 2026 17:06:17 -0700
-Subject: [PATCH 09/74] wifi: rtw88: usb: Don't return stale data from a failed
+Subject: [PATCH 08/74] wifi: rtw88: usb: Don't return stale data from a failed
  register read
 
 rtw_usb_read() reads into one of a ring of buffers and returns the

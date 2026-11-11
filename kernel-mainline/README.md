@@ -160,24 +160,29 @@ Generic fixes this SoC needed, in the series:
   to thread-local data) trapped and was emulated. The X2600 has it; the
   kernel now probes Config3 for it. A thread pointer read: 559 ns before,
   2.8 ns after.
-- **Physically tagged icache on XBurst II.** The same overrides, and the
-  probe, treated every XBurst icache as virtually tagged, which only
-  XBurst1's is; the kernel then flushed it on context switches without
-  need. 3% off a pipe round trip; 2400 fork + exec runs of two programs
-  at the same addresses all ran the right one.
+- **Icache tagging from Config.VI.** The same overrides, and the probe,
+  treated every XBurst icache as virtually tagged, so the kernel flushed it
+  without need. Both XBurst programming manuals describe a physically
+  tagged icache and hardwire Config.VI to 0, which the cache probe already
+  reads, so the series drops both. On the X2600, code at a virtual address
+  remapped to another page through the TLB alone runs the new page
+  (`ictag.ko`, 20000 rounds per CPU). XBurst1 has not been tested.
 - **-O2.** The defconfig builds the kernel for performance instead of
   size: fork 690 -> 510 us, fork + exec 1946 -> 1534 us, loopback TCP
   306 -> 365 MB/s, for a 12% larger image.
 
-- **Ingenic L2 cache maintenance.** On XBurst a secondary cache operation
-  is still writing back when its instruction retires; mainline's DMA cache
-  maintenance did not wait, so DMA reads could come back with the buffer's
-  old contents, silently. rtw88 showed it: stale register reads, only for
-  buffers at the start of a 64-byte L2 line, then wrong values written back
-  into the chip. Ingenic's kernels (both XBurst generations, and Kiln's 6.6)
-  end their L2 operations with an uncached load (`__fast_iob()`); the fix
-  does the same in `sc-mips.c`. 0 stale reads in 30000 with it, about 1 in
-  500 without.
+- **Stale L2 data after DMA (`WAR_INGENIC_L2_HIT_CACHEOP`).** With the
+  L2-to-DDR prefetcher on, invalidating the L2 with Hit CACHE operations can
+  leave stale data there, so DMA reads come back with the buffer's old
+  contents, silently. rtw88 showed it: stale register reads, only for
+  buffers at the start of a 64-byte L2 line (about 1 in 500), then wrong
+  values written back into the chip; 1 in 12 when every buffer starts a
+  line, as when each gets its own cache line. Turning off the L2-to-DDR
+  prefetcher (CCU MSCR.DisPFB2) removes them, the L1-to-L2 one (DisPFB1)
+  does not. The fix leaves the prefetcher on and, as mainline's R4600 V2.0
+  workaround does, issues an uncached load (`__fast_iob()`) before
+  `mips_sc_inv()`'s cache operations; Ingenic's kernels issue the same
+  load. 0 stale reads in 20000 with it. Selected by `MACH_X2600` only.
 
 - **Ingenic USB PHY supply.** `exit()` disabled the regulator that
   `power_off()` had already disabled; DWC2 calls both on removal and on a
@@ -236,7 +241,9 @@ Open points:
   MHz, the range of Ingenic's PLL table; the boot loader's settings are
   inside it), which pins have pull resistors (all allowed), and the X2600
   cores using the X2000 CPU compatible (the same PRId).
-- **Sign-off.** The patches carry no `Signed-off-by`; only you can certify
+- **Sign-off.** Three patches are signed off and ready for submission:
+  TLBINV on the whole MMU, icache tagging from Config.VI and the L2
+  workaround. The rest carry no `Signed-off-by` yet; only you can certify
   them (`git rebase --signoff v7.3.3` in the development tree).
 
 ## Build

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Hunter Laux <hunterlaux@gmail.com>
 Date: Sun, 8 Nov 2026 19:48:47 -0700
-Subject: [PATCH 07/74] dt-bindings: clock: ingenic,cgu: Check mac-phy-ctrl as
+Subject: [PATCH 06/74] dt-bindings: clock: ingenic,cgu: Check mac-phy-ctrl as
  a syscon
 
 The mac-phy-ctrl child of the CGU is the register that the Ethernet
