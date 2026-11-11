@@ -11,7 +11,7 @@ the SoC restarts.
  1 file changed, 15 insertions(+)
 
 diff --git a/arch/mips/boot/dts/ingenic/x2600.dtsi b/arch/mips/boot/dts/ingenic/x2600.dtsi
-index f042ecf23..fefe31282 100644
+index 7be453a65..d82d7602f 100644
 --- a/arch/mips/boot/dts/ingenic/x2600.dtsi
 +++ b/arch/mips/boot/dts/ingenic/x2600.dtsi
 @@ -275,6 +275,21 @@ gpe: gpio@4 {

@@ -19,8 +19,8 @@ becomes optional, as the X2600 has none.
 The register sequence follows Ingenic's X2600 SDK kernel.
 ---
  drivers/phy/rockchip/Kconfig                  |   6 +-
- .../phy/rockchip/phy-rockchip-inno-dsidphy.c  | 129 +++++++++++++++++-
- 2 files changed, 131 insertions(+), 4 deletions(-)
+ .../phy/rockchip/phy-rockchip-inno-dsidphy.c  | 157 +++++++++++++++++-
+ 2 files changed, 159 insertions(+), 4 deletions(-)
 
 diff --git a/drivers/phy/rockchip/Kconfig b/drivers/phy/rockchip/Kconfig
 index 14698571b..233c68839 100644
@@ -43,7 +43,7 @@ index 14698571b..233c68839 100644
  config PHY_ROCKCHIP_NANENG_COMBO_PHY
  	tristate "Rockchip NANENG COMBO PHY Driver"
 diff --git a/drivers/phy/rockchip/phy-rockchip-inno-dsidphy.c b/drivers/phy/rockchip/phy-rockchip-inno-dsidphy.c
-index 30d5e5ddf..7994bbdf7 100644
+index 30d5e5ddf..820595cb8 100644
 --- a/drivers/phy/rockchip/phy-rockchip-inno-dsidphy.c
 +++ b/drivers/phy/rockchip/phy-rockchip-inno-dsidphy.c
 @@ -21,6 +21,7 @@
@@ -104,7 +104,7 @@ index 30d5e5ddf..7994bbdf7 100644
  		unsigned long rate;
  	} pll;
  };
-@@ -649,6 +659,94 @@ static void inno_dsidphy_lvds_mode_enable(struct inno_dsidphy *inno)
+@@ -649,6 +659,103 @@ static void inno_dsidphy_lvds_mode_enable(struct inno_dsidphy *inno)
  			LVDS_DATA_LANE2_EN | LVDS_DATA_LANE3_EN);
  }
  
@@ -185,6 +185,15 @@ index 30d5e5ddf..7994bbdf7 100644
 +			LVDS_DATA_LANE1_EN | LVDS_DATA_LANE2_EN |
 +			LVDS_DATA_LANE3_EN);
 +
++	/*
++	 * The write above also powers the LVDS PLL and bandgap. Give them
++	 * 20 ms before the PLL output goes to the serialiser, as Rockchip's
++	 * LVDS mode does (inno_dsidphy_lvds_mode_enable()): without it the
++	 * link starts on an unsettled clock, and the AD5X's panel stays in
++	 * its self-test until it is reset.
++	 */
++	msleep(20);
++
 +	/* PLL output to the LVDS serialiser */
 +	phy_update_bits(inno, REGISTER_PART_ANALOG, 0x1e,
 +			PLL_MODE_SEL_MASK, PLL_MODE_SEL_LVDS_MODE);
@@ -199,7 +208,7 @@ index 30d5e5ddf..7994bbdf7 100644
  static int inno_dsidphy_power_on(struct phy *phy)
  {
  	struct inno_dsidphy *inno = phy_get_drvdata(phy);
-@@ -657,6 +755,18 @@ static int inno_dsidphy_power_on(struct phy *phy)
+@@ -657,6 +764,18 @@ static int inno_dsidphy_power_on(struct phy *phy)
  	clk_prepare_enable(inno->ref_clk);
  	pm_runtime_get_sync(inno->dev);
  
@@ -218,7 +227,32 @@ index 30d5e5ddf..7994bbdf7 100644
  	/* Bandgap power on */
  	phy_update_bits(inno, REGISTER_PART_ANALOG, 0x00,
  			BANDGAP_POWER_MASK, BANDGAP_POWER_ON);
-@@ -691,6 +801,7 @@ static int inno_dsidphy_power_off(struct phy *phy)
+@@ -682,6 +801,24 @@ static int inno_dsidphy_power_off(struct phy *phy)
+ {
+ 	struct inno_dsidphy *inno = phy_get_drvdata(phy);
+ 
++	if (inno->mode == PHY_MODE_LVDS && inno->pdata->lvds_ref_pll) {
++		/* The pixels and the lanes off before the PLL */
++		phy_update_bits(inno, REGISTER_PART_LVDS, 0x00, LVDS_RX_EN, 0);
++		phy_update_bits(inno, REGISTER_PART_LVDS, 0x0b,
++				LVDS_LANE_EN_MASK, 0);
++		phy_update_bits(inno, REGISTER_PART_ANALOG, 0x00,
++				LANE_EN_MASK, 0);
++		phy_update_bits(inno, REGISTER_PART_LVDS, 0x01,
++				LVDS_DIGITAL_INTERNAL_ENABLE_MASK,
++				LVDS_DIGITAL_INTERNAL_DISABLE);
++		phy_update_bits(inno, REGISTER_PART_ANALOG, 0x01,
++				REG_LDOPD_MASK | REG_PLLPD_MASK,
++				REG_LDOPD_POWER_DOWN | REG_PLLPD_POWER_DOWN);
++		phy_update_bits(inno, REGISTER_PART_ANALOG, 0x00,
++				POWER_WORK_MASK, POWER_WORK_DISABLE);
++		goto out;
++	}
++
+ 	phy_update_bits(inno, REGISTER_PART_ANALOG, 0x00, LANE_EN_MASK, 0);
+ 	phy_update_bits(inno, REGISTER_PART_ANALOG, 0x01,
+ 			REG_LDOPD_MASK | REG_PLLPD_MASK,
+@@ -691,6 +828,7 @@ static int inno_dsidphy_power_off(struct phy *phy)
  	phy_update_bits(inno, REGISTER_PART_ANALOG, 0x00,
  			BANDGAP_POWER_MASK, BANDGAP_POWER_DOWN);
  
@@ -226,7 +260,15 @@ index 30d5e5ddf..7994bbdf7 100644
  	phy_update_bits(inno, REGISTER_PART_LVDS, 0x0b, LVDS_LANE_EN_MASK, 0);
  	phy_update_bits(inno, REGISTER_PART_LVDS, 0x01,
  			LVDS_DIGITAL_INTERNAL_ENABLE_MASK,
-@@ -729,6 +840,11 @@ static int inno_dsidphy_configure(struct phy *phy,
+@@ -699,6 +837,7 @@ static int inno_dsidphy_power_off(struct phy *phy)
+ 			LVDS_PLL_POWER_MASK | LVDS_BANDGAP_POWER_MASK,
+ 			LVDS_PLL_POWER_OFF | LVDS_BANDGAP_POWER_DOWN);
+ 
++out:
+ 	pm_runtime_put(inno->dev);
+ 	clk_disable_unprepare(inno->ref_clk);
+ 	clk_disable_unprepare(inno->pclk_phy);
+@@ -729,6 +868,11 @@ static int inno_dsidphy_configure(struct phy *phy,
  	struct inno_dsidphy *inno = phy_get_drvdata(phy);
  	int ret;
  
@@ -238,7 +280,7 @@ index 30d5e5ddf..7994bbdf7 100644
  	if (inno->mode != PHY_MODE_MIPI_DPHY)
  		return -EINVAL;
  
-@@ -770,6 +886,14 @@ static const struct inno_video_phy_plat_data max_2_5ghz_video_phy_plat_data = {
+@@ -770,6 +914,14 @@ static const struct inno_video_phy_plat_data max_2_5ghz_video_phy_plat_data = {
  	.max_lanes = 4,
  };
  
@@ -253,7 +295,7 @@ index 30d5e5ddf..7994bbdf7 100644
  static int inno_dsidphy_probe(struct platform_device *pdev)
  {
  	struct device *dev = &pdev->dev;
-@@ -804,7 +928,7 @@ static int inno_dsidphy_probe(struct platform_device *pdev)
+@@ -804,7 +956,7 @@ static int inno_dsidphy_probe(struct platform_device *pdev)
  		return ret;
  	}
  
@@ -262,7 +304,7 @@ index 30d5e5ddf..7994bbdf7 100644
  	if (IS_ERR(inno->rst)) {
  		ret = PTR_ERR(inno->rst);
  		dev_err(dev, "failed to get system reset control: %d\n", ret);
-@@ -841,6 +965,9 @@ static void inno_dsidphy_remove(struct platform_device *pdev)
+@@ -841,6 +993,9 @@ static void inno_dsidphy_remove(struct platform_device *pdev)
  
  static const struct of_device_id inno_dsidphy_of_match[] = {
  	{

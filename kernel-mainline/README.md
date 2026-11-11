@@ -133,7 +133,9 @@ through Klipper, Happy Hare and the IFS, every layer, no kernel warnings.
   drives the KX070 panel on `panel-lvds`, with the backlight on PC14.
   HelixScreen runs on it through DRM (atomic page flips, vblank events)
   and through `/dev/fb0` (fbdev emulation); starting and stopping it
-  repeatedly leaves no warnings.
+  repeatedly leaves no warnings. The kernel sets up the pixel clock and
+  the PHY itself, so the screen also comes up from a cold boot, with
+  nothing from stock's display drivers before it.
 - **Touch:** the TSC2007 on I2C0 (`i2c-jz4780`, the X1000 register map),
   pen-down on PC7; HelixScreen's stored calibration lands taps right.
 - **Restart:** the watchdog (`jz4740_wdt`, an X2600 variant: the TCU

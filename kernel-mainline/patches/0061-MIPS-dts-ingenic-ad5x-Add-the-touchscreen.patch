@@ -11,7 +11,7 @@ resistance and pressure limit of the stock firmware.
  1 file changed, 27 insertions(+)
 
 diff --git a/arch/mips/boot/dts/ingenic/ad5x.dts b/arch/mips/boot/dts/ingenic/ad5x.dts
-index a8216a662..ac92d9cf3 100644
+index 9d468111e..a4b69a950 100644
 --- a/arch/mips/boot/dts/ingenic/ad5x.dts
 +++ b/arch/mips/boot/dts/ingenic/ad5x.dts
 @@ -3,6 +3,7 @@
@@ -22,7 +22,7 @@ index a8216a662..ac92d9cf3 100644
  
  / {
  	compatible = "flashforge,ad5x", "ingenic,x2600";
-@@ -119,6 +120,28 @@ &exclk {
+@@ -127,6 +128,28 @@ &exclk {
  	clock-frequency = <24000000>;
  };
  
@@ -51,7 +51,7 @@ index a8216a662..ac92d9cf3 100644
  &mac {
  	pinctrl-names = "default";
  	pinctrl-0 = <&pins_mac>;
-@@ -167,6 +190,10 @@ &otg_phy {
+@@ -175,6 +198,10 @@ &otg_phy {
  };
  
  &pinctrl {

@@ -7,11 +7,11 @@ The Adventurer 5X has a 7" 800x480 LVDS panel on the DPU's LVDS PHY,
 VESA 24-bit mapping, with its backlight switched by PC14. Describe them,
 with the timings the stock firmware uses (31 MHz pixel clock, 60 Hz).
 ---
- arch/mips/boot/dts/ingenic/ad5x.dts | 50 +++++++++++++++++++++++++++++
- 1 file changed, 50 insertions(+)
+ arch/mips/boot/dts/ingenic/ad5x.dts | 58 +++++++++++++++++++++++++++++
+ 1 file changed, 58 insertions(+)
 
 diff --git a/arch/mips/boot/dts/ingenic/ad5x.dts b/arch/mips/boot/dts/ingenic/ad5x.dts
-index 05b3b4d15..a8216a662 100644
+index 05b3b4d15..9d468111e 100644
 --- a/arch/mips/boot/dts/ingenic/ad5x.dts
 +++ b/arch/mips/boot/dts/ingenic/ad5x.dts
 @@ -27,6 +27,38 @@ memory@0 {
@@ -53,11 +53,19 @@ index 05b3b4d15..a8216a662 100644
  	reserved-memory {
  		#address-cells = <1>;
  		#size-cells = <1>;
-@@ -66,6 +98,23 @@ regulator-wifi {
+@@ -66,6 +98,31 @@ regulator-wifi {
  	};
  };
  
 +&dpu {
++	/*
++	 * The panel's 31 MHz pixel clock from the EPLL at 434 MHz, as the
++	 * stock firmware sets it: nothing else may have set it up yet
++	 */
++	assigned-clocks = <&cgu X2600_CLK_EPLL>, <&cgu X2600_CLK_LCD>;
++	assigned-clock-parents = <0>, <&cgu X2600_CLK_EPLL>;
++	assigned-clock-rates = <434000000>, <31000000>;
++
 +	phys = <&dsi_dphy>;
 +	phy-names = "lvds";
 +
@@ -77,7 +85,7 @@ index 05b3b4d15..a8216a662 100644
  &exclk {
  	clock-frequency = <24000000>;
  };
-@@ -118,6 +167,7 @@ &otg_phy {
+@@ -118,6 +175,7 @@ &otg_phy {
  };
  
  &pinctrl {

@@ -11,7 +11,7 @@ it uses.
  1 file changed, 14 insertions(+)
 
 diff --git a/arch/mips/boot/dts/ingenic/x2600.dtsi b/arch/mips/boot/dts/ingenic/x2600.dtsi
-index fefe31282..0bd750191 100644
+index d82d7602f..ceaed8f93 100644
 --- a/arch/mips/boot/dts/ingenic/x2600.dtsi
 +++ b/arch/mips/boot/dts/ingenic/x2600.dtsi
 @@ -275,6 +275,20 @@ gpe: gpio@4 {
