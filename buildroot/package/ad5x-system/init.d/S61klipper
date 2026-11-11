@@ -9,11 +9,15 @@ umask 022
 PD=/home/klipper/printer_data
 PID=/var/run/klipper.pid
 # The image's Klipper or a newer daily package (lib/apps.sh)
-. /usr/lib/ad5x/apps.sh
-. /usr/lib/ad5x/logs.sh
+. ${AD5X_LIB:-/usr/lib/ad5x}/apps.sh
+. ${AD5X_LIB:-/usr/lib/ad5x}/logs.sh
 KROOT=$(app_root klipper)
 case "$1" in
 start)
+	# Links from an earlier IFS check never outlive it (/run is cleared at
+	# boot only): a switch to Flashforge's firmware leaves one behind.
+	AD5X_RUN=${AD5X_RUN:-/run/ad5x}
+	rm -f $AD5X_RUN/ifs-mcu/*.cfg $AD5X_RUN/ifs-klipper
 	if [ ! -f /data/ad5x/klipper.enable ]; then
 		echo "klipper: off (create /data/ad5x/klipper.enable to start it;"
 		echo "  only once the boards run mainline Klipper firmware)"
@@ -28,12 +32,11 @@ start)
 	# the IFS itself (plugin.json owns_ifs) brings its own pins: then Kiln's
 	# are left out. ad5x_plugins.py sets the link, here and (as Klipper's
 	# user, who owns the directory) whenever plugins change.
-	mkdir -p /run/ad5x/ifs-mcu && chown klipper:klipper /run/ad5x/ifs-mcu \
-		&& chmod 755 /run/ad5x/ifs-mcu
-	rm -f /run/ad5x/ifs-mcu/*.cfg /run/ad5x/ifs-klipper
+	mkdir -p $AD5X_RUN/ifs-mcu && chown klipper:klipper $AD5X_RUN/ifs-mcu \
+		&& chmod 755 $AD5X_RUN/ifs-mcu
 	if [ -f /data/ad5x/ifs-klipper.enable ] &&
 			ad5x-mcu-version --port /dev/ttyS4 --baud 115200 --timeout 5 >/dev/null 2>&1; then
-		: > /run/ad5x/ifs-klipper
+		: > $AD5X_RUN/ifs-klipper
 		/usr/bin/python3 $KROOT/klippy/extras/ad5x_plugins.py ifs-mcu \
 			$PD/config/plugins.cfg
 	fi

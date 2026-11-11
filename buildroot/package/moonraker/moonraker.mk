@@ -31,6 +31,9 @@ define MOONRAKER_INSTALL_TARGET_CMDS
 	# IFS slots for slicers (lane_data, OrcaSlicer's filament sync)
 	$(INSTALL) -D -m 0644 $(BR2_EXTERNAL_AD5X_PATH)/../moonraker/components/kiln_lanes.py \
 		$(TARGET_DIR)/usr/lib/moonraker/moonraker/components/kiln_lanes.py
+	# IFS firmware switch status for the touch screen
+	$(INSTALL) -D -m 0644 $(BR2_EXTERNAL_AD5X_PATH)/../moonraker/components/kiln_ifs_firmware.py \
+		$(TARGET_DIR)/usr/lib/moonraker/moonraker/components/kiln_ifs_firmware.py
 endef
 
 $(eval $(generic-package))
