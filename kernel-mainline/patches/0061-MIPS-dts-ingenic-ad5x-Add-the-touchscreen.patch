@@ -1,0 +1,67 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Mon, 9 Nov 2026 10:04:54 -0700
+Subject: [PATCH 61/74] MIPS: dts: ingenic: ad5x: Add the touchscreen
+
+The display has a resistive touchscreen on a TSC2007 at address 0x48 of
+I2C0 (PC00, PC01), pen down on PC07. Describe it with the plate
+resistance and pressure limit of the stock firmware.
+---
+ arch/mips/boot/dts/ingenic/ad5x.dts | 27 +++++++++++++++++++++++++++
+ 1 file changed, 27 insertions(+)
+
+diff --git a/arch/mips/boot/dts/ingenic/ad5x.dts b/arch/mips/boot/dts/ingenic/ad5x.dts
+index 9d468111e..a4b69a950 100644
+--- a/arch/mips/boot/dts/ingenic/ad5x.dts
++++ b/arch/mips/boot/dts/ingenic/ad5x.dts
+@@ -3,6 +3,7 @@
+ 
+ #include "x2600.dtsi"
+ #include <dt-bindings/gpio/gpio.h>
++#include <dt-bindings/interrupt-controller/irq.h>
+ 
+ / {
+ 	compatible = "flashforge,ad5x", "ingenic,x2600";
+@@ -127,6 +128,28 @@ &exclk {
+ 	clock-frequency = <24000000>;
+ };
+ 
++&i2c0 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pins_i2c0>;
++
++	clock-frequency = <400000>;
++
++	status = "okay";
++
++	/* The display's resistive touchscreen */
++	touchscreen@48 {
++		compatible = "ti,tsc2007";
++		reg = <0x48>;
++
++		interrupt-parent = <&gpc>;
++		interrupts = <7 IRQ_TYPE_EDGE_FALLING>;
++		gpios = <&gpc 7 GPIO_ACTIVE_LOW>;
++
++		ti,x-plate-ohms = <660>;
++		ti,max-rt = <600>;
++	};
++};
++
+ &mac {
+ 	pinctrl-names = "default";
+ 	pinctrl-0 = <&pins_mac>;
+@@ -175,6 +198,10 @@ &otg_phy {
+ };
+ 
+ &pinctrl {
++	pins_i2c0: i2c0 {
++		function = "i2c0";
++		groups = "i2c0-data-c";
++	};
+ 
+ 	pins_mac: mac {
+ 		function = "mac0";
+-- 
+2.43.0
+

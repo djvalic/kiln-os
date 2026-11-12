@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Mon, 9 Nov 2026 02:06:31 -0700
+Subject: [PATCH 03/74] MIPS: ingenic: Probe UserLocal instead of assuming it
+ is absent
+
+The Ingenic CPU feature overrides were written for the first XBurst
+SoCs, whose cores lack the UserLocal register (Config3.ULRI reads as 0
+on XBurst1, as its manual says), so they define cpu_has_userlocal as 0.
+The XBurst II cores of the X2600 do implement it, but under
+that override the kernel never enables it, and every RDHWR $29 from
+userspace, the way glibc reads the thread pointer for each access to
+thread-local data, traps and is emulated.
+
+Leave it to the Config3 probe, as on other MIPS CPUs. XBurst1 still
+reports no UserLocal. On the X2600 a thread pointer read goes from
+559 ns to 2.8 ns, returning the same value, with thread-local data
+still correct in two threads.
+---
+ arch/mips/include/asm/mach-ingenic/cpu-feature-overrides.h | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/arch/mips/include/asm/mach-ingenic/cpu-feature-overrides.h b/arch/mips/include/asm/mach-ingenic/cpu-feature-overrides.h
+index 7ace50127..08d6e2349 100644
+--- a/arch/mips/include/asm/mach-ingenic/cpu-feature-overrides.h
++++ b/arch/mips/include/asm/mach-ingenic/cpu-feature-overrides.h
+@@ -37,7 +37,6 @@
+ #define cpu_has_dsp		0
+ #define cpu_has_dsp2		0
+ #define cpu_has_mipsmt		0
+-#define cpu_has_userlocal	0
+ #define cpu_has_nofpuex 0
+ #define cpu_has_64bits		0
+ #define cpu_has_64bit_zero_reg 0
+-- 
+2.43.0
+

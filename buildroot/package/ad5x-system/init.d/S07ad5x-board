@@ -20,7 +20,10 @@ umask 022
 # sysfs GPIO number of PC11: base of the chip labelled GPC + 11
 pc11_sysfs() {
 	for c in /sys/class/gpio/gpiochip*; do
-		[ "$(cat $c/label 2>/dev/null)" = GPC ] && { echo $(( $(cat $c/base) + 11 )); return 0; }
+		# GPC on 6.6, GPIOC on mainline
+		case "$(cat $c/label 2>/dev/null)" in
+		GPC|GPIOC) echo $(( $(cat $c/base) + 11 )); return 0 ;;
+		esac
 	done
 	return 1
 }

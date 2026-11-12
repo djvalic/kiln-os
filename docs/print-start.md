@@ -36,7 +36,7 @@ PRINT_START BED=[bed_temperature_initial_layer_single] EXTRUDER=[nozzle_temperat
 3. Purge 90 mm at F300 with the fan off, fan S125 for 3 s, retract 3 mm,
    wipe (Y220/Y229 twice, end at Y220).
 4. Nozzle to 180, brush twice across the box (X65 to X78 at Y229).
-   Then the rest of the bed heat soak, if any ("Bed heat soak m:ss"): the
+   Then the rest of the bed heat soak, if any ("Heat soak m:ss"): the
    plate's surface keeps warming and growing after the sensor reads the
    target, which would shift the Z check (e.g. a cold start to 80 °C:
    180 s from reaching it, about 2 minutes of which the purge and
@@ -61,8 +61,8 @@ PRINT_START BED=[bed_temperature_initial_layer_single] EXTRUDER=[nozzle_temperat
 
 When the slicer purges (`nopoop` plugin, `use_trash_on_print` 0 or 2 when
 `PRINT_START` runs) `macros/print_start.cfg` skips step 3, as zMod does
-with its line purge: the console says "Print start: the slicer purges
-(use_trash_on_print 0), no purge at the box", the nozzle is still brushed,
+with its line purge: the console says "Slicer purges
+(use_trash_on_print 0): no purge at the box", the nozzle is still brushed,
 and the prime line (below) flushes it in front of the objects. A first
 colour that has to be loaded only primes at the box (12 mm, the swap's
 `prime_length`); the prime line then runs after it, so the change from
@@ -105,6 +105,22 @@ prime line width (2.5 x the nozzle), the IFS purge lengths (nozzle / 0.4),
 the setup wizard's first-layer test and Klipper's extrusion limits follow
 it. A bigger nozzle can also flush faster at colour changes:
 `[ifs] flush_speed` in `local.cfg` (stock 300 mm/min).
+
+## Cancel during the print start
+
+Klipper runs a cancel only after the G-code command that is running, and
+while a print starts that is the whole `PRINT_START`. `ad5x_soak` wraps
+Klipper's `pause_resume/cancel` endpoint (Moonraker `printer.print.cancel`:
+the touch screen, Fluidd, Mainsail) and notes the cancel when it arrives
+(`printer.ad5x_soak.cancel`). The heating waits (`_PRINT_START_HEAT`, as
+`TEMPERATURE_WAIT MINIMUM=` or M109) and the bed heat soak then end within
+a second, and `_PRINT_START_CHECK` ends the start between steps (after the
+homing and the box purge, before the edge scrub, before the mesh, after
+the Z check, before the first colour), always with the toolhead still. A
+probe, the mesh or an IFS swap that is running finishes first. The
+`CANCEL_PRINT` that was waiting then runs as on any cancel: heaters off,
+park, the print shows as cancelled. The console shows "Print start
+cancelled" once per macro level.
 
 ## Bed heat soak (`klipper/extras/ad5x_soak.py`)
 

@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Mon, 9 Nov 2026 10:04:54 -0700
+Subject: [PATCH 72/74] MIPS: configs: ad5x: Enable the display and touchscreen
+
+The DPU and its LVDS PHY, the panel and its backlight, fbdev emulation
+with /dev/fb0 (the printer's user interface draws there), and the
+touchscreen on I2C.
+---
+ arch/mips/configs/ad5x_defconfig | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/arch/mips/configs/ad5x_defconfig b/arch/mips/configs/ad5x_defconfig
+index a2a453bdc..ae26804b2 100644
+--- a/arch/mips/configs/ad5x_defconfig
++++ b/arch/mips/configs/ad5x_defconfig
+@@ -32,8 +32,11 @@ CONFIG_STMMAC_ETH=y
+ CONFIG_ICPLUS_PHY=y
+ CONFIG_RTW88=m
+ CONFIG_RTW88_8821CU=m
++CONFIG_INPUT_EVDEV=y
+ # CONFIG_INPUT_KEYBOARD is not set
+ # CONFIG_INPUT_MOUSE is not set
++CONFIG_INPUT_TOUCHSCREEN=y
++CONFIG_TOUCHSCREEN_TSC2007=y
+ # CONFIG_SERIO is not set
+ # CONFIG_VT is not set
+ CONFIG_SERIAL_8250=y
+@@ -42,10 +45,18 @@ CONFIG_SERIAL_8250_NR_UARTS=8
+ CONFIG_SERIAL_8250_RUNTIME_UARTS=8
+ CONFIG_SERIAL_8250_INGENIC=y
+ CONFIG_SERIAL_OF_PLATFORM=y
++CONFIG_I2C_JZ4780=y
+ CONFIG_GPIO_SYSFS=y
+ # CONFIG_HWMON is not set
+ CONFIG_REGULATOR=y
+ CONFIG_REGULATOR_FIXED_VOLTAGE=y
++CONFIG_DRM=y
++CONFIG_DRM_FBDEV_EMULATION=y
++CONFIG_DRM_INGENIC_DPU=y
++CONFIG_DRM_PANEL_LVDS=y
++CONFIG_FB_DEVICE=y
++CONFIG_BACKLIGHT_CLASS_DEVICE=y
++CONFIG_BACKLIGHT_GPIO=y
+ # CONFIG_HID is not set
+ CONFIG_USB=y
+ CONFIG_USB_DWC2=y
+@@ -60,6 +71,7 @@ CONFIG_DMA_JZ4780=y
+ CONFIG_INGENIC_X2600_OST=y
+ # CONFIG_IOMMU_SUPPORT is not set
+ CONFIG_PHY_INGENIC_USB=y
++CONFIG_PHY_ROCKCHIP_INNO_DSIDPHY=y
+ CONFIG_EXT4_FS=y
+ CONFIG_TMPFS=y
+ CONFIG_SQUASHFS=y
+-- 
+2.43.0
+

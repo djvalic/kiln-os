@@ -1,0 +1,92 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Tue, 10 Nov 2026 23:59:34 -0700
+Subject: [PATCH 12/74] MIPS: ingenic: Work around stale L2 data after DMA on
+ the X2600
+
+On the X2600 (XBurst II), with the L2-to-DDR prefetcher enabled,
+invalidating the L2 with Hit CACHE operations can leave stale data
+there: a buffer read after a device has written to it returns what it
+held before the transfer, although it is invalidated before and after
+the DMA.
+
+The RTL8821CU USB Wi-Fi driver, rtw88, shows it in its register reads,
+which go through 4-byte buffers: about one read in 500 is stale with
+the driver's buffers, and one in 12 when each buffer starts its own L2
+line. None are with the L2-to-DDR prefetcher turned off (CCU
+MSCR.DisPFB2), or with a load from an uncached address before the L2
+is invalidated, which Ingenic's kernels issue: none in 20000 reads
+over 4 boots.
+
+Add that load to mips_sc_inv(), as WAR_R4600_V2_HIT_CACHEOP does for
+the R4600, under a WAR_INGENIC_L2_HIT_CACHEOP option selected by the
+X2600. The X2000, the other XBurst II SoC, may need it as well but has
+not been tested.
+
+Cc: Paul Cercueil <paul@crapouillou.net>
+Assisted-by: Claude:claude-opus-5-5
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ arch/mips/Kconfig         | 8 ++++++++
+ arch/mips/ingenic/Kconfig | 1 +
+ arch/mips/mm/sc-mips.c    | 7 +++++++
+ 3 files changed, 16 insertions(+)
+
+diff --git a/arch/mips/Kconfig b/arch/mips/Kconfig
+index d7c67cebe..684f2e449 100644
+--- a/arch/mips/Kconfig
++++ b/arch/mips/Kconfig
+@@ -2525,6 +2525,14 @@ config WAR_R4600_V1_HIT_CACHEOP
+ config WAR_R4600_V2_HIT_CACHEOP
+ 	bool
+ 
++# Ingenic XBurst II: with the L2-to-DDR prefetcher enabled, invalidating
++# the L2 with Hit CACHE operations can leave stale data there, so that a
++# buffer read after DMA returns what it held before the transfer.  As on
++# the R4600 V2.0 above, a load from an uncached address before the
++# operations avoids it; Ingenic's own kernels do the same.
++config WAR_INGENIC_L2_HIT_CACHEOP
++	bool
++
+ # From TX49/H2 manual: "If the instruction (i.e. CACHE) is issued for
+ # the line which this instruction itself exists, the following
+ # operation is not guaranteed."
+diff --git a/arch/mips/ingenic/Kconfig b/arch/mips/ingenic/Kconfig
+index bb07c598e..4bd352a4e 100644
+--- a/arch/mips/ingenic/Kconfig
++++ b/arch/mips/ingenic/Kconfig
+@@ -89,5 +89,6 @@ config MACH_X1830
+ config MACH_X2600
+ 	bool
+ 	select MIPS_CPU_SCACHE
++	select WAR_INGENIC_L2_HIT_CACHEOP
+ 	select SYS_HAS_CPU_MIPS32_R2
+ 	select SYS_SUPPORTS_HIGHMEM
+diff --git a/arch/mips/mm/sc-mips.c b/arch/mips/mm/sc-mips.c
+index 06ec304ad..7280fb544 100644
+--- a/arch/mips/mm/sc-mips.c
++++ b/arch/mips/mm/sc-mips.c
+@@ -21,6 +21,12 @@
+  * MIPS32/MIPS64 L2 cache handling
+  */
+ 
++static inline void mips_sc_hit_cacheop_war(void)
++{
++	if (IS_ENABLED(CONFIG_WAR_INGENIC_L2_HIT_CACHEOP))
++		__fast_iob();
++}
++
+ /*
+  * Writeback and invalidate the secondary cache before DMA.
+  */
+@@ -37,6 +43,7 @@ static void mips_sc_inv(unsigned long addr, unsigned long size)
+ 	unsigned long lsize = cpu_scache_line_size();
+ 	unsigned long almask = ~(lsize - 1);
+ 
++	mips_sc_hit_cacheop_war();
+ 	cache_op(Hit_Writeback_Inv_SD, addr & almask);
+ 	cache_op(Hit_Writeback_Inv_SD, (addr + size - 1) & almask);
+ 	blast_inv_scache_range(addr, addr + size);
+-- 
+2.43.0
+

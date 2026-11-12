@@ -19,10 +19,13 @@
 # package is deleted (lib/apps.sh has the same rules).
 # The kernel (issue #42): when /data/ad5x/kernel/failed names the release of
 # our kernel in this image (S00ad5x-kernel), the printer runs on the stock
-# kernel: a Moonraker warning says so (Fluidd shows it). Endpoints:
+# kernel: a Moonraker warning says so (Fluidd shows it). The same when the
+# opt-in mainline 7.3 kernel (ad5x-kernel mainline on) failed and the
+# printer fell back to 6.6 (/data/ad5x/kernel/failed-mainline). Endpoints:
 #   GET  /machine/kiln_os/kernel        running, ours, failed, why, ...
 #   POST /machine/kiln_os/kernel_retry  the agent runs "ad5x-kernel retry"
-#                                       and reboots (refused while printing)
+#                                       (clears both records) and reboots
+#                                       (refused while printing)
 # The "Kiln OS" update entry's status has the same under "kernel".
 # The recovery OS (issue #47):
 #   POST /machine/kiln_os/boot_recovery the agent runs "ad5x-boot-recovery"
@@ -67,6 +70,7 @@ APPS_DIR = pathlib.Path("/data/ad5x/apps")
 APP_SUB = {"klipper": "klippy", "moonraker": "moonraker"}
 KERNEL_DIR = pathlib.Path("/data/ad5x/kernel")
 OUR_KERNEL = pathlib.Path("/usr/lib/ad5x/kernel66/release")
+MAINLINE_KERNEL = pathlib.Path("/usr/lib/ad5x/kernel-mainline/release")
 KERNEL_WARNING = "kiln_os_kernel"
 
 
@@ -162,6 +166,10 @@ def kernel_status() -> Dict[str, Any]:
         unfinished = 0
     running = os.uname().release
     failed_rel = failed[0].strip() if failed else ""
+    mainline = read_text(MAINLINE_KERNEL)
+    mainline = "" if mainline == "?" else mainline
+    mfailed = read_record(KERNEL_DIR / "failed-mainline").splitlines()
+    mfailed_rel = mfailed[0].strip() if mfailed else ""
     return {
         "running": running,
         "stock": running.startswith("5.10."),
@@ -170,6 +178,10 @@ def kernel_status() -> Dict[str, Any]:
         "failed_why": failed[1].strip() if len(failed) > 1 else "",
         "ours_failed": ours != "?" and failed_rel == ours,
         "unfinished": unfinished,
+        "mainline": mainline,
+        "mainline_on": (KERNEL_DIR / "mainline").exists(),
+        "mainline_failed": bool(mainline) and mfailed_rel == mainline,
+        "mainline_failed_why": mfailed[1].strip() if len(mfailed) > 1 else "",
     }
 
 
@@ -184,9 +196,19 @@ def safe_kernel_status() -> Dict[str, Any]:
 
 
 def kernel_notice(st: Dict[str, Any]) -> str:
-    """The warning while our kernel is recorded as failed, else ''."""
+    """The warning while our kernel (or the opt-in mainline one) is
+    recorded as failed, else ''."""
     if not st.get("ours_failed"):
-        return ""
+        if not (st.get("mainline_failed") and st.get("mainline_on")):
+            return ""
+        why = st["mainline_failed_why"]
+        why = f" ({why})" if why else ""
+        return (
+            f"Running the 6.6 kernel: the mainline {st['mainline']} kernel "
+            f"you turned on failed to start{why}. The printer works as "
+            "usual on 6.6. To try it again: POST /machine/kiln_os/"
+            "kernel_retry (the printer reboots), or 'ad5x-kernel retry' over "
+            "SSH, then reboot. 'ad5x-kernel mainline off' stops trying it.")
     why = f" ({st['failed_why']})" if st["failed_why"] else ""
     return (
         "Running the stock kernel: Kiln's kernel failed to start"
@@ -617,7 +639,8 @@ class KilnOS:
         st = kernel_status()
         if not st["ours"]:
             raise self.server.error("This image has no kernel of its own")
-        if not st["stock"] and not st["failed"]:
+        if not st["stock"] and not st["failed"] \
+                and not st["mainline_failed"]:
             raise self.server.error(
                 "Kiln's kernel is running: nothing to retry")
         # The agent refuses while printing, runs "ad5x-kernel retry" and

@@ -1,0 +1,96 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Wed, 11 Nov 2026 22:30:00 -0500
+Subject: [PATCH] discovery: Moonraker's warnings on the screen
+
+HelixScreen never reads Moonraker's warnings (server.info "warnings").
+Fluidd shows them, the touch screen didn't, so a printer that fell back
+to another kernel (Kiln's kiln_os component: the opt-in 7.3 kernel
+failed to start, or Kiln's kernel did and the stock one runs) said so
+only in a browser.
+
+On HELIX_KILN_AD5X builds each warning becomes a warning toast that
+stays until it is closed ("Printer warning" over the text) and a row
+under the home screen's bell. Discovery runs again on every
+klippy_ready and reconnect, so each text is shown once per run of the
+app; after a restart it shows again while Moonraker still has it.
+---
+diff --git a/src/api/moonraker_discovery_sequence.cpp b/src/api/moonraker_discovery_sequence.cpp
+index e710bb9..a9ea6f2 100644
+--- a/src/api/moonraker_discovery_sequence.cpp
++++ b/src/api/moonraker_discovery_sequence.cpp
+@@ -3,6 +3,9 @@
+ 
+ #include "moonraker_discovery_sequence.h"
+ 
++#include "lvgl/src/others/translation/lv_translation.h"
++#include "ui_notification.h"
++
+ #include "ui_update_queue.h"
+ 
+ #include "accel_sensor_manager.h"
+@@ -60,6 +63,8 @@
+ 
+ #include <algorithm>
+ #include <cctype>
++#include <mutex>
++#include <set>
+ #include <thread>
+ #include <unordered_set>
+ #include <utility>
+@@ -671,6 +676,30 @@ void MoonrakerDiscoverySequence::continue_discovery_objects(uint64_t seq) {
+                     return;
+                 if (info_response.contains("result")) {
+                     const json& result = info_response["result"];
++#if defined(HELIX_KILN_AD5X)
++                    // Kiln OS: Moonraker's warnings (server.info "warnings", the
++                    // ones Fluidd shows, e.g. kiln_os's "the printer fell back to
++                    // another kernel") as a warning toast that stays until it is
++                    // closed, and a row under the bell. Discovery runs again on
++                    // every klippy_ready and reconnect: each text once per run.
++                    if (result.contains("warnings") && result["warnings"].is_array()) {
++                        static std::mutex shown_mutex;
++                        static std::set<std::string> shown;
++                        for (const auto& w : result["warnings"]) {
++                            if (!w.is_string())
++                                continue;
++                            std::string text = w.get<std::string>();
++                            {
++                                std::lock_guard<std::mutex> lock(shown_mutex);
++                                if (text.empty() || !shown.insert(text).second)
++                                    continue;
++                            }
++                            spdlog::warn("[Moonraker Client] Moonraker warning: {}", text);
++                            ui_notification_warning_sticky(lv_tr("Printer warning"),
++                                                           text.c_str());
++                        }
++                    }
++#endif
+                     std::string klippy_version = result.value("klippy_version", "unknown");
+                     auto moonraker_version = result.value("moonraker_version", "unknown");
+                     {
+diff --git a/translations/en.yml b/translations/en.yml
+index 65b807b..d9b219a 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -5005,6 +5005,8 @@ translations:
+   NOT AVAILABLE HERE: "NOT AVAILABLE HERE"
+   The plugin didn't say why.: "The plugin didn't say why."
+   # Kiln OS (AD5X) strings from the Kiln HelixScreen patches
++  # Moonraker's warnings on the screen (patch 0059)
++  'Printer warning': 'Printer warning'
+   # Kiln's tour (patch 0058, tour_steps_kiln.cpp)
+   'Welcome to Kiln OS': 'Welcome to Kiln OS'
+   'Here''s a quick tour of the screen, so you can find things fast.': 'Here''s a quick tour of the screen, so you can find things fast.'
+diff --git a/translations/ru.yml b/translations/ru.yml
+index be23251..861545a 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -5170,6 +5170,7 @@ translations:
+   'Load and Unload are here. Settings has Auto-Refill, Tune IFS and Pre-feed.': 'Здесь «Загрузить» и «Выгрузить». В разделе «Настройки» — «Автозамена», «Настроить IFS» и «Предзагрузка».'
+   'Macros, G-code console, print history, Spoolman, calibration, and Shutdown or Reboot.': 'Макросы, консоль G-code, история печати, Spoolman, калибровка, выключение и перезагрузка.'
+   'Screen, sound, connection, and the printer''s own settings: Run Setup Wizard, Nozzle Size, Filament Auto-Refill, Plugins. Replay this tour from Help & About.': 'Экран, звук, соединение и настройки принтера: «Запустить мастер настройки», «Размер сопла», «Автозамена филамента», «Плагины». Повторить тур: «Помощь и о программе».'
++  'Printer warning': 'Предупреждение принтера'
+   'More': 'Ещё'
+   'Price, location, lot, notes': 'Цена, место, партия, заметки'
+   'Product': 'Продукт'

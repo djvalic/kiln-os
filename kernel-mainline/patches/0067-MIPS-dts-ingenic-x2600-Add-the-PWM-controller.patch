@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Mon, 9 Nov 2026 17:06:17 -0700
+Subject: [PATCH 67/74] MIPS: dts: ingenic: x2600: Add the PWM controller
+
+The 16-channel PWM controller at 0x13610000, on the CGU's PWM clock.
+Disabled by default: a board enables it with the pins of the channels
+it uses.
+---
+ arch/mips/boot/dts/ingenic/x2600.dtsi | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/arch/mips/boot/dts/ingenic/x2600.dtsi b/arch/mips/boot/dts/ingenic/x2600.dtsi
+index d82d7602f..ceaed8f93 100644
+--- a/arch/mips/boot/dts/ingenic/x2600.dtsi
++++ b/arch/mips/boot/dts/ingenic/x2600.dtsi
+@@ -275,6 +275,20 @@ gpe: gpio@4 {
+ 		};
+ 	};
+ 
++	pwm: pwm@13610000 {
++		compatible = "ingenic,x2600-pwm";
++		reg = <0x13610000 0x1000>;
++
++		interrupt-parent = <&intc>;
++		interrupts = <20>;
++
++		clocks = <&cgu X2600_CLK_PWM>;
++
++		#pwm-cells = <3>;
++
++		status = "disabled";
++	};
++
+ 	watchdog: watchdog@13630000 {
+ 		compatible = "ingenic,x2600-watchdog";
+ 		reg = <0x13630000 0x40>;
+-- 
+2.43.0
+

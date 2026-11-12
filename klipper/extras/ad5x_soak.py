@@ -48,6 +48,20 @@
 # BED_SOAK_WAIT
 #   Waits for what is left of the soak (the purge and brushing since
 #   BED_SOAK_START count), with a countdown on the screen.
+# _PRINT_START_HEAT HEATER=heater_bed|extruder [MINIMUM=]
+#   PRINT_START's heating waits: TEMPERATURE_WAIT MINIMUM= (with MINIMUM)
+#   or M109's wait for the heater to settle (without), set the target first.
+# Cancel during the print start: a cancel (Moonraker printer.print.cancel,
+#   Klipper endpoint pause_resume/cancel: Fluidd, Mainsail, HelixScreen)
+#   queues CANCEL_PRINT behind the running G-code command, which during
+#   the print start is the whole PRINT_START (several minutes). The
+#   endpoint is wrapped so the cancel is noted when it arrives
+#   (printer.ad5x_soak.cancel, until CANCEL_PRINT has run); the soak and
+#   heating waits above end within a second, _PRINT_START_CHECK (ad5x.cfg)
+#   at the step boundaries, with an error that ends PRINT_START. The
+#   waiting CANCEL_PRINT then runs as on any cancel (print_stats
+#   "cancelled", heaters off, park). A probe move, the mesh or an IFS swap
+#   isn't cut: the start ends after it.
 # printer.ad5x_soak: calibration ({"80": {settle, drift, from, date}}),
 #   running, soak (seconds of the current print's soak), last (readings of
 #   the last calibration: [[seconds, z centre, z corners...], ...]).
@@ -141,7 +155,8 @@ class BedSoak:
         self.points = 1
         self.enabled = True
         self.abort = False
-        self.printer.register_event_handler("klippy:connect", self._load)
+        self.cancel = False     # a cancel waits for the print start to end
+        self.printer.register_event_handler("klippy:connect", self._connect)
         webhooks = self.printer.lookup_object('webhooks', None)
         if webhooks is not None:
             webhooks.register_endpoint("ad5x_soak/abort", self._handle_abort)
@@ -153,9 +168,15 @@ class BedSoak:
                 ("BED_SOAK_ENABLE", "Bed heat soak on or off for every "
                  "print: ENABLE=0|1"),
                 ("BED_SOAK_WAIT", "PRINT_START: wait for the rest of the "
-                 "bed soak")):
+                 "bed soak"),
+                ("_PRINT_START_HEAT", "PRINT_START: wait for a heater, a "
+                 "cancel ends it: HEATER= [MINIMUM=]")):
             self.gcode.register_command(cmd, getattr(self, "cmd_" + cmd),
                                         desc=desc)
+
+    def _connect(self):
+        self._load()
+        self._hook_cancel()
 
     def _load(self):
         sv = self.printer.lookup_object('save_variables', None)
@@ -177,16 +198,41 @@ class BedSoak:
     def _status(self, msg):
         self.gcode.run_script_from_command('_PRINT_STATUS MSG="%s"' % (msg,))
 
+    def _hook_cancel(self):
+        # Note a cancel when it arrives, before it waits for the G-code
+        # queue (webhooks has no public way to wrap an endpoint)
+        endpoints = getattr(self.printer.lookup_object('webhooks'),
+                            '_endpoints', None)
+        orig = (endpoints or {}).get("pause_resume/cancel")
+        if orig is None:
+            logging.info("ad5x_soak: no pause_resume/cancel endpoint; a "
+                         "cancel waits for the print start to end")
+            return
+
+        def cancel(web_request):
+            self.cancel = True
+            try:
+                orig(web_request)
+            finally:
+                self.cancel = False
+        endpoints["pause_resume/cancel"] = cancel
+
+    def _check_cancel(self):
+        if self.cancel:
+            raise self.gcode.error("Print start cancelled")
+
     def _handle_abort(self, web_request):
         if self.running:
             self.abort = True
         web_request.send({'running': self.running})
 
-    def _sleep(self, seconds):
+    def _sleep(self, seconds, start=False):
         end = self.reactor.monotonic() + seconds
         while not self.printer.is_shutdown():
             if self.abort:
                 raise self.gcode.error("Bed soak calibration stopped")
+            if start:
+                self._check_cancel()
             now = self.reactor.monotonic()
             if now >= end:
                 return
@@ -347,22 +393,28 @@ class BedSoak:
     def cmd_BED_SOAK_WAIT(self, gcmd):
         if self.soak <= 0:
             return
-        if self.mode == 'probe':
-            self._probe_until_stable(gcmd)
-            return
-        while True:
-            left = self.until - self.reactor.monotonic()
-            if left < 1.:
-                break
-            self._status("Bed heat soak %d:%02d" % (left // 60, left % 60))
-            self._sleep(min(left, 5.))
-        self.soak = 0.
+        try:
+            if self.mode == 'probe':
+                self._probe_until_stable(gcmd)
+                return
+            while True:
+                left = self.until - self.reactor.monotonic()
+                if left < 1.:
+                    break
+                # "Heat soak", not "Bed heat soak": HelixScreen's print start
+                # steps read "bed ... heat" as heating the bed, a step it has
+                # passed by now, and the screen stayed on the step before
+                self._status("Heat soak %d:%02d" % (left // 60, left % 60))
+                self._sleep(min(left, 5.), start=True)
+        finally:
+            self.soak = 0.
 
     def _probe_until_stable(self, gcmd, stable=.005, interval=60.):
+        self._check_cancel()
         prev = self._probe_points(self.points)
         while self.reactor.monotonic() < self.until:
-            self._status("Bed heat soak: waiting for Z to settle")
-            self._sleep(interval)
+            self._status("Heat soak: waiting for Z to settle")
+            self._sleep(interval, start=True)
             zs = self._probe_points(self.points)
             moved = max(abs(a - b) for a, b in zip(zs, prev))
             if moved <= stable:
@@ -370,12 +422,38 @@ class BedSoak:
                                   " in %d s)" % (moved, interval))
                 break
             prev = zs
-        self.soak = 0.
+
+    def cmd__PRINT_START_HEAT(self, gcmd):
+        # As TEMPERATURE_WAIT (heaters.py) / M109's wait, checking for a
+        # cancel each second; the toolhead is still here
+        try:
+            heater = self.printer.lookup_object('heaters').lookup_heater(
+                gcmd.get('HEATER'))
+        except self.printer.config_error as e:
+            raise gcmd.error(str(e))    # not a shutdown for a wrong name
+        minimum = gcmd.get_float('MINIMUM', None)
+        if self.printer.get_start_args().get('debugoutput') is not None:
+            return      # batch mode (tools/test_image.sh), as heaters.py
+        toolhead = self.printer.lookup_object('toolhead')
+        eventtime = self.reactor.monotonic()
+        while not self.printer.is_shutdown():
+            self._check_cancel()
+            temp, target = heater.get_temp(eventtime)
+            if minimum is not None:
+                if temp >= minimum:
+                    return
+            elif target <= 0. or not heater.check_busy(eventtime):
+                return
+            toolhead.get_last_move_time()
+            self.reactor.pause(eventtime + 1.)
+            eventtime = self.reactor.monotonic()
+        raise gcmd.error("Shutdown while heating")
 
     def get_status(self, eventtime):
         return {'enabled': self.enabled,
                 'calibration': self.calibration, 'running': self.running,
-                'soak': self.soak, 'last': self.last}
+                'soak': self.soak, 'last': self.last,
+                'cancel': self.cancel}
 
 
 def load_config(config):

@@ -1,0 +1,289 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Wed, 11 Nov 2026 19:30:00 -0500
+Subject: [PATCH] tour: Kiln OS's own tour of the AD5X screens
+
+Upstream's first-run and "New in 1.1" tour points at tiles the AD5X
+home doesn't have (nozzle_temps, printer_image), calls the IFS an AMS,
+shows a Print Status sample with a quad gantry level step, and names an
+"Advanced" panel with firmware updates. Printers that came from a Kiln
+beta.18 image saw only its upgrade part ("New in 1.1", 1 / 5).
+
+On HELIX_KILN_AD5X builds build_tour_steps() returns
+build_kiln_tour_steps() (tour_steps_kiln.cpp): welcome to Kiln OS, the
+top strip, the Print status tile, the IFS slots tile, customizing the
+home screen, Controls, Load and unload, the IFS screen and its tools
+(Auto-Refill, Tune IFS, Pre-feed), More (the dots button) and Settings
+with Kiln's rows. The IFS steps only with a filament system. No Print
+Status sample. Upstream's list stays as it is for other builds.
+
+kTourVersion is 3 (kKilnTourVersion) on the AD5X build, so someone who
+finished or skipped upstream's tour (1 or 2) sees Kiln's once, starting
+with a "A tour of Kiln's screens" card instead of the welcome. Replay
+Welcome Tour in Help & About shows the full Kiln tour. Strings in en
+and ru.
+---
+ include/first_run_tour.h        |   4 +
+ include/tour_steps.h            |   9 ++
+ src/ui/tour/tour_steps.cpp      |   3 +
+ src/ui/tour/tour_steps_kiln.cpp | 142 ++++++++++++++++++++++++++++++++
+ translations/en.yml             |  16 ++++
+ translations/ru.yml             |  16 ++++
+ 6 files changed, 190 insertions(+)
+ create mode 100644 src/ui/tour/tour_steps_kiln.cpp
+
+diff --git a/include/first_run_tour.h b/include/first_run_tour.h
+index 3b23c72..23ce05e 100644
+--- a/include/first_run_tour.h
++++ b/include/first_run_tour.h
+@@ -17,7 +17,11 @@ namespace helix::tour {
+ class TourOverlay; // fwd-declare (defined in tour_overlay.h)
+ 
+ /// Current tour version. Bump when tour content materially changes.
++#if defined(HELIX_KILN_AD5X)
++constexpr int kTourVersion = kKilnTourVersion; // Kiln's tour (tour_steps_kiln.cpp)
++#else
+ constexpr int kTourVersion = 2;
++#endif
+ 
+ /// Singleton used by runtime methods (start, advance, skip); gate helpers below are static.
+ class FirstRunTour {
+diff --git a/include/tour_steps.h b/include/tour_steps.h
+index 9680af2..67c836b 100644
+--- a/include/tour_steps.h
++++ b/include/tour_steps.h
+@@ -58,6 +58,15 @@ struct TourStep {
+ /// is the upgrade tour holding only the steps newer than that version.
+ std::vector<TourStep> build_tour_steps(bool has_ams, int seen_version = 0);
+ 
++/// Kiln OS (AD5X): the version of Kiln's own tour, above upstream's (2), so
++/// someone who finished or skipped upstream's tour sees Kiln's once.
++inline constexpr int kKilnTourVersion = 3;
++
++/// Kiln OS (AD5X): the tour of Kiln's screens (tour_steps_kiln.cpp);
++/// build_tour_steps() returns it on HELIX_KILN_AD5X builds. Declared on every
++/// build so tests can call it.
++std::vector<TourStep> build_kiln_tour_steps(bool has_ams, int seen_version = 0);
++
+ /// The `seen_version` for an automatic start, from the persisted tour state. Someone
+ /// who has never finished a tour, or whose state predates versioning, gets the full tour.
+ int auto_start_seen_version(bool completed, int last_seen_version);
+diff --git a/src/ui/tour/tour_steps.cpp b/src/ui/tour/tour_steps.cpp
+index 57fe3ef..41ba0dc 100644
+--- a/src/ui/tour/tour_steps.cpp
++++ b/src/ui/tour/tour_steps.cpp
+@@ -23,6 +23,9 @@ bool hardware_has_ams() {
+ // "Welcome to HelixScreen" renders RAW in the English UI. Renaming one here
+ // means renaming it in translations/*.yml too.
+ std::vector<TourStep> build_tour_steps(bool has_ams, int seen_version) {
++#if defined(HELIX_KILN_AD5X)
++    return build_kiln_tour_steps(has_ams, seen_version);
++#endif
+     std::vector<TourStep> steps;
+     steps.reserve(11);
+ 
+diff --git a/src/ui/tour/tour_steps_kiln.cpp b/src/ui/tour/tour_steps_kiln.cpp
+new file mode 100644
+index 0000000..b8ef5af
+--- /dev/null
++++ b/src/ui/tour/tour_steps_kiln.cpp
+@@ -0,0 +1,142 @@
++// Copyright (C) 2025-2026 356C LLC
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++// Kiln OS (AD5X): the tour of Kiln's own screens. Upstream's list
++// (tour_steps.cpp) points at tiles the AD5X home doesn't have, calls the
++// IFS an AMS, shows a Print Status sample with steps the AD5X has no use
++// for, and names an "Advanced" panel with firmware updates; on
++// HELIX_KILN_AD5X builds build_tour_steps() returns this list instead.
++// Keys are their own English text, as in tour_steps.cpp.
++
++#include "tour_steps.h"
++
++#include <algorithm>
++#include <utility>
++
++namespace helix::tour {
++
++std::vector<TourStep> build_kiln_tour_steps(bool has_ams, int seen_version) {
++    std::vector<TourStep> steps;
++    steps.reserve(12);
++
++    steps.push_back({"",
++                     "Welcome to Kiln OS",
++                     "Here's a quick tour of the screen, so you can find things fast.",
++                     TooltipAnchor::Center,
++                     {}});
++
++    // Only for someone who saw an earlier tour (upstream's): say why it's back
++    TourStep changed{"",
++                     "A tour of Kiln's screens",
++                     "The tour now shows the screens Kiln OS sets up. Skip it anytime.",
++                     TooltipAnchor::Center,
++                     {}};
++    changed.upgrade_only = true;
++    steps.push_back(std::move(changed));
++
++    TourStep glance{"temperature",
++                    "Your printer at a glance",
++                    "Nozzle and bed temperatures, fans and notifications are along the top. "
++                    "Tap any tile to open its controls.",
++                    TooltipAnchor::PreferBelow,
++                    {}};
++    glance.fallback_target_name = "print_status";
++    steps.push_back(std::move(glance));
++
++    // The tile has no free side: the card goes to its corner, the outline stays
++    steps.push_back({"print_status",
++                     "Print status",
++                     "The print in progress, or your last print with Reprint Last. During a "
++                     "print, tap it for temperatures, IFS slots, and Pause, Tune and Cancel.",
++                     TooltipAnchor::PreferRight,
++                     {}});
++
++    if (has_ams) {
++        steps.push_back({"ams",
++                         "IFS slots",
++                         "The material and colour in each of the four slots. Tap here to open "
++                         "the IFS screen.",
++                         TooltipAnchor::PreferLeft,
++                         {}});
++    }
++
++    TourStep customize{"fan_stack",
++                       "Customize your home screen",
++                       "Long-press any tile to move, resize, remove or add tiles.",
++                       TooltipAnchor::PreferBelow,
++                       {}};
++    customize.fallback_target_name = "print_status";
++    steps.push_back(std::move(customize));
++
++    steps.push_back({"nav_btn_controls",
++                     "Controls",
++                     "Move the toolhead, home axes, level the bed, and fine-tune temperatures, "
++                     "fans, and other motion settings.",
++                     TooltipAnchor::PreferRight,
++                     {}});
++
++    TourStep filament_panel{"filament_operations_group",
++                            "Load and unload",
++                            "Load, unload, and purge from here. Choose a material to set its "
++                            "temperatures first.",
++                            TooltipAnchor::LeftNarrowed,
++                            {}};
++    filament_panel.panel = TourPanel::Filament;
++    steps.push_back(std::move(filament_panel));
++
++    if (has_ams) {
++        TourStep ifs{"ams_unit_card",
++                     "The IFS screen",
++                     "Tap a slot to load it or to set its material and colour. With Spoolman, "
++                     "you can link a spool to it.",
++                     TooltipAnchor::PreferBelow,
++                     {}};
++        ifs.panel = TourPanel::AmsOverlay;
++        ifs.fallback_target_name = "unit_cards_row";
++        steps.push_back(std::move(ifs));
++
++        // The sidebar, not its Settings button: that hides without device ops,
++        // and the overlay doesn't check whether a target is hidden
++        TourStep tools{"ams_operation_sidebar",
++                       "Auto-Refill and IFS tools",
++                       "Load and Unload are here. Settings has Auto-Refill, Tune IFS and "
++                       "Pre-feed.",
++                       TooltipAnchor::LeftNarrowed,
++                       {}};
++        tools.panel = TourPanel::AmsOverlay;
++        steps.push_back(std::move(tools));
++    }
++
++    steps.push_back({"nav_btn_advanced",
++                     "More",
++                     "Macros, G-code console, print history, Spoolman, calibration, and "
++                     "Shutdown or Reboot.",
++                     TooltipAnchor::PreferRight,
++                     {}});
++    steps.push_back({"nav_btn_settings",
++                     "Settings",
++                     "Screen, sound, connection, and the printer's own settings: Run Setup "
++                     "Wizard, Nozzle Size, Filament Auto-Refill, Plugins. Replay this tour "
++                     "from Help & About.",
++                     TooltipAnchor::PreferRight,
++                     {}});
++
++    // Every step but the welcome is new in Kiln's tour (kKilnTourVersion): a
++    // new install sees it all without the "tour of Kiln's screens" card,
++    // someone who saw upstream's tour (1 or 2) sees it all but the welcome,
++    // with that card; once seen (3), nothing.
++    for (auto& s : steps)
++        if (s.title_key != "Welcome to Kiln OS")
++            s.since_version = kKilnTourVersion;
++
++    const bool upgrading = seen_version > 0;
++    steps.erase(std::remove_if(steps.begin(), steps.end(),
++                               [&](const TourStep& s) {
++                                   return upgrading ? s.since_version <= seen_version
++                                                    : s.upgrade_only;
++                               }),
++                steps.end());
++    return steps;
++}
++
++} // namespace helix::tour
+diff --git a/translations/en.yml b/translations/en.yml
+index 5989953..65b807b 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -5005,6 +5005,22 @@ translations:
+   NOT AVAILABLE HERE: "NOT AVAILABLE HERE"
+   The plugin didn't say why.: "The plugin didn't say why."
+   # Kiln OS (AD5X) strings from the Kiln HelixScreen patches
++  # Kiln's tour (patch 0058, tour_steps_kiln.cpp)
++  'Welcome to Kiln OS': 'Welcome to Kiln OS'
++  'Here''s a quick tour of the screen, so you can find things fast.': 'Here''s a quick tour of the screen, so you can find things fast.'
++  'A tour of Kiln''s screens': 'A tour of Kiln''s screens'
++  'The tour now shows the screens Kiln OS sets up. Skip it anytime.': 'The tour now shows the screens Kiln OS sets up. Skip it anytime.'
++  'Nozzle and bed temperatures, fans and notifications are along the top. Tap any tile to open its controls.': 'Nozzle and bed temperatures, fans and notifications are along the top. Tap any tile to open its controls.'
++  'The print in progress, or your last print with Reprint Last. During a print, tap it for temperatures, IFS slots, and Pause, Tune and Cancel.': 'The print in progress, or your last print with Reprint Last. During a print, tap it for temperatures, IFS slots, and Pause, Tune and Cancel.'
++  'IFS slots': 'IFS slots'
++  'The material and colour in each of the four slots. Tap here to open the IFS screen.': 'The material and colour in each of the four slots. Tap here to open the IFS screen.'
++  'Long-press any tile to move, resize, remove or add tiles.': 'Long-press any tile to move, resize, remove or add tiles.'
++  'The IFS screen': 'The IFS screen'
++  'Tap a slot to load it or to set its material and colour. With Spoolman, you can link a spool to it.': 'Tap a slot to load it or to set its material and colour. With Spoolman, you can link a spool to it.'
++  'Auto-Refill and IFS tools': 'Auto-Refill and IFS tools'
++  'Load and Unload are here. Settings has Auto-Refill, Tune IFS and Pre-feed.': 'Load and Unload are here. Settings has Auto-Refill, Tune IFS and Pre-feed.'
++  'Macros, G-code console, print history, Spoolman, calibration, and Shutdown or Reboot.': 'Macros, G-code console, print history, Spoolman, calibration, and Shutdown or Reboot.'
++  'Screen, sound, connection, and the printer''s own settings: Run Setup Wizard, Nozzle Size, Filament Auto-Refill, Plugins. Replay this tour from Help & About.': 'Screen, sound, connection, and the printer''s own settings: Run Setup Wizard, Nozzle Size, Filament Auto-Refill, Plugins. Replay this tour from Help & About.'
+   ', corners {:+.3f} to {:+.3f}': ', corners {:+.3f} to {:+.3f}'
+   ', not fully settled': ', not fully settled'
+   'Ad5xFinish': 'Ad5xFinish'
+diff --git a/translations/ru.yml b/translations/ru.yml
+index 2314b41..be23251 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -5154,6 +5154,22 @@ translations:
+   'Basic': 'Базовый'
+   'Recycled': 'Переработанный'
+   'Add to Spoolman + label': 'Добавить в Spoolman + этикетка'
++  # Kiln's tour (patch 0058, tour_steps_kiln.cpp)
++  'Welcome to Kiln OS': 'Добро пожаловать в Kiln OS'
++  'Here''s a quick tour of the screen, so you can find things fast.': 'Краткий тур по экрану, чтобы вы быстро находили нужное.'
++  'A tour of Kiln''s screens': 'Тур по экранам Kiln'
++  'The tour now shows the screens Kiln OS sets up. Skip it anytime.': 'Тур показывает экраны, настроенные Kiln OS. Пропустить его можно в любой момент.'
++  'Nozzle and bed temperatures, fans and notifications are along the top. Tap any tile to open its controls.': 'Вверху — температуры сопла и стола, вентиляторы и уведомления. Нажмите на любую плитку, чтобы открыть её элементы управления.'
++  'The print in progress, or your last print with Reprint Last. During a print, tap it for temperatures, IFS slots, and Pause, Tune and Cancel.': 'Текущая печать или последняя с кнопкой «Перепечатать последнюю». Во время печати нажмите сюда: температуры, слоты IFS, «Пауза», «Настройка» и «Отмена».'
++  'IFS slots': 'Слоты IFS'
++  'The material and colour in each of the four slots. Tap here to open the IFS screen.': 'Материал и цвет в каждом из четырёх слотов. Нажмите сюда, чтобы открыть экран IFS.'
++  'Long-press any tile to move, resize, remove or add tiles.': 'Удерживайте плитку, чтобы перемещать, менять размер, удалять или добавлять плитки.'
++  'The IFS screen': 'Экран IFS'
++  'Tap a slot to load it or to set its material and colour. With Spoolman, you can link a spool to it.': 'Нажмите на слот, чтобы загрузить его или указать материал и цвет. Если подключён Spoolman, к слоту можно привязать катушку.'
++  'Auto-Refill and IFS tools': 'Автозамена и функции IFS'
++  'Load and Unload are here. Settings has Auto-Refill, Tune IFS and Pre-feed.': 'Здесь «Загрузить» и «Выгрузить». В разделе «Настройки» — «Автозамена», «Настроить IFS» и «Предзагрузка».'
++  'Macros, G-code console, print history, Spoolman, calibration, and Shutdown or Reboot.': 'Макросы, консоль G-code, история печати, Spoolman, калибровка, выключение и перезагрузка.'
++  'Screen, sound, connection, and the printer''s own settings: Run Setup Wizard, Nozzle Size, Filament Auto-Refill, Plugins. Replay this tour from Help & About.': 'Экран, звук, соединение и настройки принтера: «Запустить мастер настройки», «Размер сопла», «Автозамена филамента», «Плагины». Повторить тур: «Помощь и о программе».'
+   'More': 'Ещё'
+   'Price, location, lot, notes': 'Цена, место, партия, заметки'
+   'Product': 'Продукт'
+-- 
+2.56.0
+

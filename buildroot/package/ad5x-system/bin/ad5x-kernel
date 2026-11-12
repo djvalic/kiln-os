@@ -5,15 +5,29 @@
 # panic: reboots by itself; two unfinished start-ups in a row), the printer
 # runs on the stock kernel until "retry" (an update does not clear it: the
 # release string is the same in every build).
-#   ad5x-kernel            the running kernel, ours in this image, failures
-#   ad5x-kernel retry      try ours again from the next boot
+# Mainline 7.3 is opt-in; a failed start of it falls back to 6.6.
+#   ad5x-kernel                 the running kernel, ours in this image, failures
+#   ad5x-kernel retry           try ours (and 7.3) again from the next boot
+#   ad5x-kernel mainline on|off 7.3 instead of 6.6 from the next boot
 # AD5X_LIB overrides /usr/lib/ad5x (tools/test_kernel_fallback.sh).
 D=/data/ad5x/kernel
 K=${AD5X_LIB:-/usr/lib/ad5x}/kernel66
+KM=${AD5X_LIB:-/usr/lib/ad5x}/kernel-mainline
 case "$1" in
 status|"")
 	echo "running: $(uname -r)"
 	echo "ours:    $(cat $K/release 2>/dev/null || echo 'not in this image')"
+	if [ -f $KM/xImage ]; then
+		if [ -f $D/mainline ]; then
+			echo "mainline: $(cat $KM/release 2>/dev/null), on (ad5x-kernel mainline off)"
+		else
+			echo "mainline: $(cat $KM/release 2>/dev/null), off (ad5x-kernel mainline on)"
+		fi
+		if [ -f $D/failed-mainline ]; then
+			echo "mainline failed: $(sed -n 1p $D/failed-mainline) (6.6 until ad5x-kernel retry)"
+			echo "why:     $(sed -n 2p $D/failed-mainline)"
+		fi
+	fi
 	if [ -f $D/failed ]; then
 		echo "failed:  $(sed -n 1p $D/failed) (stock kernel until ad5x-kernel retry)"
 		w=$(sed -n 2p $D/failed)
@@ -44,8 +58,21 @@ status|"")
 	;;
 retry)
 	[ -f $K/xImage ] || { echo "ad5x-kernel: this image has no kernel in $K"; exit 1; }
-	rm -f $D/failed $D/pending $D/started $D/unfinished $D/use; sync
+	rm -f $D/failed $D/failed-mainline $D/pending $D/started $D/unfinished $D/use; sync
 	echo "our kernel from the next boot (reboot now?)"
 	;;
-*) sed -n '2,9p' "$0"; exit 2 ;;
+mainline)
+	[ -f $KM/xImage ] || { echo "ad5x-kernel: this image has no mainline kernel"; exit 1; }
+	case "$2" in
+	on) mkdir -p $D && : > $D/mainline && sync
+	    echo "mainline $(cat $KM/release 2>/dev/null) from the next boot (reboot now?)"
+	    if [ -f $D/failed-mainline ]; then
+		echo "  it failed before: ad5x-kernel retry to try it again"
+	    fi ;;
+	off) rm -f $D/mainline; sync
+	    echo "6.6 from the next boot (reboot now?)" ;;
+	*) echo "usage: ad5x-kernel mainline on|off"; exit 2 ;;
+	esac
+	;;
+*) sed -n '2,12p' "$0"; exit 2 ;;
 esac

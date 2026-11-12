@@ -1,0 +1,143 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Thu, 12 Nov 2026 06:00:00 -0500
+Subject: [PATCH] home: Kiln locks the home screen layout by default
+
+A long press on the home screen opened edit mode, and a swipe past the
+last page reached the + Add page tile, whose tap added a page, both easy
+to do by accident on a printer's screen. Upstream's Settings > Touch &
+Input > Allow Home Screen Editing stops only the long press.
+
+On the AD5X build (HELIX_KILN_AD5X) the setting is off by default (unless
+it was already set), and while it is off the + Add page tile is out of
+reach too: no swipe onto it, a tap can't add a page, and with one page
+the home screen doesn't swipe. The setting applies when Home is shown
+again. The Kiln tour says where to turn editing on.
+---
+diff --git a/src/system/input_settings_manager.cpp b/src/system/input_settings_manager.cpp
+index 2bbf5ff..bc4842f 100644
+--- a/src/system/input_settings_manager.cpp
++++ b/src/system/input_settings_manager.cpp
+@@ -13,6 +13,16 @@
+ 
+ using namespace helix;
+ 
++// Home screen editing (the long press and the + Add page tile): off by
++// default on the Kiln OS AD5X build (HELIX_KILN_AD5X, set in
++// buildroot/package/helixscreen/helixscreen.mk), so a stray hold or swipe
++// can't change the layout; Settings > Touch & Input turns it on.
++#if defined(HELIX_KILN_AD5X)
++static constexpr int kHomeEditDefault = 0;
++#else
++static constexpr int kHomeEditDefault = 1;
++#endif
++
+ using settings::Scope;
+ // Row order is InputSettingsManager::Key.
+ static constexpr settings::PersistedSetting kInputSettings[] = {
+@@ -26,8 +36,8 @@ static constexpr settings::PersistedSetting kInputSettings[] = {
+     {"settings_scroll_guard", "/input/scroll_guard", Scope::Global, true, 0, 0, 1, "scroll_guard"},
+     {"settings_debug_touches", "/input/debug_touches", Scope::Global, true, 0, 0, 1,
+      "debug_touches"},
+-    {"settings_home_edit_mode_enabled", "/input/home_edit_mode_enabled", Scope::Global, true, 1, 0,
+-     1, "home_edit_mode_enabled"},
++    {"settings_home_edit_mode_enabled", "/input/home_edit_mode_enabled", Scope::Global, true,
++     kHomeEditDefault, 0, 1, "home_edit_mode_enabled"},
+     {"settings_keypad_layout", "/input/keypad_layout", Scope::Global, false,
+      static_cast<int>(KeypadLayout::PHONE), 0, 1, "keypad_layout"},
+ };
+diff --git a/src/ui/tour/tour_steps_kiln.cpp b/src/ui/tour/tour_steps_kiln.cpp
+index b8ef5af..cc96631 100644
+--- a/src/ui/tour/tour_steps_kiln.cpp
++++ b/src/ui/tour/tour_steps_kiln.cpp
+@@ -62,7 +62,8 @@ std::vector<TourStep> build_kiln_tour_steps(bool has_ams, int seen_version) {
+ 
+     TourStep customize{"fan_stack",
+                        "Customize your home screen",
+-                       "Long-press any tile to move, resize, remove or add tiles.",
++                       "To move, resize, remove or add tiles, turn on Allow Home Screen Editing "
++                       "in Settings > Touch & Input, then long-press a tile.",
+                        TooltipAnchor::PreferBelow,
+                        {}};
+     customize.fallback_target_name = "print_status";
+diff --git a/src/ui/ui_panel_home.cpp b/src/ui/ui_panel_home.cpp
+index 34d5157..e052bb5 100644
+--- a/src/ui/ui_panel_home.cpp
++++ b/src/ui/ui_panel_home.cpp
+@@ -287,7 +287,16 @@ void HomePanel::apply_edit_swipe_policy() {
+     // target, so its tile is within reach whenever the slot exists. A drop that
+     // creates a page leaves the session scoped to it, and the carousel resting
+     // on it, until the page-set rebuild on the next tick.
++#if defined(HELIX_KILN_AD5X)
++    // Kiln: with home screen editing off (Settings > Touch & Input) the +
++    // Add page tile is out of reach too, not only the long press.
++    helix::ui::carousel_set_trailing_tiles_reachable(
++        carousel_, next_page_container_ != nullptr &&
++                       (grid_edit_mode_.is_active() ||
++                        helix::InputSettingsManager::instance().get_home_edit_mode_enabled()));
++#else
+     helix::ui::carousel_set_trailing_tiles_reachable(carousel_, next_page_container_ != nullptr);
++#endif
+ }
+ 
+ void HomePanel::build_carousel(int initial_page) {
+@@ -846,6 +855,12 @@ void HomePanel::delete_edit_page(const std::string& page_id) {
+ }
+ 
+ void HomePanel::add_page_from_slot() {
++#if defined(HELIX_KILN_AD5X)
++    if (!grid_edit_mode_.is_active() &&
++        !helix::InputSettingsManager::instance().get_home_edit_mode_enabled()) {
++        return;
++    }
++#endif
+     auto& config = helix::PanelWidgetManager::instance().get_widget_config("home");
+     helix::PageSetChange change;
+     change.page_count = static_cast<int>(config.page_count());
+@@ -1021,6 +1036,20 @@ void HomePanel::repopulate() {
+ void HomePanel::on_activate() {
+     panel_active_ = true;
+ 
++#if defined(HELIX_KILN_AD5X)
++    // The editing setting changes in Settings, while Home is hidden: apply it
++    // here, off the + tile first if the carousel rests on it (the carousel
++    // doesn't move itself, ui_carousel.h).
++    if (carousel_) {
++        const int last = static_cast<int>(pages_.size()) - 1;
++        if (last >= 0 && ui_carousel_get_current_page(carousel_) > last &&
++            !helix::InputSettingsManager::instance().get_home_edit_mode_enabled()) {
++            helix::ui::carousel_goto_tile(carousel_, last, /*animate=*/false);
++        }
++        apply_edit_swipe_policy();
++    }
++#endif
++
+     // Notify only the active page's widgets that the panel is visible
+     if (active_page_index_ >= 0 && active_page_index_ < static_cast<int>(pages_.size())) {
+         for (auto& w : pages_[static_cast<size_t>(active_page_index_)].widgets) {
+diff --git a/translations/en.yml b/translations/en.yml
+index db0b67f..6915b78 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -5018,7 +5018,7 @@ translations:
+   'The print in progress, or your last print with Reprint Last. During a print, tap it for temperatures, IFS slots, and Pause, Tune and Cancel.': 'The print in progress, or your last print with Reprint Last. During a print, tap it for temperatures, IFS slots, and Pause, Tune and Cancel.'
+   'IFS slots': 'IFS slots'
+   'The material and colour in each of the four slots. Tap here to open the IFS screen.': 'The material and colour in each of the four slots. Tap here to open the IFS screen.'
+-  'Long-press any tile to move, resize, remove or add tiles.': 'Long-press any tile to move, resize, remove or add tiles.'
++  'To move, resize, remove or add tiles, turn on Allow Home Screen Editing in Settings > Touch & Input, then long-press a tile.': 'To move, resize, remove or add tiles, turn on Allow Home Screen Editing in Settings > Touch & Input, then long-press a tile.'
+   'The IFS screen': 'The IFS screen'
+   'Tap a slot to load it or to set its material and colour. With Spoolman, you can link a spool to it.': 'Tap a slot to load it or to set its material and colour. With Spoolman, you can link a spool to it.'
+   'Auto-Refill and IFS tools': 'Auto-Refill and IFS tools'
+diff --git a/translations/ru.yml b/translations/ru.yml
+index b30a650..cb2dd04 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -5163,7 +5163,7 @@ translations:
+   'The print in progress, or your last print with Reprint Last. During a print, tap it for temperatures, IFS slots, and Pause, Tune and Cancel.': 'Текущая печать или последняя с кнопкой «Перепечатать последнюю». Во время печати нажмите сюда: температуры, слоты IFS, «Пауза», «Настройка» и «Отмена».'
+   'IFS slots': 'Слоты IFS'
+   'The material and colour in each of the four slots. Tap here to open the IFS screen.': 'Материал и цвет в каждом из четырёх слотов. Нажмите сюда, чтобы открыть экран IFS.'
+-  'Long-press any tile to move, resize, remove or add tiles.': 'Удерживайте плитку, чтобы перемещать, менять размер, удалять или добавлять плитки.'
++  'To move, resize, remove or add tiles, turn on Allow Home Screen Editing in Settings > Touch & Input, then long-press a tile.': 'Чтобы перемещать, менять размер, удалять или добавлять плитки, включите «Разрешить редактирование главного экрана» в разделе Настройки > Касание и ввод, затем удерживайте плитку.'
+   'The IFS screen': 'Экран IFS'
+   'Tap a slot to load it or to set its material and colour. With Spoolman, you can link a spool to it.': 'Нажмите на слот, чтобы загрузить его или указать материал и цвет. Если подключён Spoolman, к слоту можно привязать катушку.'
+   'Auto-Refill and IFS tools': 'Автозамена и функции IFS'

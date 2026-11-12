@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Wed, 11 Nov 2026 23:10:00 -0500
+Subject: [PATCH] application: no 10 s full redraw on the AD5X
+
+On fbdev the main loop invalidates the whole screen every 10 s, to
+paint over kernel console text that could show through. On the AD5X
+nothing else draws on fb0: the 6.6 kernel's fbcon is held off by
+KD_GRAPHICS, and the mainline 7.3 kernel has no VT or fbcon (printk
+goes to the serial port only). The redraw only cost a full render and
+copy into the uncached framebuffer every 10 s, during prints too.
+---
+diff --git a/src/application/application.cpp b/src/application/application.cpp
+index 98ec3d8..1c2863d 100644
+--- a/src/application/application.cpp
++++ b/src/application/application.cpp
+@@ -2074,8 +2074,16 @@ int Application::main_loop() {
+     // fbdev self-heal: periodic full-screen invalidation to overwrite any kernel
+     // console text that bleeds through LVGL's partial render. KDSETMODE KD_GRAPHICS
+     // is the primary defense; this is belt-and-suspenders for robustness.
++#if defined(HELIX_KILN_AD5X)
++    // Kiln OS (AD5X): nothing else draws on fb0. The 6.6 kernel's fbcon is
++    // held off by KD_GRAPHICS and the 7.3 kernel has no VT or fbcon at all
++    // (printk goes to the serial port only), so a full redraw every 10 s
++    // only costs CPU and memory bandwidth, also during prints.
++    bool needs_fb_self_heal = false;
++#else
+     bool needs_fb_self_heal =
+         m_display->backend() && m_display->backend()->type() == DisplayBackendType::FBDEV;
++#endif
+     uint32_t last_fb_selfheal_tick = start_time;
+     static constexpr uint32_t kFbSelfhealIntervalMs = 10000; // 10 seconds
+ 

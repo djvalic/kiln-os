@@ -1,0 +1,28 @@
+From 5789b6ef815fb275ad4afa2e7de1e984d054c2c5 Mon Sep 17 00:00:00 2001
+From: valix <djvalic.wc@gmail.com>
+Date: Wed, 11 Nov 2026 20:51:56 -0500
+Subject: [PATCH] MIPS: Ingenic: Write-combine on XBurst II
+
+Ingenic's 6.6 kernel maps write-combined memory on XBurst II with the
+uncached accelerated attribute. Without it, the framebuffer and DRM
+buffers that HelixScreen draws into are mapped plain uncached, so every
+store goes to the bus on its own.
+---
+ arch/mips/kernel/cpu-probe.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/mips/kernel/cpu-probe.c b/arch/mips/kernel/cpu-probe.c
+index d7473aa5e..3293adc5d 100644
+--- a/arch/mips/kernel/cpu-probe.c
++++ b/arch/mips/kernel/cpu-probe.c
+@@ -1828,6 +1828,7 @@ static inline void cpu_probe_ingenic(struct cpuinfo_mips *c, unsigned int cpu)
+ 	/* XBurst®2 with MXU2.1 SIMD ISA */
+ 	case PRID_IMP_XBURST2:
+ 		c->cputype = CPU_XBURST;
++		c->writecombine = _CACHE_UNCACHED_ACCELERATED;
+ 		__cpu_name[cpu] = "Ingenic XBurst II";
+ 		break;
+ 
+-- 
+2.56.0
+

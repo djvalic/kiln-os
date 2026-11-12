@@ -17,7 +17,7 @@ HELIXSCREEN_LICENSE_FILES = LICENSE
 # host-python-pyyaml: the build makes the language packs (ui_xml/translations)
 # from translations/*.yml; without PyYAML it keeps upstream's packs and the
 # patched YAML (0030, 0032) never reaches the screen
-HELIXSCREEN_DEPENDENCIES = openssl zlib host-python3 host-python-pyyaml \
+HELIXSCREEN_DEPENDENCIES = openssl zlib libdrm host-python3 host-python-pyyaml \
 	host-autoconf host-automake host-libtool host-pkgconf host-bison host-flex
 
 # Upstream applies its LVGL/libhv/Lua/libnl patches with `git -C <submodule>
@@ -47,7 +47,12 @@ HELIXSCREEN_POST_PATCH_HOOKS += HELIXSCREEN_KILN_FLAGS
 # of its static musl one: dynamic link, our r5 ISA (nan2008/fp64 kept), no
 # -static. Packaging build (HELIX_PACKAGING=1): no mock backends, no remote
 # control server. Crash/debug uploads to helixscreen.org off by default.
-# Bluetooth and systemd stay off (not in the sysroot); no SDL/DRM/EGL.
+# Bluetooth and systemd stay off (not in the sysroot); no SDL/EGL.
+# Display: the DRM backend with fbdev beside it, in one binary. It takes
+# DRM/KMS where the kernel has a DRM driver (mainline's ingenic-dpu) and
+# falls back to /dev/fb0 where it has none (6.6, stock 5.10). No libinput
+# (no udev): touch comes from the evdev scan (patch 0057). S70helixscreen
+# picks fbdev for now (HELIX_DISPLAY_BACKEND).
 # The vendored spdlog, not one the build host may have in /usr/include.
 # HELIX_KILN_AD5X: this build is the Kiln OS AD5X image only (upstream's
 # unified MIPS target also serves the K1); patch 0029 keys the AD5X default on it.
@@ -58,7 +63,8 @@ HELIXSCREEN_CFLAGS = -march=mips32r5 -mnan=2008 -mfp64 \
 	-Os -flto=auto -ffunction-sections -fdata-sections \
 	-fno-omit-frame-pointer -funwind-tables -fmerge-all-constants -fno-ident \
 	-Wno-error=conversion -Wno-error=sign-conversion \
-	-DHELIX_RELEASE_BUILD -DHELIX_PLATFORM_MIPS -DHELIX_KILN_AD5X
+	-DHELIX_RELEASE_BUILD -DHELIX_PLATFORM_MIPS -DHELIX_KILN_AD5X \
+	-I$(STAGING_DIR)/usr/include/libdrm -DHELIX_NO_LIBINPUT
 
 HELIXSCREEN_MAKE_OPTS = \
 	PLATFORM_TARGET=mips \
@@ -73,6 +79,7 @@ HELIXSCREEN_MAKE_OPTS = \
 	ENABLE_REMOTE_CONTROL=no \
 	ENABLE_MOCKS=no \
 	ENABLE_SDL=no ENABLE_GLES_3D=no ENABLE_OPENGLES=no \
+	DISPLAY_BACKEND=drm SNAPMAKER_SKIP_LIBINPUT=yes \
 	HELIX_GIT_HASH=$(shell echo $(HELIXSCREEN_COMMIT) | cut -c1-8) \
 	SPDLOG_SYSTEM_HEADER_PATHS= \
 	SKIP_OPTIONAL_DEPS=1 \

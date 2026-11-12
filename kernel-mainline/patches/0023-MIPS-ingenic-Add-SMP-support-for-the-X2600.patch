@@ -1,0 +1,410 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Mon, 9 Nov 2026 08:16:49 -0700
+Subject: [PATCH 23/74] MIPS: ingenic: Add SMP support for the X2600
+
+The X2600 has two XBurst2 cores. Its core control unit (CCU) holds the
+second one in reset and sets the address it starts from, and has a
+mailbox per core whose interrupt, CPU interrupt line 3, serves as the
+inter-processor interrupt. It also enables, per core, the interrupt lines
+of the SoC interrupt controller, of the OST and of the mailboxes.
+
+Add SMP operations for it: start a core at a small entry stub that
+caches KSEG0 and loads the core's stack, raise IPIs through the
+mailboxes, and let a secondary core take its mailbox and its own OST
+timer. Peripheral interrupts stay with the boot CPU.
+
+XBurst2 is weakly ordered, also around LL/SC, as Ingenic's own kernels
+declare: select WEAK_ORDERING and WEAK_REORDERING_BEYOND_LLSC, without
+which the SMP memory barriers are compiled out.
+
+The register layout follows Ingenic's X2600 SDK kernel.
+---
+ arch/mips/generic/Makefile            |   1 +
+ arch/mips/generic/init.c              |   2 +
+ arch/mips/generic/smp-ingenic-entry.S |  41 +++++
+ arch/mips/generic/smp-ingenic.c       | 237 ++++++++++++++++++++++++++
+ arch/mips/generic/smp-ingenic.h       |  15 ++
+ arch/mips/include/asm/smp-ops.h       |  13 ++
+ arch/mips/ingenic/Kconfig             |   6 +
+ 7 files changed, 315 insertions(+)
+ create mode 100644 arch/mips/generic/smp-ingenic-entry.S
+ create mode 100644 arch/mips/generic/smp-ingenic.c
+ create mode 100644 arch/mips/generic/smp-ingenic.h
+
+diff --git a/arch/mips/generic/Makefile b/arch/mips/generic/Makefile
+index ea0e4ad5e..b9699cf5c 100644
+--- a/arch/mips/generic/Makefile
++++ b/arch/mips/generic/Makefile
+@@ -12,5 +12,6 @@ obj-$(CONFIG_YAMON_DT_SHIM)		+= yamon-dt.o
+ obj-$(CONFIG_LEGACY_BOARD_SEAD3)	+= board-sead3.o
+ obj-$(CONFIG_LEGACY_BOARD_OCELOT)	+= board-ocelot.o
+ obj-$(CONFIG_MACH_INGENIC)			+= board-ingenic.o
++obj-$(CONFIG_INGENIC_SMP)		+= smp-ingenic.o smp-ingenic-entry.o
+ obj-$(CONFIG_VIRT_BOARD_RANCHU)		+= board-ranchu.o
+ obj-$(CONFIG_MACH_REALTEK_RTL)		+= board-realtek.o
+diff --git a/arch/mips/generic/init.c b/arch/mips/generic/init.c
+index 1d712eac1..aa07bb8f3 100644
+--- a/arch/mips/generic/init.c
++++ b/arch/mips/generic/init.c
+@@ -117,6 +117,8 @@ void __init device_tree_init(void)
+ 		return;
+ 	if (!register_vsmp_smp_ops())
+ 		return;
++	if (!register_ingenic_smp_ops())
++		return;
+ 
+ 	register_up_smp_ops();
+ }
+diff --git a/arch/mips/generic/smp-ingenic-entry.S b/arch/mips/generic/smp-ingenic-entry.S
+new file mode 100644
+index 000000000..6794d8042
+--- /dev/null
++++ b/arch/mips/generic/smp-ingenic-entry.S
+@@ -0,0 +1,41 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/*
++ * Entry point of the secondary cores of Ingenic XBurst2 SoCs
++ *
++ * The core control unit (CCU) starts a core released from reset at the
++ * address in its reset entry register, with the CP0 state of a reset.
++ */
++
++#include <asm/addrspace.h>
++#include <asm/asm.h>
++#include <asm/mipsregs.h>
++#include <asm/regdef.h>
++
++	.set	noreorder
++	.set	mips32r2
++
++	.balign	64
++LEAF(ingenic_smp_entry)
++	/* Cache KSEG0 like the boot CPU */
++	mfc0	t0, CP0_CONFIG
++	ori	t0, CONF_CM_CMASK
++	xori	t0, CONF_CM_CMASK ^ CONF_CM_CACHABLE_NONCOHERENT
++	mtc0	t0, CP0_CONFIG
++
++	/* No pending software interrupts; kernel mode, BEV and ERL clear */
++	mtc0	zero, CP0_CAUSE
++	li	t0, ST0_CU0
++	mtc0	t0, CP0_STATUS
++	ehb
++
++	PTR_LA	t0, ingenic_smp_boot_sp
++	PTR_L	sp, 0(t0)
++	PTR_LA	t0, ingenic_smp_boot_gp
++	PTR_L	gp, 0(t0)
++
++	PTR_LA	t9, smp_bootstrap
++	jr.hb	t9
++	 nop
++	.globl	ingenic_smp_entry_end
++ingenic_smp_entry_end:
++	END(ingenic_smp_entry)
+diff --git a/arch/mips/generic/smp-ingenic.c b/arch/mips/generic/smp-ingenic.c
+new file mode 100644
+index 000000000..e7212c575
+--- /dev/null
++++ b/arch/mips/generic/smp-ingenic.c
+@@ -0,0 +1,237 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/*
++ * SMP support for Ingenic XBurst2 SoCs
++ *
++ * The core control unit (CCU) holds the secondary cores in reset and gives
++ * them the address to start from. It has a mailbox per core: setting bits
++ * in a core's mailbox raises CPU interrupt line 3 on that core, which is
++ * the inter-processor interrupt. It also enables, per core, the lines of
++ * the mailboxes, of the SoC interrupt controller (line 2) and of the OST
++ * (line 4).
++ *
++ * Peripheral interrupts stay with the boot CPU: the other cores take only
++ * their mailbox and their own OST timer.
++ *
++ * Register layout from Ingenic's X2600 SDK (Linux 6.6).
++ */
++
++#include <linux/bits.h>
++#include <linux/cpumask.h>
++#include <linux/init.h>
++#include <linux/interrupt.h>
++#include <linux/io.h>
++#include <linux/of.h>
++#include <linux/of_address.h>
++#include <linux/of_irq.h>
++#include <linux/processor.h>
++#include <linux/sched/task_stack.h>
++#include <linux/smp.h>
++#include <linux/spinlock.h>
++
++#include <asm/cpu-info.h>
++#include <asm/mipsregs.h>
++#include <asm/smp-ops.h>
++
++#include "smp-ingenic.h"
++
++#define CCU_REG_CSRR		0x040	/* core reset: a set bit holds the core */
++#define CCU_REG_PIMR		0x120	/* interrupt controller line enable */
++#define CCU_REG_MIMR		0x160	/* mailbox line enable */
++#define CCU_REG_OIMR		0x1a0	/* OST line enable */
++#define CCU_REG_RER		0xf00	/* reset entry address */
++#define CCU_REG_MBOX(core)	(0x1000 + 4 * (core))
++
++unsigned long ingenic_smp_boot_sp;
++unsigned long ingenic_smp_boot_gp;
++
++static struct device_node *ccu_np;
++static void __iomem *ccu;
++
++/* Serialises the read-modify-write of the CCU registers and mailboxes */
++static DEFINE_RAW_SPINLOCK(ccu_lock);
++
++static void ccu_update_bits(unsigned int reg, u32 mask, u32 val)
++{
++	unsigned long flags;
++
++	raw_spin_lock_irqsave(&ccu_lock, flags);
++	writel((readl(ccu + reg) & ~mask) | val, ccu + reg);
++	raw_spin_unlock_irqrestore(&ccu_lock, flags);
++}
++
++static void ingenic_send_ipi_single(int cpu, unsigned int action)
++{
++	void __iomem *mbox = ccu + CCU_REG_MBOX(cpu_logical_map(cpu));
++	unsigned long flags;
++
++	raw_spin_lock_irqsave(&ccu_lock, flags);
++	writel(readl(mbox) | action, mbox);
++	raw_spin_unlock_irqrestore(&ccu_lock, flags);
++}
++
++static void ingenic_send_ipi_mask(const struct cpumask *mask,
++				  unsigned int action)
++{
++	unsigned int cpu;
++
++	for_each_cpu(cpu, mask)
++		ingenic_send_ipi_single(cpu, action);
++}
++
++static irqreturn_t ingenic_ipi_interrupt(int irq, void *dev_id)
++{
++	void __iomem *mbox = ccu + CCU_REG_MBOX(get_ebase_cpunum());
++	u32 action;
++
++	raw_spin_lock(&ccu_lock);
++	action = readl(mbox);
++	writel(0, mbox);
++	raw_spin_unlock(&ccu_lock);
++
++	if (action & SMP_RESCHEDULE_YOURSELF)
++		scheduler_ipi();
++
++	if (action & SMP_CALL_FUNCTION)
++		generic_smp_call_function_interrupt();
++
++	return action ? IRQ_HANDLED : IRQ_NONE;
++}
++
++static void ingenic_enable_core_lines(unsigned int core, bool intc)
++{
++	writel(0, ccu + CCU_REG_MBOX(core));
++	ccu_update_bits(CCU_REG_MIMR, BIT(core), BIT(core));
++	ccu_update_bits(CCU_REG_OIMR, BIT(core), BIT(core));
++	ccu_update_bits(CCU_REG_PIMR, BIT(core), intc ? BIT(core) : 0);
++}
++
++static void ingenic_init_secondary(void)
++{
++	ingenic_enable_core_lines(get_ebase_cpunum(), false);
++
++	/* The mailbox and the OST; the SoC interrupt controller stays off */
++	change_c0_status(ST0_IM, STATUSF_IP3 | STATUSF_IP4);
++}
++
++static void ingenic_smp_finish(void)
++{
++	local_irq_enable();
++}
++
++static int ingenic_boot_secondary(int cpu, struct task_struct *idle)
++{
++	unsigned int core = cpu_logical_map(cpu);
++	unsigned long entry = (unsigned long)ingenic_smp_entry;
++
++	ingenic_smp_boot_sp = __KSTK_TOS(idle);
++	ingenic_smp_boot_gp = (unsigned long)task_thread_info(idle);
++
++	/*
++	 * The core starts with an empty cache: make sure what it reads
++	 * before it caches KSEG0 is in memory.
++	 */
++	dma_cache_wback(entry, (unsigned long)ingenic_smp_entry_end - entry);
++	dma_cache_wback((unsigned long)&ingenic_smp_boot_sp,
++			sizeof(ingenic_smp_boot_sp));
++	dma_cache_wback((unsigned long)&ingenic_smp_boot_gp,
++			sizeof(ingenic_smp_boot_gp));
++
++	writel(entry, ccu + CCU_REG_RER);
++	ccu_update_bits(CCU_REG_CSRR, BIT(core), BIT(core));
++	ccu_update_bits(CCU_REG_CSRR, BIT(core), 0);
++
++	return 0;
++}
++
++static void __init ingenic_smp_setup(void)
++{
++	struct device_node *np;
++	u32 others = 0;
++	u64 hwid;
++
++	init_cpu_possible(cpumask_of(0));
++	init_cpu_present(cpumask_of(0));
++
++	for_each_of_cpu_node(np) {
++		hwid = of_get_cpu_hwid(np, 0);
++		if (hwid == 0 || hwid >= nr_cpu_ids)
++			continue;
++
++		set_cpu_possible(hwid, true);
++		set_cpu_present(hwid, true);
++		__cpu_number_map[hwid] = hwid;
++		__cpu_logical_map[hwid] = hwid;
++		others |= BIT(hwid);
++	}
++
++	/* Whatever ran before may have left the other cores running */
++	ccu_update_bits(CCU_REG_CSRR, others, others);
++
++	pr_info("Ingenic SMP: %u CPUs\n", num_possible_cpus());
++}
++
++static void __init ingenic_prepare_cpus(unsigned int max_cpus)
++{
++	unsigned int irq;
++	int err;
++
++	irq = irq_of_parse_and_map(ccu_np, 0);
++	if (!irq) {
++		pr_err("Ingenic SMP: no IPI interrupt\n");
++		goto err_up;
++	}
++
++	err = request_irq(irq, ingenic_ipi_interrupt,
++			  IRQF_PERCPU | IRQF_NO_SUSPEND | IRQF_NO_THREAD,
++			  "ipi", NULL);
++	if (err) {
++		pr_err("Ingenic SMP: cannot request the IPI: %d\n", err);
++		goto err_up;
++	}
++
++	ingenic_enable_core_lines(0, true);
++	return;
++
++err_up:
++	init_cpu_possible(cpumask_of(0));
++	init_cpu_present(cpumask_of(0));
++}
++
++static const struct plat_smp_ops ingenic_smp_ops = {
++	.send_ipi_single	= ingenic_send_ipi_single,
++	.send_ipi_mask		= ingenic_send_ipi_mask,
++	.init_secondary		= ingenic_init_secondary,
++	.smp_finish		= ingenic_smp_finish,
++	.boot_secondary		= ingenic_boot_secondary,
++	.smp_setup		= ingenic_smp_setup,
++	.prepare_cpus		= ingenic_prepare_cpus,
++};
++
++int __init register_ingenic_smp_ops(void)
++{
++	struct device_node *np;
++
++	np = of_find_compatible_node(NULL, NULL, "ingenic,x2600-ccu");
++	if (!np)
++		return -ENODEV;
++
++	/* Secondary cores are numbered from the boot CPU, core 0 */
++	if (get_ebase_cpunum() != 0) {
++		pr_warn("Ingenic SMP: booted on core %u, staying UP\n",
++			get_ebase_cpunum());
++		goto err_put;
++	}
++
++	ccu = of_iomap(np, 0);
++	if (!ccu)
++		goto err_put;
++
++	ccu_np = np;
++	register_smp_ops(&ingenic_smp_ops);
++
++	return 0;
++
++err_put:
++	of_node_put(np);
++	return -ENODEV;
++}
+diff --git a/arch/mips/generic/smp-ingenic.h b/arch/mips/generic/smp-ingenic.h
+new file mode 100644
+index 000000000..07a68a09a
+--- /dev/null
++++ b/arch/mips/generic/smp-ingenic.h
+@@ -0,0 +1,15 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++#ifndef __MIPS_GENERIC_SMP_INGENIC_H
++#define __MIPS_GENERIC_SMP_INGENIC_H
++
++#include <linux/linkage.h>
++
++/* Where the CCU starts a secondary core, in smp-ingenic-entry.S */
++asmlinkage void ingenic_smp_entry(void);
++extern char ingenic_smp_entry_end[];
++
++/* The stack and thread_info ingenic_smp_entry() starts the core with */
++extern unsigned long ingenic_smp_boot_sp;
++extern unsigned long ingenic_smp_boot_gp;
++
++#endif /* __MIPS_GENERIC_SMP_INGENIC_H */
+diff --git a/arch/mips/include/asm/smp-ops.h b/arch/mips/include/asm/smp-ops.h
+index 1617b2077..4e14c0598 100644
+--- a/arch/mips/include/asm/smp-ops.h
++++ b/arch/mips/include/asm/smp-ops.h
+@@ -95,6 +95,19 @@ static inline int register_vsmp_smp_ops(void)
+ #endif
+ }
+ 
++#ifdef CONFIG_INGENIC_SMP
++
++int register_ingenic_smp_ops(void);
++
++#else /* !CONFIG_INGENIC_SMP */
++
++static inline int register_ingenic_smp_ops(void)
++{
++	return -ENODEV;
++}
++
++#endif /* !CONFIG_INGENIC_SMP */
++
+ #ifdef CONFIG_MIPS_CPS
+ extern int register_cps_smp_ops(void);
+ #else
+diff --git a/arch/mips/ingenic/Kconfig b/arch/mips/ingenic/Kconfig
+index 4bd352a4e..f03bd6ced 100644
+--- a/arch/mips/ingenic/Kconfig
++++ b/arch/mips/ingenic/Kconfig
+@@ -92,3 +92,9 @@ config MACH_X2600
+ 	select WAR_INGENIC_L2_HIT_CACHEOP
+ 	select SYS_HAS_CPU_MIPS32_R2
+ 	select SYS_SUPPORTS_HIGHMEM
++	select SYS_SUPPORTS_SMP
++	select WEAK_ORDERING
++	select WEAK_REORDERING_BEYOND_LLSC
++
++config INGENIC_SMP
++	def_bool SMP && MACH_X2600
+-- 
+2.43.0
+

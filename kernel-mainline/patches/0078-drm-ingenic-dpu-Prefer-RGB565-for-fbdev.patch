@@ -1,0 +1,35 @@
+From 5de2122a01a1b0b8a1ebb5189d37da21a3ad9402 Mon Sep 17 00:00:00 2001
+From: valix <djvalic.wc@gmail.com>
+Date: Wed, 11 Nov 2026 21:40:43 -0500
+Subject: [PATCH] drm/ingenic: dpu: Prefer RGB565 for fbdev
+
+The fbdev emulation picks its format from the preferred depth, so
+without one the AD5X's framebuffer was XRGB8888. The panel's UI renders
+RGB565 (as on the vendor kernel), and at 32 bpp every frame is twice the
+bytes to render, copy into the uncached framebuffer, scan out and read
+back for the browser's screen view. RGB565 scans out correctly on the
+AD5X (tested with video=LVDS-1:800x480-16).
+---
+ drivers/gpu/drm/ingenic/ingenic-dpu.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/drivers/gpu/drm/ingenic/ingenic-dpu.c b/drivers/gpu/drm/ingenic/ingenic-dpu.c
+index 501e0d23f..1480723bf 100644
+--- a/drivers/gpu/drm/ingenic/ingenic-dpu.c
++++ b/drivers/gpu/drm/ingenic/ingenic-dpu.c
+@@ -519,6 +519,12 @@ static int ingenic_dpu_probe(struct platform_device *pdev)
+ 	drm->mode_config.max_height = FIELD_MAX(DPU_TFT_END_MASK);
+ 	drm->mode_config.funcs = &ingenic_dpu_mode_config_funcs;
+ 	drm->mode_config.helper_private = &ingenic_dpu_mode_config_helpers;
++	/*
++	 * RGB565 for the fbdev emulation: half the bytes of XRGB8888 to
++	 * render, copy, scan out and read back, and what the panel's
++	 * user interface was written for. The plane scans out both.
++	 */
++	drm->mode_config.preferred_depth = 16;
+ 
+ 	drm_plane_helper_add(&dpu->plane, &ingenic_dpu_plane_helper_funcs);
+ 	ret = drm_universal_plane_init(drm, &dpu->plane, 1, &ingenic_dpu_plane_funcs,
+-- 
+2.56.0
+

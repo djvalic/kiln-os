@@ -1,0 +1,57 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Thu, 12 Nov 2026 00:20:00 -0500
+Subject: [PATCH] print control: Kiln's cancel during the print start
+
+Stop while a print starts said the printer finishes its start sequence
+and then stops. On Kiln OS the start now ends at its next safe point
+(ad5x_soak notes the cancel when it arrives: heating and the bed heat
+soak end within a second, a probe, the mesh or a colour load first
+finishes), so the AD5X build says that.
+---
+diff --git a/src/ui/print_control_buttons.cpp b/src/ui/print_control_buttons.cpp
+index 09dba91..b5bd7d9 100644
+--- a/src/ui/print_control_buttons.cpp
++++ b/src/ui/print_control_buttons.cpp
+@@ -320,8 +320,16 @@ void PrintControlButtons::request_sent_start_cancel() {
+     auto& ps = get_printer_state().print_state();
+     cancel_epoch_ = lv_subject_get_int(ps.get_preparing_epoch_subject());
+     ps.note_preparing_cancel_requested();
++#if defined(HELIX_KILN_AD5X)
++    // Kiln OS (AD5X): ad5x_soak notes the cancel when it arrives; the
++    // print start ends at its next safe point (heating and the soak within
++    // a second, a probe or the mesh after it finishes)
++    NOTIFY_INFO(lv_tr("Cancel sent. The printer stops its start sequence at the next safe "
++                      "point."));
++#else
+     NOTIFY_INFO(lv_tr("Cancel sent. The printer finishes its start sequence, then stops "
+                       "before printing."));
++#endif
+     const auto start = ps.preparing_start();
+     // A start the printer announced itself is on the printer with no job of ours
+     // to wait for.
+diff --git a/translations/en.yml b/translations/en.yml
+index d9b219a..db0b67f 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -5005,6 +5005,8 @@ translations:
+   NOT AVAILABLE HERE: "NOT AVAILABLE HERE"
+   The plugin didn't say why.: "The plugin didn't say why."
+   # Kiln OS (AD5X) strings from the Kiln HelixScreen patches
++  # Cancel during the print start (patch 0063)
++  'Cancel sent. The printer stops its start sequence at the next safe point.': 'Cancel sent. The printer stops its start sequence at the next safe point.'
+   # Moonraker's warnings on the screen (patch 0059)
+   'Printer warning': 'Printer warning'
+   # Kiln's tour (patch 0058, tour_steps_kiln.cpp)
+diff --git a/translations/ru.yml b/translations/ru.yml
+index 861545a..b30a650 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -5171,6 +5171,7 @@ translations:
+   'Macros, G-code console, print history, Spoolman, calibration, and Shutdown or Reboot.': 'Макросы, консоль G-code, история печати, Spoolman, калибровка, выключение и перезагрузка.'
+   'Screen, sound, connection, and the printer''s own settings: Run Setup Wizard, Nozzle Size, Filament Auto-Refill, Plugins. Replay this tour from Help & About.': 'Экран, звук, соединение и настройки принтера: «Запустить мастер настройки», «Размер сопла», «Автозамена филамента», «Плагины». Повторить тур: «Помощь и о программе».'
+   'Printer warning': 'Предупреждение принтера'
++  'Cancel sent. The printer stops its start sequence at the next safe point.': 'Отмена отправлена. Принтер остановит стартовую последовательность в ближайшей безопасной точке.'
+   'More': 'Ещё'
+   'Price, location, lot, notes': 'Цена, место, партия, заметки'
+   'Product': 'Продукт'

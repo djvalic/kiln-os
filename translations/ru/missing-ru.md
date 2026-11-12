@@ -6,7 +6,7 @@ the recovery screen's [en.txt](../../recovery-ui/i18n/en.txt) and [ru.txt](../..
 
 ## Summary
 
-- `helixscreen-en.yml` has 4901 keys. `helixscreen-ru.yml` has the same 4901 keys: none is missing.
+- `helixscreen-en.yml` has 4918 keys. `helixscreen-ru.yml` has the same 4918 keys: none is missing.
 - 111 Russian values are the same as the English text. They are names, units and numbers that stay as they are, and `Pressure Advance`, which stays English on purpose (section 4).
 - 7 more values have no Cyrillic but differ from English on purpose (for example `AMS` reads `IFS`, `WiFi` reads `Wi-Fi`).
 - 243 keys belong to Kiln OS's own screens. I wrote their Russian myself, so they need a native speaker's check most (section 5). 14 of them are new since the last list: Boot into recovery, Log detail, the two Auto-Refill rows of the IFS settings, and SELECTOR and HUB on the IFS drawing.

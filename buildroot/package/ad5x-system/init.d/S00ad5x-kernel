@@ -3,8 +3,8 @@
 # the boot slots: they keep the printer's stock 5.10 kernel, every boot
 # starts with it, and this runs first thing on it and starts our kernel
 # from RAM (chainload.ko, kernel-ingenic66/chainload): same command line,
-# same root, plus ad5x.kernel=own panic=10. The boot flag and the eMMC are
-# not written, only markers on /data/ad5x/kernel (issue #42):
+# same root, plus ad5x.kernel=own panic=10 loglevel=5. The boot flag and
+# the eMMC are not written, only markers on /data/ad5x/kernel (issue #42):
 #   pending     written (and synced) before the jump: "UPTIME slot S RELEASE"
 #   started     pending renamed by this script on our kernel, first thing in
 #               its userspace: our kernel booted, start-up not finished yet
@@ -33,6 +33,13 @@
 # EXPECT_RELEASE); only a failed record naming another release is dropped.
 # There is no setting to choose the stock kernel: this OS is made and
 # tested for ours.
+# Mainline 7.3 (kernel-mainline/, in /usr/lib/ad5x/kernel-mainline): opt-in
+# with /data/ad5x/kernel/mainline ("ad5x-kernel mainline on"). Then it is
+# started instead of 6.6, with the same markers (their release says which
+# kernel), except on the first start after an install. When a 7.3 start
+# fails the same way, the release goes into failed-mainline instead of
+# failed and this boot goes on to 6.6 at once; 6.6's own failure still
+# falls back to the stock kernel. "ad5x-kernel retry" clears both.
 # AD5X_LIB overrides /usr/lib/ad5x (tools/test_kernel_fallback.sh).
 
 # Files this creates are readable by klipper and www-data, whoever started
@@ -42,7 +49,8 @@ umask 022
 LIB=${AD5X_LIB:-/usr/lib/ad5x}
 . $LIB/kernel.sh
 . $LIB/slot.sh
-K=$LIB/kernel66
+K=$LIB/kernel66			# 6.6 and chainload.ko
+KM=$LIB/kernel-mainline		# 7.3, opt-in
 M=/tmp/kdata
 d=$M/ad5x/kernel
 
@@ -66,12 +74,22 @@ saved_clock() {
 	echo "; after $(date -u -d "@$s" '+%Y-%m-%d %H:%M') UTC (last saved clock)"
 }
 
-# give_up MARKER WHY: record that release as failed, stay on the stock kernel
+# give_up MARKER WHY: record that release as failed, stay on the stock
+# kernel; for 7.3's release, record it in failed-mainline and go on (to 6.6)
 give_up() {
 	m=$(cat $d/$1 2>/dev/null)
 	r=$(echo "$m" | cut -d' ' -f4)
 	[ -n "$r" ] || r=$rel
 	why="$2$(saved_clock)"
+	if [ -n "$relm" ] && [ "$r" = "$relm" ]; then
+		echo "ad5x-kernel: mainline kernel ($r) did not finish starting: $why; 6.6 until ad5x-kernel retry"
+		echo "$m failed: $why" >> $d/history
+		printf '%s\n%s\n' "$r" "$why" > $d/failed-mainline
+		rm -f $d/pending $d/started $d/unfinished
+		sync
+		ad5x-bootlog "  mainline kernel failed ($2): 6.6"
+		return 0
+	fi
 	echo "ad5x-kernel: our kernel ($r) did not finish starting: $why; stock kernel until ad5x-kernel retry"
 	echo "${m:-? slot $SLOT $r} failed: $why" >> $d/history
 	printf '%s\n%s\n' "$r" "$why" > $d/failed
@@ -101,37 +119,60 @@ start)
 	# Before 2026-10-20 a choice file said which kernel: gone, ours always
 	rm -f $d/use
 	rel=$(cat $K/release 2>/dev/null)
+	relm=
+	[ -f $KM/xImage ] && relm=$(cat $KM/release 2>/dev/null)
 	[ -f $d/pending ] && give_up pending "before userspace"
 	if [ -f $d/started ]; then
-		[ -f $M/ad5x/install/recovery.squashfs ] &&
+		if [ -f $M/ad5x/install/recovery.squashfs ]; then
 			give_up started "start-up unfinished, first start after the install"
-		n=$(cat $d/unfinished 2>/dev/null)
-		case "$n" in ''|*[!0-9]*) n=0 ;; esac
-		n=${n#"${n%%[!0]*}"}	# no leading zeros (08 is not octal here)
-		n=$((${n:-0} + 1))
-		[ $n -ge 2 ] && give_up started "start-up unfinished, $n in a row"
-		why="start-up unfinished, $n in a row$(saved_clock)"
-		echo "ad5x-kernel: our kernel's last start didn't finish ($why); trying it again"
-		echo "$(cat $d/started) unfinished: $why; tried again" >> $d/history
-		echo $n > $d/unfinished
-		rm -f $d/started
-		ad5x-bootlog "  own kernel: start-up unfinished, $n in a row; trying again"
+		else
+			n=$(cat $d/unfinished 2>/dev/null)
+			case "$n" in ''|*[!0-9]*) n=0 ;; esac
+			n=${n#"${n%%[!0]*}"}	# no leading zeros (08 is not octal here)
+			n=$((${n:-0} + 1))
+			if [ $n -ge 2 ]; then
+				give_up started "start-up unfinished, $n in a row"
+			else
+				why="start-up unfinished, $n in a row$(saved_clock)"
+				echo "ad5x-kernel: our kernel's last start didn't finish ($why); trying it again"
+				echo "$(cat $d/started) unfinished: $why; tried again" >> $d/history
+				echo $n > $d/unfinished
+				rm -f $d/started
+				ad5x-bootlog "  own kernel: start-up unfinished, $n in a row; trying again"
+			fi
+		fi
 	fi
-	# A record from before issue #42 (one line, no stage): it may have been
-	# an unfinished start-up only, so try once more. New records have two
-	# lines, so this happens at most once.
-	if [ -f $d/failed ] && [ "$(sed -n 1p $d/failed)" = "$rel" ] &&
-	   [ -z "$(sed -n 2p $d/failed)" ]; then
-		echo "ad5x-kernel: failure record of $rel from before issue #42; trying our kernel once more"
-		echo "? slot $SLOT $rel retried: record from before #42, retried once" >> $d/history
+	# 7.3's record of another release (an update): dropped
+	[ -f $d/failed-mainline ] && [ "$(sed -n 1p $d/failed-mainline)" != "$relm" ] &&
+		rm -f $d/failed-mainline
+	img=
+	if [ -n "$relm" ] && [ -f $d/mainline ]; then
+		if [ -f $M/ad5x/install/recovery.squashfs ]; then
+			echo "ad5x-kernel: first start after the install: 6.6, not mainline"
+		elif [ -f $d/failed-mainline ]; then
+			echo "ad5x-kernel: mainline kernel $relm failed to start before; 6.6 (ad5x-kernel retry)"
+		else
+			img=$KM/xImage rel=$relm
+		fi
+	fi
+	if [ -z "$img" ]; then
+		img=$K/xImage
+		# A record from before issue #42 (one line, no stage): it may have
+		# been an unfinished start-up only, so try once more. New records
+		# have two lines, so this happens at most once.
+		if [ -f $d/failed ] && [ "$(sed -n 1p $d/failed)" = "$rel" ] &&
+		   [ -z "$(sed -n 2p $d/failed)" ]; then
+			echo "ad5x-kernel: failure record of $rel from before issue #42; trying our kernel once more"
+			echo "? slot $SLOT $rel retried: record from before #42, retried once" >> $d/history
+			rm -f $d/failed
+			ad5x-bootlog "  own kernel: record from before #42, retried once"
+		fi
+		if [ -f $d/failed ] && [ "$(sed -n 1p $d/failed)" = "$rel" ]; then
+			echo "ad5x-kernel: our kernel $rel failed to start before; stock kernel (ad5x-kernel retry)"
+			umount $M; exit 0
+		fi
 		rm -f $d/failed
-		ad5x-bootlog "  own kernel: record from before #42, retried once"
 	fi
-	if [ -f $d/failed ] && [ "$(sed -n 1p $d/failed)" = "$rel" ]; then
-		echo "ad5x-kernel: our kernel $rel failed to start before; stock kernel (ad5x-kernel retry)"
-		umount $M; exit 0
-	fi
-	rm -f $d/failed
 	krp=$(sed -n 's/^\([0-9a-f]*\) T kernel_restart_prepare$/\1/p' /proc/kallsyms)
 	if [ -z "$krp" ]; then
 		echo "ad5x-kernel: no kernel_restart_prepare in kallsyms; stock kernel"
@@ -139,9 +180,14 @@ start)
 	fi
 	echo "ad5x-kernel: starting our kernel ($rel)"
 	ad5x-bootlog "  chainload own kernel"
-	# /data/ad5x/kernel/cmdline-extra: more kernel options (tests)
-	cmdline="$(cat /proc/cmdline) ad5x.kernel=own panic=10 $(cat $d/cmdline-extra 2>/dev/null)"
-	if ! insmod $K/chainload.ko image=$K/xImage krp=0x$krp cmdline="\"$cmdline\""; then
+	# loglevel=5 (after stock's loglevel=8; the last one counts): warnings
+	# and worse on the serial console. 7.3's console thread (nice -20)
+	# busy-waits on the 115200 port and holds up Klipper during log bursts;
+	# dmesg still has every level. /data/ad5x/kernel/cmdline-extra: more
+	# kernel options (tests); it comes last, so loglevel=8 there brings the
+	# full console back.
+	cmdline="$(cat /proc/cmdline) ad5x.kernel=own panic=10 loglevel=5 $(cat $d/cmdline-extra 2>/dev/null)"
+	if ! insmod $K/chainload.ko image=$img krp=0x$krp cmdline="\"$cmdline\""; then
 		echo "ad5x-kernel: staging failed; stock kernel"
 		umount $M; exit 0
 	fi

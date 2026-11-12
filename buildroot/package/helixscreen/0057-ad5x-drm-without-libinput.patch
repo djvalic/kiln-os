@@ -1,0 +1,64 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Mon, 9 Nov 2026 12:00:00 -0500
+Subject: [PATCH] build: a DRM build without libinput
+
+Kiln OS builds the MIPS target with the DRM backend as well as fbdev
+(DRM on the mainline kernel, /dev/fb0 on kernels without a DRM driver),
+but has no libinput: no udev. HELIX_NO_LIBINPUT leaves LVGL's libinput
+driver out, as the Snapmaker U1 build does, so the DRM backend finds the
+touch screen by its evdev scan; SNAPMAKER_SKIP_LIBINPUT=yes, which
+already drops -linput from the main binary, now drops it from the splash
+and watchdog links too.
+---
+
+diff --git a/lv_conf.h b/lv_conf.h
+index ac058b9..9d017be 100644
+--- a/lv_conf.h
++++ b/lv_conf.h
+@@ -1210,8 +1210,11 @@
+ #endif
+ 
+ /*Driver for libinput input devices (preferred for DRM on modern systems)*/
+-/*Snapmaker U1 has no libinput — uses evdev directly for touch input*/
+-#if defined(HELIX_DISPLAY_DRM) && !defined(HELIX_PLATFORM_SNAPMAKER_U1)
++/*Snapmaker U1 has no libinput — uses evdev directly for touch input.
++ *HELIX_NO_LIBINPUT: any other build without libinput (the DRM backend then
++ *finds the touch screen by its evdev scan)*/
++#if defined(HELIX_DISPLAY_DRM) && !defined(HELIX_PLATFORM_SNAPMAKER_U1) && \
++    !defined(HELIX_NO_LIBINPUT)
+     #define LV_USE_LIBINPUT    1
+ #else
+     #define LV_USE_LIBINPUT    0
+diff --git a/mk/splash.mk b/mk/splash.mk
+index 37252ba..5dc5dea 100644
+--- a/mk/splash.mk
++++ b/mk/splash.mk
+@@ -40,7 +40,10 @@ endif
+ ifneq ($(UNAME_S),Darwin)
+     # Linux: may need DRM/input libraries
+     ifeq ($(DISPLAY_BACKEND)-$(DLOPEN_GPU_LIBS),drm-)
+-        SPLASH_LDFLAGS += -ldrm -linput
++        SPLASH_LDFLAGS += -ldrm
++        ifneq ($(SNAPMAKER_SKIP_LIBINPUT),yes)
++            SPLASH_LDFLAGS += -linput
++        endif
+         ifneq ($(filter yes,$(ENABLE_OPENGLES) $(ENABLE_GLES_3D)),)
+             SPLASH_LDFLAGS += -lEGL -lGLESv2 -lgbm -ldl
+         endif
+diff --git a/mk/watchdog.mk b/mk/watchdog.mk
+index 68aca68..802d1f4 100644
+--- a/mk/watchdog.mk
++++ b/mk/watchdog.mk
+@@ -46,7 +46,10 @@ endif
+ ifneq ($(UNAME_S),Darwin)
+     # Linux: may need DRM/input libraries
+     ifeq ($(DISPLAY_BACKEND)-$(DLOPEN_GPU_LIBS),drm-)
+-        WATCHDOG_LDFLAGS += -ldrm -linput
++        WATCHDOG_LDFLAGS += -ldrm
++        ifneq ($(SNAPMAKER_SKIP_LIBINPUT),yes)
++            WATCHDOG_LDFLAGS += -linput
++        endif
+         ifneq ($(filter yes,$(ENABLE_OPENGLES) $(ENABLE_GLES_3D)),)
+             WATCHDOG_LDFLAGS += -lEGL -lGLESv2 -lgbm -ldl
+         endif

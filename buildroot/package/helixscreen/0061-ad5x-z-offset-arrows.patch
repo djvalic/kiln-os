@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Wed, 11 Nov 2026 23:40:00 -0500
+Subject: [PATCH] print tune: Z offset arrows follow the nozzle on the AD5X
+
+On printers whose bed moves in Z, Print Tuning's Z offset buttons show
+the bed's direction: closer (the bottom button) has an up arrow, farther
+(the top one) a down arrow. The panel draws a nozzle over a scale with
++ at the top, so on the AD5X the nozzle came closer from the button
+pointing up. On HELIX_KILN_AD5X builds the arrows follow the nozzle:
+farther points up, closer points down. The buttons and what they send
+are unchanged.
+---
+diff --git a/src/ui/ui_print_tune_overlay.cpp b/src/ui/ui_print_tune_overlay.cpp
+index 4ce4e74..f1f57ea 100644
+--- a/src/ui/ui_print_tune_overlay.cpp
++++ b/src/ui/ui_print_tune_overlay.cpp
+@@ -289,6 +289,12 @@ void PrintTuneOverlay::update_z_offset_icons(lv_obj_t* /*panel*/) {
+     int kin =
+         lv_subject_get_int(printer_state_->capabilities_state().subject(Capability::BedMoves));
+     bool bed_moves_z = (kin == 1);
++#if defined(HELIX_KILN_AD5X)
++    // Kiln OS (AD5X): the panel shows a nozzle over a scale with + at the
++    // top, and the buttons say closer and farther, so the arrows follow the
++    // nozzle (down = closer) although the AD5X's bed is what moves.
++    bed_moves_z = false;
++#endif
+ 
+     // Set icon names via string subjects (bind_icon in XML)
+     // Closer = more squish. On bed-moves-Z (CoreXY): bed rises (expand_up).

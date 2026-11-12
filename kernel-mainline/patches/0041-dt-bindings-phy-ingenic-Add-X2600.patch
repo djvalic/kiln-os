@@ -1,0 +1,109 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sun, 8 Nov 2026 19:40:11 -0700
+Subject: [PATCH 41/74] dt-bindings: phy: ingenic: Add X2600
+
+The X2600 has two USB 2.0 PHYs, one per DWC2 controller, controlled
+through the CGU like those of the earlier SoCs. Only the first one's
+USBPCR1 follows its other registers; the second PHY's is at the end of
+the CGU (0xe8), so on the X2600 USBPCR1 is a second register region.
+
+Each PHY also has registers of its own outside the CGU (the high-speed
+eye height, the VBUS comparator). They respond only while the bus clock
+of the PHY's controller runs, so that clock is a second one of the PHY.
+A board that detects VBUS elsewhere has the comparator powered down.
+---
+ .../bindings/phy/ingenic,phy-usb.yaml         | 60 ++++++++++++++++++-
+ 1 file changed, 58 insertions(+), 2 deletions(-)
+
+diff --git a/Documentation/devicetree/bindings/phy/ingenic,phy-usb.yaml b/Documentation/devicetree/bindings/phy/ingenic,phy-usb.yaml
+index 30b42008d..19b328df5 100644
+--- a/Documentation/devicetree/bindings/phy/ingenic,phy-usb.yaml
++++ b/Documentation/devicetree/bindings/phy/ingenic,phy-usb.yaml
+@@ -22,12 +22,33 @@ properties:
+       - ingenic,x1000-phy
+       - ingenic,x1830-phy
+       - ingenic,x2000-phy
++      - ingenic,x2600-phy
+ 
+   reg:
+-    maxItems: 1
++    minItems: 1
++    items:
++      - description: USBPCR and the registers following it
++      - description: USBPCR1, where it does not follow them
++      - description: The PHY's own (analog) registers
+ 
+   clocks:
+-    maxItems: 1
++    minItems: 1
++    items:
++      - description: The PHY's clock
++      - description:
++          The bus clock of the PHY's USB controller, without which the
++          PHY's own registers do not respond
++
++  clock-names:
++    items:
++      - const: phy
++      - const: bus
++
++  ingenic,external-vbus-detect:
++    type: boolean
++    description:
++      VBUS is detected outside the PHY, so its VBUS comparator is powered
++      down.
+ 
+   vcc-supply:
+     description: VCC power supply
+@@ -42,6 +63,29 @@ required:
+   - vcc-supply
+   - '#phy-cells'
+ 
++allOf:
++  - if:
++      properties:
++        compatible:
++          contains:
++            const: ingenic,x2600-phy
++    then:
++      properties:
++        reg:
++          minItems: 3
++        clocks:
++          minItems: 2
++      required:
++        - clock-names
++    else:
++      properties:
++        reg:
++          maxItems: 1
++        clocks:
++          maxItems: 1
++        clock-names: false
++        ingenic,external-vbus-detect: false
++
+ additionalProperties: false
+ 
+ examples:
+@@ -54,5 +98,17 @@ examples:
+       vcc-supply = <&vcc>;
+       clocks = <&cgu JZ4770_CLK_OTG_PHY>;
+ 
++      #phy-cells = <0>;
++    };
++  - |
++    #include <dt-bindings/clock/ingenic,x2600-cgu.h>
++    usb_phy: usb-phy@4c {
++      compatible = "ingenic,x2600-phy";
++      reg = <0x4c 0x8>, <0xe8 0x4>, <0x78400 0x100>;
++
++      vcc-supply = <&vcc>;
++      clocks = <&cgu X2600_CLK_USBPHY>, <&cgu X2600_CLK_USB>;
++      clock-names = "phy", "bus";
++
+       #phy-cells = <0>;
+     };
+-- 
+2.43.0
+

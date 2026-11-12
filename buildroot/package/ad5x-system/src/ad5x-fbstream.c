@@ -288,6 +288,10 @@ static int touch(const char *state, double x, double y)
 
 // --- HTTP ----------------------------------------------------------------
 
+// The page drops the stream while it is hidden (a background browser tab,
+// also Fluidd's camera iframe in one): every frame costs uncached reads of
+// fb0 and a JPEG encode on the printer, for nobody.
+
 static const char page[] =
 "<!doctype html><html><head><meta charset=utf-8>"
 "<meta name=viewport content='width=device-width,initial-scale=1'>"
@@ -308,7 +312,9 @@ static const char page[] =
 "if(n-last<50)return;last=n;send('move',e);});"
 "s.addEventListener('pointerup',e=>{if(!down)return;down=false;send('up',e);});"
 "s.addEventListener('pointercancel',e=>{if(down){down=false;send('up',e);}});"
-"s.onerror=()=>setTimeout(()=>{s.src='stream?'+Date.now()},2000);"
+"s.onerror=()=>setTimeout(()=>{if(!document.hidden)s.src='stream?'+Date.now()},2000);"
+"document.addEventListener('visibilitychange',()=>{if(document.hidden)"
+"s.removeAttribute('src');else s.src='stream?'+Date.now();});"
 "</script></body></html>";
 
 static int send_all(int fd, const void *buf, size_t len)

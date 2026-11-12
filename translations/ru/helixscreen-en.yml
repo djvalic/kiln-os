@@ -5005,6 +5005,26 @@ translations:
   NOT AVAILABLE HERE: "NOT AVAILABLE HERE"
   The plugin didn't say why.: "The plugin didn't say why."
   # Kiln OS (AD5X) strings from the Kiln HelixScreen patches
+  # Cancel during the print start (patch 0063)
+  'Cancel sent. The printer stops its start sequence at the next safe point.': 'Cancel sent. The printer stops its start sequence at the next safe point.'
+  # Moonraker's warnings on the screen (patch 0059)
+  'Printer warning': 'Printer warning'
+  # Kiln's tour (patch 0058, tour_steps_kiln.cpp)
+  'Welcome to Kiln OS': 'Welcome to Kiln OS'
+  'Here''s a quick tour of the screen, so you can find things fast.': 'Here''s a quick tour of the screen, so you can find things fast.'
+  'A tour of Kiln''s screens': 'A tour of Kiln''s screens'
+  'The tour now shows the screens Kiln OS sets up. Skip it anytime.': 'The tour now shows the screens Kiln OS sets up. Skip it anytime.'
+  'Nozzle and bed temperatures, fans and notifications are along the top. Tap any tile to open its controls.': 'Nozzle and bed temperatures, fans and notifications are along the top. Tap any tile to open its controls.'
+  'The print in progress, or your last print with Reprint Last. During a print, tap it for temperatures, IFS slots, and Pause, Tune and Cancel.': 'The print in progress, or your last print with Reprint Last. During a print, tap it for temperatures, IFS slots, and Pause, Tune and Cancel.'
+  'IFS slots': 'IFS slots'
+  'The material and colour in each of the four slots. Tap here to open the IFS screen.': 'The material and colour in each of the four slots. Tap here to open the IFS screen.'
+  'To move, resize, remove or add tiles, turn on Allow Home Screen Editing in Settings > Touch & Input, then long-press a tile.': 'To move, resize, remove or add tiles, turn on Allow Home Screen Editing in Settings > Touch & Input, then long-press a tile.'
+  'The IFS screen': 'The IFS screen'
+  'Tap a slot to load it or to set its material and colour. With Spoolman, you can link a spool to it.': 'Tap a slot to load it or to set its material and colour. With Spoolman, you can link a spool to it.'
+  'Auto-Refill and IFS tools': 'Auto-Refill and IFS tools'
+  'Load and Unload are here. Settings has Auto-Refill, Tune IFS and Pre-feed.': 'Load and Unload are here. Settings has Auto-Refill, Tune IFS and Pre-feed.'
+  'Macros, G-code console, print history, Spoolman, calibration, and Shutdown or Reboot.': 'Macros, G-code console, print history, Spoolman, calibration, and Shutdown or Reboot.'
+  'Screen, sound, connection, and the printer''s own settings: Run Setup Wizard, Nozzle Size, Filament Auto-Refill, Plugins. Replay this tour from Help & About.': 'Screen, sound, connection, and the printer''s own settings: Run Setup Wizard, Nozzle Size, Filament Auto-Refill, Plugins. Replay this tour from Help & About.'
   ', corners {:+.3f} to {:+.3f}': ', corners {:+.3f} to {:+.3f}'
   ', not fully settled': ', not fully settled'
   'Ad5xFinish': 'Ad5xFinish'

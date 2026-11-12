@@ -1,9 +1,15 @@
 #!/bin/sh
-# HelixScreen, the touch screen UI, on the panel's framebuffer (/dev/fb0,
-# 800x480) with the tsc2007 touch (evdev, found by the app). Talks to
-# Moonraker at 127.0.0.1:7125. Read-only files in /usr/lib/helixscreen;
+# HelixScreen, the touch screen UI, on the panel's framebuffer /dev/fb0
+# (800x480) on every kernel: 6.6 and stock have only fbdev, mainline 7.3
+# has a DRM driver and gives fb0 through its fbdev emulation, so the wait
+# for fb0 below holds everywhere. The build also has the DRM backend, but
+# HELIX_DISPLAY_BACKEND=fbdev keeps it off for now: on DRM the browser's
+# screen view (ad5x-fbstream reads fb0) would freeze, and a missed vblank
+# would stop the UI with nothing logged. The tsc2007 touch (evdev) is
+# found by the app. Talks to Moonraker at 127.0.0.1:7125. Read-only
+# files in /usr/lib/helixscreen;
 # settings and cache in /data/ad5x/helixscreen, log with Klipper's (so
-# Fluidd shows it). Runs as root (framebuffer, input) at nice 10.
+# Fluidd shows it). Runs as root (framebuffer, DRM, input) at nice 10.
 # On by default; /data/ad5x/helixscreen.disable turns it off. A first
 # start gets a ready-made setup (ad5x preset: stock names, our fans and
 # toolhead sensor, touch calibration) with the wizard not yet completed, so
@@ -67,6 +73,7 @@ start)
 	HELIX_LOG_DEST=file HELIX_LOG_FILE=$LOG HELIX_LOG_LEVEL=$LEVEL \
 	HELIX_LOG_ROTATE_BYTES=1048576 HELIX_LOG_ROTATE_FILES=3 \
 	HELIX_DISABLE_AUTO_UPDATES=1 \
+	HELIX_DISPLAY_BACKEND=fbdev \
 	HELIX_WIZARD_FLAG_FILE=/data/ad5x/printer_data/comms/run-setup-wizard \
 	HELIX_OOM_SCORE_ADJ=300 \
 	start-stop-daemon -S -b -m -p $PID -N 10 \

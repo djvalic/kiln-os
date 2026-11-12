@@ -1,0 +1,40 @@
+From 280e1477fa16ca80c04ab96dd6cf8d32b1df80cb Mon Sep 17 00:00:00 2001
+From: valix <djvalic.wc@gmail.com>
+Date: Wed, 11 Nov 2026 18:39:58 -0500
+Subject: [PATCH] MIPS: dts: ingenic: ad5x: Add a ramoops region
+
+Keep the kernel log of a crash over the reboot, so that pstore can
+show it after the next boot. The 1 MiB below the stock firmware's
+media region is unused by it, and Kiln's 6.6 kernel uses the same
+region.
+---
+ arch/mips/boot/dts/ingenic/ad5x.dts | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/arch/mips/boot/dts/ingenic/ad5x.dts b/arch/mips/boot/dts/ingenic/ad5x.dts
+index fd981e0d5..efd466b59 100644
+--- a/arch/mips/boot/dts/ingenic/ad5x.dts
++++ b/arch/mips/boot/dts/ingenic/ad5x.dts
+@@ -65,6 +65,19 @@ reserved-memory {
+ 		#size-cells = <1>;
+ 		ranges;
+ 
++		/*
++		 * The kernel log of a crash, kept over the reboot in RAM the
++		 * stock firmware leaves unused (below "rmem"), as Kiln's 6.6
++		 * device tree has it: pstore reads it back after the next boot.
++		 */
++		ramoops@eb00000 {
++			compatible = "ramoops";
++			reg = <0x0eb00000 0x00100000>;
++			no-map;
++			record-size = <0x10000>;
++			console-size = <0x40000>;
++		};
++
+ 		/* Kept by the stock firmware for its media drivers ("rmem") */
+ 		media@ec00000 {
+ 			reg = <0x0ec00000 0x01000000>;
+-- 
+2.56.0
+

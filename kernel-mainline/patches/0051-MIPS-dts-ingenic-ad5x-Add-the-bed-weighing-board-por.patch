@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Mon, 9 Nov 2026 09:03:22 -0700
+Subject: [PATCH 51/74] MIPS: dts: ingenic: ad5x: Add the bed weighing board
+ port
+
+The bed of the Adventurer 5X rests on a weighing board, which Klipper
+reads (and tares before probing) over UART7 at 9600 baud, on PC4/PC5.
+Enable the port.
+---
+ arch/mips/boot/dts/ingenic/ad5x.dts | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/arch/mips/boot/dts/ingenic/ad5x.dts b/arch/mips/boot/dts/ingenic/ad5x.dts
+index 717b941b0..05b3b4d15 100644
+--- a/arch/mips/boot/dts/ingenic/ad5x.dts
++++ b/arch/mips/boot/dts/ingenic/ad5x.dts
+@@ -14,6 +14,7 @@ aliases {
+ 		serial2 = &uart2;
+ 		serial4 = &uart4;
+ 		serial5 = &uart5;
++		serial7 = &uart7;
+ 	};
+ 
+ 	chosen {
+@@ -146,6 +147,11 @@ pins_uart5: uart5 {
+ 		function = "uart5";
+ 		groups = "uart5-data-b";
+ 	};
++
++	pins_uart7: uart7 {
++		function = "uart7";
++		groups = "uart7-data-c";
++	};
+ };
+ 
+ /* Debug console */
+@@ -189,6 +195,14 @@ &uart5 {
+ 	status = "okay";
+ };
+ 
++/* Bed weighing board */
++&uart7 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pins_uart7>;
++
++	status = "okay";
++};
++
+ /* Host port: an internal USB hub with the camera and the Wi-Fi module */
+ &usb {
+ 	dr_mode = "host";
+-- 
+2.43.0
+

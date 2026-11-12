@@ -39,6 +39,13 @@ start)
 	fi
 	# Old dated klippy logs: at most 5 and 50 MB (lib/logs.sh)
 	klippy_log_retention $PD/logs
+	# Mainline 7.3: the kernel worker that hands the MCUs' serial bytes to
+	# klippy runs at nice 0 while klippy runs at -10; give it klippy's.
+	# (6.6 uses the shared workqueue and has no such file.)
+	WQ=/sys/devices/virtual/workqueue/ttyS-serial_8250/nice
+	if [ -w $WQ ]; then
+		echo -10 > $WQ 2>/dev/null
+	fi
 	HOME=/home/klipper start-stop-daemon -S -b -m -p $PID -c klipper -N -10 \
 		-x /usr/bin/python3 -- $KROOT/klippy/klippy.py \
 		$PD/config/printer.cfg -l $PD/logs/klippy.log \

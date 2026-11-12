@@ -1,0 +1,98 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Mon, 9 Nov 2026 10:04:54 -0700
+Subject: [PATCH 60/74] MIPS: dts: ingenic: ad5x: Add the display
+
+The Adventurer 5X has a 7" 800x480 LVDS panel on the DPU's LVDS PHY,
+VESA 24-bit mapping, with its backlight switched by PC14. Describe them,
+with the timings the stock firmware uses (31 MHz pixel clock, 60 Hz).
+---
+ arch/mips/boot/dts/ingenic/ad5x.dts | 58 +++++++++++++++++++++++++++++
+ 1 file changed, 58 insertions(+)
+
+diff --git a/arch/mips/boot/dts/ingenic/ad5x.dts b/arch/mips/boot/dts/ingenic/ad5x.dts
+index 05b3b4d15..9d468111e 100644
+--- a/arch/mips/boot/dts/ingenic/ad5x.dts
++++ b/arch/mips/boot/dts/ingenic/ad5x.dts
+@@ -27,6 +27,38 @@ memory@0 {
+ 		      <0x30000000 0x10000000>;
+ 	};
+ 
++	backlight: backlight {
++		compatible = "gpio-backlight";
++		gpios = <&gpc 14 GPIO_ACTIVE_HIGH>;
++	};
++
++	panel {
++		compatible = "flashforge,ad5x-panel", "panel-lvds";
++		backlight = <&backlight>;
++
++		data-mapping = "vesa-24";
++		width-mm = <108>;
++		height-mm = <64>;
++
++		panel-timing {
++			clock-frequency = <31000000>;
++			hactive = <800>;
++			vactive = <480>;
++			hfront-porch = <40>;
++			hback-porch = <88>;
++			hsync-len = <48>;
++			vfront-porch = <13>;
++			vback-porch = <35>;
++			vsync-len = <3>;
++		};
++
++		port {
++			panel_in: endpoint {
++				remote-endpoint = <&dpu_out>;
++			};
++		};
++	};
++
+ 	reserved-memory {
+ 		#address-cells = <1>;
+ 		#size-cells = <1>;
+@@ -66,6 +98,31 @@ regulator-wifi {
+ 	};
+ };
+ 
++&dpu {
++	/*
++	 * The panel's 31 MHz pixel clock from the EPLL at 434 MHz, as the
++	 * stock firmware sets it: nothing else may have set it up yet
++	 */
++	assigned-clocks = <&cgu X2600_CLK_EPLL>, <&cgu X2600_CLK_LCD>;
++	assigned-clock-parents = <0>, <&cgu X2600_CLK_EPLL>;
++	assigned-clock-rates = <434000000>, <31000000>;
++
++	phys = <&dsi_dphy>;
++	phy-names = "lvds";
++
++	status = "okay";
++
++	port {
++		dpu_out: endpoint {
++			remote-endpoint = <&panel_in>;
++		};
++	};
++};
++
++&dsi_dphy {
++	status = "okay";
++};
++
+ &exclk {
+ 	clock-frequency = <24000000>;
+ };
+@@ -118,6 +175,7 @@ &otg_phy {
+ };
+ 
+ &pinctrl {
++
+ 	pins_mac: mac {
+ 		function = "mac0";
+ 		groups = "mac0-rmii";
+-- 
+2.43.0
+

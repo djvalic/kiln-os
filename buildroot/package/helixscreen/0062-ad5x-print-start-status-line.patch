@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Wed, 11 Nov 2026 23:55:00 -0500
+Subject: [PATCH] print status: the printer's status line under the print
+ start steps
+
+While a print starts, the step list is drawn over the job card and
+covers its M117 row, so Kiln's PRINT_START messages ("Heat soak 1:53",
+"Checking Z", "Cleaning nozzle on the bed edge", "Meshing print area")
+never reached the screen: during a two-minute bed heat soak the screen
+showed a step that had ended and the printer looked stuck. The list and
+its compact form now show the M117 line (display_message) while it is
+set.
+---
+diff --git a/ui_xml/components/print_status_job_checklist.xml b/ui_xml/components/print_status_job_checklist.xml
+index 225102e..27aaf25 100644
+--- a/ui_xml/components/print_status_job_checklist.xml
++++ b/ui_xml/components/print_status_job_checklist.xml
+@@ -43,6 +43,13 @@
+                     bind_text="print_display_filename" style_text_color="#text" long_mode="dots" style_max_width="70%"/>
+         <text_small text="preparing" style_text_color="#text_muted" long_mode="dots" flex_grow="1"/>
+       </lv_obj>
++      <!-- Kiln OS (AD5X): the printer's own status line (M117), e.g.
++           "Heat soak 1:53", "Checking Z", "Meshing print area"; this list
++           covers the card's M117 row while the print starts. -->
++      <text_small name="ps_checklist_message"
++                  width="100%" bind_text="display_message" style_text_color="#warning" long_mode="dots" hidden="true">
++        <bind_flag_if_eq subject="display_message_visible" flag="hidden" ref_value="0"/>
++      </text_small>
+       <repeat count="8">
+         <lv_obj name="ps_step_row_${i}"
+                 width="100%" height="content" style_pad_all="0" style_bg_opa="0" style_border_width="0" flex_flow="row"
+@@ -88,6 +95,10 @@
+       <text_body name="ps_checklist_current"
+                  width="100%" bind_text="ps_step_current_name" style_text_color="#warning" long_mode="wrap"/>
+       <text_small name="ps_checklist_current_time" bind_text="ps_step_current_time" style_text_color="#warning"/>
++      <text_small name="ps_checklist_compact_message"
++                  width="100%" bind_text="display_message" style_text_color="#text_muted" long_mode="dots" hidden="true">
++        <bind_flag_if_eq subject="display_message_visible" flag="hidden" ref_value="0"/>
++      </text_small>
+       <lv_obj name="ps_checklist_dots"
+               width="100%" height="content" style_pad_all="0" style_bg_opa="0" style_border_width="0" flex_flow="row"
+               style_pad_gap="#space_xs" scrollable="false">

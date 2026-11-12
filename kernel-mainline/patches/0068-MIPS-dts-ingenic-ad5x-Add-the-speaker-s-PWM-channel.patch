@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Mon, 9 Nov 2026 17:06:17 -0700
+Subject: [PATCH 68/74] MIPS: dts: ingenic: ad5x: Add the speaker's PWM channel
+
+The speaker is a piezo on PC12, PWM channel 13.
+---
+ arch/mips/boot/dts/ingenic/ad5x.dts | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/arch/mips/boot/dts/ingenic/ad5x.dts b/arch/mips/boot/dts/ingenic/ad5x.dts
+index a4b69a950..fd981e0d5 100644
+--- a/arch/mips/boot/dts/ingenic/ad5x.dts
++++ b/arch/mips/boot/dts/ingenic/ad5x.dts
+@@ -213,6 +213,11 @@ pins_mmc0: mmc0 {
+ 		groups = "mmc0-4bit", "mmc0-8bit";
+ 	};
+ 
++	pins_pwm13: pwm13 {
++		function = "pwm13";
++		groups = "pwm13";
++	};
++
+ 	pins_uart0: uart0 {
+ 		function = "uart0";
+ 		groups = "uart0-e";
+@@ -240,6 +245,14 @@ pins_uart7: uart7 {
+ };
+ 
+ /* Debug console */
++/* Speaker: a piezo on PC12 */
++&pwm {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pins_pwm13>;
++
++	status = "okay";
++};
++
+ &uart0 {
+ 	pinctrl-names = "default";
+ 	pinctrl-0 = <&pins_uart0>;
+-- 
+2.43.0
+

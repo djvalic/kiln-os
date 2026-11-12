@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Mon, 9 Nov 2026 08:16:49 -0700
+Subject: [PATCH 71/74] MIPS: configs: ad5x: Enable SMP
+
+Run both cores of the X2600. Suspend needs CPU hotplug on an SMP
+kernel, which this platform does not have yet, so the line disabling
+it goes.
+---
+ arch/mips/configs/ad5x_defconfig | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/arch/mips/configs/ad5x_defconfig b/arch/mips/configs/ad5x_defconfig
+index 234ade8ca..a2a453bdc 100644
+--- a/arch/mips/configs/ad5x_defconfig
++++ b/arch/mips/configs/ad5x_defconfig
+@@ -10,10 +10,11 @@ CONFIG_MACH_INGENIC_SOC=y
+ CONFIG_X2600_FLASHFORGE_AD5X=y
+ CONFIG_ZBOOT_LOAD_ADDRESS=0x80f00000
+ CONFIG_HIGHMEM=y
++CONFIG_SMP=y
++CONFIG_NR_CPUS=2
+ CONFIG_HZ_100=y
+ CONFIG_MIPS_O32_FP64_SUPPORT=y
+ CONFIG_MIPS_CMDLINE_BUILTIN_EXTEND=y
+-# CONFIG_SUSPEND is not set
+ # CONFIG_SECCOMP is not set
+ CONFIG_MODULES=y
+ CONFIG_MODULE_UNLOAD=y
+-- 
+2.43.0
+

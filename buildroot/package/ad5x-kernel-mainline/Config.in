@@ -1,0 +1,13 @@
+config BR2_PACKAGE_AD5X_KERNEL_MAINLINE
+	bool "ad5x-kernel-mainline"
+	depends on BR2_PACKAGE_AD5X_KERNEL66 # chainload.ko, the fallback
+	help
+	  Mainline Linux 7.3.3 with the AD5X patch series and Kiln's
+	  kernel options (kernel-mainline/: patches, kiln.config,
+	  build.sh). Installed in /usr/lib/ad5x/kernel-mainline. Off by
+	  default on the printer: "ad5x-kernel mainline on" makes
+	  S00ad5x-kernel start it instead of 6.6; a failed start falls
+	  back to 6.6 in the same boot.
+
+	  build.sh downloads linux-7.3.3.tar.xz from kernel.org and the
+	  rtw8821c firmware from linux-firmware (both sha256-pinned).

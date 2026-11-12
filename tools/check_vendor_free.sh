@@ -35,7 +35,7 @@ import hashlib, io, os, shutil, stat, subprocess, sys, tarfile, tempfile, zipfil
 REPO = os.environ["AD5X_REPO"]
 UNSQ = os.environ.get("AD5X_UNSQUASHFS") or ""
 USAGE = "usage: tools/check_vendor_free.sh [-s STOCKDIR]... [--no-stock] [-q] TARGET..."
-OWN_KERNEL_DIR = "usr/lib/ad5x/kernel66/"
+OWN_KERNEL_DIR = ("usr/lib/ad5x/kernel66/", "usr/lib/ad5x/kernel-mainline/")
 VENDOR_NAMES_ANY = {"libhardware2.so", "libutils2.so", "kernel.uimage"}
 VENDOR_ELF_NAMES = {"cmd_gpio", "cmd_fb", "cmd_jpeg_display"}
 # Parts of the stock firmware that are unmodified upstream open-source
@@ -209,8 +209,9 @@ def scan_tree(root, label):
                 continue
             count += 1
             elf = is_elf(p)
-            # Our own 6.6 kernel and chainload.ko (built from GPL source in
-            # kernel-ingenic66/): no kernel-type flags there; the hash
+            # Our own 6.6 and 7.3 kernels and chainload.ko (built from GPL
+            # source in kernel-ingenic66/ and kernel-mainline/): no
+            # kernel-type flags there; the hash
             # comparison with stock files below still applies.
             if rel.startswith(OWN_KERNEL_DIR):
                 pass

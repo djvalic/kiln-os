@@ -19,6 +19,8 @@
 #   src-linux-ingenic-6.6-<commit>.tar.xz  the 6.6 kernel tree (Ingenic SDK)
 #                                        our kernel is built from; our
 #                                        patches/config are kernel-ingenic66/
+#   src-linux-7.3.3.tar.xz               kernel.org tree the opt-in 7.3 kernel
+#                                        is built from (+ kernel-mainline/)
 #   src-linux-5.10.186.tar.xz            kernel.org tree chainload.ko builds
 #                                        against (kernel-ingenic66/chainload)
 #   src-klipper-mcu-<commit>.tar.gz      Klipper the boards' firmware is built
@@ -135,6 +137,28 @@ if [ -n "$SDK" ]; then
 	fi
 	printf '%s\t%s\t%s\t%s\n' linux 5.10.186 GPL-2.0 \
 		"$a (headers for chainload.ko, kernel-ingenic66/chainload/ in this repository)" >> "$LIST"
+fi
+
+# The opt-in 7.3 kernel: kernel.org's tarball (kernel-mainline/build.sh pins
+# it) plus kernel-mainline/ in this repository (patches, kiln.config)
+if grep -q '^BR2_PACKAGE_AD5X_KERNEL_MAINLINE=y' buildroot/output/.config; then
+	kv=$(sed -n 's/^KVER=//p' kernel-mainline/build.sh)
+	ks=$(sed -n 's/^KSHA256=//p' kernel-mainline/build.sh)
+	a=src-linux-$kv.tar.xz
+	if ! have "$a"; then
+		k=$(ls buildroot/dl/ad5x-kernel-mainline/linux-$kv.tar.xz 2>/dev/null || true)
+		if [ -n "$k" ]; then
+			cp "$k" "$work/$a"
+		else
+			curl -fsSL -o "$work/$a" "https://cdn.kernel.org/pub/linux/kernel/v${kv%%.*}.x/linux-$kv.tar.xz" ||
+				die "downloading linux-$kv"
+		fi
+		echo "$ks  $work/$a" | sha256sum -c --quiet || die "linux-$kv: sha256 mismatch"
+		upload "$work/$a"
+		rm -f "$work/$a"
+	fi
+	printf '%s\t%s\t%s\t%s\n' linux "$kv" GPL-2.0 \
+		"$a (+ kernel-mainline/ in this repository at $TAG: patches, kiln.config, build.sh)" >> "$LIST"
 fi
 
 # The boards' firmware: upstream Klipper at the commit tools/build_mcu.sh uses
