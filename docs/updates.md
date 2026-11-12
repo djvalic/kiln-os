@@ -105,7 +105,7 @@ is kept in the run's log folder (`update-<version>.zip`). It is never published,
   `S99ad5x-booted` has run, a reboot would count as an unfinished start of
   our kernel. It stages it with `ad5x-update` (boot flag on the recovery OS)
   and reboots. The recovery OS installs it into slot B, checks it and
-  boots it (about 3 minutes). Log: `/data/ad5x/kiln-update/agent.log`.
+  boots it (about 3 minutes). Log: `/data/ad5x/kiln-log/agent.log`.
   The update carries the release's recovery OS too: after the first
   complete start the main OS writes it into slot A if slot A holds
   another one (docs/recovery-os.md, "Updates of the recovery OS itself").
