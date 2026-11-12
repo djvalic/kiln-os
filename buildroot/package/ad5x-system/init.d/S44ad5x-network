@@ -1,0 +1,58 @@
+#!/bin/sh
+# Before NetworkManager (S45): its files on /data, and on the first start
+# the connections of the releases before it (docs/networkmanager.md):
+# Ethernet from /data/ad5x/network.conf with stock's MAC, Wi-Fi from
+# /data/ad5x/wpa_supplicant.conf (or, on a fresh install, the networks
+# saved on stock's screen). Once: /data/ad5x/NetworkManager/imported.
+# Main OS and recovery OS alike.
+#
+# The root is read-only: the connections live in
+# /data/ad5x/NetworkManager/system-connections (NetworkManager.conf), its
+# state (the Wi-Fi radio switch among it) in /data/ad5x/NetworkManager/lib
+# (/var/lib/NetworkManager links there).
+#
+# /data/ad5x/wifi.disable: no Wi-Fi at all, wlan0 left unmanaged.
+# In USB test mode stock runs the network; NetworkManager doesn't start
+# (/etc/default/NetworkManager).
+
+# Files this creates are readable by klipper and www-data, whoever started
+# it (a root SSH session may run with umask 077; issue #31)
+umask 022
+
+. /usr/lib/ad5x/nm-import.sh
+RUNCONF=/run/NetworkManager/conf.d
+NM_LOG=/data/ad5x/printer_data/logs/network.log
+case "$1" in
+start)
+	[ -n "$AD5X_USB" ] && exit 0
+	if ! mkdir -p $NM_DATA/lib $NM_CONN 2>/dev/null; then
+		echo "ad5x-network: /data not writable; NetworkManager keeps its state in RAM"
+		mkdir -p /run/ad5x-nm/lib /run/ad5x-nm/system-connections
+		mkdir -p $RUNCONF
+		printf '[keyfile]\npath=/run/ad5x-nm/system-connections\n' > $RUNCONF/50-ad5x-nodata.conf
+		exit 0
+	fi
+	chmod 700 $NM_DATA $NM_CONN
+	mkdir -p ${NM_LOG%/*}
+	[ -s $NM_LOG ] && mv -f $NM_LOG $NM_LOG.1 2>/dev/null
+	: > $NM_LOG 2>/dev/null
+	[ -f $NM_MARK ] || nm_import
+	# The releases before NetworkManager kept Wi-Fi passwords in
+	# wpa_supplicant.conf, some of them readable by all (issue #31): it
+	# stays here after the import, private like the keyfiles
+	for f in $NM_WPACONF $NM_WPACONF.bad-*; do
+		[ -f "$f" ] && chmod 600 "$f"
+	done
+	mkdir -p $RUNCONF
+	if [ -f /data/ad5x/wifi.disable ]; then
+		printf '[keyfile]\nunmanaged-devices=interface-name:wlan0\n' > $RUNCONF/50-ad5x-wifi-disable.conf
+		ip link set wlan0 down 2>/dev/null
+		nm_log "Wi-Fi off (remove /data/ad5x/wifi.disable to use it)"
+	else
+		rm -f $RUNCONF/50-ad5x-wifi-disable.conf
+	fi
+	;;
+stop)
+	;;
+esac
+exit 0

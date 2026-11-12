@@ -19,13 +19,16 @@ BR2_DL_DIR="$(BR2_EXTERNAL_AD5X_PATH)/dl"
 # Fixes to Buildroot's own packages: board/ad5x/patches/<package>/
 BR2_GLOBAL_PATCH_DIR="$(BR2_EXTERNAL_AD5X_PATH)/board/ad5x/patches"
 
-# System. The stock kernel has no cgroups, so no systemd: BusyBox init and
-# mdev, like stock.
+# System. The stock kernel has no cgroups, so no systemd: BusyBox init, as
+# stock.
 BR2_TARGET_GENERIC_HOSTNAME="ad5x"
 BR2_TARGET_GENERIC_ISSUE="Kiln OS"
 BR2_INIT_BUSYBOX=y
 BR2_PACKAGE_BUSYBOX_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_AD5X_PATH)/board/ad5x/busybox.fragment"
-BR2_ROOTFS_DEVICE_CREATION_DYNAMIC_MDEV=y
+# eudev (NetworkManager needs udev): /etc/init.d/S10udevd, no hardware
+# database (vendor names, nothing here reads them)
+BR2_ROOTFS_DEVICE_CREATION_DYNAMIC_EUDEV=y
+# BR2_PACKAGE_EUDEV_ENABLE_HWDB is not set
 # squashfs root: read-only
 # BR2_TARGET_GENERIC_REMOUNT_ROOTFS_RW is not set
 # Serial login on the debug console, ttyS0 (stock: console=ttyS0,115200n8).
@@ -33,7 +36,7 @@ BR2_ROOTFS_DEVICE_CREATION_DYNAMIC_MDEV=y
 # eboard, ttyS7 weighing board.
 BR2_TARGET_GENERIC_GETTY_PORT="ttyS0"
 BR2_TARGET_GENERIC_GETTY_BAUDRATE_115200=y
-# eth0 is set up by S41ad5x-eth (stock MAC, DHCP)
+# NetworkManager runs eth0 (stock MAC, DHCP) and wlan0 (S44ad5x-network)
 BR2_TARGET_TZ_INFO=y
 BR2_ROOTFS_USERS_TABLES="$(BR2_EXTERNAL_AD5X_PATH)/board/ad5x/users.table"
 BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_AD5X_PATH)/board/ad5x/rootfs-overlay"
@@ -60,6 +63,12 @@ BR2_PACKAGE_DROPBEAR=y
 BR2_PACKAGE_WPA_SUPPLICANT=y
 BR2_PACKAGE_WPA_SUPPLICANT_NL80211=y
 BR2_PACKAGE_WPA_SUPPLICANT_CLI=y
+BR2_PACKAGE_WPA_SUPPLICANT_DBUS=y
+# NetworkManager runs the network (docs/networkmanager.md): Ethernet and
+# Wi-Fi, DHCP (its internal client), nmcli for HelixScreen and ad5x-status
+BR2_PACKAGE_DBUS=y
+BR2_PACKAGE_NETWORK_MANAGER=y
+BR2_PACKAGE_NETWORK_MANAGER_CLI=y
 BR2_PACKAGE_WPA_SUPPLICANT_PASSPHRASE=y
 BR2_PACKAGE_IW=y
 BR2_PACKAGE_WIRELESS_REGDB=y

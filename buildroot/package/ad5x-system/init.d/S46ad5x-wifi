@@ -1,0 +1,96 @@
+#!/bin/sh
+# After NetworkManager (S45), in the background: the Wi-Fi log and the
+# off switch's safety (docs/networkmanager.md). Main OS and recovery OS.
+#
+# Off switch: HelixScreen's Wi-Fi switch turns the radio off through
+# NetworkManager (nmcli radio wifi off), which keeps it off across
+# reboots, with or without Ethernet (issue #44: the touch screen is the
+# way back). The recovery OS has no HelixScreen, and NetworkManager's
+# state on /data is shared with it, so there the radio is turned back on.
+#
+# printer_data/logs/wifi.log (Fluidd shows it): kernel and release,
+# the Wi-Fi driver, its settings and firmware, the radio, how many Wi-Fi
+# connections are saved (no names or secrets), power saving, the network
+# joined. The previous start's log is kept as wifi.log.1.
+
+# Files this creates are readable by klipper and www-data, whoever started
+# it (a root SSH session may run with umask 077; issue #31)
+umask 022
+
+LOG=/data/ad5x/printer_data/logs/wifi.log
+log() {
+	echo "ad5x-wifi: $*"
+	echo "$(date '+%F %T') $*" >> $LOG 2>/dev/null
+}
+
+driver_info() {
+	drv=$(readlink /sys/class/net/wlan0/device/driver 2>/dev/null)
+	log "wlan0, driver ${drv##*/}"
+	p=/sys/module/rtw88_core/parameters
+	if [ -d $p ]; then
+		s=
+		for f in "$p"/*; do
+			[ -f "$f" ] && s="$s ${f##*/}=$(cat "$f" 2>/dev/null)"
+		done
+		log "rtw88_core:$s"
+	fi
+	fw=$(dmesg 2>/dev/null | grep -m 1 'rtw_.*: Firmware version')
+	[ -n "$fw" ] && log "firmware: ${fw#*Firmware version }"
+	return 0
+}
+
+check() {
+	mkdir -p ${LOG%/*}
+	[ -s $LOG ] && mv -f $LOG $LOG.1 2>/dev/null
+	: > $LOG 2>/dev/null
+	log "start: kernel $(uname -r), $(head -1 /etc/ad5x-release 2>/dev/null), $(NetworkManager --version 2>/dev/null | sed 's/^/NetworkManager /')"
+	if [ -f /data/ad5x/wifi.disable ]; then
+		log "off (remove /data/ad5x/wifi.disable to use Wi-Fi)"
+		return 0
+	fi
+	i=0
+	while [ ! -d /sys/class/net/wlan0 ] && [ $i -lt 10 ]; do
+		sleep 1; i=$((i + 1))
+	done
+	if [ ! -d /sys/class/net/wlan0 ]; then
+		log "no wlan0 after ${i} s; interfaces: $(ls /sys/class/net | tr '\n' ' ')"
+		log "USB: $(cat /sys/bus/usb/devices/*/product 2>/dev/null | tr '\n' ',')"
+		return 0
+	fi
+	driver_info
+	n=$(nmcli -t -f TYPE connection show 2>/dev/null | grep -c '^802-11-wireless$')
+	log "$n Wi-Fi connection(s) saved"
+	if [ "$(nmcli radio wifi 2>/dev/null)" = disabled ]; then
+		if [ -f /etc/ad5x-recovery ]; then
+			nmcli radio wifi on
+			log "radio was switched off on the screen: on in the recovery OS"
+		else
+			log "radio off (switched off on the screen)"
+			return 0
+		fi
+	fi
+	# Joined within a minute? Then the network (no name) and power saving.
+	i=0
+	while [ "$(nmcli -g GENERAL.STATE device show wlan0 2>/dev/null | cut -d' ' -f1)" != 100 ] && [ $i -lt 60 ]; do
+		sleep 1; i=$((i + 1))
+	done
+	if [ $i -lt 60 ]; then
+		log "joined after ${i} s, $(nmcli -g IP4.ADDRESS device show wlan0 2>/dev/null | head -1)"
+	else
+		log "not joined after 60 s: $(nmcli -g GENERAL.STATE device show wlan0 2>/dev/null)"
+	fi
+	# NetworkManager turns power saving off for each connection
+	# (wifi.powersave = 2): with it on, the rtw88 8821CU's signal falls to
+	# -95 dBm and it drops and rejoins over and over (issue #37).
+	log "power saving: $(iw dev wlan0 get power_save 2>/dev/null | sed 's/^Power save: //')"
+}
+
+case "$1" in
+start)
+	[ -n "$AD5X_USB" ] && exit 0
+	check </dev/null >/dev/null 2>&1 &
+	;;
+stop)
+	;;
+esac
+exit 0

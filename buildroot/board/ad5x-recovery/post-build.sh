@@ -2,7 +2,8 @@
 # Recovery image, after the target tree is assembled ($1 = target dir).
 # - Vendor files as the main image (board/ad5x/bundle-stock.sh): none by
 #   default, bundled only in a private build.
-# - rcS (boot trace), S10mdev and mdev.conf from the main image's overlay.
+# - rcS (boot trace), S10udevd and NetworkManager's configuration from the
+#   main image's overlay; NetworkManager as in the main image (network-nm.sh).
 # - Release marks: /etc/ad5x-release ("Kiln OS recovery <version> (<date>)"),
 #   /etc/ad5x-recovery
 #   (tells it from the main OS), /etc/hwrevision for SWUpdate's hardware check.
@@ -22,8 +23,15 @@ bundle_stock "$TARGET"
 
 MAIN=$EXT/board/ad5x/rootfs-overlay
 install -D -m 0755 "$MAIN/etc/init.d/rcS" "$TARGET/etc/init.d/rcS"
-install -D -m 0755 "$MAIN/etc/init.d/S10mdev" "$TARGET/etc/init.d/S10mdev"
-install -D -m 0644 "$MAIN/etc/mdev.conf" "$TARGET/etc/mdev.conf"
+install -D -m 0755 "$MAIN/etc/init.d/S10udevd" "$TARGET/etc/init.d/S10udevd"
+install -D -m 0644 "$MAIN/etc/NetworkManager/NetworkManager.conf" \
+	"$TARGET/etc/NetworkManager/NetworkManager.conf"
+install -D -m 0644 "$MAIN/etc/default/NetworkManager" \
+	"$TARGET/etc/default/NetworkManager"
+install -D -m 0644 "$MAIN/etc/udev/rules.d/80-net-name-slot.rules" \
+	"$TARGET/etc/udev/rules.d/80-net-name-slot.rules"
+. "$EXT/board/ad5x/network-nm.sh"
+nm_target "$TARGET"
 install -D -m 0644 "$MAIN/etc/network/interfaces" "$TARGET/etc/network/interfaces"
 
 # The release it was built for (AD5X_VERSION, else git as the main image's

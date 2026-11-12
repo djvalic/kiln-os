@@ -6,7 +6,8 @@
 #   --slots  also mount and identify both slots (slot_a=, slot_b=; slower)
 #
 # Keys: release, slot, root, flag, flag_at_boot, net_mode (dhcp|static),
-# net_if, net_ip (address/prefix, empty without a link), ssh (running|stopped),
+# net_if, net_ip (address/prefix, empty without a link), network
+# (NetworkManager running|stopped), ssh (running|stopped),
 # swupdate (running|stopped), web_port, ui (running|absent|stopped),
 # update_pending (.swu files waiting in /data/ad5x/update), update_last (last
 # line of /data/ad5x/update/last.log), auto (running|done), stock_saved
@@ -21,18 +22,21 @@ echo "slot=$(rc_slot)"
 echo "root=$(rc_root)"
 echo "flag=$(rc_read_flag)"
 echo "flag_at_boot=$(cat "$AD5X_RUN/flag-at-boot" 2>/dev/null)"
-MODE=dhcp IFACE=
-[ -f "$AD5X_DATA/ad5x/network.conf" ] && . "$AD5X_DATA/ad5x/network.conf" 2>/dev/null
-[ "$MODE" = static ] || MODE=dhcp
-echo "net_mode=$MODE"
-ifc=${IFACE:-eth0}
-ip=$(ip -4 addr show dev "$ifc" 2>/dev/null | awk '/inet / { print $2; exit }')
+# The network: NetworkManager's active connection (docs/networkmanager.md)
+ifc=eth0
+ip=$(ip -4 addr show dev eth0 2>/dev/null | awk '/inet / { print $2; exit }')
 if [ -z "$ip" ]; then
 	ip=$(ip -4 addr show dev wlan0 2>/dev/null | awk '/inet / { print $2; exit }')
 	[ -n "$ip" ] && ifc=wlan0
 fi
+conn=$(nmcli -g GENERAL.CONNECTION device show "$ifc" 2>/dev/null)
+case "$([ -n "$conn" ] && nmcli -g ipv4.method connection show "$conn" 2>/dev/null)" in
+manual) echo "net_mode=static" ;;
+*) echo "net_mode=dhcp" ;;
+esac
 echo "net_if=$ifc"
 echo "net_ip=$ip"
+echo "network=$(running NetworkManager)"
 echo "ssh=$(running dropbear)"
 echo "swupdate=$(running swupdate)"
 echo "web_port=8080"

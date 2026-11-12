@@ -32,8 +32,8 @@ define AD5X_SYSTEM_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/usr/bin/ad5x-flash-n32
 	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-mcu $(TARGET_DIR)/usr/bin/ad5x-mcu
 	$(AD5X_SYSTEM_INSTALL_MCU_FIRMWARE)
-	$(INSTALL) -D -m 0644 $(@D)/lib/network.sh \
-		$(TARGET_DIR)/usr/lib/ad5x/network.sh
+	$(INSTALL) -D -m 0644 $(@D)/lib/nm-import.sh \
+		$(TARGET_DIR)/usr/lib/ad5x/nm-import.sh
 	$(INSTALL) -D -m 0644 $(@D)/lib/slot.sh \
 		$(TARGET_DIR)/usr/lib/ad5x/slot.sh
 	$(INSTALL) -D -m 0644 $(@D)/lib/kernel.sh \
