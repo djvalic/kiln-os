@@ -10,6 +10,7 @@ the issue: it is closed by hand after the release.
 
 ## Unreleased
 
+- **The touch screen in the browser on the opt-in 7.3 kernel, whichever way the screen draws**: Fluidd's "Screen" camera and `/screen/` read `/dev/fb0`, so they showed only the boot logo when HelixScreen draws through DRM, as it can on 7.3. `ad5x-fbstream` now reads the picture the display actually shows through DRM on 7.3 (with HelixScreen on DRM or on `/dev/fb0`), and `/dev/fb0` on the 6.6 and stock kernels as before.
 - **Part Fan tile**: on the print screen, the Part Fan tile could read 100% at the start of a print while the part fan was off (it showed the board fan until the part fan had run once). It now shows the part fan from the start.
 - **No part fan during the bed heat soak**: the part fan now switches off after the nozzle brushing at the start of a print, so it no longer blows on the bed while the bed heat soak waits.
 - **No second splash**: the touch screen no longer shows HelixScreen's own logo after the Kiln logo; the Kiln logo stays until the home screen (or the setup wizard) appears, about 2 seconds sooner.
