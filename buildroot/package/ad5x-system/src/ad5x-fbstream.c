@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // ad5x-fbstream: the touch screen in the browser, with touch (as zMod's
-// screen view in Fluidd). Reads the visible part of /dev/fb0
-// (double-buffered: yoffset from FBIOGET_VSCREENINFO), encodes JPEG with
-// libjpeg and serves on 127.0.0.1:PORT (nginx: /screen/):
+// screen view in Fluidd). Reads the buffer the display shows through DRM
+// (/dev/dri/card0: the CRTC's framebuffer, where HelixScreen draws on the
+// mainline kernel), else the visible part of /dev/fb0 (double-buffered:
+// yoffset from FBIOGET_VSCREENINFO), encodes JPEG with libjpeg and serves on 127.0.0.1:PORT (nginx: /screen/):
 //   GET /                         page: the stream, click/drag = touch
 //   GET /?action=stream, /stream  multipart MJPEG at FPS
 //   GET /?action=snapshot, /snapshot  one JPEG
@@ -15,7 +16,7 @@
 // (a..f, rotation 0). Re-read when settings.json changes.
 //
 // usage: ad5x-fbstream [-p PORT] [-f FPS] [-q QUALITY] [-d FBDEV]
-//                      [-t TOUCH_EVDEV] [-s SETTINGS_JSON]
+//                      [-t TOUCH_EVDEV] [-s SETTINGS_JSON] [-D DRMDEV]
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -36,9 +37,13 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <drm/drm.h>
+#include <drm/drm_fourcc.h>
+#include <drm/drm_mode.h>
 #include <jpeglib.h>
 
 static const char *fbdev = "/dev/fb0";
+static const char *drmdev = "/dev/dri/card0";
 static const char *touchdev;	// found by name when not given
 static const char *settings = "/data/ad5x/helixscreen/config/settings.json";
 static int port = 8092, fps = 2, quality = 70;
@@ -48,6 +53,7 @@ static uint8_t *fb_mem;
 static size_t fb_len;
 static struct fb_fix_screeninfo fix;
 static unsigned screen_w = 800, screen_h = 480;
+static int drm_fd = -1;
 
 static int fb_open(void)
 {
@@ -56,6 +62,9 @@ static int fb_open(void)
 	if (fb_fd < 0 || ioctl(fb_fd, FBIOGET_FSCREENINFO, &fix) < 0
 	    || ioctl(fb_fd, FBIOGET_VSCREENINFO, &var) < 0) {
 		perror(fbdev);
+		if (fb_fd >= 0)
+			close(fb_fd);
+		fb_fd = -1;
 		return -1;
 	}
 	screen_w = var.xres;
@@ -64,6 +73,8 @@ static int fb_open(void)
 	fb_mem = mmap(NULL, fb_len, PROT_READ, MAP_SHARED, fb_fd, 0);
 	if (fb_mem == MAP_FAILED) {
 		perror("mmap");
+		close(fb_fd);
+		fb_fd = -1;
 		return -1;
 	}
 	return 0;
@@ -75,47 +86,44 @@ static uint8_t channel(uint32_t px, const struct fb_bitfield *f)
 	return f->length >= 8 ? v >> (f->length - 8) : v << (8 - f->length);
 }
 
-// JPEG of the visible screen into a malloc'd buffer
-static int grab_jpeg(unsigned char **out, size_t *out_len)
+// The pixels of one frame and how to read them
+struct frame {
+	const uint8_t *base;
+	unsigned w, h, bpp;	// bpp in bytes: 2 or 4
+	size_t pitch;
+	struct fb_bitfield red, green, blue;
+};
+
+// JPEG of a frame into a malloc'd buffer
+static int encode(const struct frame *f, unsigned char **out, size_t *out_len)
 {
-	struct fb_var_screeninfo var;
 	struct jpeg_compress_struct c;
 	struct jpeg_error_mgr err;
-	unsigned bpp, x, y;
-	uint8_t *row;
+	unsigned x, y;
+	uint8_t *row = malloc(f->w * 3);
 
-	if (ioctl(fb_fd, FBIOGET_VSCREENINFO, &var) < 0)
-		return -1;
-	bpp = var.bits_per_pixel / 8;
-	if (bpp != 2 && bpp != 4)
-		return -1;
-	if ((size_t)(var.yoffset + var.yres) * fix.line_length > fb_len)
-		var.yoffset = 0;
-	row = malloc(var.xres * 3);
 	if (!row)
 		return -1;
-
 	c.err = jpeg_std_error(&err);
 	jpeg_create_compress(&c);
 	*out = NULL;
 	*out_len = 0;
 	jpeg_mem_dest(&c, out, out_len);
-	c.image_width = var.xres;
-	c.image_height = var.yres;
+	c.image_width = f->w;
+	c.image_height = f->h;
 	c.input_components = 3;
 	c.in_color_space = JCS_RGB;
 	jpeg_set_defaults(&c);
 	jpeg_set_quality(&c, quality, TRUE);
 	jpeg_start_compress(&c, TRUE);
-	for (y = 0; y < var.yres; y++) {
-		const uint8_t *src = fb_mem + (size_t)(var.yoffset + y)
-			* fix.line_length + (size_t)var.xoffset * bpp;
-		for (x = 0; x < var.xres; x++) {
-			uint32_t px = bpp == 4 ? ((const uint32_t *)src)[x]
-					       : ((const uint16_t *)src)[x];
-			row[x * 3] = channel(px, &var.red);
-			row[x * 3 + 1] = channel(px, &var.green);
-			row[x * 3 + 2] = channel(px, &var.blue);
+	for (y = 0; y < f->h; y++) {
+		const uint8_t *src = f->base + (size_t)y * f->pitch;
+		for (x = 0; x < f->w; x++) {
+			uint32_t px = f->bpp == 4 ? ((const uint32_t *)src)[x]
+						  : ((const uint16_t *)src)[x];
+			row[x * 3] = channel(px, &f->red);
+			row[x * 3 + 1] = channel(px, &f->green);
+			row[x * 3 + 2] = channel(px, &f->blue);
 		}
 		JSAMPROW r = row;
 		jpeg_write_scanlines(&c, &r, 1);
@@ -124,6 +132,122 @@ static int grab_jpeg(unsigned char **out, size_t *out_len)
 	jpeg_destroy_compress(&c);
 	free(row);
 	return 0;
+}
+
+// The visible part of /dev/fb0 (double-buffered: yoffset)
+static int fb_grab(unsigned char **out, size_t *out_len)
+{
+	struct fb_var_screeninfo var;
+	struct frame f;
+
+	if (fb_fd < 0 || ioctl(fb_fd, FBIOGET_VSCREENINFO, &var) < 0)
+		return -1;
+	f.bpp = var.bits_per_pixel / 8;
+	if (f.bpp != 2 && f.bpp != 4)
+		return -1;
+	if ((size_t)(var.yoffset + var.yres) * fix.line_length > fb_len)
+		var.yoffset = 0;
+	f.base = fb_mem + (size_t)var.yoffset * fix.line_length
+		+ (size_t)var.xoffset * f.bpp;
+	f.w = var.xres;
+	f.h = var.yres;
+	f.pitch = fix.line_length;
+	f.red = var.red;
+	f.green = var.green;
+	f.blue = var.blue;
+	return encode(&f, out, out_len);
+}
+
+// The buffer the display shows, through DRM. On the mainline kernel
+// HelixScreen draws through DRM, and /dev/fb0 (the kernel's fbdev
+// emulation) then keeps showing the boot splash. Reading another
+// client's buffer needs root (GETFB2 returns no handle otherwise).
+static int drm_grab(unsigned char **out, size_t *out_len)
+{
+	uint32_t crtcs[8];
+	struct drm_mode_card_res res = { 0 };
+	struct drm_mode_crtc crtc;
+	struct drm_mode_fb_cmd2 fb = { 0 };
+	struct drm_mode_map_dumb map = { 0 };
+	struct drm_gem_close gc = { 0 };
+	struct frame f = { 0 };
+	unsigned i;
+	size_t len;
+	void *mem;
+	int ret = -1;
+
+	if (drm_fd < 0)
+		return -1;
+	res.crtc_id_ptr = (uintptr_t)crtcs;
+	res.count_crtcs = 8;
+	if (ioctl(drm_fd, DRM_IOCTL_MODE_GETRESOURCES, &res) < 0)
+		return -1;
+	if (res.count_crtcs > 8)
+		res.count_crtcs = 8;
+	for (i = 0; i < res.count_crtcs; i++) {
+		memset(&crtc, 0, sizeof(crtc));
+		crtc.crtc_id = crtcs[i];
+		if (ioctl(drm_fd, DRM_IOCTL_MODE_GETCRTC, &crtc) == 0
+		    && crtc.mode_valid && crtc.fb_id)
+			break;
+	}
+	if (i == res.count_crtcs)
+		return -1;
+	fb.fb_id = crtc.fb_id;
+	if (ioctl(drm_fd, DRM_IOCTL_MODE_GETFB2, &fb) < 0 || !fb.handles[0])
+		return -1;
+	switch (fb.pixel_format) {
+	case DRM_FORMAT_XRGB8888:
+	case DRM_FORMAT_ARGB8888:
+		f.bpp = 4;
+		f.red = (struct fb_bitfield){ 16, 8, 0 };
+		f.green = (struct fb_bitfield){ 8, 8, 0 };
+		f.blue = (struct fb_bitfield){ 0, 8, 0 };
+		break;
+	case DRM_FORMAT_XBGR8888:
+	case DRM_FORMAT_ABGR8888:
+		f.bpp = 4;
+		f.red = (struct fb_bitfield){ 0, 8, 0 };
+		f.green = (struct fb_bitfield){ 8, 8, 0 };
+		f.blue = (struct fb_bitfield){ 16, 8, 0 };
+		break;
+	case DRM_FORMAT_RGB565:
+		f.bpp = 2;
+		f.red = (struct fb_bitfield){ 11, 5, 0 };
+		f.green = (struct fb_bitfield){ 5, 6, 0 };
+		f.blue = (struct fb_bitfield){ 0, 5, 0 };
+		break;
+	default:
+		goto out;
+	}
+	f.w = fb.width < crtc.mode.hdisplay ? fb.width : crtc.mode.hdisplay;
+	f.h = fb.height < crtc.mode.vdisplay ? fb.height : crtc.mode.vdisplay;
+	if (crtc.x + f.w > fb.width || crtc.y + f.h > fb.height)
+		crtc.x = crtc.y = 0;
+	f.pitch = fb.pitches[0];
+	map.handle = fb.handles[0];
+	if (ioctl(drm_fd, DRM_IOCTL_MODE_MAP_DUMB, &map) < 0)
+		goto out;
+	len = (size_t)fb.offsets[0] + (size_t)fb.pitches[0] * fb.height;
+	mem = mmap(NULL, len, PROT_READ, MAP_SHARED, drm_fd, map.offset);
+	if (mem == MAP_FAILED)
+		goto out;
+	f.base = (const uint8_t *)mem + fb.offsets[0]
+		+ (size_t)crtc.y * f.pitch + (size_t)crtc.x * f.bpp;
+	ret = encode(&f, out, out_len);
+	munmap(mem, len);
+out:
+	gc.handle = fb.handles[0];
+	ioctl(drm_fd, DRM_IOCTL_GEM_CLOSE, &gc);
+	return ret;
+}
+
+// JPEG of the visible screen into a malloc'd buffer
+static int grab_jpeg(unsigned char **out, size_t *out_len)
+{
+	if (drm_grab(out, out_len) == 0)
+		return 0;
+	return fb_grab(out, out_len);
 }
 
 // --- Touch ---------------------------------------------------------------
@@ -428,7 +552,7 @@ int main(int argc, char **argv)
 	int opt, s, one = 1;
 	struct sockaddr_in a = { .sin_family = AF_INET };
 
-	while ((opt = getopt(argc, argv, "p:f:q:d:t:s:")) != -1) {
+	while ((opt = getopt(argc, argv, "p:f:q:d:t:s:D:")) != -1) {
 		switch (opt) {
 		case 'p': port = atoi(optarg); break;
 		case 'f': fps = atoi(optarg) > 0 ? atoi(optarg) : 1; break;
@@ -436,13 +560,15 @@ int main(int argc, char **argv)
 		case 'd': fbdev = optarg; break;
 		case 't': touchdev = optarg; break;
 		case 's': settings = optarg; break;
+		case 'D': drmdev = optarg; break;
 		default:
 			fprintf(stderr, "usage: %s [-p PORT] [-f FPS] [-q QUALITY] "
-				"[-d FBDEV] [-t TOUCH_EVDEV] [-s SETTINGS]\n", argv[0]);
+				"[-d FBDEV] [-t TOUCH_EVDEV] [-s SETTINGS] [-D DRMDEV]\n", argv[0]);
 			return 2;
 		}
 	}
-	if (fb_open() < 0)
+	drm_fd = open(drmdev, O_RDWR | O_CLOEXEC);
+	if (fb_open() < 0 && drm_fd < 0)
 		return 1;
 	signal(SIGPIPE, SIG_IGN);
 	s = socket(AF_INET, SOCK_STREAM, 0);

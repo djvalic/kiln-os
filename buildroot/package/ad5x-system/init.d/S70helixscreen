@@ -2,10 +2,11 @@
 # HelixScreen, the touch screen UI, on the panel's framebuffer /dev/fb0
 # (800x480) on every kernel: 6.6 and stock have only fbdev, mainline 7.3
 # has a DRM driver and gives fb0 through its fbdev emulation, so the wait
-# for fb0 below holds everywhere. The build also has the DRM backend, but
-# HELIX_DISPLAY_BACKEND=fbdev keeps it off for now: on DRM the browser's
-# screen view (ad5x-fbstream reads fb0) would freeze, and a missed vblank
-# would stop the UI with nothing logged. The tsc2007 touch (evdev) is
+# for fb0 below holds everywhere. The build also has the DRM backend:
+# off by default (HELIX_DISPLAY_BACKEND=fbdev), on with
+# /data/ad5x/helixscreen.drm where the kernel has a DRM driver (the
+# opt-in 7.3). ad5x-fbstream reads the screen through DRM there, so the
+# browser's screen view works with either backend. The tsc2007 touch (evdev) is
 # found by the app. Talks to Moonraker at 127.0.0.1:7125. Read-only
 # files in /usr/lib/helixscreen;
 # settings and cache in /data/ad5x/helixscreen, log with Klipper's (so
@@ -64,8 +65,11 @@ start)
 		*) [ "$(date +%s)" -lt "$t" ] && LEVEL=debug ;;
 		esac
 	fi
+	# DRM only when asked for and the kernel has it (7.3); fbdev otherwise
+	BACKEND=fbdev
+	[ -f /data/ad5x/helixscreen.drm ] && [ -e /dev/dri/card0 ] && BACKEND=drm
 	# At warn the screen's own start lines aren't in its log: one here
-	echo "$(date '+%F %T') S70helixscreen: start, log level $LEVEL" >> $LOG
+	echo "$(date '+%F %T') S70helixscreen: start, log level $LEVEL, display $BACKEND" >> $LOG
 	HOME=$D \
 	HELIX_DATA_DIR=/usr/lib/helixscreen \
 	HELIX_CONFIG_DIR=$D/config \
@@ -73,7 +77,7 @@ start)
 	HELIX_LOG_DEST=file HELIX_LOG_FILE=$LOG HELIX_LOG_LEVEL=$LEVEL \
 	HELIX_LOG_ROTATE_BYTES=1048576 HELIX_LOG_ROTATE_FILES=3 \
 	HELIX_DISABLE_AUTO_UPDATES=1 \
-	HELIX_DISPLAY_BACKEND=fbdev \
+	HELIX_DISPLAY_BACKEND=$BACKEND \
 	HELIX_WIZARD_FLAG_FILE=/data/ad5x/printer_data/comms/run-setup-wizard \
 	HELIX_OOM_SCORE_ADJ=300 \
 	start-stop-daemon -S -b -m -p $PID -N 10 \
