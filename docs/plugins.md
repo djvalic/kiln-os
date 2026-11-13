@@ -207,6 +207,7 @@ below) and updated from Fluidd, separately from Kiln OS:
 | `spoolman` | [kiln-spoolman](https://github.com/djvalic/kiln-spoolman) | A Spoolman spool per IFS slot: the loaded slot's spool is the active one (plugin API 1.2, `ifs:loaded`) |
 | `notify` | [kiln-notify](https://github.com/djvalic/kiln-notify) | Notifications with a camera photo through Apprise (Telegram, Discord, ntfy, e-mail, ...): print events, progress, auto-refill, interrupted prints; set up with `NOTIFY_SETUP` (plugin API 1.3) |
 | `timelapse` | [kiln-timelapse](https://github.com/djvalic/kiln-timelapse) | moonraker-timelapse with an ffmpeg built from source for the printer; Fluidd's Timelapse tab (plugin API 1.3) |
+| `happy-hare` | [kiln-happy-hare](https://github.com/KilnOS-Plugins/kiln-happy-hare) | Happy Hare v4 drives the IFS instead of Kiln's `[ifs]`: tool changes parked at the toolhead, the IFS feeder synced with the extruder, FlowGuard clog detection from the IFS stall sensors; needs the IFS on Klipper firmware (plugin API 1.5, `owns_ifs`) |
 
 They are listed in the image's catalog (`klipper/plugin-catalog.json`,
 `/usr/share/ad5x/plugin-catalog.json`), which `INSTALL_PLUGIN` and
