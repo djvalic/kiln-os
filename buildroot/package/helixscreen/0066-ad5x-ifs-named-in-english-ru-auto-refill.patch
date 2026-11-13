@@ -1,0 +1,645 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Thu, 12 Nov 2026 15:15:00 -0500
+Subject: [PATCH] ams: the AD5X's English texts name its unit IFS; Russian
+ Auto-Refill reads Автозамена
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+English is the identity locale: the screen shows a source string as
+written, and no pack is loaded for it. Patch 0028's edits to
+ui_xml/translations/en.xml therefore never reached the screen, and the
+English screen still said "AMS is busy", "uses AMS slots" and so on.
+
+Where the AD5X IFS is the backend in use, these texts are now their own
+strings that say IFS: the busy refusal of a load, unload or device action
+("The IFS is busy", Kiln's wording for the IFS settings rows,
+AmsSubscriptionBackend), the warning for an expected IFS that is missing
+("IFS not detected", HardwareValidator), the two print start warnings for
+bypass and toolhead filament (PrintStartContext::ad5x_ifs_in_use) and
+the telemetry event line "IFS Active". Every other backend keeps
+upstream's AMS text. The keys are in every translations/*.yml, with the
+translation their AMS twins already had (patch 0030 worded those as IFS),
+so no language falls back to English. "The IFS is busy" was only in
+en.yml and ru.yml; the other languages now have it too, which also
+translates the Tune IFS and Pre-feed rows' reason there.
+
+"No AMS Detected" (an error without a message; the AD5X backend makes
+none) and the "AMS" key (no source uses it) cannot show on the AD5X and
+stay as they are.
+
+Russian: four Auto-Refill texts still read «автопополнение»; they now use
+«Автозамена», the word the AD5X's Auto-Refill switch (patch 0052),
+Settings > Filament Auto-Refill and the wizard's auto-refill rows use.
+
+Tests: the AD5X IFS busy refusal, both print start warnings and the
+missing-IFS warning say IFS, other backends still say AMS, and every
+catalog has the IFS keys, translated and without AMS.
+
+Upstream: not applicable (AD5X OS specific)
+---
+diff --git a/include/ams_error.h b/include/ams_error.h
+--- a/include/ams_error.h
++++ b/include/ams_error.h
+@@ -354,6 +354,17 @@
+     }
+ 
+     /**
++     * @brief busy() for the AD5X IFS (Kiln OS): the unit is named IFS there.
++     * @param current_op Description of the current operation
++     * @return AmsError configured for UI display
++     */
++    static AmsError busy_ifs(const std::string& current_op = "another operation") {
++        AmsError err = busy(current_op);
++        err.user_msg = lv_tr("The IFS is busy");
++        return err;
++    }
++
++    /**
+      * @brief Create a "print in progress" refusal for toolhead-motion ops.
+      *
+      * PRINTING is refused for every backend. PAUSED is refused only when the
+diff --git a/include/print_start_checks.h b/include/print_start_checks.h
+--- a/include/print_start_checks.h
++++ b/include/print_start_checks.h
+@@ -123,6 +123,9 @@
+     bool has_active_backend = false;      ///< AmsState::get_backend() != nullptr
+     bool any_auto_unload_backend = false; ///< any backend->auto_unloads_after_print()
+     bool any_bypass_active = false;       ///< AmsState::any_bypass_active()
++    /// Kiln OS: the backend in use (AmsState::get_backend()) is the AD5X IFS,
++    /// so the warnings name its unit IFS, not AMS.
++    bool ad5x_ifs_in_use = false;
+     /// The firmware picks each tool's lane at print time
+     /// (AmsState::collect_firmware_routing().chosen_at_print).
+     bool lanes_picked_at_print = false;
+diff --git a/src/printer/ams_subscription_backend.cpp b/src/printer/ams_subscription_backend.cpp
+--- a/src/printer/ams_subscription_backend.cpp
++++ b/src/printer/ams_subscription_backend.cpp
+@@ -19,6 +19,15 @@
+ 
+ namespace helix {
+ 
++namespace {
++// Kiln OS: the AD5X's filament unit is the IFS, so its busy refusal reads
++// "The IFS is busy". Every other backend keeps "AMS is busy".
++AmsError busy_for(AmsType type, const std::string& current_op) {
++    return type == AmsType::AD5X_IFS ? AmsErrorHelper::busy_ifs(current_op)
++                                     : AmsErrorHelper::busy(current_op);
++}
++} // namespace
++
+ AmsSubscriptionBackend::AmsSubscriptionBackend(IMoonrakerAPI* api, helix::IMoonrakerClient* client)
+     : api_(api), client_(client) {
+     // Common defaults -- derived constructors set type-specific fields
+@@ -804,7 +813,7 @@
+         }
+     }
+     if (filament_op_in_flight_) {
+-        return AmsErrorHelper::busy(ams_action_to_string(filament_op_claimed_action_));
++        return busy_for(get_type(), ams_action_to_string(filament_op_claimed_action_));
+     }
+     filament_op_in_flight_ = true;
+     filament_op_claimed_action_ = pending;
+@@ -907,12 +916,12 @@
+                                              " backend not started");
+     }
+     if (system_info_.is_busy()) {
+-        return AmsErrorHelper::busy(ams_action_to_string(system_info_.action));
++        return busy_for(get_type(), ams_action_to_string(system_info_.action));
+     }
+     // A calibration or tool cycle the printer is still running: Klipper would
+     // queue the op behind it, to run unattended minutes later.
+     if (tracked_run_active_.load()) {
+-        return AmsErrorHelper::busy("a device action");
++        return busy_for(get_type(), "a device action");
+     }
+     return AmsErrorHelper::success();
+ }
+@@ -1073,7 +1082,7 @@
+     }
+     if (it->moves_machine) {
+         if (tracked_run_active_.load()) {
+-            return AmsErrorHelper::busy("a device action");
++            return busy_for(get_type(), "a device action");
+         }
+         return it->allowed_while_paused ? refuse_if_printing() : refuse_motion_if_printing();
+     }
+diff --git a/src/printer/hardware_validator.cpp b/src/printer/hardware_validator.cpp
+--- a/src/printer/hardware_validator.cpp
++++ b/src/printer/hardware_validator.cpp
+@@ -644,8 +644,12 @@
+                 if (ams_type != AmsType::NONE) {
+                     if (!hardware.has_filament_system(ams_type) &&
+                         !is_hardware_optional(config, hw_name)) {
+-                        result.expected_missing.push_back(HardwareIssue::warning(
+-                            hw_name, HardwareType::OTHER, TR_NOOP("AMS/MMU system not detected")));
++                        // Kiln OS: the AD5X's filament unit is named IFS.
++                        const char* message = ams_type == AmsType::AD5X_IFS
++                                                  ? TR_NOOP("IFS not detected")
++                                                  : TR_NOOP("AMS/MMU system not detected");
++                        result.expected_missing.push_back(
++                            HardwareIssue::warning(hw_name, HardwareType::OTHER, message));
+                         spdlog::debug("[HardwareValidator] Expected AMS hardware '{}' not found",
+                                       hw_name);
+                     }
+diff --git a/src/printer/print_start_checks.cpp b/src/printer/print_start_checks.cpp
+--- a/src/printer/print_start_checks.cpp
++++ b/src/printer/print_start_checks.cpp
+@@ -212,11 +212,16 @@
+     if (!ctx.any_bypass_active || !ctx.ams_available || print_lane_requirement(ctx) <= 1) {
+         return pass_result();
+     }
++    // Kiln OS: the AD5X's filament unit is named IFS.
+     return warn_result(
+         lv_tr("Bypass Is Active"),
+-        lv_tr("Bypass is active, but this print uses AMS slots. The printer may refuse "
+-              "to load a slot while bypass filament is in the toolhead. Remove the "
+-              "filament and turn bypass off before printing. Start anyway?"),
++        ctx.ad5x_ifs_in_use
++            ? lv_tr("Bypass is active, but this print uses IFS slots. The printer may refuse "
++                    "to load a slot while bypass filament is in the toolhead. Remove the "
++                    "filament and turn bypass off before printing. Start anyway?")
++            : lv_tr("Bypass is active, but this print uses AMS slots. The printer may refuse "
++                    "to load a slot while bypass filament is in the toolhead. Remove the "
++                    "filament and turn bypass off before printing. Start anyway?"),
+         lv_tr("Start Anyway"));
+ }
+ 
+@@ -237,14 +242,24 @@
+         // printer would do itself, and it is aimed at a hot toolhead. Where no
+         // such path exists, a manual pull IS the answer, so that wording stays.
+         const bool clearable = i < ctx.toolhead_clearable.size() && ctx.toolhead_clearable[i];
+-        return warn_result(
+-            lv_tr("Filament In The Toolhead"),
+-            clearable
+-                ? lv_tr("The toolhead has filament but no AMS slot reports it loaded. The "
+-                        "printer may refuse to load a slot until it is cleared. Start anyway?")
+-                : lv_tr("The toolhead has filament but no AMS slot reports it loaded. "
+-                        "Pull it out manually before printing. Start anyway?"),
+-            lv_tr("Start Anyway"));
++        const char* body = nullptr;
++        if (ctx.ad5x_ifs_in_use) {
++            // Kiln OS: the AD5X's filament unit is named IFS.
++            body = clearable
++                       ? lv_tr("The toolhead has filament but no IFS slot reports it loaded. The "
++                               "printer may refuse to load a slot until it is cleared. Start "
++                               "anyway?")
++                       : lv_tr("The toolhead has filament but no IFS slot reports it loaded. "
++                               "Pull it out manually before printing. Start anyway?");
++        } else {
++            body = clearable
++                       ? lv_tr("The toolhead has filament but no AMS slot reports it loaded. The "
++                               "printer may refuse to load a slot until it is cleared. Start "
++                               "anyway?")
++                       : lv_tr("The toolhead has filament but no AMS slot reports it loaded. "
++                               "Pull it out manually before printing. Start anyway?");
++        }
++        return warn_result(lv_tr("Filament In The Toolhead"), body, lv_tr("Start Anyway"));
+     }
+     return pass_result();
+ }
+diff --git a/src/ui/ui_print_start_controller.cpp b/src/ui/ui_print_start_controller.cpp
+--- a/src/ui/ui_print_start_controller.cpp
++++ b/src/ui/ui_print_start_controller.cpp
+@@ -828,6 +828,8 @@
+     ctx.external_spool = ams.get_external_spool_info();
+     ctx.filament_diameter_mm = printer_state_.get_discovery().filament_diameter_mm();
+     ctx.has_active_backend = ams.get_backend() != nullptr;
++    ctx.ad5x_ifs_in_use =
++        ctx.has_active_backend && ams.get_backend()->get_type() == AmsType::AD5X_IFS;
+     ctx.multiple_toolheads = helix::ToolState::instance().has_multiple_toolheads();
+     for (int i = 0; i < ams.backend_count(); ++i) {
+         if (auto* backend = ams.get_backend(i)) {
+diff --git a/src/ui/ui_settings_telemetry_data.cpp b/src/ui/ui_settings_telemetry_data.cpp
+--- a/src/ui/ui_settings_telemetry_data.cpp
++++ b/src/ui/ui_settings_telemetry_data.cpp
+@@ -12,6 +12,8 @@
+ #include "ui_toast_manager.h"
+ #include "ui_utils.h"
+ 
++#include "ams_backend.h"
++#include "ams_state.h"
+ #include "i18n_plural.h"
+ #include "lvgl/src/others/translation/lv_translation.h"
+ #include "system/telemetry_manager.h"
+@@ -614,8 +616,11 @@
+             add_field_str("slicer", lv_tr("Slicer"));
+             add_field_num("tool_count_used", lv_tr("Tools Used"), "");
+             if (event.contains("ams_active") && event["ams_active"].is_boolean()) {
++                // Kiln OS: on the AD5X IFS the filament unit is named IFS.
++                const AmsBackend* backend = AmsState::instance().get_backend();
++                const bool ifs = backend && backend->get_type() == AmsType::AD5X_IFS;
+                 make_label(card,
+-                           std::string(lv_tr("AMS Active: ")) +
++                           std::string(ifs ? lv_tr("IFS Active: ") : lv_tr("AMS Active: ")) +
+                                (event["ams_active"].get<bool>() ? lv_tr("Yes") : lv_tr("No")),
+                            "text_subtle");
+             }
+diff --git a/tests/unit/test_kiln_ifs_wording.cpp b/tests/unit/test_kiln_ifs_wording.cpp
+new file mode 100644
+--- /dev/null
++++ b/tests/unit/test_kiln_ifs_wording.cpp
+@@ -0,0 +1,208 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//
++// Kiln OS: the AD5X's filament unit is the IFS. English is the identity
++// locale, so the screen shows a source string as written: a text that says
++// AMS on the AD5X has to be a different string there. These tests pin that
++// the AD5X IFS paths say IFS, that every other backend keeps upstream's AMS,
++// and that every catalog has the IFS keys, translated as the AMS ones are.
++
++#include "../lvgl_test_fixture.h"
++#include "../test_helpers/config_test_access.h"
++#include "ams_backend_ad5x_ifs.h"
++#include "ams_error.h"
++#include "ams_types.h"
++#include "config.h"
++#include "data_root_resolver.h"
++#include "hardware_validator.h"
++#include "moonraker_client_mock.h"
++#include "print_start_checks.h"
++#include "test_helpers/ad5x_ifs_test_access.h"
++
++#include <algorithm>
++#include <filesystem>
++#include <fstream>
++#include <iterator>
++#include <optional>
++#include <string>
++#include <vector>
++
++#include "../catch_amalgamated.hpp"
++
++using namespace helix;
++using json = nlohmann::json;
++namespace fs = std::filesystem;
++
++namespace {
++
++bool says_ams(const std::string& text) {
++    return text.find("AMS") != std::string::npos;
++}
++
++const PrintStartGate& gate_named(const char* name) {
++    const auto& gates = default_print_start_gates();
++    const auto it = std::find_if(gates.begin(), gates.end(), [&](const PrintStartGate& g) {
++        return g.name == std::string(name);
++    });
++    REQUIRE(it != gates.end());
++    return *it;
++}
++
++/// The value of a one-line `'key': 'value'` entry, or nullopt.
++std::optional<std::string> quoted_value(const std::string& yml, const std::string& key) {
++    auto quote = [](const std::string& s) {
++        std::string out = "'";
++        for (char c : s) {
++            out += c;
++            if (c == '\'') {
++                out += '\'';
++            }
++        }
++        return out + "'";
++    };
++    const std::string head = "\n  " + quote(key) + ": '";
++    const size_t at = yml.find(head);
++    if (at == std::string::npos) {
++        return std::nullopt;
++    }
++    std::string value;
++    for (size_t i = at + head.size(); i < yml.size(); ++i) {
++        if (yml[i] == '\'') {
++            if (i + 1 < yml.size() && yml[i + 1] == '\'') {
++                value += '\'';
++                ++i;
++                continue;
++            }
++            return value;
++        }
++        value += yml[i];
++    }
++    return std::nullopt;
++}
++
++} // namespace
++
++TEST_CASE("Kiln IFS wording: the AD5X IFS says the IFS is busy", "[kiln][ams][ad5x_ifs][i18n]") {
++    AmsBackendAd5xIfs backend(nullptr, nullptr);
++    Ad5xIfsTestAccess::set_running(backend, true);
++    Ad5xIfsTestAccess::set_action(backend, AmsAction::LOADING);
++
++    const AmsError err = backend.load_filament(1);
++    REQUIRE(err.result == AmsResult::BUSY);
++    CHECK(err.user_msg == "The IFS is busy");
++    CHECK_FALSE(says_ams(err.display_text()));
++
++    // Every other backend keeps upstream's wording.
++    CHECK(AmsErrorHelper::busy().user_msg == "AMS is busy");
++    CHECK(AmsErrorHelper::busy_ifs().result == AmsResult::BUSY);
++}
++
++TEST_CASE("Kiln IFS wording: print start warnings name the IFS on the AD5X",
++          "[kiln][print-start][i18n]") {
++    auto bypass_ctx = [](bool ad5x) {
++        PrintStartContext c;
++        c.ams_available = true;
++        c.any_bypass_active = true;
++        c.filament_color_count = 4;
++        c.ad5x_ifs_in_use = ad5x;
++        return c;
++    };
++    auto toolhead_ctx = [](bool ad5x, bool clearable) {
++        PrintStartContext c;
++        c.toolhead_unaccounted = {std::optional<bool>(true)};
++        c.toolhead_clearable = {clearable};
++        c.ad5x_ifs_in_use = ad5x;
++        return c;
++    };
++    const auto& bypass = gate_named("bypass_engaged_lane_print");
++    const auto& toolhead = gate_named("unaccounted_toolhead_filament");
++
++    SECTION("AD5X IFS") {
++        auto r = bypass.evaluate(bypass_ctx(true));
++        REQUIRE(r.verdict == CheckResult::Verdict::Warn);
++        CHECK(r.body.find("uses IFS slots") != std::string::npos);
++        CHECK_FALSE(says_ams(r.body));
++        for (bool clearable : {false, true}) {
++            auto t = toolhead.evaluate(toolhead_ctx(true, clearable));
++            REQUIRE(t.verdict == CheckResult::Verdict::Warn);
++            CHECK(t.body.find("no IFS slot") != std::string::npos);
++            CHECK_FALSE(says_ams(t.body));
++        }
++    }
++    SECTION("any other backend") {
++        auto r = bypass.evaluate(bypass_ctx(false));
++        REQUIRE(r.verdict == CheckResult::Verdict::Warn);
++        CHECK(r.body.find("uses AMS slots") != std::string::npos);
++        for (bool clearable : {false, true}) {
++            auto t = toolhead.evaluate(toolhead_ctx(false, clearable));
++            REQUIRE(t.verdict == CheckResult::Verdict::Warn);
++            CHECK(t.body.find("no AMS slot") != std::string::npos);
++        }
++    }
++}
++
++TEST_CASE("Kiln IFS wording: a missing IFS reads IFS not detected", "[kiln][hardware][i18n]") {
++    Config config;
++    setup_printer_data(config, {{"moonraker_host", "127.0.0.1"},
++                                {"moonraker_port", 7125},
++                                {"hardware",
++                                 {{"optional", json::array()},
++                                  {"expected", {"ifs", "AFC"}},
++                                  {"last_snapshot", json::object()}}}});
++    MoonrakerClientMock client;
++    const auto result = HardwareValidator{}.validate(&config, client.hardware());
++
++    std::string ifs_message;
++    std::string afc_message;
++    for (const auto& issue : result.expected_missing) {
++        if (issue.hardware_name == "ifs") {
++            ifs_message = issue.message;
++        } else if (issue.hardware_name == "AFC") {
++            afc_message = issue.message;
++        }
++    }
++    CHECK(ifs_message == "IFS not detected");
++    CHECK(afc_message == "AMS/MMU system not detected");
++}
++
++// The build makes the packs from translations/*.yml. Each IFS key has to be
++// in every catalog, carrying the translation its AMS twin already had (patch
++// 0030 worded those as IFS), so no language falls back to English.
++TEST_CASE("Kiln IFS wording: every catalog has the IFS keys", "[kiln][i18n]") {
++    const std::vector<std::string> keys = {
++        "The IFS is busy",
++        "IFS not detected",
++        "IFS Active: ",
++        "Bypass is active, but this print uses IFS slots. The printer may refuse to load a slot "
++        "while bypass filament is in the toolhead. Remove the filament and turn bypass off before "
++        "printing. Start anyway?",
++        "The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to "
++        "load a slot until it is cleared. Start anyway?",
++        "The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before "
++        "printing. Start anyway?",
++    };
++
++    int catalogs = 0;
++    for (const auto& entry : fs::directory_iterator(helix::asset_path("translations"))) {
++        if (entry.path().extension() != ".yml") {
++            continue;
++        }
++        ++catalogs;
++        const std::string locale = entry.path().stem().string();
++        std::ifstream in(entry.path());
++        const std::string yml((std::istreambuf_iterator<char>(in)),
++                              std::istreambuf_iterator<char>());
++        for (const auto& key : keys) {
++            INFO(locale << ": " << key);
++            const auto value = quoted_value(yml, key);
++            REQUIRE(value.has_value());
++            if (locale == "en") {
++                CHECK(*value == key);
++            } else {
++                CHECK(value->find("IFS") != std::string::npos);
++                CHECK(*value != key);
++            }
++            CHECK_FALSE(says_ams(*value));
++        }
++    }
++    CHECK(catalogs >= 11); // de en es fr it ja ko pt ru tr zh
++}
+diff --git a/translations/de.yml b/translations/de.yml
+--- a/translations/de.yml
++++ b/translations/de.yml
+@@ -5133,3 +5133,10 @@
+   RUNNING: "LÄUFT"
+   NOT AVAILABLE HERE: "HIER NICHT VERFÜGBAR"
+   The plugin didn't say why.: "Das Plugin hat keinen Grund genannt."
++  # The AD5X's filament unit named IFS where the AD5X IFS is in use (patch 0066)
++  'The IFS is busy': 'IFS ist beschäftigt'
++  'IFS not detected': 'Kein IFS erkannt'
++  'IFS Active: ': 'IFS aktiv: '
++  'Bypass is active, but this print uses IFS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?': 'Bypass ist aktiv, aber dieser Druck verwendet IFS-Slots. Der Drucker verweigert möglicherweise das Laden eines Slots, solange Bypass-Filament im Werkzeugkopf ist. Entfernen Sie das Filament und deaktivieren Sie Bypass, bevor Sie drucken. Trotzdem starten?'
++  'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': 'Im Werkzeugkopf befindet sich Filament, aber kein IFS-Slot meldet es als geladen. Der Drucker verweigert möglicherweise das Laden eines Slots, bis er geleert ist. Trotzdem starten?'
++  'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?': 'Im Werkzeugkopf befindet sich Filament, aber kein IFS-Slot meldet es als geladen. Ziehen Sie es vor dem Drucken manuell heraus. Trotzdem starten?'
+diff --git a/translations/en.yml b/translations/en.yml
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -5005,6 +5005,12 @@
+   NOT AVAILABLE HERE: "NOT AVAILABLE HERE"
+   The plugin didn't say why.: "The plugin didn't say why."
+   # Kiln OS (AD5X) strings from the Kiln HelixScreen patches
++  # The AD5X's filament unit named IFS where the AD5X IFS is in use (patch 0066)
++  'IFS not detected': 'IFS not detected'
++  'IFS Active: ': 'IFS Active: '
++  'Bypass is active, but this print uses IFS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?': 'Bypass is active, but this print uses IFS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?'
++  'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': 'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?'
++  'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?': 'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?'
+   # Cancel during the print start (patch 0063)
+   'Cancel sent. The printer stops its start sequence at the next safe point.': 'Cancel sent. The printer stops its start sequence at the next safe point.'
+   # Moonraker's warnings on the screen (patch 0059)
+diff --git a/translations/es.yml b/translations/es.yml
+--- a/translations/es.yml
++++ b/translations/es.yml
+@@ -5123,3 +5123,10 @@
+   RUNNING: "EN MARCHA"
+   NOT AVAILABLE HERE: "NO DISPONIBLE AQUÍ"
+   The plugin didn't say why.: "El plugin no indicó el motivo."
++  # The AD5X's filament unit named IFS where the AD5X IFS is in use (patch 0066)
++  'The IFS is busy': 'El IFS está ocupado'
++  'IFS not detected': 'No se detectó IFS'
++  'IFS Active: ': 'IFS activo: '
++  'Bypass is active, but this print uses IFS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?': 'El bypass está activo, pero esta impresión usa ranuras IFS. La impresora puede negarse a cargar una ranura mientras haya filamento de bypass en el cabezal. Retire el filamento y desactive el bypass antes de imprimir. ¿Iniciar de todos modos?'
++  'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': 'El cabezal tiene filamento, pero ninguna ranura del IFS informa que esté cargado. La impresora puede negarse a cargar una ranura hasta que se vacíe. ¿Iniciar de todos modos?'
++  'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?': 'El cabezal tiene filamento, pero ninguna ranura del IFS informa que esté cargado. Retírelo manualmente antes de imprimir. ¿Iniciar de todos modos?'
+diff --git a/translations/fr.yml b/translations/fr.yml
+--- a/translations/fr.yml
++++ b/translations/fr.yml
+@@ -5159,3 +5159,10 @@
+   RUNNING: "ACTIF"
+   NOT AVAILABLE HERE: "NON DISPONIBLE ICI"
+   The plugin didn't say why.: "Le plugin n'a pas donné de raison."
++  # The AD5X's filament unit named IFS where the AD5X IFS is in use (patch 0066)
++  'The IFS is busy': 'L''IFS est occupé'
++  'IFS not detected': 'Aucun IFS détecté'
++  'IFS Active: ': 'IFS actif : '
++  'Bypass is active, but this print uses IFS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?': 'Le bypass est actif, mais cette impression utilise les slots de l''IFS. L''imprimante peut refuser de charger un slot tant que du filament bypass se trouve dans la tête d''outil. Retirez le filament et désactivez le bypass avant d''imprimer. Démarrer quand même ?'
++  'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': 'La tête d''outil contient du filament mais aucun slot de l''IFS ne le signale comme chargé. L''imprimante peut refuser de charger un slot tant qu''il n''est pas vidé. Démarrer quand même ?'
++  'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?': 'La tête d''outil contient du filament mais aucun slot de l''IFS ne le signale comme chargé. Retirez-le manuellement avant d''imprimer. Démarrer quand même ?'
+diff --git a/translations/it.yml b/translations/it.yml
+--- a/translations/it.yml
++++ b/translations/it.yml
+@@ -5124,3 +5124,10 @@
+   RUNNING: "IN ESECUZIONE"
+   NOT AVAILABLE HERE: "NON DISPONIBILE QUI"
+   The plugin didn't say why.: "Il plugin non ha indicato il motivo."
++  # The AD5X's filament unit named IFS where the AD5X IFS is in use (patch 0066)
++  'The IFS is busy': 'IFS occupato'
++  'IFS not detected': 'Nessun IFS rilevato'
++  'IFS Active: ': 'IFS attivo: '
++  'Bypass is active, but this print uses IFS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?': 'Il bypass è attivo, ma questa stampa usa gli slot IFS. La stampante potrebbe rifiutare il caricamento di uno slot mentre il filamento del bypass è nella testina. Rimuovi il filamento e disattiva il bypass prima di stampare. Avviare comunque?'
++  'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': 'La testina contiene filamento ma nessuno slot IFS lo riporta come caricato. La stampante potrebbe rifiutare il caricamento di uno slot finché non viene svuotata. Avviare comunque?'
++  'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?': 'La testina contiene filamento ma nessuno slot IFS lo riporta come caricato. Estrailo manualmente prima di stampare. Avviare comunque?'
+diff --git a/translations/ja.yml b/translations/ja.yml
+--- a/translations/ja.yml
++++ b/translations/ja.yml
+@@ -4867,3 +4867,10 @@
+   RUNNING: "動作中"
+   NOT AVAILABLE HERE: "この環境では利用不可"
+   The plugin didn't say why.: "プラグインは理由を示していません。"
++  # The AD5X's filament unit named IFS where the AD5X IFS is in use (patch 0066)
++  'The IFS is busy': 'IFS はビジー状態です'
++  'IFS not detected': 'IFS が検出されません'
++  'IFS Active: ': 'IFS 有効: '
++  'Bypass is active, but this print uses IFS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?': 'バイパスが有効ですが、この印刷はIFSスロットを使用します。バイパスのフィラメントがツールヘッドにある間は、プリンターがスロットの装填を拒否する場合があります。印刷前にフィラメントを取り除き、バイパスをオフにしてください。それでも印刷を開始しますか？'
++  'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': 'ツールヘッドにフィラメントがありますが、装填済みと報告しているIFSスロットはありません。取り除くまで、プリンターがスロットの装填を拒否する場合があります。それでも印刷を開始しますか？'
++  'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?': 'ツールヘッドにフィラメントがありますが、装填済みと報告しているIFSスロットはありません。印刷前に手動で引き抜いてください。それでも印刷を開始しますか？'
+diff --git a/translations/ko.yml b/translations/ko.yml
+--- a/translations/ko.yml
++++ b/translations/ko.yml
+@@ -4664,3 +4664,10 @@
+   Basic: 기본
+   Recycled: 재활용
+   ~{:.1f} Hz / turn: ~{:.1f} Hz / 회전
++  # The AD5X's filament unit named IFS where the AD5X IFS is in use (patch 0066)
++  'The IFS is busy': 'IFS가 사용 중입니다'
++  'IFS not detected': 'IFS가 감지되지 않음'
++  'IFS Active: ': 'IFS 활성: '
++  'Bypass is active, but this print uses IFS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?': '바이패스가 활성 상태지만 이 출력은 IFS 슬롯을 사용합니다. 툴헤드에 바이패스 필라멘트가 있으면 프린터가 슬롯 로드를 거부할 수 있습니다. 필라멘트를 빼고 출력 전에 바이패스를 끄세요. 그래도 시작할까요?'
++  'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': '툴헤드에 필라멘트가 있지만 어떤 IFS 슬롯도 로드되었다고 보고하지 않습니다. 비우기 전까지 프린터가 슬롯 로드를 거부할 수 있습니다. 그래도 시작할까요?'
++  'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?': '툴헤드에 필라멘트가 있지만 어떤 IFS 슬롯도 로드되었다고 보고하지 않습니다. 출력 전에 수동으로 빼내세요. 그래도 시작할까요?'
+diff --git a/translations/pt.yml b/translations/pt.yml
+--- a/translations/pt.yml
++++ b/translations/pt.yml
+@@ -5127,3 +5127,10 @@
+   RUNNING: "EM EXECUÇÃO"
+   NOT AVAILABLE HERE: "NÃO DISPONÍVEL AQUI"
+   The plugin didn't say why.: "O plugin não informou o motivo."
++  # The AD5X's filament unit named IFS where the AD5X IFS is in use (patch 0066)
++  'The IFS is busy': 'O IFS está ocupado'
++  'IFS not detected': 'Nenhum IFS detectado'
++  'IFS Active: ': 'IFS Ativo: '
++  'Bypass is active, but this print uses IFS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?': 'O bypass está ativo, mas esta impressão usa slots IFS. A impressora pode não conseguir carregar um slot enquanto houver filamento de bypass no cabeçote. Remova o filamento e desative o bypass antes de imprimir. Iniciar mesmo assim?'
++  'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': 'O cabeçote tem filamento, mas nenhum slot IFS o reporta como carregado. A impressora pode não conseguir carregar um slot até que ele seja esvaziado. Iniciar mesmo assim?'
++  'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?': 'O cabeçote tem filamento, mas nenhum slot IFS o reporta como carregado. Retire-o manualmente antes de imprimir. Iniciar mesmo assim?'
+diff --git a/translations/ru.yml b/translations/ru.yml
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -1676,7 +1676,7 @@
+   ? Filament ran out and the CFS found no matching spool to switch to. Load a spool of the same material and color, then resume.
+   : 'Филамент закончился, и CFS не нашла подходящей катушки для замены. Загрузите катушку того же материала и цвета и продолжите печать.'
+   Filament ran out at the toolhead: 'Филамент закончился у печатающей головки'
+-  Filament ran out. Auto-Refill is off, so the CFS will not switch spools on its own. Load filament, then resume.: 'Филамент закончился. Автопополнение выключено, поэтому CFS не сменит катушку сам. Загрузите филамент и продолжите печать.'
++  Filament ran out. Auto-Refill is off, so the CFS will not switch spools on its own. Load filament, then resume.: 'Филамент закончился. Автозамена выключена, поэтому CFS не сменит катушку сам. Загрузите филамент и продолжите печать.'
+   Filament ran out. The CFS knows which spools match, but those slots are empty. Load one of them, then resume.: Филамент закончился. CFS знает, какие катушки подходят, но эти слоты пусты. Загрузите одну из них, затем продолжите печать.
+   Filament reload failed: Не удалось повторно подать филамент
+   Filament runout: Окончание филамента
+@@ -2276,7 +2276,7 @@
+   Load Failed: 'Не удалось загрузить'
+   Load Filament: Загрузить филамент
+   Load a filament first before trying to unload: Сначала загрузите филамент, прежде чем пытаться его выгрузить
+-  Load a new spool in this slot, or turn on Auto-Refill to switch to a matching one: Установите новую катушку в этот слот или включите автопополнение для переключения на подходящую
++  Load a new spool in this slot, or turn on Auto-Refill to switch to a matching one: Установите новую катушку в этот слот или включите автозамену для переключения на подходящую
+   Load and unload filament at the tool by hand: 'Загружайте и выгружайте филамент вручную на инструменте'
+   'Load canceled: nozzle target dropped': 'Загрузка отменена: цель сопла снижена'
+   Load complete: 'Загрузка завершена'
+@@ -3274,7 +3274,7 @@
+   'RFCOMM connect failed: ': 'Не удалось подключиться по RFCOMM: '
+   RFID reader malfunction (left): Неисправность RFID-считывателя (левый)
+   RFID reader malfunction (right): Неисправность RFID-считывателя (правый)
+-  RFID, Auto-Refill, nozzle and link care: RFID, автопополнение, уход за соплом и связью
++  RFID, Auto-Refill, nozzle and link care: RFID, автозамена, уход за соплом и связью
+   RFID, nozzle and link care: 'RFID, уход за соплом и связью'
+   RH: RH
+   RSS: RSS
+@@ -4488,7 +4488,7 @@
+   Toggle: Переключить
+   Toggle (fire-and-forget): Переключение (без отслеживания)
+   Toggle AFC LED strip: 'Переключить LED-ленту AFC'
+-  Toggle Auto-Refill: 'Переключить автопополнение'
++  Toggle Auto-Refill: 'Переключить автозамену'
+   Toggle Quiet Mode: 'Переключить тихий режим'
+   Toggle external spool bypass: Переключить байпас внешней катушки
+   Toggle this tool's toolhead LED: "Переключить LED печатающей головки этого инструмента"
+@@ -5172,6 +5172,12 @@
+   'Screen, sound, connection, and the printer''s own settings: Run Setup Wizard, Nozzle Size, Filament Auto-Refill, Plugins. Replay this tour from Help & About.': 'Экран, звук, соединение и настройки принтера: «Запустить мастер настройки», «Размер сопла», «Автозамена филамента», «Плагины». Повторить тур: «Помощь и о программе».'
+   'Printer warning': 'Предупреждение принтера'
+   'Cancel sent. The printer stops its start sequence at the next safe point.': 'Отмена отправлена. Принтер остановит стартовую последовательность в ближайшей безопасной точке.'
++  # The AD5X's filament unit named IFS where the AD5X IFS is in use (patch 0066)
++  'IFS not detected': 'IFS не обнаружен'
++  'IFS Active: ': 'IFS активен: '
++  'Bypass is active, but this print uses IFS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?': 'Активен байпас, но эта печать использует слоты IFS. Принтер может отказаться загружать слот, пока филамент байпаса находится в печатающей головке. Извлеките филамент и выключите байпас перед печатью. Всё равно начать?'
++  'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': 'В печатающей головке есть филамент, но ни один слот IFS не сообщает о его загрузке. Принтер может отказаться загружать слот, пока она не будет очищена. Всё равно начать?'
++  'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?': 'В печатающей головке есть филамент, но ни один слот IFS не сообщает о его загрузке. Извлеките его вручную перед печатью. Всё равно начать?'
+   'More': 'Ещё'
+   'Price, location, lot, notes': 'Цена, место, партия, заметки'
+   'Product': 'Продукт'
+diff --git a/translations/tr.yml b/translations/tr.yml
+--- a/translations/tr.yml
++++ b/translations/tr.yml
+@@ -4664,3 +4664,10 @@
+   Basic: Temel
+   Recycled: Geri dönüştürülmüş
+   ~{:.1f} Hz / turn: ~{:.1f} Hz / tur
++  # The AD5X's filament unit named IFS where the AD5X IFS is in use (patch 0066)
++  'The IFS is busy': 'IFS meşgul'
++  'IFS not detected': 'IFS algılanmadı'
++  'IFS Active: ': 'IFS Etkin: '
++  'Bypass is active, but this print uses IFS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?': 'Bypass etkin, ancak bu baskı IFS yuvalarını kullanıyor. Takım kafasında bypass filamenti varken yazıcı bir yuvayı yüklemeyi reddedebilir. Filamenti çıkarın ve baskıdan önce bypass''ı kapatın. Yine de başlatılsın mı?'
++  'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': 'Takım kafasında filament var ama hiçbir IFS yuvası yüklü olduğunu bildirmiyor. Temizlenene kadar yazıcı bir yuvayı yüklemeyi reddedebilir. Yine de başlatılsın mı?'
++  'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?': 'Takım kafasında filament var ama hiçbir IFS yuvası yüklü olduğunu bildirmiyor. Baskıdan önce elle çıkarın. Yine de başlatılsın mı?'
+diff --git a/translations/zh.yml b/translations/zh.yml
+--- a/translations/zh.yml
++++ b/translations/zh.yml
+@@ -4857,3 +4857,10 @@
+   RUNNING: "运行中"
+   NOT AVAILABLE HERE: "此处不可用"
+   The plugin didn't say why.: "插件未说明原因。"
++  # The AD5X's filament unit named IFS where the AD5X IFS is in use (patch 0066)
++  'The IFS is busy': 'IFS 正忙'
++  'IFS not detected': '未检测到 IFS'
++  'IFS Active: ': 'IFS 已激活: '
++  'Bypass is active, but this print uses IFS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?': '旁路已启用，但此打印使用 IFS 槽位。当旁路耗材仍在工具头中时，打印机可能拒绝装载槽位。请在打印前取出耗材并关闭旁路。仍要开始打印吗？'
++  'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': '工具头内有耗材，但没有 IFS 槽位报告已装载。在清空之前，打印机可能拒绝装载槽位。仍要开始打印吗？'
++  'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?': '工具头内有耗材，但没有 IFS 槽位报告已装载。请在打印前手动取出耗材。仍要开始打印吗？'

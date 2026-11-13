@@ -31,6 +31,7 @@ define AD5X_SYSTEM_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(AD5X_SYSTEM_TOOLS)/flash_n32.py \
 		$(TARGET_DIR)/usr/bin/ad5x-flash-n32
 	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-mcu $(TARGET_DIR)/usr/bin/ad5x-mcu
+	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-fb-show $(TARGET_DIR)/usr/bin/ad5x-fb-show
 	$(AD5X_SYSTEM_INSTALL_MCU_FIRMWARE)
 	$(INSTALL) -D -m 0644 $(@D)/lib/network.sh \
 		$(TARGET_DIR)/usr/lib/ad5x/network.sh

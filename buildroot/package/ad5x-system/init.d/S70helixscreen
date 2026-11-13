@@ -78,7 +78,7 @@ start)
 	HELIX_OOM_SCORE_ADJ=300 \
 	start-stop-daemon -S -b -m -p $PID -N 10 \
 		-x /usr/lib/helixscreen/bin/helix-screen -- \
-		--moonraker ws://127.0.0.1:7125
+		--moonraker ws://127.0.0.1:7125 --skip-splash
 	;;
 stop)
 	start-stop-daemon -K -p $PID -s TERM

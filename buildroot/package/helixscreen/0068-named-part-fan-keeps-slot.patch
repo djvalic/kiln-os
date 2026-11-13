@@ -1,0 +1,71 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Fri, 13 Nov 2026 08:00:00 -0500
+Subject: [PATCH] fans: a named part fan keeps the part slot before it runs
+
+On the AD5X the part fan is "fan_generic fanM106" (the printer's
+preset). Until it had run once since the screen started, the part slot
+went to the first commandable fan that had run, and the board fan
+(fan_generic pcb_fan, on with the heaters) took it: the print status
+tile read "Part Fan 100%" through the print start while the part fan
+was off. The stale-stub rule this follows is for the bare [fan] only, so
+a named part fan set by the wizard or a preset now keeps the slot.
+
+Tests: fanM106 idle with pcb_fan at 100% keeps fanM106 as the part fan
+and pcb_fan as aux.
+---
+ src/printer/printer_fan_state.cpp            |  8 ++++++++
+ tests/unit/test_print_status_fan_section.cpp | 18 ++++++++++++++++++
+ 2 files changed, 26 insertions(+)
+
+diff --git a/src/printer/printer_fan_state.cpp b/src/printer/printer_fan_state.cpp
+index cf5aabbb..c4334bb9 100644
+--- a/src/printer/printer_fan_state.cpp
++++ b/src/printer/printer_fan_state.cpp
+@@ -338,6 +338,14 @@ std::string PrinterFanState::resolve_part_fan(const std::string& configured) con
+     if (!configured.empty() && has_run(configured))
+         return configured; // (1) the configured part fan proved itself
+ 
++    // (1b) A named part fan (set by the wizard or the printer's preset, e.g.
++    // the AD5X's "fan_generic fanM106") is the part fan even before it runs:
++    // the stale-stub case above is the bare [fan] only. Otherwise a board fan
++    // that switches on with the heaters (the AD5X's fan_generic pcb_fan) takes
++    // the slot and the tile reads "Part Fan 100%" while the part fan is off.
++    if (!configured.empty() && configured != "fan")
++        return configured;
++
+     std::string first_candidate;
+     for (const auto& fan : fans_) {
+         if (!is_fan_controllable(fan.type) || fan.object_name == configured)
+diff --git a/tests/unit/test_print_status_fan_section.cpp b/tests/unit/test_print_status_fan_section.cpp
+index 0d5514ca..bc131c9b 100644
+--- a/tests/unit/test_print_status_fan_section.cpp
++++ b/tests/unit/test_print_status_fan_section.cpp
+@@ -204,6 +204,24 @@ TEST_CASE_METHOD(HelixTestFixture,
+     REQUIRE(state.classify_primary_fans().part == "fan");
+ }
+ 
++TEST_CASE_METHOD(HelixTestFixture,
++                 "classify_primary_fans: a named part fan keeps the slot before it runs",
++                 "[fan_state][drift]") {
++    // The AD5X: fanM106 is the configured part fan, the board fan runs with the
++    // heaters. Before the first M106 the part slot must stay on fanM106.
++    PrinterFanState state;
++    std::vector<FanInfo> fans;
++    fans.push_back(
++        {"heater_fan heat_fan", "Hotend", FanType::HEATER_FAN, 100, false, std::nullopt});
++    fans.push_back({"fan_generic fanM106", "Part", FanType::PART_COOLING, 0, true, std::nullopt});
++    fans.push_back({"fan_generic pcb_fan", "Board", FanType::GENERIC_FAN, 100, true, std::nullopt});
++    PrinterFanStateTestAccess::set_fans(state, fans);
++
++    const auto picked = state.classify_primary_fans();
++    REQUIRE(picked.part == "fan_generic fanM106");
++    REQUIRE(picked.aux == "fan_generic pcb_fan");
++}
++
+ TEST_CASE_METHOD(HelixTestFixture,
+                  "classify_primary_fans: stale bare 'fan' yields to a RUNNING commandable fan "
+                  "(#1124)",
+-- 
+2.56.0
+

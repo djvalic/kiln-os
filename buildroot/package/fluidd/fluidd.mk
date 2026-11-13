@@ -4,7 +4,7 @@
 #
 ################################################################################
 
-FLUIDD_VERSION = 1.37.7
+FLUIDD_VERSION = 1.38.0
 FLUIDD_SITE = https://github.com/fluidd-core/fluidd/releases/download/v$(FLUIDD_VERSION)
 FLUIDD_SOURCE = fluidd.zip
 FLUIDD_LICENSE = GPL-3.0

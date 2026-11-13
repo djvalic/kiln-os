@@ -57,10 +57,22 @@ reading to end of file, not `struct inode`).
 
 ## Memory
 
-zboot image at 0x80f00000-0x814e6000 plus bss, stack and heap (to about
-0x81510000); it decompresses the kernel to 0x80010000-0x80d9cf50. Staged
-pages, page list, argv and trampoline are all above physical 0x01600000 (and
-below 0x0ec00000), so the copy never overwrites its own source.
+Both kernels are zboot images loaded at physical 0x00f00000. The zboot
+clears its bss on entry and uses a heap and stack there before the new
+kernel reads its argv:
+
+| | image | bss, heap and stack to | kernel decompressed to |
+|---|---|---|---|
+| 6.6 | to 0x01498000 | about 0x014b2450 | 0x00010000-0x00d31900 |
+| 7.3.3 | to 0x014da3a0 | 0x019dc3b0 (1 MiB `.appended_dtb` gap, 4 MiB heap) | 0x00100000-0x00e3be70 |
+
+Staged pages, page list, argv and trampoline are all above physical
+0x02000000 (`SAFE_MIN`) and below 0x0ec00000. That is above an 8 MiB image
+with mainline's bss (0x01c02010), so neither the copy nor the zboot
+overwrites what the next step still needs. Until 2026-11-12 the limit was
+0x01600000, below the end of 7.3's bss: an argv page placed there would have
+been cleared and 7.3 would hang before its console (never seen).
+`kernel-mainline/build.sh` fails a build whose zboot ends above `SAFE_MIN`.
 
 ## Test on the printer
 

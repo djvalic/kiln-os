@@ -7,19 +7,34 @@
 # Stock kernel: with stock's tools (from this printer's firmware,
 # /data/ad5x/vendor; see ad5x-vendor and S06ad5x-modules; /usr/bin/cmd_*
 # are wrappers). Our kernel: sysfs GPIO and the backlight class; the logo
-# is written to /dev/fb0 with Python/PIL (the framebuffer is on from boot).
+# is written to /dev/fb0 by ad5x-fb-show (Python/PIL; the framebuffer is
+# on from boot), unless S02ad5x-logo has already put the default logo
+# there ($AD5X_RUN/logo-early) and there is no custom one. Then the
+# backlight in either case: bl_power 0 (6.6's gpio-backlight probes
+# powered off; brightness alone does nothing then) and brightness at its
+# maximum, after the frame and the pan (7.3 turns the panel on with the
+# first pan).
 # In USB test mode stock has already done both.
+# Test overrides (tools/test_boot_logo.sh): AD5X_LIB (/usr/lib/ad5x),
+# AD5X_SYS (/sys), AD5X_DEV (/dev), AD5X_SHARE (/usr/share/ad5x),
+# AD5X_DATA (/data), AD5X_RUN (/run/ad5x), AD5X_KERNEL (kernel.sh).
 
 # Files this creates are readable by klipper and www-data, whoever started
 # it (a root SSH session may run with umask 077; issue #31)
 umask 022
 
-. /usr/lib/ad5x/slot.sh
-. /usr/lib/ad5x/kernel.sh
+LIB=${AD5X_LIB:-/usr/lib/ad5x}
+SYS=${AD5X_SYS:-/sys}
+DEV=${AD5X_DEV:-/dev}
+SHARE=${AD5X_SHARE:-/usr/share/ad5x}
+DATA=${AD5X_DATA:-/data}
+RUN=${AD5X_RUN:-/run/ad5x}
+. $LIB/slot.sh
+. $LIB/kernel.sh
 
 # sysfs GPIO number of PC11: base of the chip labelled GPC + 11
 pc11_sysfs() {
-	for c in /sys/class/gpio/gpiochip*; do
+	for c in $SYS/class/gpio/gpiochip*; do
 		# GPC on 6.6, GPIOC on mainline
 		case "$(cat $c/label 2>/dev/null)" in
 		GPC|GPIOC) echo $(( $(cat $c/base) + 11 )); return 0 ;;
@@ -32,29 +47,40 @@ case "$1" in
 start)
 	[ -n "$SLOT" ] || [ $KERNEL = own ] || exit 0
 	if [ $KERNEL = own ]; then
-		n=$(pc11_sysfs) || { echo "board: no GPC gpiochip: no heartbeat"; exit 0; }
-		[ -d /sys/class/gpio/gpio$n ] || echo $n > /sys/class/gpio/export
-		echo out > /sys/class/gpio/gpio$n/direction
-		( while true; do
-			echo 0 > /sys/class/gpio/gpio$n/value; sleep 1
-			echo 1 > /sys/class/gpio/gpio$n/value; sleep 1
-		done ) &
-		ad5x-bootlog "  heartbeat started (gpio$n)"
-		# boot logo straight into the framebuffer (XRGB8888, 800x480,
-		# frame 0), then the backlight; in the background (Python + PIL
-		# take a second or two, HelixScreen starts much later)
-		logo=/usr/share/ad5x/logo.jpg
-		[ -f /data/ad5x/logo.jpg ] && logo=/data/ad5x/logo.jpg
-		( python3 -c 'import sys
-from PIL import Image
-im = Image.open(sys.argv[1]).convert("RGB").resize((800, 480))
-with open("/dev/fb0", "wb") as f:
-    f.write(im.tobytes("raw", "BGRX"))' $logo >/dev/null 2>&1 &&
-			echo 0,0 > /sys/class/graphics/fb0/pan 2>/dev/null
-		  for b in /sys/class/backlight/*; do
-			[ -f $b/brightness ] && cat $b/max_brightness > $b/brightness
-		  done ) &
-		ad5x-bootlog "  logo $logo"
+		if n=$(pc11_sysfs); then
+			[ -d $SYS/class/gpio/gpio$n ] || echo $n > $SYS/class/gpio/export
+			echo out > $SYS/class/gpio/gpio$n/direction
+			( while true; do
+				echo 0 > $SYS/class/gpio/gpio$n/value; sleep 1
+				echo 1 > $SYS/class/gpio/gpio$n/value; sleep 1
+			done ) &
+			ad5x-bootlog "  heartbeat started (gpio$n)"
+		else
+			echo "board: no GPC gpiochip: no heartbeat"
+		fi
+		# boot logo straight into the framebuffer (800x480, frame 0, at
+		# the framebuffer's depth: 32 bpp on 6.6, 16 on 7.3), then the
+		# backlight; in the background (Python + PIL take a second or
+		# two, HelixScreen starts much later). The default logo is
+		# usually on screen already (S02ad5x-logo): not drawn again.
+		logo=$SHARE/logo.jpg
+		[ -f $DATA/ad5x/logo.jpg ] && logo=$DATA/ad5x/logo.jpg
+		early=
+		[ $logo = $SHARE/logo.jpg ] && [ -f $RUN/logo-early ] && early=1
+		( if [ -z "$early" ]; then
+			echo 0 > $SYS/class/graphics/fbcon/cursor_blink 2>/dev/null
+			if msg=$(ad5x-fb-show $logo $DEV/fb0 $SYS/class/graphics/fb0 2>&1); then
+				echo 0,0 > $SYS/class/graphics/fb0/pan 2>/dev/null
+			else
+				echo "board: logo not shown: $msg"
+				ad5x-bootlog "  logo not shown: $msg"
+			fi
+		  fi
+		  for b in $SYS/class/backlight/*; do
+			[ -e $b/bl_power ] && echo 0 > $b/bl_power 2>/dev/null
+			[ -e $b/brightness ] && cat $b/max_brightness > $b/brightness 2>/dev/null
+		  done ) </dev/null &
+		ad5x-bootlog "  logo $logo${early:+ (already shown by S02ad5x-logo)}"
 		exit 0
 	fi
 	ad5x-vendor dir tools >/dev/null || {

@@ -309,6 +309,13 @@ Risks:
   power-cycle it waits for the next frame: silent, `C` ignored, but a frame is ACKed, including
   the last one again (seen 2026-11-11 after a cut at frame 22 of 41). Whether it places a frame by
   its number or just after the previous one is unknown, so Kiln OS doesn't resume such a write.
+- **A lost frame ACK (Kiln OS's `ad5x-flash-iap`, eboard and IFS).** The bootloader writes every
+  frame it accepts, so a frame sent again after a late or lost ACK is written twice: on
+  2026-10-29 that left the IFS with a broken application that still passed the bootloader's
+  checks (SWD only; stock's `IFSCommand` resends the same way, see the table above). The
+  flasher sends a frame again only after a NAK (0x15). With no ACK or NAK within 5 s it stops
+  before EOT: the bootloader stays, waits for the next frame as above, and takes a new write
+  after a power-cycle. `tools/test_flash_tools.py` (`TestFlashIAPFrameReplies`) covers both.
 - **Interrupted mainboard flash**: ROM ISP is always there; run `NationsCommand` again.
 - `IAPCommand` exit 0 with "Update :HD" means nothing was written. Check the output, not just
   the exit code.

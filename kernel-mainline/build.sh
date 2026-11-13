@@ -22,6 +22,7 @@ WORK=${WORK:-$HOME/workspace/kernel-mainline-ad5x}
 TOOLBIN=${TOOLBIN:-$REPO/buildroot/output/host/bin}
 JOBS=${JOBS:-$(nproc)}
 MAX_SIZE=$((8 * 1024 * 1024))	# a kernel slot, and chainload's MAX_IMAGE
+SAFE_MIN=$((0x02000000))	# chainload.c SAFE_MIN (build.sh runs from a copy: kept here)
 
 log() { printf '\n=== %s\n' "$*"; }
 
@@ -144,3 +145,10 @@ python3 "$HERE/tools/mkuimage.py" --load 0x80f00000 --entry 0x80f00000 \
 size=$(stat -c %s "$IMAGE")
 echo "$IMAGE: $size bytes (limit $MAX_SIZE)"
 [ "$size" -le "$MAX_SIZE" ] || { echo "ERROR: larger than a kernel slot"; exit 1; }
+# chainload puts the new kernel's argv above SAFE_MIN: the zboot's bss,
+# cleared on entry, and its heap and stack must end below it
+READELF=$(command -v mipsel-linux-readelf || command -v readelf)
+read -r vaddr memsz < <("$READELF" -lW "$O/vmlinuz" | awk '$1 == "LOAD" { print $3, $6; exit }')
+top=$(( (vaddr & 0x1fffffff) + memsz ))
+printf 'zboot ends at 0x%08x (chainload SAFE_MIN 0x%08x)\n' "$top" "$SAFE_MIN"
+[ "$top" -le "$SAFE_MIN" ] || { echo "ERROR: zboot bss ends above chainload's SAFE_MIN"; exit 1; }

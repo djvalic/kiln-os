@@ -6,10 +6,10 @@ the recovery screen's [en.txt](../../recovery-ui/i18n/en.txt) and [ru.txt](../..
 
 ## Summary
 
-- `helixscreen-en.yml` has 4918 keys. `helixscreen-ru.yml` has the same 4918 keys: none is missing.
+- `helixscreen-en.yml` has 4923 keys. `helixscreen-ru.yml` has the same 4923 keys: none is missing.
 - 111 Russian values are the same as the English text. They are names, units and numbers that stay as they are, and `Pressure Advance`, which stays English on purpose (section 4).
 - 7 more values have no Cyrillic but differ from English on purpose (for example `AMS` reads `IFS`, `WiFi` reads `Wi-Fi`).
-- 243 keys belong to Kiln OS's own screens. I wrote their Russian myself, so they need a native speaker's check most (section 5). 14 of them are new since the last list: Boot into recovery, Log detail, the two Auto-Refill rows of the IFS settings, and SELECTOR and HUB on the IFS drawing.
+- 248 keys belong to Kiln OS's own screens. I wrote their Russian myself, so they need a native speaker's check most (section 5). 14 of them are new since the last list: Boot into recovery, Log detail, the two Auto-Refill rows of the IFS settings, and SELECTOR and HUB on the IFS drawing. 5 more are new since then: the IFS messages that said AMS in English (section 5); their Russian is the one the AMS messages already had.
 - 41 keys are new in HelixScreen v1.1.0-rc.1, and the 41 that came with v1.1.0-beta.18 are still unchecked. HelixScreen ships Russian for all of them, so nothing shows in English, but nobody here has checked that Russian yet (section 7). rc.1 also removed 9 older keys whose texts it rewrote (the HelixPrint plugin reasons and the tour).
 - A few open questions and texts that are still English on the screen (section 1).
 - Recovery screen: all 155 lines of `ru.txt` have a first Russian version that needs checking (section 6).
@@ -32,6 +32,10 @@ the recovery screen's [en.txt](../../recovery-ui/i18n/en.txt) and [ru.txt](../..
 **Recovery screen:** a first Russian version to check (section 6).
 
 ## 2. Fixed so far
+
+### After Kiln OS v0.0.60
+
+- Auto-Refill is `Автозамена` everywhere now, as on the screen. Four texts still said `автопополнение`: `Filament ran out. Auto-Refill is off, ...` (`Автозамена выключена, ...`), `Load a new spool in this slot, or turn on Auto-Refill ...` (`... включите автозамену ...`), `RFID, Auto-Refill, nozzle and link care` (`RFID, автозамена, ...`) and `Toggle Auto-Refill` (`Переключить автозамену`). `Auto-Replenish` and the other `Replenish` texts are a different feature of other units and keep `пополнение`.
 
 ### Kiln OS v0.0.58: alexshev86's fixes (PR #49)
 
@@ -95,7 +99,7 @@ Different from English on purpose, no Cyrillic:
 
 ## 5. Kiln OS's own screens
 
-243 keys come from Kiln OS, not from HelixScreen. All but two are at the end of `helixscreen-ru.yml`, after
+248 keys come from Kiln OS, not from HelixScreen. All but two are at the end of `helixscreen-ru.yml`, after
 `~{:.1f} Hz / turn` (in `helixscreen-en.yml` after the line `# Kiln OS (AD5X) strings from the Kiln HelixScreen
 patches`), starting with `, corners {:+.3f} to {:+.3f}`. The other two are the chamber light lines
 near the top (`Chamber light off when the screen sleeps` and the one after it). Keep IFS as IFS: it is the name of
@@ -602,6 +606,17 @@ the filament unit. (The 12 `Ad5x...` step names there are only used in log files
   = `Перезапуск в систему восстановления...`
 - `The printer restarts into the recovery OS, where it can't print. To come back, tap Boot main OS on its screen.`
   = `Принтер перезапустится в систему восстановления, где печать недоступна. Чтобы вернуться, нажмите на её экране «Запустить ОС».`
+
+</details>
+
+<details><summary>The IFS in messages that said AMS (5)</summary>
+
+- `IFS not detected`
+  = `IFS не обнаружен`
+- `IFS Active: `
+  = `IFS активен: `
+- `Bypass is active, but this print uses IFS slots. ...`, `The toolhead has filament but no IFS slot reports it loaded. ...` (two texts)
+  = the Russian of the same texts with AMS, which already said IFS
 
 </details>
 

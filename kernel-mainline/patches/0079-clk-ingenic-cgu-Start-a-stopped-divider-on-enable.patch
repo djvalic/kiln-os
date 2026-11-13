@@ -1,0 +1,63 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: valix <djvalic.wc@gmail.com>
+Date: Thu, 12 Nov 2026 15:01:26 -0500
+Subject: [PATCH] clk: ingenic: cgu: Start a stopped divider on enable
+
+A CGU divider with a stop bit gives no clock while that bit is set, and
+the driver clears it only in set_rate(). A clock that is enabled but
+never given a new rate keeps the stop bit as it was found, so if
+whatever ran before Linux left the divider stopped, the clock stays off
+although the clock framework counts it as enabled.
+
+On the Flashforge AD5X (X2600) the PWM divider (PWMCDR) reads
+0x2800000f: its stop bit is set. The X2600 PWM driver enables its clock
+and never sets its rate, so the PWM channels get no clock and the
+speaker on PC12 stays silent. Ingenic's own clock driver clears the
+stop bit when it enables a divider.
+
+Clear the stop bit on enable too, with the change enable bit and the
+busy wait as set_rate() does, before the gate is opened (the order of
+Ingenic's driver, where the gate is the divider's child). A divider
+that is not stopped is not written.
+---
+ drivers/clk/ingenic/cgu.c | 24 ++++++++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+
+diff --git a/drivers/clk/ingenic/cgu.c b/drivers/clk/ingenic/cgu.c
+index 0605a969a..1def63fc4 100644
+--- a/drivers/clk/ingenic/cgu.c
++++ b/drivers/clk/ingenic/cgu.c
+@@ -651,6 +651,30 @@ static int ingenic_clk_enable(struct clk_hw *hw)
+ 	const struct ingenic_cgu_clk_info *clk_info = to_clk_info(ingenic_clk);
+ 	struct ingenic_cgu *cgu = ingenic_clk->cgu;
+ 	unsigned long flags;
++	int ret = 0;
++	u32 reg;
++
++	if ((clk_info->type & CGU_CLK_DIV) && clk_info->div.stop_bit != -1) {
++		spin_lock_irqsave(&cgu->lock, flags);
++		reg = readl(cgu->base + clk_info->div.reg);
++
++		/* start a stopped divider, as set_rate() does */
++		if (reg & BIT(clk_info->div.stop_bit)) {
++			reg &= ~BIT(clk_info->div.stop_bit);
++
++			if (clk_info->div.ce_bit != -1)
++				reg |= BIT(clk_info->div.ce_bit);
++
++			writel(reg, cgu->base + clk_info->div.reg);
++
++			if (clk_info->div.busy_bit != -1)
++				ret = ingenic_clk_check_stable(cgu, clk_info);
++		}
++
++		spin_unlock_irqrestore(&cgu->lock, flags);
++		if (ret)
++			return ret;
++	}
+
+ 	if (clk_info->type & CGU_CLK_GATE) {
+ 		/* ungate the clock */
+--
+2.56.0
+

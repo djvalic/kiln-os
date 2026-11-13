@@ -1676,7 +1676,7 @@ translations:
   ? Filament ran out and the CFS found no matching spool to switch to. Load a spool of the same material and color, then resume.
   : 'Филамент закончился, и CFS не нашла подходящей катушки для замены. Загрузите катушку того же материала и цвета и продолжите печать.'
   Filament ran out at the toolhead: 'Филамент закончился у печатающей головки'
-  Filament ran out. Auto-Refill is off, so the CFS will not switch spools on its own. Load filament, then resume.: 'Филамент закончился. Автопополнение выключено, поэтому CFS не сменит катушку сам. Загрузите филамент и продолжите печать.'
+  Filament ran out. Auto-Refill is off, so the CFS will not switch spools on its own. Load filament, then resume.: 'Филамент закончился. Автозамена выключена, поэтому CFS не сменит катушку сам. Загрузите филамент и продолжите печать.'
   Filament ran out. The CFS knows which spools match, but those slots are empty. Load one of them, then resume.: Филамент закончился. CFS знает, какие катушки подходят, но эти слоты пусты. Загрузите одну из них, затем продолжите печать.
   Filament reload failed: Не удалось повторно подать филамент
   Filament runout: Окончание филамента
@@ -2276,7 +2276,7 @@ translations:
   Load Failed: 'Не удалось загрузить'
   Load Filament: Загрузить филамент
   Load a filament first before trying to unload: Сначала загрузите филамент, прежде чем пытаться его выгрузить
-  Load a new spool in this slot, or turn on Auto-Refill to switch to a matching one: Установите новую катушку в этот слот или включите автопополнение для переключения на подходящую
+  Load a new spool in this slot, or turn on Auto-Refill to switch to a matching one: Установите новую катушку в этот слот или включите автозамену для переключения на подходящую
   Load and unload filament at the tool by hand: 'Загружайте и выгружайте филамент вручную на инструменте'
   'Load canceled: nozzle target dropped': 'Загрузка отменена: цель сопла снижена'
   Load complete: 'Загрузка завершена'
@@ -3274,7 +3274,7 @@ translations:
   'RFCOMM connect failed: ': 'Не удалось подключиться по RFCOMM: '
   RFID reader malfunction (left): Неисправность RFID-считывателя (левый)
   RFID reader malfunction (right): Неисправность RFID-считывателя (правый)
-  RFID, Auto-Refill, nozzle and link care: RFID, автопополнение, уход за соплом и связью
+  RFID, Auto-Refill, nozzle and link care: RFID, автозамена, уход за соплом и связью
   RFID, nozzle and link care: 'RFID, уход за соплом и связью'
   RH: RH
   RSS: RSS
@@ -4488,7 +4488,7 @@ translations:
   Toggle: Переключить
   Toggle (fire-and-forget): Переключение (без отслеживания)
   Toggle AFC LED strip: 'Переключить LED-ленту AFC'
-  Toggle Auto-Refill: 'Переключить автопополнение'
+  Toggle Auto-Refill: 'Переключить автозамену'
   Toggle Quiet Mode: 'Переключить тихий режим'
   Toggle external spool bypass: Переключить байпас внешней катушки
   Toggle this tool's toolhead LED: "Переключить LED печатающей головки этого инструмента"
@@ -5172,6 +5172,12 @@ translations:
   'Screen, sound, connection, and the printer''s own settings: Run Setup Wizard, Nozzle Size, Filament Auto-Refill, Plugins. Replay this tour from Help & About.': 'Экран, звук, соединение и настройки принтера: «Запустить мастер настройки», «Размер сопла», «Автозамена филамента», «Плагины». Повторить тур: «Помощь и о программе».'
   'Printer warning': 'Предупреждение принтера'
   'Cancel sent. The printer stops its start sequence at the next safe point.': 'Отмена отправлена. Принтер остановит стартовую последовательность в ближайшей безопасной точке.'
+  # The AD5X's filament unit named IFS where the AD5X IFS is in use (patch 0066)
+  'IFS not detected': 'IFS не обнаружен'
+  'IFS Active: ': 'IFS активен: '
+  'Bypass is active, but this print uses IFS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?': 'Активен байпас, но эта печать использует слоты IFS. Принтер может отказаться загружать слот, пока филамент байпаса находится в печатающей головке. Извлеките филамент и выключите байпас перед печатью. Всё равно начать?'
+  'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': 'В печатающей головке есть филамент, но ни один слот IFS не сообщает о его загрузке. Принтер может отказаться загружать слот, пока она не будет очищена. Всё равно начать?'
+  'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?': 'В печатающей головке есть филамент, но ни один слот IFS не сообщает о его загрузке. Извлеките его вручную перед печатью. Всё равно начать?'
   'More': 'Ещё'
   'Price, location, lot, notes': 'Цена, место, партия, заметки'
   'Product': 'Продукт'

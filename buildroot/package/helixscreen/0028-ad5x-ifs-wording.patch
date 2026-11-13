@@ -4,7 +4,6 @@
  src/ui/ui_settings_telemetry_data.cpp |  2 +-
  src/ui/ui_wizard_telemetry.cpp        |  2 +-
  ui_xml/translations/de.xml            | 18 +++++++++---------
- ui_xml/translations/en.xml            | 16 ++++++++--------
  ui_xml/translations/es.xml            | 18 +++++++++---------
  ui_xml/translations/fr.xml            | 18 +++++++++---------
  ui_xml/translations/it.xml            | 18 +++++++++---------
@@ -13,7 +12,7 @@
  ui_xml/translations/ru.xml            | 18 +++++++++---------
  ui_xml/translations/translations.xml  | 18 +++++++++---------
  ui_xml/translations/zh.xml            | 18 +++++++++---------
- 13 files changed, 92 insertions(+), 92 deletions(-)
+ 12 files changed, 84 insertions(+), 84 deletions(-)
 
 diff --git a/src/ui/ui_notification_history.cpp b/src/ui/ui_notification_history.cpp
 index f25291b08e..f8a86f56a5 100644
@@ -111,54 +110,6 @@ index 8a1a413887..f92ea4ca58 100644
    <translation tag="The toolhead is not homed, so this would home into the print" de="Der Werkzeugkopf ist nicht referenziert, das Referenzieren würde in den Druck fahren"/>
    <translation tag="The toolhead sensor indicates filament is already loaded. Proceed with load anyway?" de="Der Werkzeugkopfsensor zeigt an, dass Filament bereits geladen ist. Trotzdem mit dem Laden fortfahren?"/>
    <translation tag="The toolhead sensor indicates no filament is present. Proceed with unload anyway?" de="Der Werkzeugkopfsensor zeigt an, dass kein Filament vorhanden ist. Trotzdem mit dem Entladen fortfahren?"/>
-diff --git a/ui_xml/translations/en.xml b/ui_xml/translations/en.xml
-index 5c1e8f1856..b498cf241a 100644
---- a/ui_xml/translations/en.xml
-+++ b/ui_xml/translations/en.xml
-@@ -203,10 +203,10 @@
-   <translation tag="AFC&apos;s remember_spool is retaining spool info in firmware; that takes precedence over this toggle" en="AFC&apos;s remember_spool is retaining spool info in firmware; that takes precedence over this toggle"/>
-   <translation tag="AI detection" en="AI detection"/>
-   <translation tag="ALL DEVICES" en="ALL DEVICES"/>
--  <translation tag="AMS" en="AMS"/>
--  <translation tag="AMS Active: " en="AMS Active: "/>
--  <translation tag="AMS is busy" en="AMS is busy"/>
--  <translation tag="AMS/MMU system not detected" en="AMS/MMU system not detected"/>
-+  <translation tag="AMS" en="IFS"/>
-+  <translation tag="AMS Active: " en="IFS Active: "/>
-+  <translation tag="AMS is busy" en="IFS is busy"/>
-+  <translation tag="AMS/MMU system not detected" en="IFS/MMU system not detected"/>
-   <translation tag="API Key" en="API Key"/>
-   <translation tag="API Key (if Moonraker requires a login)" en="API Key (if Moonraker requires a login)"/>
-   <translation tag="API not available" en="API not available"/>
-@@ -500,7 +500,7 @@
-   <translation tag="Bypass disabled" en="Bypass disabled"/>
-   <translation tag="Bypass enabled" en="Bypass enabled"/>
-   <translation tag="Bypass failed" en="Bypass failed"/>
--  <translation tag="Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?" en="Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?"/>
-+  <translation tag="Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?" en="Bypass is active, but this print uses IFS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?"/>
-   <translation tag="Bypass mode is not currently active" en="Bypass mode is not currently active"/>
-   <translation tag="Bypass off macro" en="Bypass off macro"/>
-   <translation tag="Bypass on macro" en="Bypass on macro"/>
-@@ -2335,7 +2335,7 @@
-   <translation tag="Niimbot (Bluetooth)" en="Niimbot (Bluetooth)"/>
-   <translation tag="No" en="No"/>
-   <translation tag="No ACE unit was found." en="No ACE unit was found."/>
--  <translation tag="No AMS Detected" en="No AMS Detected"/>
-+  <translation tag="No AMS Detected" en="No IFS Detected"/>
-   <translation tag="No API connection" en="No API connection"/>
-   <translation tag="No Bluetooth printer selected — pick one in settings" en="No Bluetooth printer selected — pick one in settings"/>
-   <translation tag="No Bluetooth printers found" en="No Bluetooth printers found"/>
-@@ -3892,8 +3892,8 @@
-   <translation tag="The timelapse plugin is installed. Making videos also needs ffmpeg, which is not installed on this printer." en="The timelapse plugin is installed. Making videos also needs ffmpeg, which is not installed on this printer."/>
-   <translation tag="The tool change under way finished, and the tool was not parked" en="The tool change under way finished, and the tool was not parked"/>
-   <translation tag="The tool change under way finished, and {} was not put back on the carriage" en="The tool change under way finished, and {} was not put back on the carriage"/>
--  <translation tag="The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?" en="The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?"/>
--  <translation tag="The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?" en="The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?"/>
-+  <translation tag="The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?" en="The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?"/>
-+  <translation tag="The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?" en="The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?"/>
-   <translation tag="The toolhead is not homed, so this would home into the print" en="The toolhead is not homed, so this would home into the print"/>
-   <translation tag="The toolhead sensor indicates filament is already loaded. Proceed with load anyway?" en="The toolhead sensor indicates filament is already loaded. Proceed with load anyway?"/>
-   <translation tag="The toolhead sensor indicates no filament is present. Proceed with unload anyway?" en="The toolhead sensor indicates no filament is present. Proceed with unload anyway?"/>
 diff --git a/ui_xml/translations/es.xml b/ui_xml/translations/es.xml
 index 6573ebf8b7..ae40503a86 100644
 --- a/ui_xml/translations/es.xml

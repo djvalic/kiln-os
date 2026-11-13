@@ -245,7 +245,9 @@ class Ad5xResume:
             out.append("SET_PRESSURE_ADVANCE ADVANCE=%s SMOOTH_TIME=%s" % (
                 f(pa[0]), f(pa[1])))
         ifs = st.get('ifs')
-        if ifs:
+        # Saved with Kiln's IFS module, resumed with it off (a plugin that
+        # drives the IFS was enabled since): no IFS_SET_CHANNEL to send
+        if ifs and self.printer.lookup_object('ifs', None) is not None:
             out.append("IFS_SET_CHANNEL CHANNEL=%d" % (ifs['channel'],))
         if nozzle:
             out.append("M109 S%s" % f(nozzle))

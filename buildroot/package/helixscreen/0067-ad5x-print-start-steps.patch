@@ -1,0 +1,1527 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Fri, 13 Nov 2026 00:30:00 -0500
+Subject: [PATCH] print status: the AD5X's print start steps as Kiln runs them
+
+The step list on the print status screen read the AD5X's start with the
+generic profile and got it wrong in several ways. The first heat warms
+bed and nozzle together, but the heater signals made a "Heating nozzle"
+row that flipped back to the bed within a second (always 0s), and a
+nozzle that was still hot made none, so the rows changed from print to
+print. The box purge counted as the purge step. The upcoming rows came
+in the order the macro scan saw the commands (Kiln's PRINT_START clears
+the mesh before it homes and purges at the box before the edge clean),
+so Purge came before Cleaning. Patch 0062's status line above the list
+could disagree with the row below it ("Checking Z" over a current "Heat
+soak"), and a step past its prediction counted down to a stuck "0s".
+
+The AD5X now has its own print start profile (ad5x.json). Kiln's
+PRINT_START names every step, as an M117 and an "echo:" console line,
+and the profile reads only those texts: Homing; "Heating bed and
+nozzle" and "Purging at the box" are one Heating step (the box purge
+and the brushing run while the soak's clock already runs); "Heat soak
+m:ss"; "Checking Z" and "Cleaning nozzle on the bed edge" are the
+Cleaning step; "Bed mesh: ..."; "Heating to print temperature" is
+Heating nozzle; "Prime line" or "Loading first colour" is Purge. With
+"narrated_steps" the collector takes no phase from the heaters, from
+extrusion or from probe lines outside the mesh. "// Bed heat soak:
+N s" is not a step: it is printed when the bed arrives, while the
+nozzle still heats.
+
+Its "checklist" block lists the steps in the order the AD5X runs them:
+Homing, Heating, Heat soak, Cleaning, Bed mesh, Heating nozzle, Purge.
+The macro scan only drops a step it can see and did not find. A step
+the start went past without running (no soak on a hot bed, no mesh
+with the centre Z check) leaves the list. The running step's row shows
+the printer's own words ("Heat soak 0:09", "Checking Z", "Cleaning
+nozzle on the bed edge"), done rows their step name; 0062's separate
+line is gone. A running step past its prediction shows no time instead
+of 0s, and a step whose words carry the printer's own countdown ("Heat
+soak 1:41") shows no guess from past prints beside it. Other printers' profiles have none of this and keep upstream's
+list.
+
+Tests: the AD5X texts, with and without the "echo: " prefix, and the
+lines around them that name no step; the AD5X's profile in the printer
+database; its messages and labels in every catalog; the step order
+against Kiln's macros as the scan reads them, a macro without a mesh or
+a clean, and no scan; whole starts replayed (box purge, soak, mesh,
+first colour; no box purge, no soak, centre Z check, prime line; a hot
+nozzle with a cold bed), with the heaters as they move; the M117 alone;
+the printer's words leaving with their step; the default profile's
+checklist unchanged; the rows the screen draws.
+---
+ assets/config/print_start_profiles/ad5x.json  |  30 +
+ assets/config/printer_database.json           |   2 +
+ include/preprint_checklist.h                  |  26 +-
+ include/print_start_collector.h               |  10 +
+ include/print_start_profile.h                 |  40 +
+ src/print/preprint_checklist.cpp              |  64 +-
+ src/print/print_start_collector.cpp           |  60 +-
+ src/print/print_start_profile.cpp             |  80 ++
+ src/ui/ui_print_status_tiles.cpp              |  17 +-
+ tests/unit/test_kiln_print_start_ad5x.cpp     | 762 ++++++++++++++++++
+ tests/unit/test_print_status_redesign.cpp     |  45 ++
+ .../components/print_status_job_checklist.xml |  15 +-
+ 12 files changed, 1126 insertions(+), 25 deletions(-)
+ create mode 100644 assets/config/print_start_profiles/ad5x.json
+ create mode 100644 tests/unit/test_kiln_print_start_ad5x.cpp
+
+diff --git a/assets/config/print_start_profiles/ad5x.json b/assets/config/print_start_profiles/ad5x.json
+new file mode 100644
+index 00000000..26d11446
+--- /dev/null
++++ b/assets/config/print_start_profiles/ad5x.json
+@@ -0,0 +1,30 @@
++{
++  "name": "FlashForge AD5X (Kiln OS)",
++  "description": "Kiln OS PRINT_START on the FlashForge Adventurer 5X: every step is an M117 and an \"echo:\" console line, so the text alone names the step",
++  "progress_mode": "weighted",
++  "narrated_steps": true,
++  "phase_object": {
++    "object": "display_status",
++    "field": "message"
++  },
++  "signal_formats": [],
++  "response_patterns": [
++    { "pattern": "^(?:echo: )?(Homing)\\s*$", "phase": "HOMING", "message": "Homing...", "weight": 10, "label_group": 1 },
++    { "pattern": "^(?:echo: )?(Heating bed and nozzle)\\s*$", "phase": "HEATING_BED", "message": "Heating...", "weight": 20, "label_group": 1 },
++    { "pattern": "^(?:echo: )?(Purging at the box)\\s*$", "phase": "HEATING_BED", "message": "Heating...", "weight": 20, "label_group": 1 },
++    { "pattern": "^(?:echo: )?(Heat soak\\b.*\\S)\\s*$", "phase": "SOAKING", "message": "Heat Soaking...", "weight": 20, "label_group": 1 },
++    { "pattern": "^(?:echo: )?(Checking Z)\\s*$", "phase": "CLEANING", "message": "Cleaning Nozzle...", "weight": 5, "label_group": 1 },
++    { "pattern": "^(?:echo: )?(Cleaning nozzle on the bed edge)\\s*$", "phase": "CLEANING", "message": "Cleaning Nozzle...", "weight": 5, "label_group": 1 },
++    { "pattern": "^(?:echo: )?(Bed mesh: .*\\S)\\s*$", "phase": "BED_MESH", "message": "Probing Bed Mesh...", "weight": 10, "label_group": 1 },
++    { "pattern": "^(?:echo: )?(Heating to print temperature)\\s*$", "phase": "HEATING_NOZZLE", "message": "Heating Nozzle...", "weight": 20, "label_group": 1 },
++    { "pattern": "^(?:echo: )?(Prime line)\\s*$", "phase": "PURGING", "message": "Purging...", "weight": 5, "label_group": 1 },
++    { "pattern": "^(?:echo: )?(Loading first colour)\\s*$", "phase": "PURGING", "message": "Purging...", "weight": 5, "label_group": 1 }
++  ],
++  "status_signals": [],
++  "checklist": {
++    "steps": ["HOMING", "HEATING_BED", "SOAKING", "CLEANING", "BED_MESH", "HEATING_NOZZLE", "PURGING"],
++    "macro_steps": ["HOMING", "CLEANING", "BED_MESH", "PURGING"],
++    "labels": { "HEATING_BED": "Heating" },
++    "hide_overrun": true
++  }
++}
+diff --git a/assets/config/printer_database.json b/assets/config/printer_database.json
+index 6a45dc15..6668dbb6 100644
+--- a/assets/config/printer_database.json
++++ b/assets/config/printer_database.json
+@@ -634,6 +634,8 @@
+       "image": "flashforge-adventurer-5x.png",
+       "preset": "ad5x",
+       "z_offset_calibration_strategy": "firmware_managed",
++      "_print_start_profile_comment": "Kiln OS: its PRINT_START names every step (M117 and an echo: line); ad5x.json reads them and lists the steps in the order it runs them.",
++      "print_start_profile": "ad5x",
+       "heuristics": [
+         {
+           "type": "object_exists",
+diff --git a/include/preprint_checklist.h b/include/preprint_checklist.h
+index b843979a..48878d91 100644
+--- a/include/preprint_checklist.h
++++ b/include/preprint_checklist.h
+@@ -9,6 +9,7 @@
+ 
+ #include <cstddef>
+ #include <map>
++#include <string>
+ #include <vector>
+ 
+ namespace helix {
+@@ -21,6 +22,12 @@ struct PreprintStepRow {
+     /// Done: seconds it took. Current: predicted seconds left (never below 0).
+     /// Upcoming: predicted seconds. -1 when nothing predicts it.
+     int seconds = -1;
++    /// Kiln OS (AD5X): the label key replacing the phase's own label (English,
++    /// translated when shown); empty for the phase's own.
++    std::string label_key;
++    /// Kiln OS (AD5X), the current row only: the printer's own words for the
++    /// step ("Heat soak 3:09"), shown as they are; empty for none.
++    std::string text;
+ };
+ 
+ /// What the collector knows right now.
+@@ -33,6 +40,19 @@ struct PreprintChecklistInput {
+     /// block, else the macro analysis. Empty when nothing does.
+     std::vector<PrintStartPhase> expected_order;
+     std::map<int, int> predicted_seconds; ///< phase int -> seconds, from history
++
++    // Kiln OS (AD5X), from the printer's print start profile. The defaults
++    // are upstream's checklist.
++    /// expected_order is the printer's own sequence: a step listed before the
++    /// current one (or, with none current, before the last done one) has been
++    /// passed over and is not upcoming.
++    bool expected_is_sequence = false;
++    /// A current step past its prediction shows no time (-1), not 0.
++    bool hide_overrun = false;
++    /// The printer's own words for the current step; empty for none.
++    std::string current_text;
++    /// phase int -> label key replacing the phase's own label
++    std::map<int, std::string> label_keys;
+ };
+ 
+ /// Rows the XML declares; the list never grows past this.
+@@ -40,8 +60,10 @@ inline constexpr size_t kPreprintChecklistMaxRows = 8;
+ 
+ /// The rows, oldest first. IDLE, INITIALIZING and COMPLETE never appear.
+ /// Upcoming rows come only from expected_order: with it empty, the list is the
+-/// done rows and the current one. Past kPreprintChecklistMaxRows, the oldest
+-/// done rows drop first; the current row never drops.
++/// done rows and the current one. With expected_is_sequence, only the steps
++/// after the current one (or the last done one) are upcoming. Past
++/// kPreprintChecklistMaxRows, the oldest done rows drop first; the current row
++/// never drops.
+ [[nodiscard]] std::vector<PreprintStepRow>
+ build_preprint_checklist(const PreprintChecklistInput& in);
+ 
+diff --git a/include/print_start_collector.h b/include/print_start_collector.h
+index 7560d0c4..6fefef5f 100644
+--- a/include/print_start_collector.h
++++ b/include/print_start_collector.h
+@@ -389,6 +389,11 @@ class PrintStartCollector : public std::enable_shared_from_this<PrintStartCollec
+      * takes state_mutex_. It changes only when print_start_phase or
+      * print_start_progress does (both are set at every phase entry), plus the
+      * elapsed time that the panel reads on its own tick.
++     *
++     * Kiln OS (AD5X): a profile with a "checklist" block gives the expected
++     * order as its own steps (the macro analysis only drops the steps it can
++     * see and did not find), its row labels, the printer's words for the
++     * current step and whether an overrun hides the time.
+      */
+     [[nodiscard]] helix::PreprintChecklistInput checklist_input() const;
+ 
+@@ -943,6 +948,11 @@ class PrintStartCollector : public std::enable_shared_from_this<PrintStartCollec
+     /// is appended. Guarded by state_mutex_.
+     std::string current_message_;
+ 
++    /// Kiln OS (AD5X): the printer's own words for the current step, from the
++    /// last text the profile matched to it (a pattern's label_group); empty
++    /// once the phase changes another way. Guarded by state_mutex_.
++    std::string step_text_;
++
+     /// When the last heater-wait report arrived. A wait reports once a second,
+     /// so one older than kHeaterWaitReportGap means no wait is blocking.
+     /// Guarded by state_mutex_.
+diff --git a/include/print_start_profile.h b/include/print_start_profile.h
+index 7ff3c0b0..ef525b13 100644
+--- a/include/print_start_profile.h
++++ b/include/print_start_profile.h
+@@ -6,6 +6,7 @@
+ #include "helix_regex.h"
+ #include "printer_state.h"
+ 
++#include <map>
+ #include <memory>
+ #include <string>
+ #include <unordered_map>
+@@ -50,6 +51,9 @@ class PrintStartProfile {
+         /// Phases whose signals belong to the step this text begins, for as
+         /// long as it runs (see the pattern's `owns`); empty for most text.
+         std::vector<helix::PrintStartPhase> owns;
++        /// The printer's own words for the step, from a pattern's label_group
++        /// (Kiln OS, AD5X: "Heat soak 3:09"); empty when it declares none.
++        std::string label;
+     };
+ 
+     /**
+@@ -84,6 +88,9 @@ class PrintStartProfile {
+         /// The firmware prints this text only once it has committed to a print
+         /// (see announces_print_start())
+         bool announces_start = false;
++        /// Capture group holding the printer's own words for the step, shown
++        /// as the running step's label (see MatchResult::label); 0 for none.
++        int label_group = 0;
+     };
+ 
+     /**
+@@ -334,6 +341,33 @@ class PrintStartProfile {
+         return position_signals_;
+     }
+ 
++    /// Kiln OS (AD5X): true when this printer names every step of its start
++    /// itself (an M117 and a console line each). Its text is then the only
++    /// source of a phase: the collector does not move between heating phases
++    /// from the heaters, read a purge from extrusion, or enter the mesh from
++    /// probe lines. Off by default.
++    bool narrated_steps() const {
++        return narrated_steps_;
++    }
++
++    /// Kiln OS (AD5X): the pre-print checklist as this printer runs it, from
++    /// the profile's "checklist" block. Empty steps: the upstream checklist.
++    struct Checklist {
++        /// Every step the start can run, in the order it runs them.
++        std::vector<helix::PrintStartPhase> steps;
++        /// Steps listed only when the PRINT_START macro analysis found them
++        /// (or when there is no analysis): the ones the scan can see.
++        std::vector<helix::PrintStartPhase> macro_steps;
++        /// Row label keys (English, translated when shown) replacing the
++        /// phase's own label, by phase int.
++        std::map<int, std::string> labels;
++        /// A running step past its prediction shows no time rather than 0s.
++        bool hide_overrun = false;
++    };
++    const Checklist& checklist() const {
++        return checklist_;
++    }
++
+     // =========================================================================
+     // Phase-Object Status Source
+     // =========================================================================
+@@ -422,6 +456,8 @@ class PrintStartProfile {
+     bool scripted_start_{false};
+     std::unordered_map<std::string, std::vector<std::string>> start_block_owned_lines_;
+     bool position_signals_{false};
++    bool narrated_steps_{false};
++    Checklist checklist_;
+     std::vector<SignalFormat> signal_formats_;
+     std::vector<ResponsePattern> response_patterns_;
+     std::vector<ResponsePattern> state_patterns_;
+@@ -457,6 +493,10 @@ class PrintStartProfile {
+      */
+     void parse_status_signals(const nlohmann::json& array, const std::string& source_path);
+ 
++    /// Parse the "checklist" block into checklist_ (Kiln OS, AD5X). A bad
++    /// phase name warns and is left out; a bad block leaves the upstream list.
++    void parse_checklist(const nlohmann::json& block, const std::string& source_path);
++
+     /**
+      * @brief Run the compiled-pattern matching loop over one pattern list
+      */
+diff --git a/src/print/preprint_checklist.cpp b/src/print/preprint_checklist.cpp
+index 06c74d79..d495f669 100644
+--- a/src/print/preprint_checklist.cpp
++++ b/src/print/preprint_checklist.cpp
+@@ -23,6 +23,44 @@ bool contains(const std::vector<PreprintStepRow>& rows, PrintStartPhase p) {
+                        [p](const PreprintStepRow& r) { return r.phase == p; });
+ }
+ 
++/// Kiln OS (AD5X): the printer's words carry their own countdown ("Heat soak
++/// 1:41"), a digit, a colon and two digits.
++bool has_own_time(const std::string& text) {
++    for (size_t i = 1; i + 2 < text.size(); ++i) {
++        const auto digit = [&text](size_t j) { return text[j] >= '0' && text[j] <= '9'; };
++        if (text[i] == ':' && digit(i - 1) && digit(i + 1) && digit(i + 2)) {
++            return true;
++        }
++    }
++    return false;
++}
++
++std::string label_key_of(const PreprintChecklistInput& in, PrintStartPhase p) {
++    auto it = in.label_keys.find(static_cast<int>(p));
++    return it == in.label_keys.end() ? std::string() : it->second;
++}
++
++/// Index in expected_order of the step the sequence has reached: the current
++/// one, else the last done one listed; -1 for none.
++int reached_index(const PreprintChecklistInput& in) {
++    const auto index_of = [&in](PrintStartPhase p) {
++        auto it = std::find(in.expected_order.begin(), in.expected_order.end(), p);
++        return it == in.expected_order.end() ? -1
++                                             : static_cast<int>(it - in.expected_order.begin());
++    };
++    if (is_listed_phase(in.current)) {
++        if (const int i = index_of(in.current); i >= 0) {
++            return i;
++        }
++    }
++    for (auto it = in.done_in_order.rbegin(); it != in.done_in_order.rend(); ++it) {
++        if (const int i = index_of(*it); i >= 0) {
++            return i;
++        }
++    }
++    return -1;
++}
++
+ } // namespace
+ 
+ std::vector<PreprintStepRow> build_preprint_checklist(const PreprintChecklistInput& in) {
+@@ -31,20 +69,36 @@ std::vector<PreprintStepRow> build_preprint_checklist(const PreprintChecklistInp
+     for (PrintStartPhase p : in.done_in_order) {
+         if (!is_listed_phase(p) || contains(rows, p))
+             continue;
+-        rows.push_back(
+-            {p, PreprintStepStatus::Done, std::max(0, lookup_seconds(in.actual_seconds, p))});
++        rows.push_back({p, PreprintStepStatus::Done,
++                        std::max(0, lookup_seconds(in.actual_seconds, p)), label_key_of(in, p)});
+     }
+ 
+     if (is_listed_phase(in.current) && !contains(rows, in.current)) {
+         int predicted = lookup_seconds(in.predicted_seconds, in.current);
+         int left = predicted < 0 ? -1 : std::max(0, predicted - in.current_elapsed_seconds);
+-        rows.push_back({in.current, PreprintStepStatus::Current, left});
++        // Kiln OS (AD5X): a step past its prediction is still running, so it
++        // shows no time rather than a countdown stuck at 0s.
++        if (in.hide_overrun && predicted >= 0 && predicted <= in.current_elapsed_seconds) {
++            left = -1;
++        }
++        // Kiln OS (AD5X): the printer's own countdown in the label is the real
++        // time left; a guess from past prints next to it would disagree.
++        if (in.hide_overrun && has_own_time(in.current_text)) {
++            left = -1;
++        }
++        rows.push_back({in.current, PreprintStepStatus::Current, left, label_key_of(in, in.current),
++                        in.current_text});
+     }
+ 
+-    for (PrintStartPhase p : in.expected_order) {
++    const int reached = in.expected_is_sequence ? reached_index(in) : -1;
++    for (size_t i = 0; i < in.expected_order.size(); ++i) {
++        const PrintStartPhase p = in.expected_order[i];
+         if (!is_listed_phase(p) || contains(rows, p))
+             continue;
+-        rows.push_back({p, PreprintStepStatus::Upcoming, lookup_seconds(in.predicted_seconds, p)});
++        if (static_cast<int>(i) <= reached)
++            continue; // passed over: the printer's sequence went on without it
++        rows.push_back({p, PreprintStepStatus::Upcoming, lookup_seconds(in.predicted_seconds, p),
++                        label_key_of(in, p)});
+     }
+ 
+     // Drop the oldest done rows first; the current row and upcoming rows stay.
+diff --git a/src/print/print_start_collector.cpp b/src/print/print_start_collector.cpp
+index 7f2897e5..1d9ea6f2 100644
+--- a/src/print/print_start_collector.cpp
++++ b/src/print/print_start_collector.cpp
+@@ -497,6 +497,7 @@ void PrintStartCollector::reset_run_locked() {
+     pre_mesh_last_probe_time_ = {};
+     current_mesh_message_.clear();
+     current_message_.clear();
++    step_text_.clear();
+     heater_wait_report_time_ = helix::sim::SimulatedClock::time_point::min();
+     heater_wait_shown_ = false;
+     wait_heater_arrived_at_ = helix::sim::SimulatedClock::time_point::min();
+@@ -679,6 +680,12 @@ void PrintStartCollector::check_purge_shape() {
+     if (!active_.load()) {
+         return;
+     }
++    // Kiln OS (AD5X): its box purge runs before the soak and the mesh, and
++    // its text names the purge that is a step ("Prime line", "Loading first
++    // colour"); extrusion names none.
++    if (profile_ && profile_->narrated_steps()) {
++        return;
++    }
+     auto& motion = state_.motion_state();
+     const double x =
+         helix::units::from_centimm(lv_subject_get_int(motion.get_position_x_subject()));
+@@ -934,8 +941,14 @@ void PrintStartCollector::check_fallback_completion() {
+     // relabel a firmware's ordered non-heating phase (e.g. Snapmaker U1
+     // PRINT_BED_DETECTING) as a heating phase. A heater wait's own label is
+     // resolved by the wait block below instead.
+-    if (!wait_shown &&
+-        (current == PrintStartPhase::HEATING_BED || current == PrintStartPhase::HEATING_NOZZLE)) {
++    // Kiln OS (AD5X): a printer that names its steps heats bed and nozzle
++    // together, then lets the nozzle cool for the Z check and heats it again
++    // for the print. Its text says which step runs; the heaters relabel none.
++    const bool narrated = profile_ && profile_->narrated_steps();
++    if (narrated) {
++        // the text alone moves the phase
++    } else if (!wait_shown && (current == PrintStartPhase::HEATING_BED ||
++                               current == PrintStartPhase::HEATING_NOZZLE)) {
+         PrintStartPhase resolved = bed_heating      ? PrintStartPhase::HEATING_BED
+                                    : nozzle_heating ? PrintStartPhase::HEATING_NOZZLE
+                                                     : current;
+@@ -970,7 +983,7 @@ void PrintStartCollector::check_fallback_completion() {
+     // What this tick read the wait as holding on; the chamber-wait flag
+     // follows it, so the flag drops the tick the chamber stops being why.
+     PrintStartPhase tick_waited_on = PrintStartPhase::IDLE;
+-    if (real_signal_seen_.load(std::memory_order_relaxed)) {
++    if (real_signal_seen_.load(std::memory_order_relaxed) && !narrated) {
+         bool waiting;
+         bool nozzle_short;
+         bool bed_short;
+@@ -1497,6 +1510,12 @@ void PrintStartCollector::on_gcode_response(const json& msg) {
+             !in_mesh && !in_leveling &&
+             (helix::parse_probe_progress(line) || helix::is_probe_result_line(line));
+ 
++        // Kiln OS (AD5X): its Z checks and a probing heat soak probe outside
++        // the mesh, which it names itself ("Bed mesh: print area").
++        if (is_probe_line && profile_ && profile_->narrated_steps()) {
++            return;
++        }
++
+         // If we see a probe line but aren't in BED_MESH yet, buffer probes
+         // before entering the phase. Some printers (e.g. AD5M Klipper mod)
+         // emit 1-2 PROBE commands for nozzle wipe before mesh calibration.
+@@ -1812,6 +1831,15 @@ void PrintStartCollector::apply_profile_match(const PrintStartProfile::MatchResu
+         }
+         spdlog::debug("[PrintStartCollector] Detected phase: {}", static_cast<int>(match.phase));
+     }
++    // Kiln OS (AD5X): the printer's words name the step on the checklist for
++    // as long as it is the one running, also when they only refine it ("Heat
++    // soak 3:09", then "Heat soak 3:04").
++    if (!match.label.empty() && match.narrates) {
++        std::lock_guard<std::mutex> lock(state_mutex_);
++        if (current_phase_ == match.phase) {
++            step_text_ = match.label;
++        }
++    }
+ }
+ 
+ bool PrintStartCollector::absorbed_by_owning_step(PrintStartPhase phase) {
+@@ -2961,6 +2989,7 @@ void PrintStartCollector::enter_phase_locked(PrintStartPhase phase) {
+         const auto now = helix::sim::SimulatedClock::now();
+         phase_time_spent_[static_cast<int>(current_phase_)] += now - phase_since_;
+         phase_since_ = now;
++        step_text_.clear();
+     }
+     current_phase_ = phase;
+ }
+@@ -2990,13 +3019,38 @@ helix::PreprintChecklistInput PrintStartCollector::checklist_input() const {
+     }
+     in.current = current_phase_;
+     in.current_elapsed_seconds = static_cast<int>(phase_seconds_locked(current_phase_).count());
++    const PrintStartProfile::Checklist* own =
++        profile_ && !profile_->checklist().steps.empty() ? &profile_->checklist() : nullptr;
+     if (start_block_.has_steps()) {
+         for (const auto& step : start_block_.steps()) {
+             in.expected_order.push_back(helix::start_block_step_phase(step.kind));
+         }
++    } else if (own) {
++        // Kiln OS (AD5X): the printer's own steps in its own order. The macro
++        // analysis, where there is one, drops a step it can see and did not
++        // find; it does not decide the order (Kiln's PRINT_START clears the
++        // mesh before it homes, and its box purge comes before the edge
++        // clean).
++        const auto found = [this](PrintStartPhase p) {
++            return std::find(macro_expected_phases_.begin(), macro_expected_phases_.end(), p) !=
++                   macro_expected_phases_.end();
++        };
++        for (PrintStartPhase p : own->steps) {
++            const bool scanned = std::find(own->macro_steps.begin(), own->macro_steps.end(), p) !=
++                                 own->macro_steps.end();
++            if (!scanned || macro_expected_phases_.empty() || found(p)) {
++                in.expected_order.push_back(p);
++            }
++        }
++        in.expected_is_sequence = true;
+     } else {
+         in.expected_order = macro_expected_phases_;
+     }
++    if (own) {
++        in.hide_overrun = own->hide_overrun;
++        in.label_keys = own->labels;
++    }
++    in.current_text = step_text_;
+     in.predicted_seconds = predictor_.predicted_phases();
+     return in;
+ }
+diff --git a/src/print/print_start_profile.cpp b/src/print/print_start_profile.cpp
+index fcb1d8b5..97e77acc 100644
+--- a/src/print/print_start_profile.cpp
++++ b/src/print/print_start_profile.cpp
+@@ -251,6 +251,11 @@ bool PrintStartProfile::match_pattern_list(const std::vector<ResponsePattern>& p
+             result.counts_probes = rp.counts_probes;
+             result.reported_percent = -1;
+             result.owns = rp.owns;
++            result.label.clear();
++            if (rp.label_group > 0 && static_cast<size_t>(rp.label_group) < match.size() &&
++                match[rp.label_group].matched) {
++                result.label = std::string(helix::text_io::trim(match[rp.label_group].view));
++            }
+             if (rp.progress_group > 0 && static_cast<size_t>(rp.progress_group) < match.size()) {
+                 if (auto value = helix::text_io::parse_double(match[rp.progress_group].view)) {
+                     result.reported_percent = percent_from_report(*value);
+@@ -378,6 +383,16 @@ bool PrintStartProfile::parse_json(const json& j, const std::string& source_path
+         position_signals_ = j["position_signals"].get<bool>();
+     }
+ 
++    // Kiln OS (AD5X): the printer narrates every step (optional, defaults to false)
++    if (j.contains("narrated_steps") && j["narrated_steps"].is_boolean()) {
++        narrated_steps_ = j["narrated_steps"].get<bool>();
++    }
++
++    // Kiln OS (AD5X): the checklist as this printer runs it (optional)
++    if (j.contains("checklist")) {
++        parse_checklist(j["checklist"], source_path);
++    }
++
+     // Progress mode (optional, defaults to weighted)
+     if (j.contains("progress_mode") && j["progress_mode"].is_string()) {
+         std::string mode_str = helix::text_io::to_upper(j["progress_mode"].get<std::string>());
+@@ -671,6 +686,19 @@ void PrintStartProfile::parse_pattern_array(const nlohmann::json& array,
+             }
+         }
+ 
++        // The printer's own words for the step, from a capture group (optional)
++        if (rp_json.contains("label_group")) {
++            const auto& group = rp_json["label_group"];
++            if (group.is_number_integer() && group.get<int>() >= 1 &&
++                static_cast<unsigned>(group.get<int>()) <= rp.pattern.mark_count()) {
++                rp.label_group = group.get<int>();
++            } else {
++                spdlog::warn("[PrintStartProfile] Ignoring label_group for {} '{}' in {}: "
++                             "not a capture group of the pattern",
++                             kind, pattern_str, source_path);
++            }
++        }
++
+         // Phases the step this text begins emits signals for (optional)
+         if (rp_json.contains("owns")) {
+             const auto& owns = rp_json["owns"];
+@@ -873,6 +901,58 @@ void PrintStartProfile::parse_status_signals(const json& array, const std::strin
+     }
+ }
+ 
++void PrintStartProfile::parse_checklist(const json& block, const std::string& source_path) {
++    if (!block.is_object()) {
++        spdlog::warn("[PrintStartProfile] checklist must be an object in {} - ignored",
++                     source_path);
++        return;
++    }
++    // A listed phase is one a row can show: never IDLE, INITIALIZING or COMPLETE.
++    const auto listed_phase = [&](const json& name) -> std::optional<PrintStartPhase> {
++        std::optional<PrintStartPhase> phase;
++        if (name.is_string()) {
++            phase = helix::print_start_phase_from_name(
++                helix::text_io::to_upper(name.get<std::string>()));
++        }
++        if (!phase || *phase == PrintStartPhase::IDLE || *phase == PrintStartPhase::INITIALIZING ||
++            *phase == PrintStartPhase::COMPLETE) {
++            spdlog::warn("[PrintStartProfile] Ignoring checklist phase {} in {}", name.dump(),
++                         source_path);
++            return std::nullopt;
++        }
++        return phase;
++    };
++    const auto phase_list = [&](const char* key, std::vector<PrintStartPhase>& out) {
++        if (!block.contains(key)) {
++            return;
++        }
++        if (!block[key].is_array()) {
++            spdlog::warn("[PrintStartProfile] checklist {} must be an array in {}", key,
++                         source_path);
++            return;
++        }
++        for (const auto& name : block[key]) {
++            const auto phase = listed_phase(name);
++            if (phase && std::find(out.begin(), out.end(), *phase) == out.end()) {
++                out.push_back(*phase);
++            }
++        }
++    };
++    phase_list("steps", checklist_.steps);
++    phase_list("macro_steps", checklist_.macro_steps);
++    if (block.contains("labels") && block["labels"].is_object()) {
++        for (const auto& [name, label] : block["labels"].items()) {
++            const auto phase = listed_phase(json(name));
++            if (phase && label.is_string() && !label.get_ref<const std::string&>().empty()) {
++                checklist_.labels[static_cast<int>(*phase)] = label.get<std::string>();
++            }
++        }
++    }
++    if (block.contains("hide_overrun") && block["hide_overrun"].is_boolean()) {
++        checklist_.hide_overrun = block["hide_overrun"].get<bool>();
++    }
++}
++
+ PrintStartPhase PrintStartProfile::parse_phase_name(const std::string& name) {
+     // Profiles are hand-written JSON, so the spelling is case-folded before the
+     // canonical lookup; the lookup itself is exact.
+diff --git a/src/ui/ui_print_status_tiles.cpp b/src/ui/ui_print_status_tiles.cpp
+index 3752753b..67bf7bac 100644
+--- a/src/ui/ui_print_status_tiles.cpp
++++ b/src/ui/ui_print_status_tiles.cpp
+@@ -92,6 +92,18 @@ const char* fan_chip_label(PrintStatusChip c) {
+     return lv_tr(fan_role_label(role, FanLabelLength::Chip));
+ }
+ 
++/// A row's label: the printer's own words for the running step (Kiln OS,
++/// AD5X; not translated), else the profile's label key, else the phase's own.
++std::string step_label(const PreprintStepRow& row) {
++    if (!row.text.empty()) {
++        return row.text;
++    }
++    if (!row.label_key.empty()) {
++        return lv_tr(row.label_key.c_str());
++    }
++    return print_start_phase_step_label(row.phase);
++}
++
+ std::string step_time(const PreprintStepRow& row) {
+     if (row.seconds < 0) {
+         return {};
+@@ -731,8 +743,7 @@ void PrintStatusTiles::refresh_checklist() {
+     for (size_t i = 0; i < kPreprintChecklistMaxRows; ++i) {
+         StepSubjects& s = steps_[i];
+         if (i < count) {
+-            set_string(&s.name, s.name_buf, sizeof(s.name_buf),
+-                       print_start_phase_step_label(rows[i].phase));
++            set_string(&s.name, s.name_buf, sizeof(s.name_buf), step_label(rows[i]));
+             set_string(&s.time, s.time_buf, sizeof(s.time_buf), step_time(rows[i]));
+             set_int(&s.status, static_cast<int>(rows[i].status));
+         } else {
+@@ -748,7 +759,7 @@ void PrintStatusTiles::refresh_checklist() {
+     if (pos.index > 0) {
+         position = fmt::format(lv_tr("Step {} of {}"), pos.index, pos.count);
+         const PreprintStepRow& current = rows[static_cast<size_t>(pos.index - 1)];
+-        name = print_start_phase_step_label(current.phase);
++        name = step_label(current);
+         time = step_time(current);
+     }
+     set_string(&step_position_text_, step_position_buf_, sizeof(step_position_buf_), position);
+diff --git a/tests/unit/test_kiln_print_start_ad5x.cpp b/tests/unit/test_kiln_print_start_ad5x.cpp
+new file mode 100644
+index 00000000..87c1c487
+--- /dev/null
++++ b/tests/unit/test_kiln_print_start_ad5x.cpp
+@@ -0,0 +1,762 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++// Kiln OS (AD5X): the print start steps on the PRINT STATUS screen, from the
++// texts Kiln's PRINT_START prints (klipper/macros/print_start.cfg and
++// ad5x.cfg's _CHECK_Z in the Kiln OS repo). Each step is an M117
++// (display_status.message) and the same text as an "echo: " console line.
++// The cases replay those texts as the printer sends them and read the rows the
++// screen draws: done rows in the order they ran, the running step labelled
++// with the printer's own words, then the steps still to come in the order the
++// AD5X runs them.
++
++#include "ui_update_queue.h"
++
++#include "../lvgl_test_fixture.h"
++#include "../test_helpers/print_start_collector_test_access.h"
++#include "../test_helpers/update_queue_test_access.h"
++#include "data_root_resolver.h"
++#include "moonraker_client_mock.h"
++#include "preprint_checklist.h"
++#include "print_start_analyzer.h"
++#include "print_start_collector.h"
++#include "print_start_phase_label.h"
++#include "print_start_profile.h"
++#include "printer_detector.h"
++#include "printer_state.h"
++#include "simulated_clock.h"
++#include "thermal_rate_model.h"
++
++#include <filesystem>
++#include <fstream>
++#include <iterator>
++#include <map>
++#include <string>
++#include <vector>
++
++#include "../catch_amalgamated.hpp"
++
++using namespace helix;
++using helix::PreprintChecklistInput;
++using helix::PreprintStepRow;
++using helix::PreprintStepStatus;
++using helix::PrintStartPhase;
++using P = PrintStartPhase;
++using json = nlohmann::json;
++
++namespace {
++
++int K(P p) {
++    return static_cast<int>(p);
++}
++
++/// What a row reads: the printer's words, else the label key, else the
++/// phase's own label (the keys, as the identity locale shows them).
++std::string row_label(const PreprintStepRow& row) {
++    if (!row.text.empty()) {
++        return row.text;
++    }
++    if (!row.label_key.empty()) {
++        return row.label_key;
++    }
++    return helix::print_start_phase_step_key(row.phase);
++}
++
++/// "+Homing 12" done, ">Heat soak 3:09" current, "-Bed mesh 60" upcoming;
++/// a time of -1 is left out.
++std::vector<std::string> describe(const std::vector<PreprintStepRow>& rows) {
++    std::vector<std::string> out;
++    for (const auto& row : rows) {
++        const char* mark = row.status == PreprintStepStatus::Done      ? "+"
++                           : row.status == PreprintStepStatus::Current ? ">"
++                                                                       : "-";
++        std::string s = mark + row_label(row);
++        if (row.seconds >= 0) {
++            s += " " + std::to_string(row.seconds);
++        }
++        out.push_back(s);
++    }
++    return out;
++}
++
++using Rows = std::vector<std::string>;
++
++std::shared_ptr<PrintStartProfile> ad5x_profile() {
++    auto profile = PrintStartProfile::load("ad5x");
++    REQUIRE_FALSE(profile->is_default());
++    return profile;
++}
++
++/// The phase and the printer's words a line maps to; IDLE when none.
++std::pair<P, std::string> ad5x_match(const std::string& line) {
++    static const auto profile = ad5x_profile();
++    PrintStartProfile::MatchResult result;
++    if (!profile->try_match_pattern(line, result)) {
++        return {P::IDLE, ""};
++    }
++    return {result.phase, result.label};
++}
++
++/// Kiln's PRINT_START as the macro scan reads it, abridged to the lines that
++/// call commands (the Jinja conditions stay): it clears the mesh before it
++/// homes and purges at the box before the edge clean, so the scan finds Bed
++/// mesh, Homing, Purge, Cleaning in that order.
++const char* kKilnMacros = R"cfg([gcode_macro PRINT_START]
++gcode:
++  CLEAR_PAUSE
++  M104 S0
++  M140 S0
++  BED_MESH_CLEAR
++  _PRINT_STATUS MSG="Homing"
++  G28
++  _PURGE_BOX
++  _PRINT_STATUS MSG="Heating bed and nozzle"
++  M140 S{bed}
++  M104 S{nozzle}
++  _PRINT_START_WAIT HEATER=heater_bed MINIMUM={bed - 1}
++  BED_SOAK_START BED={bed}
++  _PRINT_START_WAIT HEATER=extruder
++  {% if not skip_box %}
++    _PRINT_STATUS MSG="Purging at the box"
++    G1 E90 F300
++    _PURGE_WIPE
++  {% endif %}
++  M104 S180
++  _NOZZLE_BRUSH
++  _NOZZLE_BRUSH
++  BED_SOAK_WAIT
++  _CHECK_Z MESH={level} ADAPTIVE={adaptive}
++  _PRINT_STATUS MSG="Heating to print temperature"
++  M104 S{nozzle}
++  _PRINT_START_WAIT HEATER=extruder
++  {% if ifs_load %}
++    _PRINT_STATUS MSG="Loading first colour"
++    _PRINT_START_TOOL CHANNEL={chan}
++  {% else %}
++    _PRIME_LINE
++  {% endif %}
++  _PRINT_STATUS
++
++[gcode_macro _PRINT_STATUS]
++gcode:
++  M117 {params.MSG}
++  RESPOND MSG="{params.MSG}"
++
++[gcode_macro _PRINT_START_WAIT]
++gcode:
++  TEMPERATURE_WAIT SENSOR={params.HEATER}
++
++[gcode_macro _CHECK_Z]
++gcode:
++  _PRINT_STATUS MSG="Checking Z"
++  PROBE
++  _CHECK_Z_SCRUB MESH={params.MESH} ADAPTIVE={params.ADAPTIVE}
++
++[gcode_macro _CHECK_Z_SCRUB]
++gcode:
++  _PRINT_STATUS MSG="Cleaning nozzle on the bed edge"
++  {% if params.MESH|int %}
++    _PRINT_STATUS MSG="Bed mesh: print area"
++    BED_MESH_CALIBRATE ADAPTIVE=1
++  {% else %}
++    _PRINT_STATUS MSG="Checking Z"
++    PROBE
++  {% endif %}
++)cfg";
++
++helix::PrintStartAnalysis analyze(const std::string& printer_cfg) {
++    helix::PrintStartAnalysis out;
++    helix::PrintStartAnalyzer analyzer;
++    analyzer.analyze({{"printer.cfg", printer_cfg}},
++                     [&out](const helix::PrintStartAnalysis& a) { out = a; });
++    return out;
++}
++
++/// The collector on the AD5X profile, with the screen's own row builder.
++class Ad5xStartFixture : public LVGLTestFixture {
++  public:
++    Ad5xStartFixture() {
++        ThermalRateManager::instance().reset();
++        state_.init_subjects(false);
++        lv_subject_set_int(state_.print_state().get_print_active_subject(), 1);
++        client_ = std::make_unique<MoonrakerClientMock>();
++        collector_ = PrintStartCollector::create(*client_, state_);
++        collector_->set_profile(ad5x_profile());
++    }
++
++    ~Ad5xStartFixture() override {
++        if (collector_->is_active()) {
++            collector_->stop();
++        }
++        collector_.reset();
++        client_.reset();
++        ThermalRateManager::instance().reset();
++    }
++
++    PrintStartCollector& collector() {
++        return *collector_;
++    }
++
++    void drain() {
++        helix::ui::UpdateQueueTestAccess::drain(helix::ui::UpdateQueue::instance());
++    }
++
++    /// Start a run with a history: homing 12 s, soak 120 s, edge clean and
++    /// Z check 30 s, mesh 60 s, first colour 40 s (heating has no history).
++    void start() {
++        collector_->start();
++        collector_->enable_fallbacks();
++        helix::PreprintEntry e;
++        e.total_seconds = 500;
++        e.timestamp = 1000;
++        e.temp_bucket = 1;
++        e.phase_durations = {{K(P::HOMING), 12},
++                             {K(P::SOAKING), 120},
++                             {K(P::CLEANING), 30},
++                             {K(P::BED_MESH), 60},
++                             {K(P::PURGING), 40}};
++        PrintStartCollectorTestAccess::load_prediction_entries(*collector_, {e});
++        drain();
++    }
++
++    void console(const std::string& line) {
++        json msg = {{"method", "notify_gcode_response"}, {"params", {line}}};
++        client_->dispatch_method_callback("notify_gcode_response", msg);
++        drain();
++    }
++
++    void status(const json& object) {
++        client_->dispatch_status_update(object);
++        drain();
++    }
++
++    /// _PRINT_STATUS MSG=text: the console line, then the M117.
++    void say(const std::string& text) {
++        console("echo: " + text);
++        status({{"display_status", {{"message", text}}}});
++    }
++
++    /// Heaters in decidegrees, in the subjects the fallback tick reads and as
++    /// a status frame; then one fallback tick.
++    void heaters(int bed, int bed_target, int nozzle, int nozzle_target) {
++        auto& t = state_.temperature_state();
++        lv_subject_set_int(t.get_bed_temp_subject(), bed);
++        lv_subject_set_int(t.get_bed_target_subject(), bed_target);
++        lv_subject_set_int(t.get_active_extruder_temp_subject(), nozzle);
++        lv_subject_set_int(t.get_active_extruder_target_subject(), nozzle_target);
++        status({{"heater_bed", {{"temperature", bed / 10.0}, {"target", bed_target / 10.0}}},
++                {"extruder", {{"temperature", nozzle / 10.0}, {"target", nozzle_target / 10.0}}}});
++        tick();
++    }
++
++    void tick() {
++        collector_->check_fallback_completion();
++        drain();
++        drain();
++    }
++
++    PrintStartPhase phase() {
++        return static_cast<PrintStartPhase>(
++            lv_subject_get_int(state_.print_state().get_print_start_phase_subject()));
++    }
++
++    Rows rows() {
++        return describe(helix::build_preprint_checklist(collector_->checklist_input()));
++    }
++
++  protected:
++    PrinterState state_;
++    std::unique_ptr<MoonrakerClientMock> client_;
++    std::shared_ptr<PrintStartCollector> collector_;
++};
++
++/// A probe report as Klipper prints it.
++std::string probe_at(double x, double y) {
++    char buf[96];
++    std::snprintf(buf, sizeof(buf), "// probe at %.3f,%.3f is z=1.234567", x, y);
++    return buf;
++}
++
++} // namespace
++
++// ============================================================================
++// The checklist builder: the profile's options, and upstream's defaults
++// ============================================================================
++
++TEST_CASE("kiln ad5x checklist: a sequence drops the steps passed over",
++          "[kiln][ad5x][preprint_checklist]") {
++    PreprintChecklistInput in;
++    in.expected_order = {P::HOMING,   P::HEATING_BED,    P::SOAKING, P::CLEANING,
++                         P::BED_MESH, P::HEATING_NOZZLE, P::PURGING};
++    in.expected_is_sequence = true;
++    in.done_in_order = {P::HOMING, P::HEATING_BED};
++    in.current = P::CLEANING; // no soak: the bed was hot
++    auto rows = build_preprint_checklist(in);
++    CHECK(describe(rows) == Rows{"+Homing 0", "+Heating bed 0", ">Cleaning nozzle", "-Bed mesh",
++                                 "-Heating nozzle", "-Purge"});
++
++    // No current step listed (the print start only just began): the last done
++    // one is where the sequence stands.
++    in.current = P::INITIALIZING;
++    rows = build_preprint_checklist(in);
++    CHECK(describe(rows) == Rows{"+Homing 0", "+Heating bed 0", "-Heat soak", "-Cleaning nozzle",
++                                 "-Bed mesh", "-Heating nozzle", "-Purge"});
++
++    // Upstream: every expected step not shown yet is upcoming.
++    in.expected_is_sequence = false;
++    in.current = P::CLEANING;
++    rows = build_preprint_checklist(in);
++    CHECK(describe(rows) == Rows{"+Homing 0", "+Heating bed 0", ">Cleaning nozzle", "-Heat soak",
++                                 "-Bed mesh", "-Heating nozzle", "-Purge"});
++}
++
++TEST_CASE("kiln ad5x checklist: an overrun shows no time, upstream shows 0",
++          "[kiln][ad5x][preprint_checklist]") {
++    PreprintChecklistInput in;
++    in.current = P::SOAKING;
++    in.predicted_seconds = {{K(P::SOAKING), 120}};
++    in.current_elapsed_seconds = 100;
++    in.hide_overrun = true;
++    CHECK(build_preprint_checklist(in)[0].seconds == 20);
++    in.current_elapsed_seconds = 120;
++    CHECK(build_preprint_checklist(in)[0].seconds == -1);
++    in.current_elapsed_seconds = 300;
++    CHECK(build_preprint_checklist(in)[0].seconds == -1);
++    in.hide_overrun = false;
++    CHECK(build_preprint_checklist(in)[0].seconds == 0);
++    // Nothing predicts it: no time either way.
++    in.predicted_seconds.clear();
++    in.hide_overrun = true;
++    CHECK(build_preprint_checklist(in)[0].seconds == -1);
++}
++
++TEST_CASE("kiln ad5x checklist: a step with the printer's own countdown shows no guessed time",
++          "[kiln][ad5x][preprint_checklist]") {
++    PreprintChecklistInput in;
++    in.current = P::SOAKING;
++    in.current_elapsed_seconds = 13;
++    in.predicted_seconds = {{K(P::SOAKING), 26}};
++    in.hide_overrun = true;
++    in.current_text = "Heat soak 1:41";
++    CHECK(build_preprint_checklist(in)[0].seconds == -1);
++    in.current_text = "Heat soak 0:09";
++    CHECK(build_preprint_checklist(in)[0].seconds == -1);
++    // Words without a time keep the guess.
++    in.current_text = "Heating bed and nozzle";
++    CHECK(build_preprint_checklist(in)[0].seconds == 13);
++    in.current_text = "Bed mesh: print area";
++    CHECK(build_preprint_checklist(in)[0].seconds == 13);
++    // Upstream's checklist is unchanged.
++    in.hide_overrun = false;
++    in.current_text = "Heat soak 1:41";
++    CHECK(build_preprint_checklist(in)[0].seconds == 13);
++}
++
++TEST_CASE("kiln ad5x checklist: label keys on every row, the printer's words on the current one",
++          "[kiln][ad5x][preprint_checklist]") {
++    PreprintChecklistInput in;
++    in.done_in_order = {P::HEATING_BED};
++    in.current = P::SOAKING;
++    in.current_text = "Heat soak 0:09";
++    in.expected_order = {P::HEATING_BED, P::SOAKING, P::CLEANING};
++    in.label_keys = {{K(P::HEATING_BED), "Heating"}};
++    const auto rows = build_preprint_checklist(in);
++    REQUIRE(rows.size() == 3);
++    CHECK(rows[0].label_key == "Heating");
++    CHECK(rows[0].text.empty());
++    CHECK(rows[1].text == "Heat soak 0:09");
++    CHECK(rows[1].label_key.empty());
++    CHECK(rows[2].text.empty());
++    CHECK(describe(rows) == Rows{"+Heating 0", ">Heat soak 0:09", "-Cleaning nozzle"});
++}
++
++TEST_CASE("kiln ad5x checklist: the default input is upstream's checklist",
++          "[kiln][ad5x][preprint_checklist]") {
++    const PreprintChecklistInput in;
++    CHECK_FALSE(in.expected_is_sequence);
++    CHECK_FALSE(in.hide_overrun);
++    CHECK(in.current_text.empty());
++    CHECK(in.label_keys.empty());
++}
++
++// ============================================================================
++// The profile
++// ============================================================================
++
++TEST_CASE("kiln ad5x profile: the AD5X uses it, other printers keep theirs",
++          "[kiln][ad5x][print_start_profile]") {
++    CHECK(PrinterDetector::get_print_start_profile("FlashForge Adventurer 5X") == "ad5x");
++    CHECK(PrinterDetector::get_print_start_profile("Elegoo Centauri Carbon") == "cosmos_cc1");
++
++    const auto profile = ad5x_profile();
++    CHECK(profile->narrated_steps());
++    CHECK(profile->status_signals().empty()); // no heater or extrusion inference
++    CHECK(profile->has_phase_object());       // the M117 counts as well as the console
++    const auto& list = profile->checklist();
++    CHECK(list.steps == std::vector<P>{P::HOMING, P::HEATING_BED, P::SOAKING, P::CLEANING,
++                                       P::BED_MESH, P::HEATING_NOZZLE, P::PURGING});
++    CHECK(list.macro_steps == std::vector<P>{P::HOMING, P::CLEANING, P::BED_MESH, P::PURGING});
++    CHECK(list.labels == std::map<int, std::string>{{K(P::HEATING_BED), "Heating"}});
++    CHECK(list.hide_overrun);
++
++    const auto generic = PrintStartProfile::load_default();
++    CHECK_FALSE(generic->narrated_steps());
++    CHECK(generic->checklist().steps.empty());
++    CHECK(generic->checklist().labels.empty());
++    CHECK_FALSE(generic->checklist().hide_overrun);
++}
++
++TEST_CASE("kiln ad5x profile: each Kiln text names its step", "[kiln][ad5x][print_start_profile]") {
++    using M = std::pair<P, std::string>;
++    // The console line ("echo: " from RESPOND) and the M117 alike.
++    for (const std::string prefix : {"echo: ", ""}) {
++        INFO(prefix);
++        CHECK(ad5x_match(prefix + "Homing") == M{P::HOMING, "Homing"});
++        CHECK(ad5x_match(prefix + "Heating bed and nozzle") ==
++              M{P::HEATING_BED, "Heating bed and nozzle"});
++        // The box purge runs while the soak's clock already runs and before the
++        // brushing: part of the heating, not the purge step.
++        CHECK(ad5x_match(prefix + "Purging at the box") == M{P::HEATING_BED, "Purging at the box"});
++        CHECK(ad5x_match(prefix + "Heat soak 3:09") == M{P::SOAKING, "Heat soak 3:09"});
++        CHECK(ad5x_match(prefix + "Heat soak 0:04") == M{P::SOAKING, "Heat soak 0:04"});
++        CHECK(ad5x_match(prefix + "Heat soak: waiting for Z to settle") ==
++              M{P::SOAKING, "Heat soak: waiting for Z to settle"});
++        CHECK(ad5x_match(prefix + "Checking Z") == M{P::CLEANING, "Checking Z"});
++        CHECK(ad5x_match(prefix + "Cleaning nozzle on the bed edge") ==
++              M{P::CLEANING, "Cleaning nozzle on the bed edge"});
++        CHECK(ad5x_match(prefix + "Bed mesh: print area") ==
++              M{P::BED_MESH, "Bed mesh: print area"});
++        CHECK(ad5x_match(prefix + "Bed mesh: whole bed") == M{P::BED_MESH, "Bed mesh: whole bed"});
++        CHECK(ad5x_match(prefix + "Heating to print temperature") ==
++              M{P::HEATING_NOZZLE, "Heating to print temperature"});
++        CHECK(ad5x_match(prefix + "Prime line") == M{P::PURGING, "Prime line"});
++        CHECK(ad5x_match(prefix + "Loading first colour") == M{P::PURGING, "Loading first colour"});
++    }
++
++    // Lines around the steps that name none.
++    for (const char* line : {
++             // the soak's length, announced while the nozzle still heats
++             "// Bed heat soak: 192 s (calibrated at 60 C)",
++             "// Bed heat soak: Z settled (at most 0.004 mm in 60 s)",
++             "echo: Slicer purges (ifs_purge_mode 0): no purge at the box",
++             "echo: _CHECK_Z: centre drift 0.012 mm (not applied, as stock)",
++             "// probe at 60.000,-3.000 is z=1.234567",
++             "!! Prime line skipped: the objects leave no room on the plate",
++             "echo: Purge box (trash bin) at X52.5 Y229 (offset 0, 0; RESET=1 for unit.cfg)",
++             "G28",
++             "M190 S60",
++             "M109 S220",
++             "BED_MESH_CALIBRATE ADAPTIVE=1",
++             "Homing axes",
++             "Heating bed",
++             "",
++             "echo: ",
++         }) {
++        INFO(line);
++        CHECK(ad5x_match(line).first == P::IDLE);
++    }
++}
++
++// Every message and label the profile shows is translated: a key in each
++// catalog the build makes the language packs from.
++TEST_CASE("kiln ad5x profile: its messages and labels are in every catalog",
++          "[kiln][ad5x][print_start_profile][i18n]") {
++    std::ifstream f(helix::find_readable("print_start_profiles/ad5x.json"));
++    REQUIRE(f.good());
++    const json j = json::parse(f);
++    std::set<std::string> keys;
++    for (const auto& rp : j.at("response_patterns")) {
++        keys.insert(rp.at("message").get<std::string>());
++    }
++    for (const auto& [phase, label] : j.at("checklist").at("labels").items()) {
++        keys.insert(label.get<std::string>());
++    }
++    REQUIRE(keys.count("Heating") == 1);
++
++    int catalogs = 0;
++    for (const auto& entry :
++         std::filesystem::directory_iterator(helix::asset_path("translations"))) {
++        if (entry.path().extension() != ".yml") {
++            continue;
++        }
++        ++catalogs;
++        std::ifstream in(entry.path());
++        const std::string yml((std::istreambuf_iterator<char>(in)),
++                              std::istreambuf_iterator<char>());
++        for (const auto& key : keys) {
++            INFO(entry.path().filename().string() << ": " << key);
++            CHECK((yml.find("\n  " + key + ": ") != std::string::npos ||
++                   yml.find("\n  '" + key + "': ") != std::string::npos));
++        }
++    }
++    CHECK(catalogs >= 11); // de en es fr it ja ko pt ru tr zh
++}
++
++// ============================================================================
++// The macro scan decides which steps exist, never their order
++// ============================================================================
++
++TEST_CASE_METHOD(Ad5xStartFixture, "kiln ad5x: the steps follow the AD5X order, not the macro's",
++                 "[kiln][ad5x][print_start]") {
++    const auto analysis = analyze(kKilnMacros);
++    REQUIRE(analysis.found);
++    collector().set_macro_analysis(analysis);
++    start();
++    {
++        // What upstream listed: the scan's order, Bed mesh first (BED_MESH_CLEAR).
++        std::vector<P> scanned;
++        for (const auto& op : analysis.operations) {
++            if (auto p = helix::phase_of_category(op.category);
++                p && std::find(scanned.begin(), scanned.end(), *p) == scanned.end()) {
++                scanned.push_back(*p);
++            }
++        }
++        CHECK(scanned == std::vector<P>{P::BED_MESH, P::HOMING, P::PURGING, P::CLEANING});
++    }
++    CHECK(rows() == Rows{"-Homing 12", "-Heating", "-Heat soak 120", "-Cleaning nozzle 30",
++                         "-Bed mesh 60", "-Heating nozzle", "-Purge 40"});
++}
++
++TEST_CASE_METHOD(Ad5xStartFixture, "kiln ad5x: a step the macro cannot run has no row",
++                 "[kiln][ad5x][print_start]") {
++    // A PRINT_START of the user's own that never meshes or cleans.
++    const auto analysis = analyze("[gcode_macro PRINT_START]\ngcode:\n  G28\n  M190 S{bed}\n"
++                                  "  M109 S{nozzle}\n  _PRIME_LINE\n");
++    REQUIRE(analysis.found);
++    collector().set_macro_analysis(analysis);
++    start();
++    // Heating and the soak are not something the scan can see: they stay.
++    CHECK(rows() ==
++          Rows{"-Homing 12", "-Heating", "-Heat soak 120", "-Heating nozzle", "-Purge 40"});
++}
++
++TEST_CASE_METHOD(Ad5xStartFixture, "kiln ad5x: without a macro scan every step is listed",
++                 "[kiln][ad5x][print_start]") {
++    start();
++    CHECK(rows() == Rows{"-Homing 12", "-Heating", "-Heat soak 120", "-Cleaning nozzle 30",
++                         "-Bed mesh 60", "-Heating nozzle", "-Purge 40"});
++}
++
++// ============================================================================
++// Whole print starts, replayed
++// ============================================================================
++
++// Cold printer, colour already loaded: box purge, a 3 min soak, mesh of the
++// print area, the first colour from the IFS.
++TEST_CASE_METHOD(Ad5xStartFixture, "kiln ad5x: box purge, soak, mesh, first colour",
++                 "[kiln][ad5x][print_start]") {
++    helix::sim::SimulatedClock::ManualScope clock(helix::sim::SimSpeed::of(1.0));
++    collector().set_macro_analysis(analyze(kKilnMacros));
++    heaters(250, 0, 260, 0);
++    start();
++
++    say("Homing");
++    CHECK(rows() == Rows{">Homing 12", "-Heating", "-Heat soak 120", "-Cleaning nozzle 30",
++                         "-Bed mesh 60", "-Heating nozzle", "-Purge 40"});
++    clock.advance(std::chrono::seconds(12));
++
++    say("Heating bed and nozzle");
++    heaters(260, 600, 300, 2200);
++    clock.advance(std::chrono::seconds(30));
++    // The nozzle heats faster: at its target while the bed is still short.
++    heaters(450, 600, 2200, 2200);
++    clock.advance(std::chrono::seconds(60));
++    // The bed arrives; the soak's clock starts, the nozzle wait follows.
++    heaters(595, 600, 2200, 2200);
++    console("// Bed heat soak: 192 s (calibrated at 60 C)");
++    CHECK(phase() == P::HEATING_BED);
++    CHECK(rows() == Rows{"+Homing 12", ">Heating bed and nozzle", "-Heat soak 120",
++                         "-Cleaning nozzle 30", "-Bed mesh 60", "-Heating nozzle", "-Purge 40"});
++
++    say("Purging at the box");
++    for (int i = 0; i < 5; ++i) {
++        collector().check_purge_shape(); // the box purge extrudes in place
++    }
++    CHECK(phase() == P::HEATING_BED);
++    CHECK(rows()[1] == ">Purging at the box");
++    clock.advance(std::chrono::seconds(20));
++    heaters(600, 600, 2150, 1800); // M104 S180 for the brushing
++    clock.advance(std::chrono::seconds(10));
++    heaters(600, 600, 1800, 1800);
++
++    say("Heat soak 2:42");
++    CHECK(rows() == Rows{"+Homing 12", "+Heating 120", ">Heat soak 2:42", "-Cleaning nozzle 30",
++                         "-Bed mesh 60", "-Heating nozzle", "-Purge 40"});
++    for (int left = 157; left > 0; left -= 5) {
++        clock.advance(std::chrono::seconds(5));
++        char text[32];
++        std::snprintf(text, sizeof(text), "Heat soak %d:%02d", left / 60, left % 60);
++        say(text);
++        tick();
++    }
++    // 160 s into a 120 s prediction: still running, so no time.
++    CHECK(rows()[2] == ">Heat soak 0:02");
++
++    say("Checking Z");
++    console(probe_at(60, -3));
++    clock.advance(std::chrono::seconds(4));
++    CHECK(rows() == Rows{"+Homing 12", "+Heating 120", "+Heat soak 160", ">Checking Z 26",
++                         "-Bed mesh 60", "-Heating nozzle", "-Purge 40"});
++    say("Cleaning nozzle on the bed edge");
++    heaters(600, 600, 1750, 1400); // M104 S140 while it scrubs
++    clock.advance(std::chrono::seconds(6));
++    CHECK(rows()[3] == ">Cleaning nozzle on the bed edge 20");
++
++    say("Bed mesh: print area");
++    console("// Adapted probe count: (4,4)");
++    for (int i = 0; i < 16; ++i) {
++        console(probe_at(80 + 10 * (i % 4), 80 + 10 * (i / 4)));
++        clock.advance(std::chrono::seconds(4));
++    }
++    CHECK(phase() == P::BED_MESH);
++    CHECK(rows() == Rows{"+Homing 12", "+Heating 120", "+Heat soak 160", "+Cleaning nozzle 10",
++                         ">Bed mesh: print area", "-Heating nozzle", "-Purge 40"});
++
++    say("Heating to print temperature");
++    heaters(585, 600, 1400, 2200);
++    clock.advance(std::chrono::seconds(40));
++    // The nozzle arrives with the bed a degree or two short: the bed wait.
++    heaters(585, 600, 2200, 2200);
++    clock.advance(std::chrono::seconds(10));
++    heaters(592, 600, 2200, 2200);
++    CHECK(phase() == P::HEATING_NOZZLE);
++    CHECK(rows() == Rows{"+Homing 12", "+Heating 120", "+Heat soak 160", "+Cleaning nozzle 10",
++                         "+Bed mesh 64", ">Heating to print temperature", "-Purge 40"});
++
++    say("Loading first colour");
++    clock.advance(std::chrono::seconds(15));
++    CHECK(rows() == Rows{"+Homing 12", "+Heating 120", "+Heat soak 160", "+Cleaning nozzle 10",
++                         "+Bed mesh 64", "+Heating nozzle 50", ">Loading first colour 25"});
++}
++
++// Bed already hot from the last print, the slicer purges: no box purge, no
++// soak, the stock centre Z check instead of a mesh, a prime line.
++TEST_CASE_METHOD(Ad5xStartFixture, "kiln ad5x: no box purge, no soak, centre Z check, prime line",
++                 "[kiln][ad5x][print_start]") {
++    helix::sim::SimulatedClock::ManualScope clock(helix::sim::SimSpeed::of(1.0));
++    collector().set_macro_analysis(analyze(kKilnMacros));
++    heaters(600, 0, 400, 0);
++    start();
++
++    say("Homing");
++    clock.advance(std::chrono::seconds(12));
++    say("Heating bed and nozzle");
++    // The bed is at its target at once, only the nozzle heats: still the one
++    // heating step, no nozzle row of its own.
++    heaters(600, 600, 500, 2200);
++    clock.advance(std::chrono::seconds(30));
++    heaters(600, 600, 1900, 2200);
++    CHECK(phase() == P::HEATING_BED);
++    CHECK(rows() == Rows{"+Homing 12", ">Heating bed and nozzle", "-Heat soak 120",
++                         "-Cleaning nozzle 30", "-Bed mesh 60", "-Heating nozzle", "-Purge 40"});
++    clock.advance(std::chrono::seconds(10));
++    heaters(600, 600, 2200, 2200);
++    console("echo: Slicer purges (ifs_purge_mode 0): no purge at the box");
++    clock.advance(std::chrono::seconds(20)); // the brushing
++    heaters(600, 600, 1800, 1800);
++
++    // No soak: the Z check follows, and the soak's row goes.
++    say("Checking Z");
++    console(probe_at(60, -3));
++    CHECK(rows() == Rows{"+Homing 12", "+Heating 60", ">Checking Z 30", "-Bed mesh 60",
++                         "-Heating nozzle", "-Purge 40"});
++    clock.advance(std::chrono::seconds(4));
++    say("Cleaning nozzle on the bed edge");
++    clock.advance(std::chrono::seconds(6));
++    say("Checking Z"); // the centre check, no mesh
++    console(probe_at(107.5, 107.5));
++    clock.advance(std::chrono::seconds(5));
++    CHECK(phase() == P::CLEANING);
++    CHECK(rows() == Rows{"+Homing 12", "+Heating 60", ">Checking Z 15", "-Bed mesh 60",
++                         "-Heating nozzle", "-Purge 40"});
++
++    // Heating for the print: the mesh's row goes.
++    say("Heating to print temperature");
++    heaters(600, 600, 1400, 2200);
++    clock.advance(std::chrono::seconds(45));
++    heaters(600, 600, 2200, 2200);
++    CHECK(rows() == Rows{"+Homing 12", "+Heating 60", "+Cleaning nozzle 15",
++                         ">Heating to print temperature", "-Purge 40"});
++
++    say("Prime line");
++    clock.advance(std::chrono::seconds(50)); // past its 40 s
++    CHECK(rows() == Rows{"+Homing 12", "+Heating 60", "+Cleaning nozzle 15", "+Heating nozzle 45",
++                         ">Prime line"});
++}
++
++// Nozzle still hot from the last print, bed cold: the same rows as a cold
++// start (upstream's heater signals gave a cold nozzle a row of its own and a
++// hot one none), and no phase from the heaters.
++TEST_CASE_METHOD(Ad5xStartFixture,
++                 "kiln ad5x: a hot nozzle makes no nozzle row while the bed heats",
++                 "[kiln][ad5x][print_start]") {
++    helix::sim::SimulatedClock::ManualScope clock(helix::sim::SimSpeed::of(1.0));
++    heaters(250, 0, 2200, 0);
++    start();
++    say("Homing");
++    clock.advance(std::chrono::seconds(12));
++    say("Heating bed and nozzle");
++    for (int bed = 260; bed < 600; bed += 40) {
++        heaters(bed, 600, 2200, 2200);
++        clock.advance(std::chrono::seconds(10));
++        CHECK(phase() == P::HEATING_BED);
++    }
++    heaters(600, 600, 2200, 2200);
++    say("Purging at the box");
++    clock.advance(std::chrono::seconds(20));
++    say("Heat soak 1:30");
++    clock.advance(std::chrono::seconds(90));
++    say("Checking Z");
++    clock.advance(std::chrono::seconds(5));
++    say("Cleaning nozzle on the bed edge");
++    clock.advance(std::chrono::seconds(5));
++    say("Bed mesh: whole bed");
++    clock.advance(std::chrono::seconds(60));
++    CHECK(rows() == Rows{"+Homing 12", "+Heating 110", "+Heat soak 90", "+Cleaning nozzle 10",
++                         ">Bed mesh: whole bed", "-Heating nozzle", "-Purge 40"});
++    // No phase came from the heaters: only the texts' phases ran.
++    const auto in = collector().checklist_input();
++    CHECK(in.done_in_order == std::vector<P>{P::HOMING, P::HEATING_BED, P::SOAKING, P::CLEANING});
++}
++
++// The console line is missed (the screen connected late): the M117 alone
++// still names the step and its row.
++TEST_CASE_METHOD(Ad5xStartFixture, "kiln ad5x: the M117 alone names the step",
++                 "[kiln][ad5x][print_start]") {
++    start();
++    status({{"display_status", {{"message", "Heat soak 1:05"}}}});
++    CHECK(phase() == P::SOAKING);
++    CHECK(rows()[0] == ">Heat soak 1:05");
++    status({{"display_status", {{"message", "Heat soak 1:00"}}}});
++    CHECK(rows()[0] == ">Heat soak 1:00");
++    // A message the profile does not know leaves the step and its words.
++    status({{"display_status", {{"message", "Macros updated: see CONFIG_BACKUPS"}}}});
++    CHECK(rows()[0] == ">Heat soak 1:00");
++}
++
++// A phase entered any other way (a macro's HELIX:PHASE line) shows its own
++// label, not the last step's words.
++TEST_CASE_METHOD(Ad5xStartFixture, "kiln ad5x: the printer's words belong to their step only",
++                 "[kiln][ad5x][print_start]") {
++    start();
++    say("Checking Z");
++    CHECK(collector().checklist_input().current_text == "Checking Z");
++    console("HELIX:PHASE:BED_MESH");
++    CHECK(phase() == P::BED_MESH);
++    CHECK(collector().checklist_input().current_text.empty());
++    CHECK(rows()[1] == ">Bed mesh 60");
++}
++
++// The default profile keeps upstream's checklist on the same texts.
++TEST_CASE_METHOD(Ad5xStartFixture, "kiln ad5x: the default profile keeps upstream's checklist",
++                 "[kiln][ad5x][print_start]") {
++    collector().set_profile(PrintStartProfile::load_default());
++    collector().set_macro_analysis(analyze(kKilnMacros));
++    start();
++    say("Homing");
++    const auto in = collector().checklist_input();
++    CHECK_FALSE(in.expected_is_sequence);
++    CHECK_FALSE(in.hide_overrun);
++    CHECK(in.label_keys.empty());
++    CHECK(in.current_text.empty());
++    CHECK(in.expected_order == std::vector<P>{P::BED_MESH, P::HOMING, P::PURGING, P::CLEANING});
++}
+diff --git a/tests/unit/test_print_status_redesign.cpp b/tests/unit/test_print_status_redesign.cpp
+index 78419389..fb886934 100644
+--- a/tests/unit/test_print_status_redesign.cpp
++++ b/tests/unit/test_print_status_redesign.cpp
+@@ -173,6 +173,51 @@ TEST_CASE_METHOD(Landscape800, "preparing shows checklist rows from collector in
+     CHECK_FALSE(subject_str("ps_step_current_name").empty());
+ }
+ 
++// Kiln OS (AD5X): the running step reads as the printer's own status line
++// (patch 0067, which replaced patch 0062's separate line above the list).
++TEST_CASE_METHOD(Landscape800, "kiln ad5x: the running step shows the printer's words",
++                 "[print_status][kiln][ad5x]") {
++    tiles().set_checklist_source([]() -> std::optional<PreprintChecklistInput> {
++        PreprintChecklistInput in;
++        in.done_in_order = {PrintStartPhase::HOMING, PrintStartPhase::HEATING_BED};
++        in.actual_seconds[static_cast<int>(PrintStartPhase::HOMING)] = 12;
++        in.actual_seconds[static_cast<int>(PrintStartPhase::HEATING_BED)] = 60;
++        in.current = PrintStartPhase::SOAKING;
++        in.current_elapsed_seconds = 200;
++        in.current_text = "Heat soak 0:09";
++        in.expected_order = {PrintStartPhase::HOMING,   PrintStartPhase::HEATING_BED,
++                             PrintStartPhase::SOAKING,  PrintStartPhase::CLEANING,
++                             PrintStartPhase::BED_MESH, PrintStartPhase::HEATING_NOZZLE,
++                             PrintStartPhase::PURGING};
++        in.expected_is_sequence = true;
++        in.hide_overrun = true;
++        in.label_keys[static_cast<int>(PrintStartPhase::HEATING_BED)] = "Heating";
++        in.predicted_seconds[static_cast<int>(PrintStartPhase::SOAKING)] = 180;
++        in.predicted_seconds[static_cast<int>(PrintStartPhase::CLEANING)] = 30;
++        return in;
++    });
++    set_int(state().print_state().get_print_start_phase_subject(),
++            static_cast<int>(PrintStartPhase::SOAKING));
++    UpdateQueue::instance().drain();
++
++    CHECK(subject_int("ps_step_count") == 7);
++    CHECK(subject_str("ps_step_0_name") == "Homing");
++    CHECK(subject_str("ps_step_1_name") == "Heating");
++    CHECK(subject_str("ps_step_1_time") == "1m");
++    CHECK(subject_str("ps_step_2_name") == "Heat soak 0:09");
++    CHECK(subject_str("ps_step_2_time").empty()); // past its 3 min, not "0s"
++    CHECK(subject_str("ps_step_3_name") == "Cleaning nozzle");
++    CHECK(subject_str("ps_step_3_time") == "30s");
++    CHECK(subject_str("ps_step_4_name") == "Bed mesh");
++    CHECK(subject_str("ps_step_5_name") == "Heating nozzle");
++    CHECK(subject_str("ps_step_6_name") == "Purge");
++    CHECK(subject_str("ps_step_current_name") == "Heat soak 0:09");
++    CHECK(subject_str("ps_step_current_time").empty());
++    // One line: no second copy of the status line above the list.
++    CHECK(lv_obj_find_by_name(root_, "ps_checklist_message") == nullptr);
++    CHECK(lv_obj_find_by_name(root_, "ps_checklist_compact_message") == nullptr);
++}
++
+ TEST_CASE_METHOD(Landscape800, "printing hides checklist and shows preview", "[print_status]") {
+     tiles().set_checklist_source([]() -> std::optional<PreprintChecklistInput> {
+         PreprintChecklistInput in;
+diff --git a/ui_xml/components/print_status_job_checklist.xml b/ui_xml/components/print_status_job_checklist.xml
+index 27aaf251..4704d4d9 100644
+--- a/ui_xml/components/print_status_job_checklist.xml
++++ b/ui_xml/components/print_status_job_checklist.xml
+@@ -6,7 +6,9 @@
+      The list shows ps_step_count rows of ps_step_<i>_name / _time / _status
+      (PreprintStepStatus: 0 Done, 1 Current, 2 Upcoming). Where the tile is
+      too small for the list (ps_checklist_compact = 1) it shows the current
+-     step large, its countdown and a dot per step instead. -->
++     step large, its countdown and a dot per step instead. Kiln OS (AD5X):
++     the current step's name is the printer's own status line ("Heat soak
++     1:53", "Checking Z"), which this tile covers while the print starts. -->
+ <component>
+   <styles>
+     <style name="step_done" text_color="#success"/>
+@@ -43,13 +45,6 @@
+                     bind_text="print_display_filename" style_text_color="#text" long_mode="dots" style_max_width="70%"/>
+         <text_small text="preparing" style_text_color="#text_muted" long_mode="dots" flex_grow="1"/>
+       </lv_obj>
+-      <!-- Kiln OS (AD5X): the printer's own status line (M117), e.g.
+-           "Heat soak 1:53", "Checking Z", "Meshing print area"; this list
+-           covers the card's M117 row while the print starts. -->
+-      <text_small name="ps_checklist_message"
+-                  width="100%" bind_text="display_message" style_text_color="#warning" long_mode="dots" hidden="true">
+-        <bind_flag_if_eq subject="display_message_visible" flag="hidden" ref_value="0"/>
+-      </text_small>
+       <repeat count="8">
+         <lv_obj name="ps_step_row_${i}"
+                 width="100%" height="content" style_pad_all="0" style_bg_opa="0" style_border_width="0" flex_flow="row"
+@@ -95,10 +90,6 @@
+       <text_body name="ps_checklist_current"
+                  width="100%" bind_text="ps_step_current_name" style_text_color="#warning" long_mode="wrap"/>
+       <text_small name="ps_checklist_current_time" bind_text="ps_step_current_time" style_text_color="#warning"/>
+-      <text_small name="ps_checklist_compact_message"
+-                  width="100%" bind_text="display_message" style_text_color="#text_muted" long_mode="dots" hidden="true">
+-        <bind_flag_if_eq subject="display_message_visible" flag="hidden" ref_value="0"/>
+-      </text_small>
+       <lv_obj name="ps_checklist_dots"
+               width="100%" height="content" style_pad_all="0" style_bg_opa="0" style_border_width="0" flex_flow="row"
+               style_pad_gap="#space_xs" scrollable="false">
+-- 
+2.56.0

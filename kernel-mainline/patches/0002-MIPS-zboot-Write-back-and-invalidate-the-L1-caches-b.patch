@@ -10,10 +10,13 @@ Instruction fetches then miss the lines still dirty in the L1 data
 cache and run whatever was at those addresses before: code of a boot
 loader, or of the previous kernel when one kernel starts another.
 
-On the Ingenic X2600, started from its vendor kernel, this ran stale
-code in the kernel's init text, written last by the decompressor, and
-the boot stopped at a different point each time, before the console was
-up.
+On the Ingenic X2600 this decompressor runs on every start: the vendor
+kernel starts the compressed image. Ingenic's own decompressor for the
+SoC (arch/mips/boot/zcompressed in its 5.10 and 6.6 trees) flushes the
+caches after decompressing; this one did not. No hang of the X2600 has
+been traced to the missing flush. What it leaves at risk is the code
+the decompressor wrote last, the end of the kernel's init text, when
+that runs before the kernel sets up its own caches.
 
 On MIPS32/MIPS64 Release 1 and later, write back the whole L1 data
 cache and invalidate the whole L1 instruction cache with index

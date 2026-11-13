@@ -138,11 +138,18 @@ show() {	# screen NAME or a JPEG path (best effort; HelixScreen starts later)
 	if [ "$(kernel)" = stock ]; then
 		cmd_jpeg_display "$f" >/dev/null 2>&1
 	else
-		python3 -c 'import sys
-from PIL import Image
-im = Image.open(sys.argv[1]).convert("RGB").resize((800, 480))
-with open(sys.argv[2], "wb") as f:
-    f.write(im.tobytes("raw", "BGRX"))' "$f" "$AD5X_DEV/fb0" >/dev/null 2>&1
+		# at the framebuffer's depth (32 bpp on 6.6, 16 on 7.3); then frame
+		# 0 and the backlight, as S07ad5x-board does (6.6's backlight
+		# probes powered off: lit here too, in case S07 hasn't yet)
+		if msg=$(ad5x-fb-show "$f" "$AD5X_DEV/fb0" "$AD5X_SYS/class/graphics/fb0" 2>&1); then
+			echo 0,0 > "$AD5X_SYS/class/graphics/fb0/pan" 2>/dev/null
+			for b in "$AD5X_SYS"/class/backlight/*; do
+				[ -e "$b/bl_power" ] && echo 0 > "$b/bl_power" 2>/dev/null
+				[ -e "$b/brightness" ] && cat "$b/max_brightness" > "$b/brightness" 2>/dev/null
+			done
+		else
+			echo "$(date '+%F %T') screen not shown: $msg" >> "$LOG" 2>/dev/null
+		fi
 	fi
 	true
 }

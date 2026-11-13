@@ -382,7 +382,8 @@ TSC2007 touch screen (evdev, found by its name `TSC2007 Touchscreen`).
 Source in `recovery-ui/`, Buildroot package `package/ad5x-recovery-ui`
 (LVGL 9.5.0 sources from `package/ad5x-lvgl`, release tarball with
 sha256), on in `ad5x_recovery_defconfig`, started by `S80ad5x-recovery-ui`.
-Dark theme in the boot logo's colours (gradient, accent 74,144,226),
+Dark theme in the brand's Nord colours (`docs/brand`, as the boot logos and
+install screens),
 Noto Sans (subset embedded, `recovery-ui/fonts/`, OFL), buttons at least
 60 px high. Not tried on the printer yet.
 

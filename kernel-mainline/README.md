@@ -7,9 +7,13 @@ so the code is sound, not to get it merged. Kiln OS ships it as an opt-in
 second kernel beside the 6.6 SDK kernel (`../kernel-ingenic66/`), which
 stays the default: `ad5x-kernel mainline on` on the printer, and a failed
 7.3 start falls back to 6.6 in the same boot (`S00ad5x-kernel`). The
-buildroot package `ad5x-kernel-mainline` runs `build.sh`. Kiln adds two
+buildroot package `ad5x-kernel-mainline` runs `build.sh`. Kiln adds five
 patches on top of the series: 0075 (a ramoops region for pstore, as 6.6
-has) and 0076 (the eMMC at 50 MHz, as 6.6, until a longer soak at 150).
+has), 0076 (the eMMC at 50 MHz, as 6.6, until a longer soak at 150), 0077
+(write-combine on XBurst II, as the SDK's 6.6), 0078 (the DPU's fbdev at
+RGB565; 6.6 runs its framebuffer at 32 bpp) and 0079 (the CGU starts a
+divider left stopped when the clock is enabled, as Ingenic's 6.6 clock
+driver does: the speaker's PWM clock, issue #54).
 
 ## Rules
 
@@ -156,6 +160,11 @@ through Klipper, Happy Hare and the IFS, every layer, no kernel warnings.
   the period's end, the prescaler is not, and a stop finishes the phase in
   progress. Checked with `PWM_DEBUG` and a pin trace (normal and inverted
   polarity, 0%, 100%, stop); `ad5x-sound`'s tones and MIDI files play.
+  Under Kiln OS (7.3 started by `S00ad5x-kernel`) the speaker was silent
+  (issue #54): the PWM clock's divider (PWMCDR, 0x2800000f) was still
+  stopped, and the CGU driver cleared a divider's stop bit only when it
+  set a rate, which the PWM driver never does. Kiln's patch 0079 clears
+  it on enable; on the printer it is not tested yet.
 - **Not needed:** cpufreq, thermal and an RTC driver; Kiln's 6.6 has none
   of them either (the board has no battery-backed clock: `ad5x-clock`).
 
@@ -199,9 +208,16 @@ Generic fixes this SoC needed, in the series:
   which the binding rejected; and the CGU binding checked the MAC's PHY
   control register (a syscon) against the MAC binding.
 
-- **zboot cache maintenance.** The decompressor jumped to the kernel without
-  writing back the L1 data cache (an old FIXME), so the kernel ran stale
-  code: the vendor kernel's, which had been at the same addresses.
+- **zboot cache maintenance** (patch 0002). The decompressor jumped to the
+  kernel without writing back the L1 data cache (an old FIXME). It runs on
+  every 7.3 start here (`build.sh` makes a zboot image, loaded at
+  0x80f00000), and Ingenic's own decompressor in the 5.10 and 6.6 trees
+  (`arch/mips/boot/zcompressed/misc.c`) flushes the caches at the same
+  point. No hang has been traced to the missing flush: the series' first
+  message said the kernel ran stale code, which its author later called a
+  red herring, and Kiln reworded the patch's message. The patch stays: it
+  is correct by the MIPS cache rules, and without it the end of the
+  kernel's init text depends on what the L1 data cache happened to evict.
 - **Config4.IE = 3** (one TLBINVF invalidates the whole MMU) was treated as
   no TLB invalidate support; the XBurst2 reports it and has an FTLB, and the
   fallback path hung in `r4k_tlb_uniquify()`.

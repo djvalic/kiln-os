@@ -1,0 +1,86 @@
+#!/bin/sh
+# Early boot logo, on Kiln's kernels only: the default logo goes straight
+# into the framebuffer with busybox alone, about a second after our kernel
+# starts, and stays until HelixScreen takes the screen. S07ad5x-board's
+# ad5x-fb-show needs Python and PIL, which add a second or more, and runs
+# after S05 and S06.
+#
+# The frames are /usr/share/ad5x/logo.jpg rendered ahead of time
+# (tools/make_logo.py --raw; tools/test_fb_show.sh checks they match it):
+#   logo-16.raw.gz  RGB565 little-endian, stride 1600 (7.3 kernel)
+#   logo-32.raw.gz  XRGB8888 (BGRX bytes), stride 3200 (6.6 kernel)
+# Order: fbcon's cursor blink off (6.6 has fbcon; its blinking cursor would
+# be stamped on the logo), the frame, the pan to frame 0 (7.3 turns the
+# panel and its backlight on with this first modeset), then the backlight:
+# bl_power 0 (6.6's gpio-backlight probes powered off, and brightness alone
+# does nothing while it is) and brightness at its maximum. Then
+# $AD5X_RUN/logo-early, so S07ad5x-board doesn't draw the default logo a
+# second time. A custom logo (/data/ad5x/logo.jpg, readable from S05 on) is
+# still drawn by S07 over this one.
+#
+# Nothing on the stock kernel: before the chainload, S00ad5x-kernel never
+# returns (our kernel starts and runs this from the top); when it falls back
+# to the stock kernel, S07 draws the logo with stock's tools. Nothing in USB
+# test mode either (stock has drawn its own). Another depth than 16 or 32
+# bpp, a stride other than 800 pixels, no frame file or no framebuffer
+# within 2 s: nothing drawn here, S07 draws the logo as before.
+# The work runs in the background, so it never holds the boot up.
+#
+# Test overrides (tools/test_boot_logo.sh): AD5X_LIB (/usr/lib/ad5x),
+# AD5X_SYS (/sys), AD5X_DEV (/dev), AD5X_SHARE (/usr/share/ad5x),
+# AD5X_RUN (/run/ad5x), AD5X_KERNEL (stock|own, kernel.sh).
+
+# Files this creates are readable by klipper and www-data, whoever started
+# it (a root SSH session may run with umask 077; issue #31)
+umask 022
+
+LIB=${AD5X_LIB:-/usr/lib/ad5x}
+SYS=${AD5X_SYS:-/sys}
+DEV=${AD5X_DEV:-/dev}
+SHARE=${AD5X_SHARE:-/usr/share/ad5x}
+RUN=${AD5X_RUN:-/run/ad5x}
+. $LIB/slot.sh
+. $LIB/kernel.sh
+
+fb=$SYS/class/graphics/fb0
+
+early_logo() {
+	n=0
+	until [ -e $DEV/fb0 ] && [ -f $fb/stride ]; do
+		[ $n -lt 20 ] || { echo "logo: no framebuffer after 2 s: S07 draws it"; return 1; }
+		sleep 0.1; n=$((n + 1))
+	done
+	bpp=$(cat $fb/bits_per_pixel 2>/dev/null)
+	stride=$(cat $fb/stride 2>/dev/null)
+	case "$bpp" in
+	16|32) ;;
+	*) echo "logo: $bpp bits per pixel: S07 draws it"; return 1 ;;
+	esac
+	# the frames are exactly 800 pixels a line, no padding
+	if [ "$stride" != $((800 * bpp / 8)) ]; then
+		echo "logo: stride $stride at $bpp bpp is not 800 pixels: S07 draws it"
+		return 1
+	fi
+	raw=$SHARE/logo-$bpp.raw.gz
+	[ -f $raw ] || { echo "logo: no $raw: S07 draws it"; return 1; }
+	echo 0 > $SYS/class/graphics/fbcon/cursor_blink 2>/dev/null
+	zcat $raw > $DEV/fb0 || { echo "logo: writing $raw failed: S07 draws it"; return 1; }
+	echo 0,0 > $fb/pan 2>/dev/null
+	for b in $SYS/class/backlight/*; do
+		[ -e $b/bl_power ] && echo 0 > $b/bl_power 2>/dev/null
+		[ -e $b/brightness ] && cat $b/max_brightness > $b/brightness 2>/dev/null
+	done
+	mkdir -p $RUN && echo "$bpp" > $RUN/logo-early
+	ad5x-bootlog "  early logo shown ($bpp bpp)"
+}
+
+case "$1" in
+start)
+	# S07ad5x-board's guard (our kernel, installed or not), and never in
+	# USB test mode
+	[ -n "$SLOT" ] || [ $KERNEL = own ] || exit 0
+	[ $KERNEL = own ] && [ -z "$AD5X_USB" ] || exit 0
+	early_logo </dev/null &
+	;;
+esac
+exit 0

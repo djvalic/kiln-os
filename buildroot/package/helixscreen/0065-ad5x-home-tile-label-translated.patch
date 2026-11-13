@@ -1,0 +1,183 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Thu, 12 Nov 2026 10:50:00 -0500
+Subject: [PATCH] home: a macro tile's label follows the screen's language
+
+The Kiln home layout names its unload tile with "label": "Unload"
+(patch 0011). The tile drew a label with lv_label_set_text(), with no
+translation lookup, so it read "Unload" in every language, although
+every catalog has the word and the tile's sizing already measured its
+translation (issue #23).
+
+A set label is now the name label's translation tag: it shows in the
+screen's language and follows a language change by itself. LVGL keeps
+its own copy of the tag. A label that no catalog has shows as written.
+A tile without a label shows the macro's own name, not translated, as
+before.
+
+Tests: the tile in a test language, a label without a translation and a
+macro's own name; and every label in the AD5X home seed is a key in
+each translations/*.yml.
+---
+diff --git a/src/ui/widgets/favorite_macro_widget.cpp b/src/ui/widgets/favorite_macro_widget.cpp
+index cad2324..918220b 100644
+--- a/src/ui/widgets/favorite_macro_widget.cpp
++++ b/src/ui/widgets/favorite_macro_widget.cpp
+@@ -193,11 +193,17 @@ void FavoriteMacroWidget::update_display() {
+         if (unconfigured) {
+             // A tag, not lv_tr() text: the label then re-translates itself.
+             lv_label_set_translation_tag(name_label_, "Configure");
++        } else if (!label_.empty()) {
++            // A layout's label (the Kiln seed's "Unload") is a tag too: it shows
++            // in the screen's language and follows a language change. A label
++            // with no translation shows as written, as TileSizing measures it.
++            lv_label_set_translation_tag(name_label_, label_.c_str());
+         } else {
+-            std::string display = label_.empty()
+-                                      ? helix::get_display_name(macro_name_, helix::DeviceType::MACRO)
+-                                      : label_;
+-            lv_label_set_text(name_label_, display.c_str());
++            // set_text drops a tag left by an earlier state. A macro's own name
++            // is not translated anywhere in the UI.
++            lv_label_set_text(
++                name_label_,
++                helix::get_display_name(macro_name_, helix::DeviceType::MACRO).c_str());
+         }
+     }
+ 
+diff --git a/tests/unit/test_default_layout.cpp b/tests/unit/test_default_layout.cpp
+index 70c9c1c..e0f27b1 100644
+--- a/tests/unit/test_default_layout.cpp
++++ b/tests/unit/test_default_layout.cpp
+@@ -3080,3 +3080,37 @@ TEST_CASE("default_layout: the ad5x seed leaves every other grid as shipped",
+         CHECK(with.disabled == without.disabled);
+     }
+ }
++
++// A tile draws its seed label as a translation key (FavoriteMacroWidget), so
++// the label follows the screen's language only where the catalog has that
++// key. Without one the tile stays English, as Unload did.
++TEST_CASE("default_layout: the ad5x seed's tile labels are translation keys",
++          "[default_layout][shipped][ad5x][i18n]") {
++    const auto seed = load_ad5x_seed();
++    std::set<std::string> labels;
++    for (const auto& anchor : seed.at("anchors")) {
++        if (anchor.contains("config") && anchor["config"].contains("label")) {
++            labels.insert(anchor["config"]["label"].get<std::string>());
++        }
++    }
++    REQUIRE(labels.count("Unload") == 1);
++
++    // The YAML catalogs, not ui_xml/translations: the build makes the packs
++    // from them, and the tree's packs lack the languages Kiln adds.
++    int catalogs = 0;
++    for (const auto& entry : fs::directory_iterator(helix::asset_path("translations"))) {
++        if (entry.path().extension() != ".yml") {
++            continue;
++        }
++        ++catalogs;
++        std::ifstream in(entry.path());
++        const std::string yml((std::istreambuf_iterator<char>(in)),
++                              std::istreambuf_iterator<char>());
++        for (const auto& label : labels) {
++            INFO(entry.path().filename().string() << ": " << label);
++            CHECK((yml.find("\n  " + label + ": ") != std::string::npos ||
++                   yml.find("\n  '" + label + "': ") != std::string::npos));
++        }
++    }
++    CHECK(catalogs >= 11); // de en es fr it ja ko pt ru tr zh
++}
+diff --git a/tests/unit/test_widget_size_favorite_macro.cpp b/tests/unit/test_widget_size_favorite_macro.cpp
+index 75130c1..cee22d3 100644
+--- a/tests/unit/test_widget_size_favorite_macro.cpp
++++ b/tests/unit/test_widget_size_favorite_macro.cpp
+@@ -15,7 +15,13 @@
+ #include "../lvgl_ui_test_fixture.h"
+ #include "../test_helpers/panel_widget_size_harness.h"
+ #include "../test_helpers/scoped_widget_labels.h"
++#include "device_display_name.h"
+ #include "favorite_macro_widget.h"
++#include "translation_loader.h"
++
++#include "lvgl/src/others/translation/lv_translation.h"
++
++#include <string>
+ 
+ #include "../catch_amalgamated.hpp"
+ 
+@@ -63,3 +69,75 @@ TEST_CASE_METHOD(LVGLUITestFixture,
+     CHECK(h.unsettled_boxes(box_sweep(20, 300, 60, 60)) == std::vector<std::string>{});
+     CHECK(h.unsettled_boxes(box_sweep(20, 300, 30, 30)) == std::vector<std::string>{});
+ }
++
++namespace {
++// Packs cannot be unregistered, so the probe locale outlives the case; going
++// back to the identity locale keeps the rest of the shard on English lookups.
++class ScopedIdentityLanguage {
++  public:
++    ~ScopedIdentityLanguage() {
++        lv_translation_set_language(helix::ui::kIdentityLocale);
++    }
++};
++} // namespace
++
++// The Kiln home seed names its unload tile with "label": "Unload". Drawn as
++// plain text it stayed English in every language, although the catalog had
++// the word and TileSizing already measured its translation.
++TEST_CASE_METHOD(LVGLUITestFixture,
++                 "favorite_macro: a layout's label shows in the screen's language",
++                 "[favorite_macro][i18n]") {
++    ScopedIdentityLanguage restore_lang;
++
++    lv_translation_pack_t* pack = lv_translation_add_dynamic();
++    REQUIRE(lv_translation_add_language(pack, "zz-favmacro") == LV_RESULT_OK);
++    const int32_t lang_idx = lv_translation_get_language_index(pack, "zz-favmacro");
++    REQUIRE(lang_idx >= 0);
++    lv_translation_tag_dsc_t* tag = lv_translation_add_tag(pack, "Unload");
++    REQUIRE(tag != nullptr);
++    REQUIRE(lv_translation_set_tag_translation(pack, tag, lang_idx, "ZZ unload") == LV_RESULT_OK);
++
++    SECTION("a label the catalog knows follows the language") {
++        PanelWidgetHarness<FavoriteMacroWidget> h(
++            test_screen(),
++            HarnessConfig{{{"macro", "UNLOAD_FILAMENT"}, {"icon", "eject"}, {"label", "Unload"}}},
++            "favorite_macro:1");
++        lv_obj_t* name = h.child("fav_macro_name");
++        REQUIRE(name != nullptr);
++        lv_translation_set_language(helix::ui::kIdentityLocale);
++        CHECK(std::string(lv_label_get_text(name)) == "Unload");
++
++        // No restart and no redraw call: the label re-translates itself.
++        lv_translation_set_language("zz-favmacro");
++        CHECK(std::string(lv_label_get_text(name)) == "ZZ unload");
++
++        lv_translation_set_language(helix::ui::kIdentityLocale);
++        CHECK(std::string(lv_label_get_text(name)) == "Unload");
++    }
++
++    SECTION("a label the catalog does not know shows as written") {
++        lv_translation_set_language("zz-favmacro");
++        PanelWidgetHarness<FavoriteMacroWidget> h(
++            test_screen(),
++            HarnessConfig{{{"macro", "UNLOAD_FILAMENT"}, {"label", "Zz my own label"}}},
++            "favorite_macro:1");
++        lv_obj_t* name = h.child("fav_macro_name");
++        REQUIRE(name != nullptr);
++        CHECK(std::string(lv_label_get_text(name)) == "Zz my own label");
++    }
++
++    SECTION("a macro's own name is left alone") {
++        // Even when the name a macro gets happens to be a catalog key.
++        const std::string own = helix::get_display_name("UNLOAD_FILAMENT", DeviceType::MACRO);
++        lv_translation_tag_dsc_t* own_tag = lv_translation_add_tag(pack, own.c_str());
++        REQUIRE(own_tag != nullptr);
++        REQUIRE(lv_translation_set_tag_translation(pack, own_tag, lang_idx, "ZZ wrong") ==
++                LV_RESULT_OK);
++        lv_translation_set_language("zz-favmacro");
++        PanelWidgetHarness<FavoriteMacroWidget> h(
++            test_screen(), HarnessConfig{{{"macro", "UNLOAD_FILAMENT"}}}, "favorite_macro:1");
++        lv_obj_t* name = h.child("fav_macro_name");
++        REQUIRE(name != nullptr);
++        CHECK(std::string(lv_label_get_text(name)) == own);
++    }
++}

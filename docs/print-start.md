@@ -36,6 +36,8 @@ PRINT_START BED=[bed_temperature_initial_layer_single] EXTRUDER=[nozzle_temperat
 3. Purge 90 mm at F300 with the fan off, fan S125 for 3 s, retract 3 mm,
    wipe (Y220/Y229 twice, end at Y220).
 4. Nozzle to 180, brush twice across the box (X65 to X78 at Y229).
+   Part fan off (stock leaves the purge's S125 on until the bed-edge
+   scrub; `macros/` only, the factory start keeps stock's).
    Then the rest of the bed heat soak, if any ("Heat soak m:ss"): the
    plate's surface keeps warming and growing after the sensor reads the
    target, which would shift the Z check (e.g. a cold start to 80 °C:
@@ -44,15 +46,16 @@ PRINT_START BED=[bed_temperature_initial_layer_single] EXTRUDER=[nozzle_temperat
 5. `_CHECK_Z` (see `docs/bed-weighing-board.md`): tare and probe the front
    edge, scrub the nozzle there while it cools to 140 (screen: "Cleaning
    nozzle on the bed edge"; it runs just above the edge, it isn't
-   printing), then either run `BED_MESH_CALIBRATE ADAPTIVE=1` ("Meshing
-   print area", `LEVEL=1`, the `macros/` default) or tare, probe the
+   printing), then either run `BED_MESH_CALIBRATE ADAPTIVE=1` ("Bed mesh:
+   print area"; with `ADAPTIVE=0` a full `BED_MESH_CALIBRATE`, "Bed mesh:
+   whole bed"; `LEVEL=1`, the `macros/` default) or tare, probe the
    centre and set the Z offset from the drift ("Checking Z", `LEVEL=0`,
    the stock default). Loads the mesh. The Z offset is then
    the saved one (`zoffset` in `variables.cfg`, written by every
    `SET_GCODE_OFFSET Z=`/`Z_ADJUST=`; seeded at first start from `unit.cfg`
    `z_offset` = stock `zProbeOffset`), as stock sends its tuned offset at
    print start; the measured drift is reported, not applied.
-6. `Z50`, back to print temperatures, wait.
+6. `Z50`, back to print temperatures, wait ("Heating to print temperature").
 7. With `TOOL` ("Loading first colour"): load the first tool's channel
    (through the tool map) with `IFS_SWAP` (from an empty toolhead that is
    one purge round, as stock). The factory start always loads it fresh
@@ -83,9 +86,11 @@ message when there is no room. The old line (3 mm before, 6 mm over
 start has no prime line (stock).
 
 Screen status line (`M117`, also in the console) for each step: Homing,
-Heating, Purging at the box, Checking Z, Cleaning nozzle on the bed edge,
-Meshing print area / Meshing the bed / Checking Z, Heating, Loading first
-colour or Prime line; cleared at the end.
+Heating bed and nozzle, Purging at the box, Heat soak m:ss, Checking Z,
+Cleaning nozzle on the bed edge, Bed mesh: print area / Bed mesh: whole bed /
+Checking Z, Heating to print temperature, Loading first colour or Prime line;
+cleared at the end. The touch screen's print start steps (HelixScreen's AD5X
+profile, patch 0067) match these texts, so keep them in step when one changes.
 
 The print file follows. Slicer end G-code: `PRINT_END` (retract 2 mm, lift 10 mm, park at X107.5 Y215, heaters, fans and X/Y/E motors off). `CANCEL_PRINT` does the same after stopping the file. Stock's swap at the first `T<n>` and the end of the
 print are not part of this macro.

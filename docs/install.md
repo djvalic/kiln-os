@@ -10,8 +10,9 @@ after zMod).
 all six steps, the first start of the main OS and its writing of the
 recovery OS, and the updates since (v0.0.4 to v0.0.8, from Fluidd). The
 USB-stick route (stock's USB hook, the install screens) has run under qemu
-only (`tools/test_install.sh`, every release). The other slot layout (stock
-in slot A) is **not yet tested on hardware**: it has run under qemu only.
+only (`tools/test_install.sh`, every release, with and without zMod). The
+other slot layout (stock in slot A) is **not yet tested on hardware**: it
+has run under qemu only.
 For a printer that already runs the main OS from slot A, see
 `docs/recovery-os.md`, "Main OS in slot A".
 
@@ -356,7 +357,7 @@ The kernel partitions stay as they are.
 ```
 tools/make_install_stick.sh -o DIR [--zip FILE] [-r recovery.squashfs] [-m main.zip]
 tools/check_vendor_free.sh FILE-or-DIR...     # 0 = no Flashforge/Ingenic files
-tools/test_install.sh                          # vendor files + installer under qemu
+tools/test_install.sh                          # vendor files + installer under qemu, with and without zMod
 ```
 
 `make_install_stick.sh` refuses images that contain vendor files unless
@@ -376,6 +377,8 @@ Not done yet:
 
 - The USB hook with our `flashforge_init.sh` on stock and on zMod, the screens
   (`cmd_jpeg_display` while stock's logo is up), and the restart.
+- Any install on a printer that never had zMod (qemu only:
+  `tools/test_install.sh`, part C).
 - A second mount of the running root (`mount -t squashfs -o ro /dev/mmcblk0p2`)
   on stock; the installer falls back to `/` if it fails.
 - The other layout (stock running from slot A).

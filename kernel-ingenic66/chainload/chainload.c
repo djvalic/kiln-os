@@ -29,7 +29,15 @@
 #include <asm/cacheflush.h>
 
 #define LOAD_PHYS	0x00f00000UL
-#define SAFE_MIN	0x01600000UL	/* above zboot image, bss, heap, stack */
+/*
+ * Above everything a started zboot writes before the new kernel reads its
+ * argv: the image copied to LOAD_PHYS (up to MAX_IMAGE), then its bss,
+ * which holds mainline's 1 MiB .appended_dtb gap, 4 MiB heap and stack and
+ * is cleared on entry. An 8 MiB mainline image would reach 0x01c02010;
+ * 7.3.3 reaches 0x019dc3b0, 6.6 about 0x014b2450. kernel-mainline/build.sh
+ * fails a build whose zboot ends above this.
+ */
+#define SAFE_MIN	0x02000000UL
 #define SAFE_MAX	0x0ec00000UL	/* end of the 236M lowmem bank */
 #define MAX_IMAGE	(8UL << 20)	/* kernel slot size */
 #define MAX_PAGES	(MAX_IMAGE / PAGE_SIZE)
@@ -58,7 +66,7 @@ static unsigned long nrejects;
  * MAX_IMAGE / 4 KiB).
  */
 #define BLOCK_ORDER	2
-#define BLOCK_TRIES	256
+#define BLOCK_TRIES	2048	/* every 16 KiB block below SAFE_MIN */
 static unsigned long block;
 static unsigned long block_rejects[BLOCK_TRIES];
 static unsigned long nblock_rejects;

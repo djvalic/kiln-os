@@ -798,6 +798,11 @@ class AD5XSetup:
                 sensor.get_status(self.reactor.monotonic())[
                     'filament_detected']:
             chan = self._reload_channel()
+            if not chan and self._ifs_owner():
+                # Not Kiln's IFS slots: the plugin loads its own way
+                raise self.printer.command_error(
+                    "No filament in the toolhead: load it with plugin %s "
+                    "first" % (self._ifs_owner(),))
             if not chan:
                 raise self.printer.command_error(
                     "No filament in the toolhead: load a slot first")

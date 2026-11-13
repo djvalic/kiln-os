@@ -41,6 +41,11 @@ Protocol:
     - Byte 1028..1029: CRC-16-CCITT (poly 0x1021, init 0x0000, uint16 little-endian)
       computed over all 1024 data bytes (including 0xFF padding)
     - Bootloader returns ACK (0x06) on success, or NAK (0x15) on CRC error.
+      Only a NAK'd frame is sent again. With no answer the write stops
+      before EOT: the bootloader stays (on the IFS the flag page stays
+      erased) but waits for the next frame and ignores 'C' until it is
+      powered off; after a power-cycle it takes a new write
+      (docs/mcu-flashing.md, "Interrupted eboard flash").
   - End of Transmission:
     - Host sends EOT (0x04); bootloader acknowledges with ACK (0x06).
     - eboard: host sends 'A' (0x41) to start the application; bootloader
@@ -68,6 +73,14 @@ CMD_POLL_CRC = b"\x43"  # 'C'
 
 FRAME_DATA_SIZE = 1024
 FRAME_TOTAL_SIZE = 1030  # SOH(1) + seq(1) + len(2) + data(1024) + crc(2)
+# How long a frame's ACK or NAK may take. A frame is sent again only after a
+# NAK: the bootloader writes every frame it accepts, so a frame resent after
+# a late or lost ACK is written twice. That left the IFS with a broken
+# application that still passes the bootloader's checks (2026-10-29, SWD
+# only). Without an answer the write stops before EOT instead: power-cycle,
+# then flash again.
+FRAME_REPLY_S = 5.0
+FRAME_NAK_RETRIES = 10
 
 
 def crc16_ccitt(data: bytes, crc: int = 0) -> int:
@@ -231,6 +244,23 @@ class SerialPort:
             self.fd = -1
 
 
+def wait_frame_reply(ser, timeout_s: float) -> bytes:
+    """The first ACK or NAK within timeout_s; other bytes are skipped.
+
+    Returns the last other byte seen (or b"") when neither came."""
+    deadline = time.monotonic() + timeout_s
+    other = b""
+    while True:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return other
+        b = ser.read_exact(1, timeout_s=left)
+        if b in (CMD_ACK, CMD_NAK):
+            return b
+        if b:
+            other = b
+
+
 def flash_iap(port_name: str, firmware_path: str, baudrate: int = 115200,
               trigger_f37: bool = False, wait_seconds: int = 20,
               dry_run: bool = False, start_app: bool = True) -> bool:
@@ -290,24 +320,29 @@ def flash_iap(port_name: str, firmware_path: str, baudrate: int = 115200,
             chunk = image[frame_idx * FRAME_DATA_SIZE : (frame_idx + 1) * FRAME_DATA_SIZE]
             frame = build_iap_frame(frame_idx, chunk)
 
-            retries = 10
             success = False
-            while retries > 0:
+            for attempt in range(FRAME_NAK_RETRIES):
                 ser.flush()
                 ser.write(frame)
-                resp = ser.read_exact(1, timeout_s=3.0)
+                resp = wait_frame_reply(ser, FRAME_REPLY_S)
                 if resp == CMD_ACK:
                     success = True
                     break
-                elif resp == CMD_NAK:
-                    print(f"\n[Frame {frame_idx}] NAK received, retrying...")
-                else:
-                    print(f"\n[Frame {frame_idx}] Timeout/unexpected response ({resp!r}), retrying...")
-                retries -= 1
+                if resp != CMD_NAK:
+                    # The frame may have been written: sending it again would
+                    # write it twice. Stop before EOT, so the bootloader keeps
+                    # waiting for a new write.
+                    print(f"\n[Frame {frame_idx}] no ACK or NAK within {FRAME_REPLY_S:g} s "
+                          f"(got {resp!r}); stopping without EOT. The bootloader is still "
+                          "there but ignores 'C' until it is powered off: switch the "
+                          "printer off and on (the IFS: or unplug and replug its cable), "
+                          "then flash again.")
+                    return False
+                print(f"\n[Frame {frame_idx}] NAK received, sending it again...")
                 time.sleep(0.05)
 
             if not success:
-                print(f"\nFailed to transmit frame {frame_idx}.")
+                print(f"\nFailed to transmit frame {frame_idx}: {FRAME_NAK_RETRIES} NAKs.")
                 return False
 
             pct = (frame_idx + 1) * 100 // total_frames

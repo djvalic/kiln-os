@@ -189,9 +189,18 @@ in `plugin.json`:
   accepted and unused), and the setup wizard skips its IFS step.
   `PRINT_START` loads no first tool then (it checks `'ifs' in printer`);
   the slicer's tool change does.
-- `T0`-`T3` (`ifs.cfg`) and `UNLOAD_FILAMENT` (`macros/`) still call
-  Kiln's IFS: the plugin replaces them with its own `[gcode_macro ...]`
-  (plugins.cfg comes after both).
+- `T0`-`T3` (`ifs.cfg`) are Kiln's IFS swaps, and `UNLOAD_FILAMENT`
+  (`macros/`) only retracts 50 mm without Kiln's IFS: the plugin replaces
+  them with its own `[gcode_macro ...]` (plugins.cfg comes after both).
+  Next version: `T0`-`T3` it leaves as they are stop with a message, as do
+  `IFS_TUNE_RUN`, `IFS_TUNE_CLEAR`, `IFS_INFO`, `IFS_PURGE_TEST` and
+  `IFS_PURGE_RESULT`; `RESUME_INTERRUPTED` restores no IFS slot, and the
+  setup wizard's Z offset step with an empty toolhead asks to load it with
+  the plugin.
+- A plugin listed after it in `plugins.cfg` that defines `T0`-`T3` too
+  replaces its tool changes. `bambufy-compat` does (its `T0`-`T3` drive
+  Kiln's IFS); next version: they stop with a message then. Don't enable
+  it together with such a plugin.
 - Klipper stops with a config error naming the plugin when: two such
   plugins are enabled, the IFS doesn't answer as Klipper, `[ifs]` is still
   on, or `plugins.cfg` was edited by hand so the pins changed hands (then
@@ -364,7 +373,8 @@ Read them; write only your own (prefixed) variables, except
   plugin's modules import each other as Klipper's do (`from .mylib import
   x`), and `printer.load_object(config, '<module> <name>')` also finds
   plugin modules.
-- Klipper is mainline v0.13.0-821 (`buildroot/package/klipper`); its
+- Klipper is mainline (`KLIPPER_DESCRIBE` in `buildroot/package/klipper`,
+  v0.13.0-827 now); its
   module interfaces are Klipper's, not part of this API's promise. Python
   3 is the image's (3.14 now); no compiler on the printer, no pip.
 - Our modules' Python classes (`ifs.IFS`, ...) are internal: use their

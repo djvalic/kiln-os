@@ -95,7 +95,10 @@ From the stock kernel image and root filesystem (3.1.0 updater):
 - Per-printer calibration: at first boot `S05ad5x-data` writes
   `printer_data/config/unit.cfg` from stock's `Adventurer5M.json`
   (`usershare` partition) with `ad5x-unit-cfg`.
-- Start-up (`package/ad5x-system/init.d`): `S05ad5x-data` mounts
+- Start-up (`package/ad5x-system/init.d`): on Kiln's kernels
+  `S02ad5x-logo` puts the default boot logo on the screen first, from
+  frames rendered ahead (`usr/share/ad5x/logo-16.raw.gz` and
+  `logo-32.raw.gz`, `tools/make_logo.py --raw`), `S05ad5x-data` mounts
   `userdata` at `/data` (our files under `/data/ad5x`, stock files left
   alone), `S06ad5x-modules` checks the printer's own vendor files
   (`ad5x-vendor ensure`: `/data/ad5x/vendor`, filled from the saved stock

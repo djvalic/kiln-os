@@ -141,7 +141,7 @@ else
 		echo
 		if [ -n "$PUBLIC" ]; then
 			echo "Contains no Flashforge files: a first install copies them from"
-			echo "the printer itself (needs zMod first, see docs/install.md)."
+			echo "the printer itself (see docs/install.md)."
 		else
 			echo "Private build: the images contain Flashforge files from the"
 			echo "stock firmware. Do not publish these artifacts."

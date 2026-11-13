@@ -19,18 +19,23 @@
 
 /* ------------------------------------------------------------------ style */
 
-/* As tools/make_logo.py (the boot logo): dark gradient, accent (74,144,226) */
-#define C_BG_TOP   lv_color_make(16, 20, 27)
-#define C_BG_BOT   lv_color_make(28, 36, 48)
-#define C_CARD     lv_color_make(35, 44, 58)
-#define C_CARD_HI  lv_color_make(46, 57, 75)
-#define C_BORDER   lv_color_make(58, 70, 90)
-#define C_TEXT     lv_color_make(240, 243, 247)
-#define C_MUTED    lv_color_make(150, 160, 176)
-#define C_ACCENT   lv_color_make(74, 144, 226)
-#define C_DANGER   lv_color_make(217, 83, 79)
-#define C_WARN     lv_color_make(230, 162, 60)
-#define C_OK       lv_color_make(76, 175, 80)
+/* The brand's Nord colours, as the boot logos and install screens
+ * (tools/make_logo.py, docs/brand) and HelixScreen's Nord theme tokens in
+ * brackets. Flat ground. Contrast: C_TEXT on the fills 3.5:1 (their labels
+ * are 20 px bold), C_ACCENT text 5.0:1 and C_DANGER icons 3.7:1 on C_CARD. */
+#define C_BG_TOP   lv_color_hex(0x2E3440)	/* [screen_bg] */
+#define C_BG_BOT   lv_color_hex(0x2E3440)
+#define C_CARD     lv_color_hex(0x3B4252)	/* [overlay_bg] */
+#define C_CARD_HI  lv_color_hex(0x434C5E)	/* [card_bg] */
+#define C_BORDER   lv_color_hex(0x4C566A)	/* [elevated_bg] */
+#define C_TEXT     lv_color_hex(0xECEFF4)	/* [text] */
+#define C_MUTED    lv_color_hex(0xD8DEE9)	/* [text_muted] */
+#define C_ACCENT   lv_color_hex(0x88C0D0)	/* [primary]: text, icons, lines */
+#define C_ACCENT_FILL lv_color_hex(0x5E81AC)	/* [tertiary]: under C_TEXT */
+#define C_DANGER   lv_color_hex(0xCC8C93)	/* [danger] + 30% text: text, icons */
+#define C_DANGER_FILL lv_color_hex(0xBF616A)	/* [danger]: under C_TEXT */
+#define C_WARN     lv_color_hex(0xEBCB8B)	/* [warning] */
+#define C_OK       lv_color_hex(0xA3BE8C)	/* [success] */
 
 #define W 800
 #define H 480
@@ -168,15 +173,15 @@ static lv_obj_t *button(lv_obj_t *parent, const char *icon, const char *text, in
 			lv_event_cb_t cb, void *ud)
 {
 	lv_obj_t *b = lv_button_create(parent);
-	lv_color_t bg = kind == 1 ? C_ACCENT : kind == 2 ? C_DANGER : kind == 3 ? C_WARN : C_CARD_HI;
+	lv_color_t bg = kind == 1 ? C_ACCENT_FILL : kind == 2 ? C_DANGER_FILL : kind == 3 ? C_WARN : C_CARD_HI;
 	lv_obj_set_style_bg_color(b, bg, 0);
 	lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
 	lv_obj_set_style_radius(b, 12, 0);
 	lv_obj_set_style_shadow_width(b, 0, 0);
 	lv_obj_set_style_border_width(b, kind ? 0 : 1, 0);
 	lv_obj_set_style_border_color(b, C_BORDER, 0);
-	lv_obj_set_style_bg_color(b, lv_color_make(60, 66, 76), LV_STATE_DISABLED);
-	lv_obj_set_style_text_color(b, lv_color_make(130, 136, 146), LV_STATE_DISABLED);
+	lv_obj_set_style_bg_color(b, C_CARD, LV_STATE_DISABLED);
+	lv_obj_set_style_text_color(b, lv_color_hex(0x7B8394), LV_STATE_DISABLED);
 	lv_obj_set_style_pad_hor(b, 18, 0);
 	lv_obj_set_style_text_color(b, C_TEXT, 0);
 	lv_obj_set_height(b, 60);
@@ -654,8 +659,8 @@ static void home_refresh(void)
 	bool swu_up = s.connected || (kv("swupdate", v, sizeof(v)) && !strcmp(v, "running"));
 	lv_label_set_text(hm.chip, job_running() ? tr(RS_BUSY) : swu_up ? tr(RS_SWU_READY)
 					       : tr(RS_SWU_NOT_RUNNING));
-	lv_obj_set_style_bg_color(hm.chip, swu_up ? lv_color_make(30, 70, 45)
-						  : lv_color_make(80, 50, 30), 0);
+	lv_obj_set_style_bg_color(hm.chip, swu_up ? lv_color_hex(0x45504F)
+						  : lv_color_hex(0x5D5A53), 0);
 }
 
 static lv_obj_t *tile(lv_obj_t *parent, const char *icon, const char *text, lv_color_t ic,
@@ -665,11 +670,11 @@ static lv_obj_t *tile(lv_obj_t *parent, const char *icon, const char *text, lv_c
 	lv_obj_set_size(b, (W - 2 * PAD - 3 * 12) / 4, 116);
 	lv_obj_set_style_radius(b, 16, 0);
 	lv_obj_set_style_shadow_width(b, 0, 0);
-	lv_obj_set_style_bg_color(b, accent ? C_ACCENT : C_CARD, 0);
+	lv_obj_set_style_bg_color(b, accent ? C_ACCENT_FILL : C_CARD, 0);
 	lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
-	lv_obj_set_style_border_color(b, accent ? C_ACCENT : C_BORDER, 0);
+	lv_obj_set_style_border_color(b, accent ? C_ACCENT_FILL : C_BORDER, 0);
 	lv_obj_set_style_border_width(b, 1, 0);
-	lv_obj_set_style_bg_color(b, accent ? lv_color_make(56, 118, 196) : C_CARD_HI,
+	lv_obj_set_style_bg_color(b, accent ? lv_color_hex(0x526E91) : C_CARD_HI,
 				  LV_STATE_PRESSED);
 	lv_obj_set_flex_flow(b, LV_FLEX_FLOW_COLUMN);
 	lv_obj_set_flex_align(b, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -692,7 +697,7 @@ static void page_home(void)
 	lv_obj_set_flex_align(hdr, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 	lv_obj_set_style_pad_column(hdr, 10, 0);
 	label(hdr, "Kiln OS", F28B, C_TEXT);
-	label(hdr, tr(RS_RECOVERY_TITLE), F28B, C_ACCENT);
+	label(hdr, tr(RS_RECOVERY_TITLE), F28B, C_WARN);
 	lv_obj_t *sp = box(hdr, LV_FLEX_FLOW_ROW);
 	lv_obj_set_flex_grow(sp, 1);
 	lv_obj_set_height(sp, 1);
@@ -749,7 +754,7 @@ static lv_obj_t *row_item(lv_obj_t *list, const char *title, const char *sub,
 	lv_obj_set_style_radius(b, 10, 0);
 	lv_obj_set_style_shadow_width(b, 0, 0);
 	lv_obj_set_style_bg_color(b, C_CARD_HI, 0);
-	lv_obj_set_style_bg_color(b, lv_color_make(40, 70, 110), LV_STATE_CHECKED);
+	lv_obj_set_style_bg_color(b, lv_color_hex(0x465A76), LV_STATE_CHECKED);
 	lv_obj_set_style_border_color(b, C_ACCENT, LV_STATE_CHECKED);
 	lv_obj_set_style_border_width(b, 2, LV_STATE_CHECKED);
 	lv_obj_set_style_border_width(b, 0, 0);
@@ -1199,7 +1204,7 @@ static void rs_fill_parts(void)
 		lv_obj_set_ext_click_area(cb, 8);
 		if (rs_locked(b->parts[i])) {
 			lv_obj_add_state(cb, LV_STATE_DISABLED);
-			lv_obj_set_style_text_color(cb, lv_color_make(110, 118, 130), 0);
+			lv_obj_set_style_text_color(cb, lv_color_hex(0x7B8394), 0);
 			locked_any = true;
 		}
 		lv_obj_add_event_cb(cb, on_rs_part, LV_EVENT_VALUE_CHANGED, (void *)(intptr_t)i);
@@ -1666,15 +1671,15 @@ static void page_logs(void)
 		lg.tabs[i] = button(row, NULL, tr(names[i]), 0, on_lg_tab, (void *)(intptr_t)i);
 		lv_obj_set_flex_grow(lg.tabs[i], 1);
 		lv_obj_set_height(lg.tabs[i], 52);
-		lv_obj_set_style_bg_color(lg.tabs[i], C_ACCENT, LV_STATE_CHECKED);
+		lv_obj_set_style_bg_color(lg.tabs[i], C_ACCENT_FILL, LV_STATE_CHECKED);
 	}
 	lg.view = card(body);
 	lv_obj_set_width(lg.view, lv_pct(100));
 	lv_obj_set_flex_grow(lg.view, 1);
 	lv_obj_add_flag(lg.view, LV_OBJ_FLAG_SCROLLABLE);
 	lv_obj_set_scroll_dir(lg.view, LV_DIR_VER);
-	lv_obj_set_style_bg_color(lg.view, lv_color_make(12, 15, 20), 0);
-	lg.text = wrap_label(lg.view, "", FMONO, lv_color_make(205, 214, 226));
+	lv_obj_set_style_bg_color(lg.view, lv_color_hex(0x242933), 0);
+	lg.text = wrap_label(lg.view, "", FMONO, C_MUTED);
 	lg_load();
 	cur_refresh = lg_refresh;
 }
@@ -1769,12 +1774,11 @@ static void on_cancel(lv_event_t *e)
 
 static void job_banner(bool ok, const char *text)
 {
-	lv_obj_set_style_bg_color(jp.banner, ok ? lv_color_make(28, 74, 40)
-						 : lv_color_make(92, 32, 30), 0);
+	lv_obj_set_style_bg_color(jp.banner, ok ? lv_color_hex(0x45504F)
+						 : lv_color_hex(0x4B3D48), 0);
 	lv_obj_set_style_border_color(jp.banner, ok ? C_OK : C_DANGER, 0);
 	lv_label_set_text(jp.status, text);
-	lv_obj_set_style_text_color(jp.status, ok ? lv_color_make(160, 230, 160)
-						  : lv_color_make(255, 170, 160), 0);
+	lv_obj_set_style_text_color(jp.status, ok ? C_OK : C_DANGER, 0);
 }
 
 static void job_refresh(void)
@@ -1947,7 +1951,7 @@ static void page_job(void)
 	jp.bar = lv_bar_create(jp.banner);
 	lv_obj_set_size(jp.bar, lv_pct(100), 22);
 	lv_bar_set_range(jp.bar, 0, 100);
-	lv_obj_set_style_bg_color(jp.bar, lv_color_make(20, 26, 34), LV_PART_MAIN);
+	lv_obj_set_style_bg_color(jp.bar, C_BORDER, LV_PART_MAIN);
 	lv_obj_set_style_bg_color(jp.bar, C_ACCENT, LV_PART_INDICATOR);
 	lv_obj_set_style_radius(jp.bar, 8, LV_PART_MAIN);
 	lv_obj_set_style_radius(jp.bar, 8, LV_PART_INDICATOR);
@@ -1957,8 +1961,8 @@ static void page_job(void)
 	lv_obj_set_flex_grow(jp.log, 1);
 	lv_obj_add_flag(jp.log, LV_OBJ_FLAG_SCROLLABLE);
 	lv_obj_set_scroll_dir(jp.log, LV_DIR_VER);
-	lv_obj_set_style_bg_color(jp.log, lv_color_make(12, 15, 20), 0);
-	jp.logtext = wrap_label(jp.log, "", FMONO, lv_color_make(205, 214, 226));
+	lv_obj_set_style_bg_color(jp.log, lv_color_hex(0x242933), 0);
+	jp.logtext = wrap_label(jp.log, "", FMONO, C_MUTED);
 
 	lv_obj_t *row = box(body, LV_FLEX_FLOW_ROW);
 	lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
@@ -2006,7 +2010,7 @@ void ui_init(lv_display_t *disp)
 {
 	i18n_set_lang(lang_from_settings_file(rui_get(PATH_SETTINGS)));
 	fonts_init();
-	lv_theme_t *th = lv_theme_default_init(disp, C_ACCENT, C_DANGER, true, F20);
+	lv_theme_t *th = lv_theme_default_init(disp, C_ACCENT_FILL, C_DANGER_FILL, true, F20);
 	lv_display_set_theme(disp, th);
 	go(page_home);
 	lv_timer_create(tick, 250, NULL);
