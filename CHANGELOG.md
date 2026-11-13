@@ -10,6 +10,7 @@ the issue: it is closed by hand after the release.
 
 ## Unreleased
 
+- **Happy Hare in the plugin catalog** (issue #25): `INSTALL_PLUGIN NAME=happy-hare ENABLE=1`, or Install under Settings > Plugins on the touch screen, installs [Happy Hare](https://github.com/KilnOS-Plugins/kiln-happy-hare) for the IFS. It drives the IFS instead of Kiln's own IFS driver: tool changes park the filament just above the toolhead instead of pulling it back through the whole tube, the IFS feeds in step with the extruder, and the IFS's stall sensors detect a clog. It needs the IFS on Klipper firmware; with Flashforge's IFS firmware nothing changes. Updates come through Fluidd.
 - **Part Fan tile**: on the print screen, the Part Fan tile could read 100% at the start of a print while the part fan was off (it showed the board fan until the part fan had run once). It now shows the part fan from the start.
 - **No part fan during the bed heat soak**: the part fan now switches off after the nozzle brushing at the start of a print, so it no longer blows on the bed while the bed heat soak waits.
 - **No second splash**: the touch screen no longer shows HelixScreen's own logo after the Kiln logo; the Kiln logo stays until the home screen (or the setup wizard) appears, about 2 seconds sooner.

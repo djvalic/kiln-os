@@ -24,6 +24,14 @@
       "url": "https://github.com/djvalic/kiln-spoolman.git",
       "requires_os": "1.2",
       "components": []
+    },
+    {
+      "name": "happy-hare",
+      "title": "Happy Hare",
+      "description": "Happy Hare MMU software in place of Kiln's IFS driver: tool changes parked at the toolhead, the IFS synced with the extruder, clog detection from the IFS stall sensors (needs the IFS on Klipper firmware)",
+      "url": "https://github.com/KilnOS-Plugins/kiln-happy-hare.git",
+      "requires_os": "1.5",
+      "components": []
     }
   ]
 }
