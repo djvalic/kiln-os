@@ -10,6 +10,7 @@ the issue: it is closed by hand after the release.
 
 ## Unreleased
 
+- **The IFS stall sensors are named as such** (IFS on Klipper firmware): `ifs_spool1_buffer` ... `ifs_spool4_buffer` are now `ifs_spool1_stall` ... `ifs_spool4_stall`. They read a magnet wheel the filament turns, so they show whether the filament moves (stock's stall detection), not a buffer position. A graph or setting in Fluidd that named the old sensors needs the new names.
 - **Mainline Linux 7.3 kernel, opt-in** (PR #46 by Hunter Laux): the image now carries a second kernel of ours, mainline Linux 7.3.3 with Hunter Laux's AD5X port (74 patches: both CPU cores, the display through DRM, eMMC, USB, Ethernet, Wi-Fi, the IFS over RS-485, the speaker, the watchdog). Kiln OS still starts the 6.6 kernel by default; nothing changes unless you turn 7.3 on. A big thank you to Hunter Laux (@jolting) for this port: careful work on the X2600, written to mainline's standards and tested on a real AD5X, including a 2-hour print through the IFS.
 
   **How to try it** (over SSH; the printer must not be printing):
