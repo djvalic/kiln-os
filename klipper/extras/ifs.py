@@ -748,10 +748,10 @@ class IFS:
                 if temp < 900.0 or temp > 3100.0:
                     silk_mask |= (1 << idx)
                 silk_counts[idx] = int(temp)
-            buffer_name = "temperature_sensor ifs_spool%d_buffer" % (chan,)
-            buf_sensor = self.printer.lookup_object(buffer_name, None)
-            if buf_sensor is not None:
-                st = buf_sensor.get_status(self.reactor.monotonic())
+            stall_name = "temperature_sensor ifs_spool%d_stall" % (chan,)
+            stall_sensor = self.printer.lookup_object(stall_name, None)
+            if stall_sensor is not None:
+                st = stall_sensor.get_status(self.reactor.monotonic())
                 temp = st.get('temperature', 2048.0)
                 stall_counts[idx] = int(temp)
         self.silk = silk_counts

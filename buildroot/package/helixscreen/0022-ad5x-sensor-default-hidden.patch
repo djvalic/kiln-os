@@ -13,7 +13,7 @@ index b9706bd556..a5aba03437 100644
          e.role = role_for_name(e.display_name, e.klipper_name);
 +        // AD5X toolhead filament and cutter readings are raw ADC values, not
 +        // temperatures, as are the IFS slot sensors with the IFS on Klipper
-+        // firmware (ifs_spool1_inlet ... ifs_spool4_buffer). Keep them out of
++        // firmware (ifs_spool1_inlet ... ifs_spool4_stall). Keep them out of
 +        // the temperature widgets by default.
 +        // Only new entries reach here (role 0), so a saved choice still wins.
 +        if (e.display_name == "filamentValue" || e.display_name == "cutValue" ||
