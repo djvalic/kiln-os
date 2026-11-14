@@ -10,6 +10,7 @@ the issue: it is closed by hand after the release.
 
 ## Unreleased
 
+- **USB boards at Klipper's default speed** (issue #59): an extra board on USB, such as a toolhead board with its own `[mcu]` section, failed to connect with "Failed to set custom baud rate (250000): [Errno 25] Inappropriate ioctl for device" unless its section set a standard speed such as `baud: 230400`. Speeds such as 250000 now work. The serial library Kiln OS uses (pyserial 3.5, its latest release) got this wrong on the printer's processor; Kiln OS now carries pyserial's own later fix.
 - **Part Fan tile**: on the print screen, the Part Fan tile could read 100% at the start of a print while the part fan was off (it showed the board fan until the part fan had run once). It now shows the part fan from the start.
 - **No part fan during the bed heat soak**: the part fan now switches off after the nozzle brushing at the start of a print, so it no longer blows on the bed while the bed heat soak waits.
 - **No second splash**: the touch screen no longer shows HelixScreen's own logo after the Kiln logo; the Kiln logo stays until the home screen (or the setup wizard) appears, about 2 seconds sooner.

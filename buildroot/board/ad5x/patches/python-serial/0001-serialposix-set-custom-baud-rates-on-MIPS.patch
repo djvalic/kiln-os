@@ -1,0 +1,57 @@
+From: Hunter Laux <hunterlaux@gmail.com>
+Subject: [PATCH] serialposix: set custom baud rates on MIPS
+
+pyserial 3.5 always uses the asm-generic TCGETS2/TCSETS2 numbers. MIPS
+encodes ioctl directions differently, so the kernel rejects them with
+ENOTTY and every baud rate outside the termios table fails, including
+Klipper's default of 250000.
+
+MIPS also has NCCS 23, so struct termios2 is 48 bytes and c_ispeed and
+c_ospeed are words 10 and 11, not 9 and 10. Changing only the ioctl
+numbers writes the rate into the end of c_cc and c_ispeed and leaves
+c_ospeed at the BOTHER placeholder: the port then sends at 4096 baud.
+
+Backported from pyserial master (5ce1773f, 2aea0ba4); there is no
+pyserial release after 3.5.
+
+Upstream: https://github.com/pyserial/pyserial/commit/5ce1773f
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+--- a/serial/serialposix.py
++++ b/serial/serialposix.py
+@@ -32,6 +32,7 @@
+ import errno
+ import fcntl
+ import os
++import platform
+ import select
+ import struct
+ import sys
+@@ -80,8 +81,16 @@
+     CMSPAR = 0o10000000000  # Use "stick" (mark/space) parity
+ 
+     # baudrate ioctls
+-    TCGETS2 = 0x802C542A
+-    TCSETS2 = 0x402C542B
++    if platform.machine().startswith('mips'):
++        # MIPS encodes ioctl directions differently and has a larger
++        # struct termios2 (NCCS is 23), so the speeds sit one word later
++        TCGETS2 = 0x4030542A
++        TCSETS2 = 0x8030542B
++        BAUDRATE_OFFSET = 10
++    else:
++        TCGETS2 = 0x802C542A
++        TCSETS2 = 0x402C542B
++        BAUDRATE_OFFSET = 9
+     BOTHER = 0o010000
+ 
+     # RS485 ioctls
+@@ -154,7 +163,7 @@
+                 # set custom speed
+                 buf[2] &= ~termios.CBAUD
+                 buf[2] |= BOTHER
+-                buf[9] = buf[10] = baudrate
++                buf[BAUDRATE_OFFSET] = buf[BAUDRATE_OFFSET + 1] = baudrate
+ 
+                 # set serial_struct
+                 fcntl.ioctl(self.fd, TCSETS2, buf)
