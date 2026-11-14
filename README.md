@@ -172,6 +172,9 @@ come back in line, see [docs/ifs-troubleshooting.md](docs/ifs-troubleshooting.md
 - **Recover**: [docs/recovery-os.md](docs/recovery-os.md). A failed start
   lands in the recovery OS, which has SSH, an update page on port 8080,
   backup and restore, and USB rescue.
+- **Serial console**: the mainboard's DEBUG header (3.3 V) gives a root
+  shell without a network, once our kernel runs
+  ([docs/serial-console.md](docs/serial-console.md)).
 - **Back to stock**: `ad5x-restore-stock` on the main OS checks the saved
   stock system and reboots into the recovery OS, whose "Restore stock" puts
   it back into its slot ([docs/install.md](docs/install.md), "Going back to
