@@ -13,7 +13,8 @@
 #
 # Flags (any one makes the exit status 1):
 #   - known vendor names: module_driver/, usr/lib/ad5x/stock-tools/, kernel
-#     modules (*.ko, or ELF with a vermagic), libhardware2.so, libutils2.so,
+#     modules (*.ko, or a relocatable ELF with a vermagic; libkmod has the
+#     string too), libhardware2.so, libutils2.so,
 #     ELF binaries named cmd_gpio / cmd_fb / cmd_jpeg_display (our /usr/bin
 #     wrappers are links/scripts and pass), kernel images (kernel.uimage,
 #     xImage*, uImage*, or any file starting with the uImage magic)
@@ -108,6 +109,15 @@ def is_elf(path):
 
 def is_uimage(path):
     return head(path, 4) == bytes.fromhex("27051956")
+
+
+def is_elf_rel(path):
+    # e_type ET_REL (1): kernel modules; libraries and programs are
+    # ET_DYN/ET_EXEC (libkmod also contains "vermagic=")
+    h = head(path, 18)
+    if len(h) < 18:
+        return False
+    return int.from_bytes(h[16:18], "little" if h[5] == 1 else "big") == 1
 
 
 def has_vermagic(path):
@@ -217,7 +227,7 @@ def scan_tree(root, label):
                 pass
             elif fn.endswith(".ko"):
                 flag(where, "kernel module (.ko)")
-            elif elf and has_vermagic(p):
+            elif elf and is_elf_rel(p) and has_vermagic(p):
                 flag(where, "kernel module (ELF with vermagic)")
             if fn in VENDOR_NAMES_ANY:
                 flag(where, "vendor file name")
