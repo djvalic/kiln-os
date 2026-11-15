@@ -1,0 +1,26 @@
+# Replaces eudev's rule of the same name: the same, except that v4l_id
+# doesn't open the H.264 decoder (felix-vdec). Its vendor driver needs a
+# reserved DMA pool this board doesn't give it, and every open() of its
+# node oopses. Our 6.6 kernel has the decoder off (kernel-ingenic66/ad5x.dts);
+# Flashforge's 5.10 kernel, which the recovery OS runs and the main OS falls
+# back to, has it on.
+
+ACTION=="remove", GOTO="persistent_v4l_end"
+SUBSYSTEM!="video4linux", GOTO="persistent_v4l_end"
+ENV{MAJOR}=="", GOTO="persistent_v4l_end"
+ATTR{name}=="felix-vdec", GOTO="persistent_v4l_end"
+
+IMPORT{program}="v4l_id $devnode"
+
+SUBSYSTEMS=="usb", IMPORT{builtin}="usb_id"
+KERNEL=="video*", ENV{ID_SERIAL}=="?*", SYMLINK+="v4l/by-id/$env{ID_BUS}-$env{ID_SERIAL}-video-index$attr{index}"
+
+# check for valid "index" number
+TEST!="index", GOTO="persistent_v4l_end"
+ATTR{index}!="?*", GOTO="persistent_v4l_end"
+
+IMPORT{builtin}="path_id"
+ENV{ID_PATH}=="?*", KERNEL=="video*|vbi*", SYMLINK+="v4l/by-path/$env{ID_PATH}-video-index$attr{index}"
+ENV{ID_PATH}=="?*", KERNEL=="audio*", SYMLINK+="v4l/by-path/$env{ID_PATH}-audio-index$attr{index}"
+
+LABEL="persistent_v4l_end"

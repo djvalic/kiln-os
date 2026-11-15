@@ -11,6 +11,7 @@ not yet in the public copy on GitHub.
 
 - [install.md](install.md): installing from stock (USB stick or SSH), and going back to stock.
 - [updates.md](updates.md): how releases are made and how the printer installs them.
+- [sponsoring.md](sponsoring.md): sponsoring Kiln OS, and what it does and doesn't mean.
 - [recovery-os.md](recovery-os.md): the recovery system in slot A: updates, backup, restore, USB rescue.
 - [deviations-from-stock.md](deviations-from-stock.md): every behaviour that differs from stock, what to watch for, how to go back.
 - [config-layout.md](config-layout.md): which Klipper config file holds what, and which ones you edit.
@@ -27,6 +28,7 @@ not yet in the public copy on GitHub.
 
 - [plugins.md](plugins.md): what a plugin is, where it lives, how it is loaded.
 - [plugin-api.md](plugin-api.md): the interface a plugin may rely on, by API version.
+- [stability.md](stability.md): what stays the same in every 1.x release, and what can change.
 - [plugin-root-hooks.md](plugin-root-hooks.md): root scripts a plugin can bring (`root/install.sh`, `update.sh`, `uninstall.sh`, boot scripts), as zMod has them.
 - [api.md](api.md): everything Kiln OS adds to Klipper and Moonraker, for slicer plugins, dashboards and other clients.
 - [data-layout.md](data-layout.md): the files and switches on the data partition.

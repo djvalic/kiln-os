@@ -5,7 +5,8 @@
 #   "ota:kernel" here usually means the main OS (slot B) didn't finish its
 #   start-up (its S01 points the flag at A, its S99 back at B) or someone
 #   chose recovery. Saved in /run/ad5x/flag-at-boot for ad5x-status.
-# - /dev/disk/by-partlabel/<GPT name> links (mdev doesn't make them), used
+# - /dev/disk/by-partlabel/<GPT name> links (udev makes none here: see
+#   etc/udev/rules.d/60-persistent-storage.rules), used
 #   by the .swu images (sw-description). Only for partitions whose GPT entry
 #   agrees with the SPL's built-in table, and never rootfs2/kernel2 when they
 #   are the running root (they can't be: the SPL boots this slot from p2).

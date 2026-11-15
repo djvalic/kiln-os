@@ -4,10 +4,11 @@
 #
 # usage: tools/release.sh VERSION [--public] [--draft] [--pre] [--no-build]
 #                         [--notes FILE] [--dry-run] [--no-push]
-#   VERSION     vMAJOR.MINOR.PATCH (e.g. v0.1.0). Any suffix, a release
-#               candidate v0.1.0-rc1..9 too, makes a pre-release on Gitea and
+#   VERSION     vMAJOR.MINOR.PATCH (e.g. v1.0.0). Any suffix, a release
+#               candidate v1.0.0-rc2..9 too, makes a pre-release on Gitea and
 #               GitHub: only printers on the test update channel are
-#               offered it (docs/updates.md, "Test channel")
+#               offered it (docs/updates.md, "Test channel"). v0.1.0 and
+#               its candidates are refused: they became v1.0.0
 #   --public    artifacts meant for publication: they must contain no
 #               Flashforge files (tools/check_vendor_free.sh must pass on
 #               both images); update zips carry no kernel. Without it the
@@ -37,7 +38,7 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 cd "$REPO"
 
 die() { echo "release: $*" >&2; exit 1; }
-usage() { sed -n '2,23p' "$0"; exit "${1:-2}"; }
+usage() { sed -n '2,24p' "$0"; exit "${1:-2}"; }
 
 VERSION= PUBLIC= DRAFT=false PRE=false BUILD=1 NOTES= DRY= PUSH=1
 while [ $# -gt 0 ]; do
@@ -57,9 +58,9 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$VERSION" ] || usage
 [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] ||
-	die "VERSION must look like v0.1.0 (got $VERSION)"
-# Release candidates stop at -rc9: Fluidd sorts -rc10 before -rc9
-# (docs/releasing.md, "Release candidates")
+	die "VERSION must look like v1.0.0 (got $VERSION)"
+# Release candidates stop at -rc9: Fluidd sorts -rc10 before -rc9; v0.1.0
+# and its candidates became v1.0.0 (docs/releasing.md, "Release candidates")
 python3 tools/release_version.py rc "$VERSION" || exit 1
 # A version with a suffix, a release candidate (-rcN) too, is a
 # pre-release on Gitea and GitHub: printers on the stable update channel

@@ -1503,9 +1503,32 @@ class AD5XPlugins:
         self._remove_now(gcmd, name, info, on, "removed", 'done')
     def _remove_now(self, gcmd, name, info, on, msg, state):
         """REMOVE_PLUGIN's removal: off, deleted, Klipper restarted if it
-        was on. gcmd None: from root's answer (a background job)."""
-        names = self._write_enabled(disable=[name]) if on else None
-        shutil.rmtree(os.path.join(self.user_dir, name))
+        was on. gcmd None: from root's answer (a background job).
+        Switched off first, then deleted: a folder that can't be deleted
+        (files root made in it) leaves the plugin off and its folder (or
+        what is left of it) in place, never on with half its files; the
+        job says so and how to delete it. Klipper keeps running."""
+        d = os.path.join(self.user_dir, name)
+        names = None
+        if on:
+            try:
+                names = self._write_enabled(disable=[name])
+            except OSError as e:
+                err = ("Plugin %s not removed: can't write %s: %s"
+                       % (name, self.plugins_file, e))
+                if gcmd is not None:
+                    raise gcmd.error(err)
+                raise Exception(err)
+        try:
+            shutil.rmtree(d)
+        except OSError as e:
+            # msg: "removed", or "removed; ..." with root's answer
+            rest = msg[len("removed"):] if msg.startswith("removed") else ""
+            msg = ("%snot deleted: %s can't be deleted (%s); delete it "
+                   "as root: rm -rf %s%s"
+                   % ("switched off, " if on else "", d, e, d, rest))
+            state = 'failed'
+            logging.warning("ad5x_plugins: REMOVE_PLUGIN %s: %s", name, e)
         self.found = self._scan()
         self.job = {'name': name, 'action': 'remove', 'state': state,
                     'message': msg}

@@ -1,0 +1,5 @@
+# Replaces eudev's rule of the same name in the recovery OS: no
+# /dev/disk/by-* links from udev. S01ad5x-recovery makes the by-partlabel
+# links the update images write through, and only for partitions whose
+# GPT entry agrees with the SPL's table and that aren't the running slot;
+# udev's would cover every partition.

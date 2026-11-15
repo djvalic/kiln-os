@@ -113,7 +113,14 @@ From the stock kernel image and root filesystem (3.1.0 updater):
 
 - Toolchain: glibc, GCC 14, kernel headers 5.10, `-march=mips32r5
   -mfp64 -mnan=2008` (stock userspace is r2 code; the CPU is r5).
-- BusyBox init and mdev (as stock), read-only squashfs root.
+- BusyBox init (as stock) and eudev, read-only squashfs root.
+  eudev's standard rules set up `/dev` (`ttyS*`, `ttyACM*`, `ttyUSB*` to
+  group `dialout`, kept by `etc/udev/rules.d/61-kiln-serial.rules`;
+  `/dev/serial/by-id`, `/dev/v4l/by-id`). `S10udevd`
+  copies the owner's rules from `/data/ad5x/udev/rules.d` to
+  `/run/udev/rules.d` before udevd starts, only when the folders and the
+  file are root's and writable by root only (rules run programs as root;
+  plugins, owned by klipper, can't add any); the recovery OS never uses them.
 - Python 3 with Klipper's dependencies; mainline Klipper at the same commit
   as the MCU images, `c_helper.so` cross-compiled, this project's extras and
   default `printer.cfg` / `ifs.cfg`.
@@ -224,7 +231,7 @@ scripts under qemu (`AD5X_USB=1`):
   stock bind-mounts from `/usr/prog/etc` only *after* the stick hook. The
   script does that bind first, so SSH works as it does today.
 - Stock already runs `mdev -df` on the shared `/dev`; ours stays off and
-  only gives `/dev/ttyS*` group `dialout` (`S10mdev` in the overlay).
+  only gives `/dev/ttyS*` group `dialout` (`S10udevd` in the overlay).
 - DNS: stock also runs dhcpcd, which leaves no nameservers; the script hands the lease's DNS servers to our `/run/resolv.conf`.
 - eth0 stays stock's (no second DHCP client; `/etc/network/interfaces` is
   loopback only). Our dropbear finds port 22 taken and stays off.

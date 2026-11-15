@@ -35,11 +35,11 @@ printer: it installs every Kiln OS update. Background on the slots and the boot 
 | Script | What |
 |---|---|
 | `rcS` | The main image's rcS (boot trace). Recovery's `ad5x-bootlog` writes its trace into `ota` at **128 KiB**, so the main OS's trace at 64 KiB survives for diagnosis |
-| `S01ad5x-recovery` | Saves the boot flag to `/run/ad5x/flag-at-boot` and creates `/dev/disk/by-partlabel/<GPT name>` links (mdev doesn't). A link is only made when the GPT entry matches the SPL's built-in table |
+| `S01ad5x-recovery` | Saves the boot flag to `/run/ad5x/flag-at-boot` and creates `/dev/disk/by-partlabel/<GPT name>` links. A link is only made when the GPT entry matches the SPL's built-in table (udev makes none here: the recovery image replaces its `60-persistent-storage.rules`) |
 | `S05ad5x-data` | Mounts `userdata` read-write at `/data`. If the mount fails it runs one `e2fsck -p` and tries again; failing that, `/data` is a tmpfs. Stock's root password: usershare `/etc/shadow` hash bound over `/etc/shadow`. SSH host keys bound from `/data/ad5x/ssh/hostkeys`, the same keys as the main OS |
 | `S06ad5x-modules` | The main OS's script (shared, see above): vendor files checked or filled (`ad5x-vendor ensure`), then the drivers from `/data/ad5x/vendor/module_driver`. Without vendor files: no display, touch or Ethernet, a message on the console and in the boot trace, start-up goes on |
 | `S07ad5x-board` | PC11 heartbeat (stock `cmd_gpio`, from `/data/ad5x/vendor` through the `/usr/bin` wrapper), framebuffer on, recovery logo (`/usr/share/ad5x/recovery-logo.jpg`, or `/data/ad5x/recovery/logo.jpg`), backlight |
-| `S10mdev` | The main image's (hotplug, so USB sticks appear) |
+| `S10udevd` | The main image's eudev (hotplug, so USB sticks appear); network interfaces keep the names `eth0` and `wlan0`; the owner's rules in `/data/ad5x/udev/rules.d` are not used here |
 | `S41ad5x-eth` | The main OS's script: stock MAC from usershare `/MAC`, then DHCP or static from `/data/ad5x/network.conf` (`/usr/lib/ad5x/network.sh`) |
 | `S42ad5x-wifi` | The main OS's script: Wi-Fi with the networks in `/data/ad5x/wpa_supplicant.conf` (made from stock's saved networks on the first start), unless `/data/ad5x/wifi.disable` exists. The main OS's Wi-Fi switch (HelixScreen's `wifi_enabled`) is not applied here: recovery has no HelixScreen, so Wi-Fi stays on |
 | `S50dropbear` | SSH, root login (stock's password, or a key in `/data/ad5x/ssh/authorized_keys`) |

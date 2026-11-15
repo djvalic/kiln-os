@@ -1,0 +1,6 @@
+# Serial ports for the klipper user (group dialout), as /etc/mdev.conf had
+# them (issue #58): the board UARTs (ttyS*) and an MCU on USB (CDC ACM
+# ttyACM*, a USB-serial adapter ttyUSB*). eudev's 50-udev-default.rules
+# already gives these group dialout; this keeps it whatever that file does
+# in a later eudev. After 50-udev-default, so its values win.
+SUBSYSTEM=="tty", KERNEL=="ttyS[0-9]*|ttyACM[0-9]*|ttyUSB[0-9]*", GROUP="dialout", MODE="0660"

@@ -296,8 +296,14 @@
 	status = "okay";
 };
 
+/* Felix, the H.264 decoder: off. Nothing here decodes H.264 (the camera
+ * sends MJPEG), and the vendor driver needs a reserved DMA pool
+ * (memory-region, 16-32 MB on the vendor boards) that this board doesn't
+ * give it. Without one, every open() of its /dev/video node is a NULL
+ * dereference in dma_coherent_mem_available() (eudev's v4l_id opens it at
+ * each start). */
 &felix {
-	status = "okay";
+	status = "disabled";
 };
 
 /* Speaker: a piezo on PC12 = PWM channel 13 (stock plays its tone tables

@@ -1,2 +1,4 @@
-# Klipper runs as its own user; dialout for the board UARTs (etc/mdev.conf)
-klipper -1 klipper -1 * /home/klipper /bin/sh dialout,tty Klipper
+# Klipper runs as its own user; dialout for the board UARTs (udev).
+# Fixed ids: files in /data carry them across updates, and packages that
+# add groups (eudev: input, kvm, sgx) would otherwise move klipper's gid.
+klipper 101 klipper 103 * /home/klipper /bin/sh dialout,tty Klipper

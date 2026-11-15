@@ -33,9 +33,12 @@ and the installer), and released only if every test passes. Daily Klipper
 and Moonraker packages go through the same tests inside the newest
 release. Versions: `vMAJOR.MINOR.PATCH`; release candidates
 `vMAJOR.MINOR.PATCH-rcN` come before their release
-(v0.0.61 < v0.1.0-rc1 < v0.1.0-rc2 < v0.1.0). A release candidate is
-published as a pre-release and offered only to printers on the test
-channel (below, "Test channel: how to join and leave").
+(v0.0.61 < v0.1.0-rc1 < v1.0.0-rc2 < v1.0.0). The release candidates
+lead to v1.0.0, the first stable release (docs/stability.md: what stays
+the same in 1.x); they started as v0.1.0-rc1 and kept counting, so the
+next is v1.0.0-rc2. A release candidate is published as a pre-release
+and offered only to printers on the test channel (below, "Test channel:
+how to join and leave").
 
 Release notes: a "What's new" section from `CHANGELOG.md` (the release's
 `## vX.Y.Z (date)` section, else `## Unreleased`, which `tools/release.sh`
@@ -175,10 +178,11 @@ is kept in the run's log folder (`update-<version>.zip`). It is never published,
 
 ## Test channel: how to join and leave
 
-Release candidates (`v0.1.0-rc1`, `-rc2`, ...) are published as
-pre-releases. A printer on the **stable** channel (the default) is never
-offered one: it stays on the last `vX.Y.Z` release until the next final
-release (for v0.1.0: on v0.0.6x until v0.1.0 is out). A printer on the
+Release candidates (`v0.1.0-rc1`, then `v1.0.0-rc2`, `-rc3`, ...) are
+published as pre-releases. A printer on the **stable** channel (the
+default) is never offered one: it stays on the last `vX.Y.Z` release until
+the next final release (now: on v0.0.61 until v1.0.0 is out, then it is
+offered v1.0.0 directly). A printer on the
 **test** channel is offered the newest release, pre-releases included,
 so each release candidate and then the final release.
 
@@ -199,8 +203,10 @@ offers the newest release candidate, and Update installs it as usual.
 On the test channel:
 
 - each new release candidate is offered as it comes out;
-- when the final release is out (`v0.1.0`), a printer on `v0.1.0-rcN` is
-  offered it (`v0.1.0-rcN < v0.1.0`);
+- a printer on `v0.1.0-rc1` is offered `v1.0.0-rc2` like any newer
+  candidate (`v0.1.0-rc1 < v1.0.0-rc2`);
+- when the final release is out (`v1.0.0`), a printer on `v1.0.0-rcN` is
+  offered it (`v1.0.0-rcN < v1.0.0`);
 - the Klipper and Moonraker packages are the same as on stable (built and
   tested on the newest stable release); one is used only when it is newer
   than the copy in the release candidate's image.
@@ -211,9 +217,9 @@ On the test channel:
 curl -X POST 'http://PRINTER/machine/kiln_os/channel?channel=stable'
 ```
 
-Leaving never downgrades. A printer on `v0.1.0-rc2` is then offered
-nothing until a stable release newer than `v0.1.0-rc2` is out, which is
-`v0.1.0` itself, so it simply stays on the candidate until then. To go
+Leaving never downgrades. A printer on `v1.0.0-rc2` is then offered
+nothing until a stable release newer than `v1.0.0-rc2` is out, which is
+`v1.0.0` itself, so it simply stays on the candidate until then. To go
 back to the stable release at once, install it by hand: download
 `kiln-os-vX.Y.Z-update.zip` of the release you want from the releases
 page and install it with `ad5x-update --reboot FILE` over SSH, or from a

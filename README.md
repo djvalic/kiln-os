@@ -202,6 +202,15 @@ files.
 
 **Documentation:** every page is listed in [docs/README.md](docs/README.md); to work on the code, start with [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Sponsoring
+
+[![Sponsor](https://img.shields.io/badge/Sponsor-djvalic-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/djvalic)
+
+Kiln OS is a hobby project I work on for fun. Sponsoring is a thank-you and
+always optional: it doesn't make issues or requests go any faster, and
+nothing is held back for sponsors. More in
+[docs/sponsoring.md](docs/sponsoring.md).
+
 ## Credits
 
 This builds on the work of many projects:

@@ -748,10 +748,10 @@ class IFS:
                 if temp < 900.0 or temp > 3100.0:
                     silk_mask |= (1 << idx)
                 silk_counts[idx] = int(temp)
-            buffer_name = "temperature_sensor ifs_spool%d_buffer" % (chan,)
-            buf_sensor = self.printer.lookup_object(buffer_name, None)
-            if buf_sensor is not None:
-                st = buf_sensor.get_status(self.reactor.monotonic())
+            stall_name = "temperature_sensor ifs_spool%d_stall" % (chan,)
+            stall_sensor = self.printer.lookup_object(stall_name, None)
+            if stall_sensor is not None:
+                st = stall_sensor.get_status(self.reactor.monotonic())
                 temp = st.get('temperature', 2048.0)
                 stall_counts[idx] = int(temp)
         self.silk = silk_counts
@@ -2166,8 +2166,10 @@ class IFS:
         gcmd.respond_info("IFS: T%d -> slot %d" % (tool, slot))
     @staticmethod
     def _parse_file_filaments(path, size):
-        """(types, colours) per tool from the first and last
-        FILAMENT_SCAN_BYTES of the file, the last winning."""
+        """(types, colours, used) per tool from the first and last
+        FILAMENT_SCAN_BYTES of the file, the last winning. used is the
+        '; filament used [mm]' line as text (Orca and PrusaSlicer write it
+        in the footer, comma separated)."""
         chunk = FILAMENT_SCAN_BYTES
         found = {}
         with open(path, 'rb') as f:
@@ -2192,20 +2194,37 @@ class IFS:
                 if sep and key in ('filament_type', 'filament_colour'):
                     found[key] = [v.strip().strip('"')
                                   for v in value.split(';')]
-        return found.get('filament_type', []), found.get('filament_colour', [])
+                elif sep and key == 'filament used [mm]':
+                    found[key] = [v.strip() for v in value.split(',')]
+        return (found.get('filament_type', []),
+                found.get('filament_colour', []),
+                found.get('filament used [mm]', []))
+    @staticmethod
+    def _used_tools(used):
+        """The tools a file prints with: above 0 mm in its '; filament used
+        [mm]' line (issue #67: Orca names every filament of the project,
+        used or not). Every tool when the file has no such line, and a tool
+        the line leaves out or gives no number for."""
+        def prints(t):
+            try:
+                return float(used[t]) > 0
+            except (IndexError, ValueError):
+                return True
+        return [t for t in TOOLS if not used or prints(t)]
     def _file_filaments(self):
-        """(types, colours) per tool from the header or footer of the file
-        printing now ('; filament_type' and '; filament_colour', as Orca and
-        PrusaSlicer write them), so files made before this change work too.
-        ([], []) when there is no file or it has no such lines. Runs on the
-        reactor: a whole-file read stalled the MCU at print start (issue
-        #22), so this reads at most 2 * FILAMENT_SCAN_BYTES, once per print
-        (print start asks twice: _map_loaded and _warn_shared_slots). An
-        unreadable file gives one console warning per print."""
+        """(types, colours, used) per tool from the header or footer of the
+        file printing now ('; filament_type', '; filament_colour' and
+        '; filament used [mm]', as Orca and PrusaSlicer write them), so files
+        made before this change work too. ([], [], []) when there is no file
+        or it has no such lines. Runs on the reactor: a whole-file read
+        stalled the MCU at print start (issue #22), so this reads at most
+        2 * FILAMENT_SCAN_BYTES, once per print (print start asks twice:
+        _map_loaded and _warn_shared_slots). An unreadable file gives one
+        console warning per print."""
         vsd = self.printer.lookup_object('virtual_sdcard', None)
         path = vsd.file_path() if vsd is not None else None
         if not path:
-            return [], []
+            return [], [], []
         try:
             st = os.stat(path)
             key = (path, st.st_size, st.st_mtime_ns)
@@ -2221,16 +2240,18 @@ class IFS:
                 self.gcode.respond_info(
                     "IFS: warning: cannot read %s for filament colours: %s"
                     % (os.path.basename(path), e))
-            return [], []
+            return [], [], []
         self.file_filaments_cache = (key, res)
         return res
     def _warn_shared_slots(self):
         """Message only: two tools that map to one slot, but the file names
         different filament for them (type or colour), print with that slot's
-        filament. Shown once, when a print starts."""
-        types, colours = self._file_filaments()
+        filament. Only tools the file prints with (_used_tools). Shown once,
+        when a print starts."""
+        types, colours, used = self._file_filaments()
         if not types and not colours:
             return
+        printing = self._used_tools(used)
         def filament(t):
             mtype = types[t].strip().upper() if t < len(types) else ''
             col = colours[t].strip() if t < len(colours) else ''
@@ -2240,7 +2261,7 @@ class IFS:
                                  colours[t] if t < len(colours) else '') if x]
             return " ".join(parts) or "no filament named"
         for slot in CHANNELS:
-            tools = [t for t in TOOLS if self.tool_map[t] == slot]
+            tools = [t for t in printing if self.tool_map[t] == slot]
             for i, a in enumerate(tools):
                 for b in tools[i + 1:]:
                     if filament(a) != filament(b):
@@ -2266,11 +2287,13 @@ class IFS:
         """Loaded-slot mode: each tool uses the loaded slot that matches its
         filament in the file (material, then nearest colour). Without file
         colours, tool t uses the (t mod n)th loaded slot in slot order. Returns
-        the loaded slots; none loaded leaves the map as it is."""
+        the loaded slots; none loaded leaves the map as it is. Tools the file
+        doesn't print with are matched too: a Tn outside the file (a macro, the
+        console) still gets the nearest filament."""
         loaded = mask_channels(self.last_status.get('silk_state', 0))
         if not loaded:
             return loaded
-        types, colours = self._file_filaments()
+        types, colours, _ = self._file_filaments()
         new = []
         for t in TOOLS:
             fallback = loaded[t % len(loaded)]

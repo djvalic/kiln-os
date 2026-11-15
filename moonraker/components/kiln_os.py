@@ -205,7 +205,7 @@ def read_api_version() -> Optional[str]:
 
 def version_key(ver: str) -> tuple:
     # vMAJOR.MINOR.PATCH[-pre][-test.RUN][+build]: build metadata doesn't
-    # count, a pre-release sorts before its release (v0.1.0-rc1 < v0.1.0),
+    # count, a pre-release sorts before its release (v1.0.0-rc2 < v1.0.0),
     # numbers in it compare as numbers (rc2 < rc10), and a builder test
     # build VERSION-test.RUN sorts just below VERSION. The same as
     # tools/release_version.py, which picks the versions the builder releases.
@@ -707,7 +707,7 @@ class KilnDeploy(BaseDeploy):
             self.channel = await self.get_channel()
             if self.channel == "test":
                 # Everything but drafts; the newest Kiln OS version wins
-                # (v0.1.0-rc2 < v0.1.0: the final after its candidates)
+                # (v1.0.0-rc2 < v1.0.0: the final after its candidates)
                 rel = pick_release(
                     await self.src.api("releases?limit=50&per_page=50"),
                     "test")

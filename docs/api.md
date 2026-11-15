@@ -137,9 +137,10 @@ Moonraker answers its errors with 400 (above).
 
 `GET /machine/kiln_os/info` gives two versions and a list of features:
 
-- `os_version`: the Kiln OS release (`v0.1.0`, or `v0.1.0+3.gabc1234` for
-  a build 3 commits after a release). Semver: a `-rc1` sorts before its
-  release, `+...` is build metadata.
+- `os_version`: the Kiln OS release (`v1.0.0`, or `v1.0.0+3.gabc1234` for
+  a build 3 commits after a release). Semver: a `-rc2` sorts before its
+  release, `+...` is build metadata. It is not the API version below:
+  Kiln OS 1.x and the API's own number move on their own.
 - `api_version`: the Kiln API version, `MAJOR.MINOR`. It is the same
   number as the plugin API (`docs/plugin-api.md`), and the same rules
   apply to this page: a **minor** step only adds (endpoints, parameters,

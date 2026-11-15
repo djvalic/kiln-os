@@ -1,0 +1,138 @@
+#!/bin/sh
+#
+# udevd (Buildroot's script), except in USB test mode: there stock's own
+# mdev daemon already handles /dev, which we share, so only the board
+# UARTs get the group our klipper user needs (as S10mdev did). Elsewhere
+# eudev's default rules give ttyS*, ttyACM* and ttyUSB* group dialout,
+# mode 660, and make the /dev/serial/by-id links.
+#
+DAEMON="udevd"
+PIDFILE="/var/run/$DAEMON.pid"
+
+SETTLE_TIMEOUT=30
+UDEVD_ARGS=""
+
+# shellcheck source=/dev/null
+[ -r "/etc/default/$DAEMON" ] && . "/etc/default/$DAEMON"
+
+# The owner's own rules: the root is read-only, so rules in
+# /data/ad5x/udev/rules.d are copied to /run/udev/rules.d, which udevd reads
+# too (a file there with the name of a rule in /lib/udev/rules.d replaces
+# it). Rules can run programs as root, so the folders and each file must be
+# root's and writable by root only; anything else is skipped and logged.
+# Plugins (owned by klipper) can't add rules this way. The recovery OS
+# (/etc/ad5x-recovery) never uses them: a rule that breaks the main OS
+# must not break what it gets repaired from.
+USER_RULES=/data/ad5x/udev/rules.d
+
+say() {	# to the console and the kernel log (dmesg, /var/log/messages)
+	echo "$*"
+	echo "$*" > /dev/kmsg 2>/dev/null
+}
+
+root_only() {	# owned by uid 0, not writable by group or others
+	# shellcheck disable=SC2046 # mode, links, uid as $1 $2 $3
+	set -- $(ls -ldn "$1" 2>/dev/null)
+	[ "$3" = 0 ] || return 1
+	case $1 in ?????w*|????????w*) return 1 ;; esac
+}
+
+user_rules() {
+	[ -d "$USER_RULES" ] || return 0
+	if [ -e /etc/ad5x-recovery ]; then
+		say "udevd: $USER_RULES not used in the recovery OS"
+		return 0
+	fi
+	if ! root_only /data/ad5x || ! root_only "${USER_RULES%/*}" ||
+		! root_only "$USER_RULES"; then
+		say "udevd: $USER_RULES skipped: not root's alone"
+		return 0
+	fi
+	mkdir -p /run/udev/rules.d
+	for f in "$USER_RULES"/*.rules; do
+		[ -e "$f" ] || continue
+		if [ -f "$f" ] && [ ! -L "$f" ] && root_only "$f"; then
+			cp "$f" /run/udev/rules.d/ && say "udevd: rule ${f##*/}"
+		else
+			say "udevd: rule ${f##*/} skipped: not a root-only file"
+		fi
+	done
+}
+
+start() {
+	if [ -n "$AD5X_USB" ]; then
+		echo "udevd: stock's mdev runs (USB test mode); ttyS* to group dialout"
+		chgrp dialout /dev/ttyS[0-9]*
+		chmod 660 /dev/ttyS[0-9]*
+		return 0
+	fi
+	user_rules
+	printf "Starting %s: " "$DAEMON"
+	[ -e /proc/sys/kernel/hotplug ] && printf '\000\000\000\000' > /proc/sys/kernel/hotplug
+	# shellcheck disable=SC2086 # we need the word splitting
+	start-stop-daemon --start --background --make-pidfile \
+		--pidfile "$PIDFILE" --exec "/sbin/$DAEMON" \
+		-- $UDEVD_ARGS
+	status=$?
+	if [ "$status" -eq 0 ]; then
+		echo "OK"
+	else
+		echo "FAIL"
+	fi
+	udevadm trigger --type=subsystems --action=add
+	udevadm trigger --type=devices --action=add
+	udevadm settle --timeout=$SETTLE_TIMEOUT || echo "udevadm settle failed"
+	return "$status"
+}
+
+stop() {
+	[ -n "$AD5X_USB" ] && return 0
+	printf "Stopping %s: " "$DAEMON"
+	udevadm control --exit
+	status=$?
+	if [ "$status" -eq 0 ]; then
+		echo "OK"
+	else
+		echo "FAIL"
+		return "$status"
+	fi
+	while start-stop-daemon --stop --test --quiet --pidfile "$PIDFILE" \
+		--exec "/sbin/$DAEMON"; do
+		sleep 0.1
+	done
+	rm -f "$PIDFILE"
+	return "$status"
+}
+
+restart() {
+	stop
+	start
+}
+
+reload() {
+	printf "Reloading %s config: " "$DAEMON"
+	udevadm control --reload
+	status=$?
+	if [ "$status" -eq 0 ]; then
+		echo "OK"
+	else
+		echo "FAIL"
+	fi
+	return "$status"
+}
+
+case "$1" in
+	start)
+		start;;
+	stop)
+		stop;;
+	restart)
+		restart;;
+	reload)
+		reload;;
+	*)
+		echo "Usage: $0 {start|stop|restart|reload}"
+		exit 1
+esac
+
+exit $?

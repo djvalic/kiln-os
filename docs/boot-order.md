@@ -81,7 +81,7 @@ package, not from Kiln.
 | `S05ad5x-data` | Kiln | Mounts `userdata` (p7) at `/data` (tmpfs if it fails). Restores the last saved clock. Mounts pstore. Lays out `printer_data`. Takes stock's root password from `usershare`. Writes `unit.cfg` once from stock's `Adventurer5M.json`. Binds SSH host keys. Converts an old full `printer.cfg`. Creates `plugins.cfg` once (adds bambufy-compat after zMod). Copies first-boot config files. Installs and updates `macros/*.cfg` (`ad5x-config-templates`). Migrates `moonraker.conf`. Trims Kiln's logs. | `usershare` (p6): `/etc/shadow`, `/config/Adventurer5M.json`; `/data/config/mod_data/` (zMod's files); `/usr/share/ad5x/defaults/` | `/data/ad5x/printer_data/{config,logs,gcodes,comms}`, `/data/ad5x/ssh/`, `/data/ad5x/plugins/` (created), `/run/ad5x/shadow` (bound over `/etc/shadow`), `/run/dropbear` (bind of `/data/ad5x/ssh/hostkeys`), the system clock |
 | `S06ad5x-modules` | Kiln (shared with recovery) | Stock kernel only: checks the vendor files (`ad5x-vendor ensure`) and loads Flashforge's driver modules from them in stock's order, then the touch driver. Loads the Wi-Fi driver from `usershare` if it is not loaded. On Kiln's kernels the drivers are built in: nothing to do. | `/data/ad5x/vendor/`, `/data/ad5x/stock/` (to refill the vendor files), `usershare` `/modules/8821cu.ko` | `/data/ad5x/vendor/` (when refilled), `/run/usershare` (mount point) |
 | `S07ad5x-board` | Kiln | The board heartbeat (PC11 toggled every second) and the boot logo with backlight. Kiln's kernels: sysfs GPIO and `ad5x-fb-show` (skipped when `S02` already drew the default logo). Stock kernel: stock's `cmd_*` tools from the vendor files. | `/data/ad5x/logo.jpg` (your own logo), `/run/ad5x/logo-early`, `/data/ad5x/vendor/` | GPIO, `/dev/fb0`, backlight |
-| `S10mdev` | Board overlay (Buildroot's, changed) | Starts the `mdev` daemon (device nodes, `/etc/mdev.conf` gives the board UARTs group `dialout`) and coldplugs modules. | `/etc/mdev.conf` | `/dev` |
+| `S10udevd` | Board overlay (Buildroot's, changed) | Copies the owner's rules from `/data/ad5x/udev/rules.d` to `/run/udev/rules.d` (only when the folders and each file are root's and writable by root only), starts eudev's `udevd`, triggers and settles (up to 30 s). eudev's rules and `61-kiln-serial.rules` give `ttyS*`, `ttyACM*` and `ttyUSB*` group `dialout`; `/dev/serial/by-id` and `/dev/v4l/by-id` links; `80-net-name-slot.rules` keeps `eth0`/`wlan0`; `60-persistent-v4l.rules` skips `v4l_id` on the H.264 decoder. In USB test mode stock's mdev keeps `/dev` and only `ttyS*` get group `dialout`. | `/etc/udev/rules.d`, `/lib/udev/rules.d`, `/data/ad5x/udev/rules.d` | `/dev`, `/run/udev` |
 | `S11modules` | Buildroot (initscripts) | Loads modules listed in `/etc/modules-load.d/`. Kiln has none, so it exits. | | |
 | `S35ad5x-sound` | Kiln | Kiln's kernels: exports the speaker's PWM channel (pwmchip0, channel 13) for user `klipper`. No speaker on the stock kernel. | `/sys/class/pwm/pwmchip0` | `/run/ad5x-sound.conf`, `/run/ad5x-sound/` |
 | `S40network` | Buildroot (ifupdown-scripts) | `ifup -a`. Kiln's `/etc/network/interfaces` has the loopback only. | `/etc/network/interfaces` | |
@@ -133,8 +133,9 @@ branch do nothing). Scripts with a `stop` branch include
 
 Built from `ad5x_recovery_defconfig`. It shares `S06ad5x-modules`,
 `S41ad5x-eth` and `S42ad5x-wifi` with the main OS (installed from the main
-package's sources by `ad5x-recovery.mk`), and `rcS`, `S10mdev`,
-`/etc/mdev.conf` and `/etc/network/interfaces` from the main overlay. A
+package's sources by `ad5x-recovery.mk`), and `rcS`, `S10udevd`, its
+rules in `/etc/udev/rules.d` (network names, v4l, serial ports) and
+`/etc/network/interfaces` from the main overlay. A
 change to one of those shared files changes both systems: test the
 recovery OS too.
 
@@ -148,7 +149,7 @@ recovery OS too.
 | `S05ad5x-data` | Kiln (recovery's own) | Mounts `userdata` at `/data` (one `e2fsck -p` and a second try if the mount fails; tmpfs without it). Restores the clock. Stock's root password from `usershare`. Binds the SSH host keys (the same keys as the main OS). | `usershare` `/etc/shadow`, `/data/ad5x/clock` | `/data/ad5x/{ssh/hostkeys,update,recovery}` (created), `/run/ad5x/shadow`, `/run/dropbear` |
 | `S06ad5x-modules` | Kiln (shared) | Loads Flashforge's drivers from the vendor files (always: recovery runs the stock kernel). | `/data/ad5x/vendor/`, `/data/ad5x/stock/` | `/data/ad5x/vendor/` (when refilled) |
 | `S07ad5x-board` | Kiln (recovery's own) | Heartbeat and the recovery logo, with stock's board tools. | `/data/ad5x/recovery/logo.jpg`, `/data/ad5x/vendor/` | GPIO, `/dev/fb0`, backlight |
-| `S10mdev` | Main overlay | As in the main OS. | | |
+| `S10udevd` | Main overlay | As in the main OS, without the owner's rules from `/data/ad5x/udev/rules.d`. udev makes no `/dev/disk/by-*` links here (the recovery overlay's empty `60-persistent-storage.rules`): `S01ad5x-recovery` makes the by-partlabel ones. | | |
 | `S11modules` | Buildroot | As in the main OS. | | |
 | `S40network` | Buildroot | Loopback only. | | |
 | `S41ad5x-eth` | Kiln (shared) | As in the main OS. | `/data/ad5x/network.conf` | |
