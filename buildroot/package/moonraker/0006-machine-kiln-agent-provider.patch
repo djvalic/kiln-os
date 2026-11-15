@@ -1,0 +1,43 @@
+machine: kiln_agent provider, services through the root agent
+
+Kiln OS has BusyBox init, no systemd, and Moonraker runs as klipper, so
+Fluidd's service buttons and the update manager's managed_services had
+nothing to restart with (provider: none). "[machine] provider: kiln_agent"
+takes the provider class from Kiln's kiln_os component: it lists klipper,
+moonraker, nginx, helixscreen and ad5x-camera with their state (from the
+init scripts' pid files) and hands start/stop/restart to the root update
+agent (S68ad5x-update-agent), which refuses while a print runs. A
+Moonraker restart waits for the agent's answer, which comes before the
+agent restarts Moonraker, so a refusal reaches the caller instead of being
+dropped in a background task.
+
+Upstream: not submitted (AD5X open OS)
+
+--- a/moonraker/components/machine.py
++++ b/moonraker/components/machine.py
+@@ -115,6 +115,11 @@
+             "supervisord_cli": SupervisordCliProvider
+         }
+         self.provider_type = config.get('provider', 'systemd_dbus')
++        if self.provider_type == "kiln_agent":
++            # Kiln OS: BusyBox init, services through the root agent
++            # (components/kiln_os.py, S68ad5x-update-agent)
++            from .kiln_os import service_provider
++            providers["kiln_agent"] = service_provider(BaseProvider)
+         pclass = providers.get(self.provider_type)
+         if pclass is None:
+             raise config.error(f"Invalid Provider: {self.provider_type}")
+@@ -338,7 +343,12 @@
+             if action != "restart":
+                 raise self.server.error(
+                     f"Service action '{action}' not available for moonraker")
+-            self.restart_moonraker_service()
++            if self.provider_type == "kiln_agent":
++                # Kiln OS: the agent answers before it restarts Moonraker,
++                # so a refusal (a print is running) reaches the caller
++                await self.do_service_action(action, name)
++            else:
++                self.restart_moonraker_service()
+         elif self.sys_provider.is_service_available(name):
+             await self.do_service_action(action, name)
+         else:

@@ -8,7 +8,7 @@ z_ad5x macro configs), ninjamida's nopoop and QuickSwap plugins and
 Bambufy's documented slicer G-code; the macros were written for this
 project, nothing was copied.
 
-Checked against the user's files (about 140, two profile families):
+Checked against the developer's G-code files (about 140, two profile families):
 "AD5X Nopoop .4/.6" (59 files: `SAVE_VARIABLE use_trash_on_print`,
 `START_PRINT`, `T<n>`, `_GOTO_TRASH`, `_SBROS_TRASH`, `_DISABLE_SENSOR` /
 `_ENABLE_SENSOR`, `END_PRINT`) and "Flashforge AD5X 0.4/0.6 nozzle - Home"
@@ -20,17 +20,17 @@ exists and does what is described below.
 
 | zMod / slicer | Count in the files | Here | Plugin |
 |---|---|---|---|
-| `START_PRINT EXTRUDER_TEMP= BED_TEMP=` | 140 | `PRINT_START EXTRUDER= BED=`, then `LINE_PURGE`; without `EXTRUDER_TEMP=`/`BED_TEMP=` the temperatures the file already set (its own `M104`/`M140`), else zMod's 245 / 80 | zmod-compat |
+| `START_PRINT EXTRUDER_TEMP= BED_TEMP=` | 140 | `PRINT_START EXTRUDER= BED=`, then `LINE_PURGE`; without `EXTRUDER_TEMP=`/`BED_TEMP=` the temperatures the file already set (its own `M104`/`M140`), else zMod's 245 / 80. A temperature that is not a number or is out of range stops the start (see the rule below) | zmod-compat |
 | `START_PRINT` without `FORCE_*` | | `PRINT_START` decides: the printer's `macros/print_start.cfg` meshes the print area every print (zMod's `print_leveling: 1` + `use_kamp: 1`); the factory one does the stock Z check. The bed heat soak applies too; `SOAK=<s>` is passed on (ours, not zMod's) | zmod-compat |
 | `START_PRINT FORCE_LEVELING=1` / `FORCE_KAMP=1` | | `PRINT_START LEVEL=1 ADAPTIVE=0` / `ADAPTIVE=1` | zmod-compat |
 | `START_PRINT TOOL=n` (Bambufy) | | `PRINT_START TOOL=n` (loads it at the end of the start). TOOL must be a whole number or -1 (see the rule below) | zmod-compat |
 | `START_PRINT SKIP_LEVELING= MESH= INTERNAL= EXTERNAL=` | | accepted, not needed | zmod-compat |
-| `START_PRINT Z_OFFSET=` | | ignored, saved Z offset used (zMod with `load_zoffset: 1`, the user's setting) | zmod-compat |
+| `START_PRINT Z_OFFSET=` | | ignored, saved Z offset used (zMod with `load_zoffset: 1`, the developer's setting) | zmod-compat |
 | `END_PRINT` | 140 | `PRINT_END`; `unload_filament: 1` unloads the IFS lane first (zMod `remove_filament`) | zmod-compat |
 | `T0`-`T3` | 5,665 | `IFS_SWAP` through the tool map (`ifs.cfg`); purge decided by the mode below | core / nopoop |
 | `SAVE_VARIABLE VARIABLE=use_trash_on_print VALUE=0|2` | 50 | purge mode for the print's tool changes | nopoop |
 | `SAVE_ZMOD_DATA USE_TRASH_ON_PRINT=0|1|2` | | the same save variable (zMod's documented way); another value is refused, not saved. `REMOVE_FILAMENT`, `DISABLE_PRIMING`, `PRINT_LEVELING`, `USE_KAMP`: not saved, a line names the `local.cfg` setting here (table below). Other keys: one line, ignored | zmod-compat |
-| `_GOTO_TRASH [SPEED=]` | 337 | into the purge box: X 52.5, Y 229 plus this printer's offsets (`unit.cfg`); X first, leaving the box towards Y 220 if inside it; nothing if already there | zmod-compat |
+| `_GOTO_TRASH [SPEED=]` | 337 | into the purge box: X 52.5, Y 229 plus this printer's offset (`TRASH_OFFSET`, else `unit.cfg`; as `_PURGE_BOX_POS` holds it); X first, leaving the box towards Y 220 if inside it; nothing if already there | zmod-compat |
 | `_SBROS_TRASH` | 337 | out of the box to Y 220, back in, out again (knocks the purge off) | zmod-compat |
 | `_DISABLE_SENSOR` / `_ENABLE_SENSOR` | 81 / 81 | toolhead runout sensor (`toolhead`) off / back on, only if it was on | zmod-compat |
 | `_NOPOOP` | 1,962 | next tool change: prime only (the prime tower purges) | bambufy-compat |
@@ -56,6 +56,20 @@ no tool and the console shows an error. That covers an unexpanded
 placeholder such as `TOOL=[initial_tool]` (before this check it became tool
 0) and an empty `TOOL=`, which used to load tool 0 and now loads none. Use
 the slicer's expanded value.
+
+Temperature rule (same check in `START_PRINT` and both `PRINT_START`s): an
+`EXTRUDER_TEMP=`/`BED_TEMP=` (`EXTRUDER=`/`BED=`) that is not a number, such
+as an unexpanded `[nozzle_temperature_initial_layer]` or
+`{first_layer_temperature[0]}`, or an empty value, stops the print before
+anything heats, with an error naming the parameter and the value received.
+So does a nozzle below `min_extrude_temp` (170 here; never below 150) or
+above `max_temp` (350), and a bed above its `max_temp` (130). Bed 0 is
+accepted: the bed stays off, which some PLA profiles choose. zMod itself
+turns such text into 0 with `|float` and then skips heating that heater
+(`_WAIT_TEMP` heats only a non-zero target), so the print starts with a
+cold nozzle or bed; before this check START_PRINT here passed the 0 on and
+`PRINT_START` heated to 0. A missing parameter is not an error: the file's
+own `M104`/`M140`, else the default (above).
 
 Not provided (no file calls them; zMod-only machinery): zMod's other
 `SAVE_ZMOD_DATA` settings (see the table), `REBOOT` / `SHUTDOWN` (shell
@@ -111,7 +125,7 @@ Differences from zMod:
   so it flushes the new colour.
 - The prime length: zMod inserts 12 mm (plus its
   `filament_unload_before_cutting`, 0 by default); QuickSwap's
-  `insert_base_distance` was 8 mm on the user's printer, plus its own
+  `insert_base_distance` was 8 mm on the developer's printer, plus its own
   pre-cut retract. This system doesn't retract before the cut, so 12 mm
   is the starting point. Thin first prime-tower lines: raise
   `prime_length` in `local.cfg` (`[ifs]`); blobs on the tower: lower it.
@@ -119,7 +133,7 @@ Differences from zMod:
   (`after_gcode`); in mode 2 the slicer's `_GOTO_TRASH` then goes to the
   box again. zMod stayed at the box in mode 2.
 
-## The user's zMod settings and their counterparts
+## The developer's zMod settings and their counterparts
 
 | zMod (variables.cfg / user.cfg) | Here |
 |---|---|

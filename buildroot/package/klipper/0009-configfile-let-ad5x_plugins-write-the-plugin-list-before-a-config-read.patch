@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: valix <djvalic.wc@gmail.com>
+Date: Fri, 13 Nov 2026 12:00:00 +0000
+Subject: [PATCH] configfile: let ad5x_plugins write the plugin list before a
+ config read
+
+Kiln OS only. ad5x.cfg includes plugins-active.cfg, the printer's
+plugins.cfg with each enabled plugin that can't run (incompatible,
+broken, missing, a required plugin off, a conflict) left out, so a
+skipped plugin's config isn't read. Klipper offers no step before it
+reads its config, so read_main_config calls
+extras.ad5x_plugins.before_config_read() first: the list follows
+plugins.cfg at every start, RESTART and FIRMWARE_RESTART, also when the
+last start stopped before [ad5x_plugins]. Without that module (a plain
+Klipper) nothing changes; an error there is logged, never fatal.
+---
+ klippy/configfile.py | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/klippy/configfile.py b/klippy/configfile.py
+--- a/klippy/configfile.py
++++ b/klippy/configfile.py
+@@ -477,6 +477,14 @@
+         fileconfig = cfgrdr.build_fileconfig(data, filename)
+         return ConfigWrapper(self.printer, fileconfig, {}, 'printer')
+     def read_main_config(self):
++        # Kiln OS: [ad5x_plugins] writes the plugin include list
++        # (plugins-active.cfg) from plugins.cfg first, so an edit of
++        # plugins.cfg applies at the next start or RESTART
++        try:
++            import extras.ad5x_plugins
++            extras.ad5x_plugins.before_config_read(self.printer)
++        except Exception:
++            logging.exception("ad5x_plugins: plugin list not updated")
+         fileconfig, autosave_fileconfig = self.autosave.load_main_config()
+         access_tracking = self.validate.start_access_tracking(
+             autosave_fileconfig)
+-- 
+2.56.0
+

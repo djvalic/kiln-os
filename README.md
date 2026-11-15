@@ -36,7 +36,7 @@ for if it goes wrong, and how to go back.
   the default hotend heating check.
 - **Open web and touch interfaces.** Fluidd on port 80 with Moonraker, and
   HelixScreen on the panel. The touch screen can also be used from the
-  browser. USB cameras stream to Fluidd (one `ustreamer` per camera).
+  browser. Up to two USB cameras stream to Fluidd (one `ustreamer` per camera).
 - **Recovery OS and A/B slots.** Kiln OS uses the printer's own two eMMC
   slots: the main system in one, a recovery OS in the other. A main system
   that fails to finish starting lands in recovery at the next power cycle.
@@ -117,11 +117,21 @@ built in from source instead of Flashforge's out-of-tree modules:
 - Wi-Fi through mainline `rtw88`, and the touch screen through mainline
   `tsc2007`.
 
+The image also carries an **opt-in mainline Linux 7.3** kernel: Hunter
+Laux's AD5X port of mainline Linux, written to mainline's standards (both
+CPU cores, the display through DRM, eMMC, USB, Ethernet, Wi-Fi, the IFS
+over RS-485, the speaker, the watchdog), plus a few Kiln patches
+([kernel-mainline/](kernel-mainline/)). 6.6 stays the default.
+`ad5x-kernel mainline on` (over SSH, as root) starts 7.3 from the next
+boot, `ad5x-kernel mainline off` goes back to 6.6. A start of 7.3 that
+fails falls back to 6.6 in the same boot, and 6.6 is used until
+`ad5x-kernel retry`.
+
 The printer's stock 5.10 kernel stays in its boot slot, and every boot
 still begins with it: the first boot script (`S00ad5x-kernel`) loads our
-kernel from the release image and starts it from RAM (`chainload.ko`; the
-stock kernel has no kexec). Nothing is written to the boot slots or the
-boot flag, and there is no setting to choose a kernel.
+kernel (6.6, or 7.3 when it is on) from the release image and starts it
+from RAM (`chainload.ko`; the stock kernel has no kexec). Nothing is
+written to the boot slots or the boot flag.
 
 The stock kernel is only the safety net: if a start of ours doesn't
 complete (a hang, then a power cycle; or a panic, which reboots by itself),
@@ -172,6 +182,9 @@ come back in line, see [docs/ifs-troubleshooting.md](docs/ifs-troubleshooting.md
 - **Recover**: [docs/recovery-os.md](docs/recovery-os.md). A failed start
   lands in the recovery OS, which has SSH, an update page on port 8080,
   backup and restore, and USB rescue.
+- **Serial console**: the mainboard's DEBUG header (3.3 V) gives a root
+  shell without a network, once our kernel runs
+  ([docs/serial-console.md](docs/serial-console.md)).
 - **Back to stock**: `ad5x-restore-stock` on the main OS checks the saved
   stock system and reboots into the recovery OS, whose "Restore stock" puts
   it back into its slot ([docs/install.md](docs/install.md), "Going back to
@@ -186,6 +199,8 @@ built by `tools/build_mcu.sh`, the update and install files by
 `tools/make_swu.sh` and `tools/make_install_stick.sh`.
 `tools/check_vendor_free.sh` checks that an image contains no Flashforge
 files.
+
+**Documentation:** every page is listed in [docs/README.md](docs/README.md); to work on the code, start with [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Credits
 
@@ -202,9 +217,13 @@ This builds on the work of many projects:
   the MCU bootloader patches in `klipper/mcu-patches/` (GPL-3.0)
 - [QuickSwap](https://github.com/ninjamida/quickswap-5x) and NoPoop by
   ninjamida, and Bambufy: ideas and G-code interfaces (no code copied)
-- Hunter Laux ([@jolting](https://github.com/jolting)): the native Klipper
-  firmware for the IFS board, proposed in GitHub pull request #16. Not yet
-  merged; credited here for the work and its ideas
+- Hunter Laux ([@jolting](https://github.com/jolting)): the mainline
+  Linux 7.3 port for the AD5X (PR #46), the native Klipper firmware for
+  the IFS board (opt-in, from PR #16), and pull requests #24 (print start
+  reads the job file once), #32 (Kiln OS's own board flashing tools), #39
+  (toolhead board updates without a power-cycle), #41 (the Klipper IFS
+  found more reliably), #50 (the public source builds again) and #52
+  (plugins can't steer the update agent)
 - Ingenic's Linux 6.6 SDK kernel for the X2000/X2600 (GPL-2.0)
 - [Buildroot](https://buildroot.org/), BusyBox, [SWUpdate](https://sbabic.github.io/swupdate/),
   [LVGL](https://lvgl.io/) (MIT), Noto fonts (OFL-1.1)

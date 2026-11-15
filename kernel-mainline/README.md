@@ -55,7 +55,8 @@ Each patch must be acceptable to a mainline reviewer:
 
 ## Status
 
-**On the printer** (2026-11-09): 74 patches, checkpatch `--strict` clean,
+**On the printer** (2026-11-09): the series' 74 patches (79 files in
+`patches/` with Kiln's five above), checkpatch `--strict` clean,
 every commit builds with `W=1`, `dt_binding_check` and `dtbs_check` clean,
 sparse (v0.6.5-rc1, `C=2` on every C file the series touches) clean apart
 from code it doesn't change (`asm/mips-cm.h`, three 32-bit constants in
@@ -309,8 +310,9 @@ mounts `/data` read-write (the boot flag is safe: `ad5x.noslot`).
   flag (`head -c 11 /dev/mmcblk0p5`) reads `ota:kernel2` again once
   `S99ad5x-booted` ran. Before that it points at recovery, and the next
   power cycle boots recovery (leave it with `ad5x-boot-main`).
-- Once the image has the one-shot test boot, `ad5x-kernel test IMAGE` plus a
-  reboot replaces the first step.
+- The image's own 7.3 build needs none of this: `ad5x-kernel mainline on`
+  and a reboot start it, with 6.6 as the fallback. There is no
+  `ad5x-kernel` command for an arbitrary test image.
 
 ## Tools
 

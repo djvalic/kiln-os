@@ -4,13 +4,16 @@
 #
 # usage: tools/release.sh VERSION [--public] [--draft] [--pre] [--no-build]
 #                         [--notes FILE] [--dry-run] [--no-push]
-#   VERSION     vMAJOR.MINOR.PATCH (e.g. v0.1.0; -rc1 etc. allowed)
+#   VERSION     vMAJOR.MINOR.PATCH (e.g. v0.1.0). Any suffix, a release
+#               candidate v0.1.0-rc1..9 too, makes a pre-release on Gitea and
+#               GitHub: only printers on the test update channel are
+#               offered it (docs/updates.md, "Test channel")
 #   --public    artifacts meant for publication: they must contain no
 #               Flashforge files (tools/check_vendor_free.sh must pass on
 #               both images); update zips carry no kernel. Without it the
 #               release is private (home Gitea only) and may contain them.
 #   --draft     create the Gitea release as a draft
-#   --pre       mark it as a pre-release
+#   --pre       mark it as a pre-release (automatic with a suffix)
 #   --no-build  use the images already in buildroot/output*/images
 #   --notes F   use F as the release notes instead of the generated ones
 #   --dry-run   build artifacts and notes into dist/VERSION, no tag, no upload
@@ -34,7 +37,7 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 cd "$REPO"
 
 die() { echo "release: $*" >&2; exit 1; }
-usage() { sed -n '2,24p' "$0"; exit "${1:-2}"; }
+usage() { sed -n '2,23p' "$0"; exit "${1:-2}"; }
 
 VERSION= PUBLIC= DRAFT=false PRE=false BUILD=1 NOTES= DRY= PUSH=1
 while [ $# -gt 0 ]; do
@@ -55,7 +58,16 @@ done
 [ -n "$VERSION" ] || usage
 [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] ||
 	die "VERSION must look like v0.1.0 (got $VERSION)"
-case "$VERSION" in *-*) PRE=true ;; esac
+# Release candidates stop at -rc9: Fluidd sorts -rc10 before -rc9
+# (docs/releasing.md, "Release candidates")
+python3 tools/release_version.py rc "$VERSION" || exit 1
+# A version with a suffix, a release candidate (-rcN) too, is a
+# pre-release on Gitea and GitHub: printers on the stable update channel
+# read releases/latest, which skips it, and stay on the last vX.Y.Z; the
+# test channel takes it (docs/releasing.md, "Release candidates")
+if [ "$(python3 tools/release_version.py pre "$VERSION")" = true ]; then
+	PRE=true
+fi
 
 # --- Checks --------------------------------------------------------------
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
@@ -188,17 +200,35 @@ echo "release: artifacts in $DIST:"
 # --- Tag, push, Gitea release ------------------------------------------------
 git tag -a "$VERSION" -F "$DIST/RELEASE_NOTES.md" "$COMMIT"
 echo "release: tagged $VERSION at $COMMIT"
+# CHANGELOG.md: the released entries move under "## VERSION (date)" and a
+# new empty "## Unreleased" starts, so the next release's notes don't
+# repeat them. A commit of its own after the tagged one: the tag stays on
+# the commit the images were built from.
+python3 tools/release_version.py changelog "$VERSION" "$(date +%F)" CHANGELOG.md ||
+	echo "release: warning: CHANGELOG.md not renamed"
+if ! git diff --quiet -- CHANGELOG.md; then
+	git commit -q -m "CHANGELOG: $VERSION released" -- CHANGELOG.md
+	echo "release: CHANGELOG.md: Unreleased is now $VERSION"
+fi
 [ -n "$PUSH" ] || { echo "release: --no-push: not pushed or uploaded"; exit 0; }
-# The branch only when it has commits the remote lacks (the builder's
-# "Upstream" commit); master may have moved on meanwhile, the tag still
-# names the released commit
+# The branch up to the tag only when it has commits the remote lacks (the
+# builder's "Upstream" commit); master may have moved on meanwhile, the tag
+# still names the released commit
 BR=$(git branch --show-current)
 git fetch -q origin
-if git merge-base --is-ancestor HEAD "origin/$BR" 2>/dev/null; then
+if git merge-base --is-ancestor "$COMMIT" "origin/$BR" 2>/dev/null; then
 	git push -q origin "$VERSION"
 else
-	git push -q origin "$BR" "$VERSION" ||
+	git push -q origin "$COMMIT:refs/heads/$BR" "$VERSION" ||
 		die "push failed: origin/$BR has commits this release lacks (rebase, then release again)"
+fi
+# Then the CHANGELOG commit. The release stands without it: when the branch
+# moved on meanwhile it is not pushed (no rebase here: the public source
+# export below must stay the released tree) and the rename is left to do
+# by hand.
+if [ "$(git rev-parse HEAD)" != "$COMMIT" ]; then
+	git push -q origin "HEAD:refs/heads/$BR" ||
+		echo "release: warning: CHANGELOG.md commit not pushed: rename \"## Unreleased\" to \"## $VERSION ($(date +%F))\" on $BR by hand"
 fi
 
 API=$GITEA_URL/api/v1/repos/$GITEA_REPO
@@ -220,5 +250,7 @@ echo "release: $GITEA_URL/$GITEA_REPO/releases/tag/$VERSION"
 
 # The public GitHub repository (source export and release), when configured
 if [ -n "$PUBLIC" ] && [ "$DRAFT" = false ] && [ -x tools/publish_github.sh ]; then
-	tools/publish_github.sh os "$VERSION" "$DIST" || die "GitHub release failed"
+	GHPRE=()
+	[ "$PRE" = true ] && GHPRE=(--prerelease)
+	tools/publish_github.sh os "$VERSION" "$DIST" "${GHPRE[@]}" || die "GitHub release failed"
 fi

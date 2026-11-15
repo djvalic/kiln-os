@@ -18,6 +18,23 @@
 # system's PLUGIN_API_VERSION, when a plugin it requires is off, or when a
 # conflicting one is on.
 #
+# Skipped plugins: Klipper doesn't read plugins.cfg itself but
+# plugins-active.cfg next to it (ad5x.cfg includes it): plugins.cfg with
+# the include line of each enabled plugin that can't run commented out
+# (missing, bad plugin.json or plugin.cfg, requires_os doesn't fit, a
+# plugin it requires not loaded, a conflict with one listed before it, a
+# plugin that drives the IFS while the IFS isn't on Klipper firmware, a
+# second plugin that drives the IFS).
+# So a skipped plugin's config, extras and Moonraker part all stay out,
+# with one warning each. Written before each config read (every start,
+# RESTART, FIRMWARE_RESTART: host Klipper patch 0009 calls
+# before_config_read, so hand edits of plugins.cfg take effect then), when
+# plugins change, and by S61klipper before Klipper starts ("ad5x_plugins.py
+# klipper", for a Klipper without patch 0009). plugins.cfg is never
+# changed for this. With an older ad5x.cfg that still includes plugins.cfg
+# itself (a newer daily Klipper package on an older OS) the list isn't
+# written and a skipped plugin's config is still read, as before.
+#
 # Extras: Klipper loads modules only from klippy/extras (read-only image).
 # This module, loaded before the plugins' sections (ad5x.cfg declares it
 # before including plugins.cfg), imports each enabled plugin's
@@ -29,26 +46,38 @@
 # extras package path, so its modules import each other as Klipper's do),
 # and printer.load_object() also finds plugin modules.
 #
+# Name collisions between running plugins: an extras module two plugins
+# have stops Klipper (above). A Moonraker component or python/ library two
+# plugins have is the first one's (plugins.cfg order), a Klipper section
+# two plugins define is merged (the later one's options win): no error, so
+# Klipper shows one warning each (collisions), except for a section of a
+# plugin the later one requires.
+#
+# Reserved names (plugin API 1.6): kiln_ and ad5x_ are kept for Kiln OS and
+# its official plugins (shipped, or in the catalog from Kiln's own
+# repositories). Any other plugin with an extras module, Moonraker
+# component, plugin.cfg section or macro starting with one of them can't be
+# enabled and is skipped, like a plugin with a bad plugin.json
+# (reserved_names; tools/check_plugin.py reports the same).
+#
 # IFS owner (plugin API 1.5): a plugin with "owns_ifs": true in plugin.json
 # drives the IFS itself (e.g. Happy Hare) instead of Kiln's [ifs] module.
 # It needs the IFS on Klipper firmware (S61klipper writes IFS_KLIPPER_FLAG
-# when the IFS answers as Klipper), and its plugin.cfg sets [ifs] enable:
+# when the IFS answers as Klipper; without it the owner is skipped, so
+# Kiln's [ifs] runs the IFS as if the plugin were off; plan, with the
+# same flag in S61klipper, Klipper and S62moonraker), and its plugin.cfg
+# sets [ifs] enable:
 # False and brings its own [mcu ifs] and pins. Kiln's IFS pins
 # (generic-flashforge-ifs.cfg, linked into IFS_MCU_DIR, which ifs.cfg
 # includes) are then left out: sync_ifs_mcu keeps the link in step with
 # plugins.cfg, at boot (S61klipper: "ad5x_plugins.py ifs-mcu") and
-# whenever plugins change. One owner at a time.
+# whenever plugins change. One owner at a time: ENABLE_PLUGIN refuses a
+# second one, and a second one enabled by hand is skipped like a conflict
+# (plan: the first in plugins.cfg drives the IFS, one warning).
 #
 # Moonraker: run as a script (S62moonraker does, before Moonraker starts)
 # it writes moonraker-plugins.conf, the [include] list of the enabled
 # plugins' moonraker.conf files; Klipper rewrites it when plugins change.
-# Developer root actions (docs/plugin-root-actions.md): a plugin lists the
-# named actions it needs in plugin.json "root_actions". DEV_ROOT_REQUEST
-# PLUGIN= ACTION= [ARGS=] writes one request file for root (in
-# /data/ad5x/dev-root/requests); root writes the result (results/) and
-# klipper reports it. Nothing is granted here: the owner turns actions on at
-# the printer (ad5x-dev-root enable), and grants/ is read-only for klipper.
-# DEV_ROOT_STATUS shows them. Off by default.
 # Moonraker reads it at its next start. A plugin's python/ (libraries) and
 # moonraker/components/ (Moonraker components) directories (plugin API
 # 1.3): Klipper gets python/ on sys.path before the extras load;
@@ -64,10 +93,35 @@
 # Moonraker. HelixScreen's Settings > Plugins uses these. See
 # docs/plugins.md and docs/plugin-api.md.
 #
+# Root scripts (plugin API 1.6, zMod's model; docs/plugin-root-hooks.md): a
+# plugin may ship root/install.sh, root/update.sh and root/uninstall.sh.
+# Klipper runs as klipper, so it asks the root update agent
+# (S68ad5x-update-agent, lib/plugin-root.sh): it packs the plugin's root/
+# folder into AGENT_DIR/plugin-<name>.tar, writes AGENT_DIR/plugin-request
+# (action, name, sha256) and waits for AGENT_DIR/plugin-status (a timer, at
+# most ROOT_WAIT; printer.ad5x_plugins.job meanwhile). Root runs the
+# script from its own copy, PLUGINS_ROOT_DIR/<name>, never from the
+# plugin's folder.
+#   ENABLE_PLUGIN       a plugin with root scripts needs ROOT=1 (they run as
+#                       root); install.sh runs first, and only when it says
+#                       ok is plugins.cfg written and Klipper restarted
+#   klippy:ready        an enabled plugin whose root/ differs from root's
+#                       copy (its .sha256), after UPDATE_PLUGIN or
+#                       Moonraker's update manager: update.sh runs by itself
+#                       when root/ is what git checked out (or the plugin is
+#                       shipped); a root/ changed any other way (uploaded in
+#                       Fluidd's file manager, copied by hand) only gets a
+#                       warning: ENABLE_PLUGIN NAME= ROOT=1 runs update.sh
+#   DISABLE_PLUGIN,     uninstall.sh (root's copy) runs, then the plugin is
+#   REMOVE_PLUGIN       switched off or removed, whatever it answered
+#
 # Copyright (C) 2026  ad5x-open contributors
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
+import configparser
+import hashlib
 import importlib
+import io
 import json
 import logging
 import os
@@ -76,12 +130,12 @@ import shutil
 import stat
 import subprocess
 import sys
-import time
+import tarfile
 
 # The plugin API this system offers (docs/plugin-api.md): major.minor.
 # Minor: additions only. Major: something plugins may use changed or went.
 # post-build.sh copies it to /usr/lib/os-release as AD5X_PLUGIN_API.
-PLUGIN_API_VERSION = "1.5"
+PLUGIN_API_VERSION = "1.6"
 
 CONFIG_DIR = "/home/klipper/printer_data/config"
 SHIPPED_DIR = "/usr/share/ad5x/plugins"
@@ -95,10 +149,32 @@ GIT_TIMEOUT = 600.
 # S61klipper) and no enabled plugin owns the IFS
 IFS_MCU_DIR = "/run/ad5x/ifs-mcu"
 IFS_KLIPPER_FLAG = "/run/ad5x/ifs-klipper"
+# Why an IFS owner is skipped while the IFS doesn't answer as Klipper
+IFS_NOT_KLIPPER = ("drives the IFS, which needs the IFS on Klipper "
+                   "firmware, and the IFS didn't answer as Klipper at this "
+                   "boot: Kiln's IFS module runs it instead. To use the "
+                   "plugin: /data/ad5x/ifs-klipper.enable, then reboot "
+                   "(docs/mcu-flashing.md)")
 GENERIC_IFS_CFG = "/usr/share/ad5x/config/generic-flashforge-ifs.cfg"
+# The image's ad5x.cfg: whether it includes plugins-active.cfg (older
+# ones include plugins.cfg itself)
+FACTORY_CFG = "/usr/share/ad5x/config/ad5x.cfg"
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
 MODULE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+# plugin.json keys read_metadata reads; others are ignored here and
+# reported by tools/check_plugin.py
+PLUGIN_JSON_KEYS = ('name', 'description', 'version', 'author', 'url',
+                    'requires_os', 'requires', 'conflicts', 'owns_ifs')
+# Name prefixes kept for Kiln OS and its official plugins (plugin API 1.6,
+# docs/plugin-api.md "Names"): Klipper modules, Moonraker components,
+# plugin.cfg sections and macros of any other plugin starting with them
+# make it unusable (reserved_names; tools/check_plugin.py reports them).
+# Official: shipped in the image, or in the catalog from one of Kiln's own
+# repositories (OFFICIAL_URL_PREFIXES)
+RESERVED_PREFIXES = ('ad5x_', 'kiln_')
+RESERVED_MODULE_PREFIXES = RESERVED_PREFIXES
+OFFICIAL_URL_PREFIXES = ('https://github.com/djvalic/kiln-',)
 # [include <dir>/<name>/plugin.cfg], with or without the glob brackets
 INCLUDE_RE = re.compile(
     r"^\s*\[include\s+(?P<path>\S*/(?P<name>[A-Za-z0-9_.-]+)/"
@@ -106,19 +182,16 @@ INCLUDE_RE = re.compile(
 # print_stats states during which plugins can't be switched (it restarts)
 BUSY_STATES = ("printing", "paused")
 
-# Developer root actions (docs/plugin-root-actions.md)
-DEV_ROOT_DIR = "/data/ad5x/dev-root"
-ROOT_ACTIONS_FILE = "/usr/share/ad5x/root-actions.conf"
-ROOT_ACTION_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
-PLUGIN_NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,47}")
-# One request argument: plain characters only, no shell or path characters
-ROOT_TOKEN_RE = re.compile(r"[A-Za-z0-9._+=,:@%-]{1,128}")
-ROOT_MAX_ACTIONS = 16
-ROOT_MAX_ARGS = 16
-ROOT_RATE_SECONDS = 10.
-ROOT_RESULT_WAIT = 600.
-# <plugin>.<n>.req / .res (n: a number, unique per request)
-ROOT_FILE_RE = re.compile(r"([a-z0-9][a-z0-9_-]{0,47})\.([0-9]{1,20})\.(req|res)")
+# Root scripts (docs/plugin-root-hooks.md): the scripts a plugin's root/
+# folder may hold, root's copies of those folders, the root update agent's
+# folder (requests, answers) and the most root takes
+ROOT_HOOKS = ('install.sh', 'update.sh', 'uninstall.sh')
+PLUGINS_ROOT_DIR = "/data/ad5x/plugins-root"
+AGENT_DIR = "/data/ad5x/kiln-update"
+ROOT_TAR_MAX = 8 << 20
+# How long Klipper waits for root's answer: root gives a script 300 s, and
+# the agent may be busy with something else for a moment first
+ROOT_WAIT = 360.
 
 # Plugin extras dirs on the extras package path and the plugin modules
 # loaded, at this start (a RESTART runs in the same process)
@@ -132,6 +205,19 @@ PLUGINS_HEADER = """\
 # is skipped instead of stopping Klipper. System updates never change
 # this file.
 """
+
+# What Klipper reads (ad5x.cfg includes it), next to plugins.cfg so that
+# relative includes there mean the same
+ACTIVE_NAME = "plugins-active.cfg"
+ACTIVE_HEADER = """\
+# The plugins Klipper loads (docs/plugins.md): plugins.cfg with the
+# enabled plugins that can't run left out, and why. Written from
+# plugins.cfg when Klipper starts and when plugins change; don't edit it,
+# edit plugins.cfg.
+"""
+# plugins.cfg, shipped and user dir and the factory config of the last
+# start in this process; before_config_read uses them (else the defaults)
+_ACTIVE_SOURCE = {}
 
 MOONRAKER_HEADER = """\
 # Moonraker parts of the enabled plugins (docs/plugins.md). Generated from
@@ -181,7 +267,7 @@ def read_metadata(plugin_dir, name):
     the file is unusable (the plugin can't be enabled then)."""
     meta = {'name': name, 'description': "", 'version': "", 'author': "",
             'url': "", 'requires_os': "", 'requires': [], 'conflicts': [],
-            'root_actions': [], 'owns_ifs': False, 'error': None}
+            'owns_ifs': False, 'error': None}
     path = os.path.join(plugin_dir, 'plugin.json')
     try:
         data = json.loads(read_regular(path))
@@ -201,7 +287,6 @@ def read_metadata(plugin_dir, name):
         if isinstance(val, str):
             val = [v.strip() for v in val.split(",")]
         meta[key] = [str(v).strip().lower() for v in val if str(v).strip()]
-    meta['root_actions'] = read_root_actions(data, name)
     meta['owns_ifs'] = data.get('owns_ifs') is True
     if data.get('name') not in (None, name):
         meta['error'] = "plugin.json name '%s' differs from the directory" % (
@@ -211,102 +296,97 @@ def read_metadata(plugin_dir, name):
             meta['requires_os'],)
     return meta
 
-def read_root_actions(data, name):
-    """plugin.json root_actions as a list of plain names. A bad list (not a
-    list, too long, or an entry that isn't a plain name) is logged and
-    ignored as a whole; the plugin still installs. Duplicates are dropped."""
-    raw = data.get('root_actions')
-    if raw is None:
-        return []
-    bad = None
-    if not isinstance(raw, list):
-        bad = "root_actions is not a list"
-    elif len(raw) > ROOT_MAX_ACTIONS:
-        bad = "more than %d root_actions" % (ROOT_MAX_ACTIONS,)
-    else:
-        for entry in raw:
-            if not isinstance(entry, str) or \
-                    not ROOT_ACTION_RE.fullmatch(entry):
-                bad = "root_actions entry %s is not a plain name" % (
-                    repr(entry)[:40],)
-                break
-    if bad is not None:
-        logging.warning("ad5x_plugins: plugin %s: %s; its root actions are "
-                        "ignored", name, bad)
-        return []
+def unknown_keys(data):
+    """plugin.json keys this plugin manager doesn't read, sorted."""
+    return sorted(k for k in data if k not in PLUGIN_JSON_KEYS)
+
+def cfg_error(path):
+    """Why Klipper's config parser would stop on a plugin.cfg (comments
+    cut at '#' and parsed as Klipper does), or None. Includes inside it
+    aren't followed."""
+    try:
+        text = read_regular(path)
+    except (OSError, ValueError) as e:
+        return "plugin.cfg: %s" % (e,)
+    text = "\n".join(line.split('#', 1)[0] for line in text.split('\n'))
+    parser = configparser.RawConfigParser(
+        strict=False, inline_comment_prefixes=(';', '#'))
+    try:
+        parser.read_string(text, path)
+    except configparser.Error as e:
+        return "plugin.cfg doesn't parse: %s" % (
+            " ".join(str(e).split())[:200],)
+    return None
+
+def extras_modules(ext_dir):
+    """(module name, file name) for each module (<name>.py) and package
+    (<name>/__init__.py) in a plugin's extras/, by file name. The loader
+    takes only names that match MODULE_RE."""
     out = []
-    for entry in raw:
-        if entry not in out:
-            out.append(entry)
+    for fn in sorted(os.listdir(ext_dir)):
+        if fn.endswith('.py') and os.path.isfile(os.path.join(ext_dir, fn)):
+            out.append((fn[:-3], fn))
+        elif os.path.isfile(os.path.join(ext_dir, fn, '__init__.py')):
+            out.append((fn, fn))
     return out
 
-def request_args(raw):
-    """ARGS= text -> the request's argument tokens (single spaces between
-    them). ValueError for anything that isn't a plain token."""
-    raw = (raw or "").strip(" ")
-    if raw == "":
-        return []
-    tokens = raw.split(" ")
-    if len(tokens) > ROOT_MAX_ARGS:
-        raise ValueError("too many arguments (at most %d)" % (ROOT_MAX_ARGS,))
-    for tok in tokens:
-        if not ROOT_TOKEN_RE.fullmatch(tok):
-            raise ValueError("argument %s is not a plain value (letters, "
-                             "digits and . _ + = , : @ %% -)"
-                             % (repr(tok)[:40],))
-    return tokens
+def is_official(name, source, catalog):
+    """Kiln OS's own plugin: shipped with the image, or a catalog entry
+    (read_catalog) from one of Kiln's own repositories."""
+    if source == 'shipped':
+        return True
+    entry = catalog.get(name)
+    return bool(entry) and entry['url'].startswith(OFFICIAL_URL_PREFIXES)
 
-def read_grants(path):
-    """Actions the owner granted, from the lines "action NAME" (root's
-    grant format). A missing file grants nothing: set(). None when the
-    file is there but klipper can't read it (root keeps grants private);
-    the caller then lets root decide."""
-    try:
-        with open(path) as f:
-            lines = f.read().splitlines()
-    except FileNotFoundError:
-        return set()
-    except OSError:
+def reserved_names(plugin_dir):
+    """Where a plugin uses a name kept for Kiln OS (RESERVED_PREFIXES), as
+    the loader reads it: extras/ modules and packages, Moonraker
+    components, plugin.cfg sections ([kiln_x], [ad5x_x name]) and macros
+    ([gcode_macro KILN_X], any case, leading _ ignored). A list of
+    "extras/kiln_x.py", "moonraker/components/kiln_x.py",
+    "plugin.cfg [kiln_x]"; [] when there is none."""
+    out = []
+    ext = os.path.join(plugin_dir, 'extras')
+    if os.path.isdir(ext):
+        out += ["extras/%s" % fn for mod, fn in extras_modules(ext)
+                if MODULE_RE.match(mod) and mod.startswith(RESERVED_PREFIXES)]
+    comps = os.path.join(plugin_dir, 'moonraker', 'components')
+    for mod in _module_names(comps):
+        if mod.startswith(RESERVED_PREFIXES):
+            fn = mod + '.py' if os.path.isfile(
+                os.path.join(comps, mod + '.py')) else mod
+            out.append("moonraker/components/%s" % (fn,))
+    for sec in _cfg_sections(os.path.join(plugin_dir, 'plugin.cfg')):
+        words = sec.split()
+        name = words[0].lower()
+        if name == 'gcode_macro' and len(words) > 1:
+            name = words[1].lower().lstrip('_')
+        if name.startswith(RESERVED_PREFIXES):
+            out.append("plugin.cfg [%s]" % (sec,))
+    return out
+
+def reserved_error(names):
+    """The plugin's error for reserved_names(), None when there are none."""
+    if not names:
         return None
-    out = set()
-    for line in lines:
-        m = re.fullmatch(r"action ([A-Za-z0-9_-]{1,64})", line)
-        if m is not None:
-            out.add(m.group(1))
-    return out
+    return ("uses names kept for Kiln OS and its official plugins (%s): %s; "
+            "start them with the plugin's name" % (
+                ", ".join(RESERVED_PREFIXES), ", ".join(names)))
 
-def read_action_list(path):
-    """(names, print_safe) from the image's root action list (root's
-    block format: "action NAME", then its lines, "print_safe yes|no"
-    default no). names is None when the list can't be read; then no
-    action is print_safe."""
-    try:
-        with open(path) as f:
-            lines = f.read().splitlines()
-    except OSError:
-        return None, set()
-    names, safe, current = set(), set(), None
-    for line in lines:
-        words = line.split()
-        if not words or words[0].startswith('#'):
-            continue
-        if words[0] == 'action' and len(words) >= 2:
-            current = words[1]
-            names.add(current)
-        elif words[0] == 'print_safe' and current is not None and \
-                len(words) >= 2 and words[1] == 'yes':
-            safe.add(current)
-    return names, safe
+def is_core_module(mod, core_dir):
+    """Whether Klipper's extras (core_dir) already have this module."""
+    return os.path.exists(os.path.join(core_dir, mod + '.py')) or \
+        os.path.isdir(os.path.join(core_dir, mod))
 
-def root_actions_note(name, actions):
-    return ("Plugin %s asks for root actions: %s. They are off until the "
-            "owner turns them on at the printer (ad5x-dev-root enable); "
-            "Kiln OS does not grant them." % (name, ", ".join(actions)))
-
-def scan(shipped_dir=SHIPPED_DIR, user_dir=USER_DIR):
+def scan(shipped_dir=SHIPPED_DIR, user_dir=USER_DIR,
+         roots_dir=PLUGINS_ROOT_DIR, catalog_file=CATALOG_FILE):
     """name -> info for every directory holding a plugin.cfg; user plugins
-    replace shipped ones of the same name."""
+    replace shipped ones of the same name. 'root': the plugin has root
+    scripts; 'root_installed': root has its copy of them (roots_dir).
+    'official': shipped, or from Kiln's own repositories (catalog_file);
+    any other plugin with names kept for Kiln OS gets an 'error'."""
     found = {}
+    catalog = read_catalog(catalog_file)
     for source, base in (("shipped", shipped_dir), ("user", user_dir)):
         try:
             names = sorted(os.listdir(base))
@@ -318,15 +398,23 @@ def scan(shipped_dir=SHIPPED_DIR, user_dir=USER_DIR):
                     os.path.join(d, 'plugin.cfg')):
                 continue
             info = read_metadata(d, name)
+            if not info['error']:
+                info['error'] = cfg_error(os.path.join(d, 'plugin.cfg'))
+            official = is_official(name, source, catalog)
+            if not info['error'] and not official:
+                info['error'] = reserved_error(reserved_names(d))
             info.update({
-                'dir': d, 'source': source,
+                'dir': d, 'source': source, 'official': official,
                 'compatible': api_compatible(info['requires_os']),
                 'extras': os.path.isdir(os.path.join(d, 'extras')),
                 'moonraker': os.path.isfile(os.path.join(d,
                                                          'moonraker.conf')),
                 'python': os.path.isdir(os.path.join(d, 'python')),
                 'components': os.path.isdir(os.path.join(
-                    d, 'moonraker', 'components'))})
+                    d, 'moonraker', 'components')),
+                'root': has_root(d),
+                'root_installed': os.path.isdir(os.path.join(roots_dir,
+                                                             name))})
             found[name] = info
     return found
 
@@ -349,6 +437,196 @@ def read_enabled(plugins_file):
             names.append(m.group('name'))
     return names, lines
 
+def ifs_klipper(flag=None):
+    """Whether the IFS answered as Klipper at this boot (flag, default
+    IFS_KLIPPER_FLAG as it is when called: S61klipper's script mode)."""
+    return os.path.exists(IFS_KLIPPER_FLAG if flag is None else flag)
+
+def plan(names, found, dirs=None, ifs_flag=None):
+    """(the enabled plugins that run, in plugins.cfg order; name -> why
+    each other enabled plugin is skipped). Skipped: missing, a bad
+    plugin.json or plugin.cfg, requires_os that doesn't fit, a required
+    plugin that isn't loaded (also when it is skipped itself), a conflict
+    with a plugin listed before it, owns_ifs while the IFS doesn't answer
+    as Klipper (ifs_flag missing, ifs_klipper) or when a plugin listed
+    before it drives the IFS already (only one can)."""
+    skipped = {}
+    on_klipper = None
+    for name in names:
+        info = found.get(name)
+        if info is None:
+            skipped[name] = "enabled but missing (no plugin.cfg in %s)" % (
+                " or ".join(dirs or ("the plugin folders",)),)
+        elif info['error']:
+            skipped[name] = info['error']
+        elif not info['compatible']:
+            skipped[name] = "needs plugin API %s, this system has %s" % (
+                info['requires_os'], PLUGIN_API_VERSION)
+        elif info['owns_ifs']:
+            if on_klipper is None:
+                on_klipper = ifs_klipper(ifs_flag)
+            if not on_klipper:
+                skipped[name] = IFS_NOT_KLIPPER
+    while True:
+        active = [n for n in names if n not in skipped]
+        for i, name in enumerate(active):
+            info = found[name]
+            missing = [r for r in info['requires'] if r not in active]
+            clash = [c for c in active[:i] if c in info['conflicts']
+                     or name in found[c]['conflicts']]
+            owner = [c for c in active[:i]
+                     if info['owns_ifs'] and found[c]['owns_ifs']]
+            if missing:
+                skipped[name] = "needs plugin %s, which is not loaded" % (
+                    ", ".join(missing),)
+                break
+            if clash:
+                skipped[name] = ("conflicts with %s, listed before it in "
+                                 "plugins.cfg" % (", ".join(clash),))
+                break
+            if owner:
+                skipped[name] = ("drives the IFS, and so does %s, listed "
+                                 "before it in plugins.cfg; only one plugin "
+                                 "can" % (owner[0],))
+                break
+        else:
+            return active, skipped
+
+def active_path(plugins_file):
+    return os.path.join(os.path.dirname(plugins_file), ACTIVE_NAME)
+
+def active_text(lines, skipped):
+    """plugins-active.cfg: plugins.cfg's lines, a skipped plugin's include
+    line commented out with the reason."""
+    out = ACTIVE_HEADER.splitlines()
+    for line in lines or []:
+        m = INCLUDE_RE.match(line)
+        if m is not None and m.group('name') in skipped:
+            out.append("# skipped (%s): %s" % (
+                " ".join(skipped[m.group('name')].split()), line.strip()))
+        else:
+            out.append(line)
+    return "\n".join(out) + "\n"
+
+def effective_lines(text):
+    """The lines Klipper acts on (no comments, no blank lines)."""
+    return [l.strip() for l in (text or "").splitlines()
+            if l.strip() and not l.lstrip().startswith(('#', ';'))]
+
+def write_active(plugins_file, shipped_dir=SHIPPED_DIR, user_dir=USER_DIR,
+                 found=None, catalog_file=CATALOG_FILE, ifs_flag=None):
+    """Write plugins-active.cfg from plugins.cfg as it is now. Returns
+    (active names, skipped, the file's text before (None when it wasn't
+    there), its text now). OSError when it can't be written."""
+    if found is None:
+        found = scan(shipped_dir, user_dir, catalog_file=catalog_file)
+    names, lines = read_enabled(plugins_file)
+    active, skipped = plan(names, found, (shipped_dir, user_dir), ifs_flag)
+    path = active_path(plugins_file)
+    try:
+        before = read_regular(path)
+    except (OSError, ValueError):
+        before = None
+    text = active_text(lines, skipped)
+    write_if_changed(path, text)
+    return active, skipped, before, text
+
+def uses_active(factory_cfg=FACTORY_CFG):
+    """Whether the factory config includes plugins-active.cfg. True when
+    it can't be read (not this image's layout: tests, a plain Klipper)."""
+    try:
+        return "plugins-activ" in read_regular(factory_cfg)
+    except (OSError, ValueError):
+        return True
+
+def before_config_read(printer=None):
+    """Host Klipper patch 0009 calls this before Klipper reads its config
+    (every start, RESTART, FIRMWARE_RESTART): plugins-active.cfg from
+    plugins.cfg as it is now, so a hand edit applies at the restart, also
+    when the last start stopped before [ad5x_plugins]. The paths of the
+    last start in this process, else the defaults (the first start)."""
+    src = dict(plugins_file=os.path.join(CONFIG_DIR, 'plugins.cfg'),
+               shipped_dir=SHIPPED_DIR, user_dir=USER_DIR,
+               factory_cfg=FACTORY_CFG, catalog_file=CATALOG_FILE,
+               ifs_flag=None)
+    src.update(_ACTIVE_SOURCE)
+    if not uses_active(src.pop('factory_cfg')):
+        return
+    try:
+        write_active(**src)
+    except OSError as e:
+        logging.info("ad5x_plugins: can't write %s: %s",
+                     active_path(src['plugins_file']), e)
+
+def _module_names(d):
+    """Top-level importable names in a directory: name.py files and
+    package directories."""
+    try:
+        entries = sorted(os.listdir(d))
+    except OSError:
+        return []
+    out = []
+    for fn in entries:
+        if fn.endswith('.py') and MODULE_RE.match(fn[:-3]):
+            out.append(fn[:-3])
+        elif MODULE_RE.match(fn) and os.path.isfile(
+                os.path.join(d, fn, '__init__.py')):
+            out.append(fn)
+    return out
+
+def _cfg_sections(path):
+    """Section names of a plugin.cfg as Klipper reads them (exact: a
+    different spelling is another section), [] when unreadable."""
+    try:
+        text = read_regular(path)
+    except (OSError, ValueError):
+        return []
+    text = "\n".join(line.split('#', 1)[0] for line in text.split('\n'))
+    parser = configparser.RawConfigParser(
+        strict=False, inline_comment_prefixes=(';', '#'))
+    try:
+        parser.read_string(text, path)
+    except configparser.Error:
+        return []
+    return [s for s in parser.sections() if not s.startswith('include ')]
+
+def collisions(names, found, ifs_flag=None):
+    """Messages for names two running plugins (plan, plugins.cfg order)
+    both bring, where one silently loses: a Moonraker component or a
+    python/ library (the first plugin's is used), a Klipper config section
+    (the later plugin's options replace the earlier one's; not reported
+    when the later plugin requires the earlier one, which then is meant)."""
+    msgs = []
+    owners = {'component': {}, 'library': {}, 'section': {}}
+    for name in plan(names, found, ifs_flag=ifs_flag)[0]:
+        info = found[name]
+        d = info['dir']
+        kinds = (
+            ('component', _module_names(os.path.join(
+                d, 'moonraker', 'components')) if info['components'] else []),
+            ('library', _module_names(os.path.join(d, 'python'))
+             if info['python'] else []),
+            ('section', _cfg_sections(os.path.join(d, 'plugin.cfg'))))
+        for kind, items in kinds:
+            for item in items:
+                first = owners[kind].setdefault(item, name)
+                if first == name:
+                    continue
+                if kind == 'component':
+                    msgs.append("Plugins %s and %s both have Moonraker "
+                                "component %s: Moonraker loads %s's"
+                                % (first, name, item, first))
+                elif kind == 'library':
+                    msgs.append("Plugins %s and %s both have python/%s: "
+                                "%s's is imported" % (first, name, item,
+                                                      first))
+                elif first not in info['requires']:
+                    msgs.append("Plugins %s and %s both define [%s]: %s's "
+                                "options replace %s's" % (first, name, item,
+                                                          name, first))
+                    owners[kind][item] = name
+    return msgs
+
 def ifs_owners(names, found):
     """Enabled plugins that drive the IFS themselves (owns_ifs)."""
     return [n for n in names if n in found and found[n]['owns_ifs']
@@ -370,13 +648,12 @@ def sync_ifs_mcu(names, found, mcu_dir=IFS_MCU_DIR, flag=IFS_KLIPPER_FLAG,
         os.unlink(link)
     return True
 
-def moonraker_text(names, found):
+def moonraker_text(names, found, ifs_flag=None):
     lines = [MOONRAKER_HEADER.rstrip("\n")]
     updates = False
-    for name in names:
-        info = found.get(name)
-        if info is None or not info['moonraker'] or not info['compatible'] \
-                or info['error']:
+    for name in plan(names, found, ifs_flag=ifs_flag)[0]:
+        info = found[name]
+        if not info['moonraker']:
             continue
         path = os.path.join(info['dir'], 'moonraker.conf')
         try:
@@ -391,14 +668,12 @@ def moonraker_text(names, found):
         lines += ["[update_manager]", "enable_system_updates: False"]
     return "\n".join(lines) + "\n"
 
-def plugin_paths(names, found):
-    """(python dirs, Moonraker component dirs) of the enabled, compatible
-    plugins, in plugins.cfg order."""
+def plugin_paths(names, found, ifs_flag=None):
+    """(python dirs, Moonraker component dirs) of the enabled plugins that
+    run (plan), in plugins.cfg order."""
     python, components = [], []
-    for name in names:
-        info = found.get(name)
-        if info is None or not info['compatible'] or info['error']:
-            continue
+    for name in plan(names, found, ifs_flag=ifs_flag)[0]:
+        info = found[name]
         if info['python']:
             python.append(os.path.join(info['dir'], 'python'))
         if info['components']:
@@ -465,203 +740,98 @@ def write_if_changed(path, text):
     os.replace(tmp, path)
     return True
 
-class DevRoot:
-    """DEV_ROOT_REQUEST / DEV_ROOT_STATUS: a plugin's request for a named
-    root action (docs/plugin-root-actions.md). Klipper checks what it can,
-    writes one request file and reports root's result. Granting is root's
-    job (the owner's ad5x-dev-root enable); Klipper only reads the grants,
-    and where root keeps a grant unreadable it lets root decide."""
-    def __init__(self, owner, config):
-        self.owner = owner
-        self.printer = owner.printer
-        self.gcode = owner.gcode
-        base = config.get('dev_root_dir', DEV_ROOT_DIR)
-        self.requests_dir = os.path.join(base, 'requests')
-        self.results_dir = os.path.join(base, 'results')
-        self.grants_dir = os.path.join(base, 'grants')
-        self.actions_file = config.get('root_actions_file', ROOT_ACTIONS_FILE)
-        self.last_sent = {}   # plugin -> time of its last request written
-        self.pending = {}     # request id -> (request line, time sent)
-        self.recent = []      # last results reported (DEV_ROOT_STATUS)
-        self.kept = set()     # result files that could not be removed
-        self.last_n = 0
-        self.polling = False
+def has_root(plugin_dir):
+    """The plugin ships root scripts (root/install.sh, update.sh or
+    uninstall.sh)."""
+    return any(os.path.isfile(os.path.join(plugin_dir, 'root', h))
+               for h in ROOT_HOOKS)
 
-    def _now(self):
-        return self.printer.get_reactor().monotonic()
+def pack_root(root_dir, limit=ROOT_TAR_MAX):
+    """(tar, sha256): the plugin's root/ folder as the uncompressed tar the
+    root update agent unpacks (lib/plugin-root.sh). The same files always
+    give the same bytes: names in order, no times or owners, modes 0755
+    (folders, files with an execute bit) or 0644, so the sha256 says whether
+    root/ changed since root made its copy (its .sha256). ValueError for
+    anything but folders and plain files (a link, a FIFO) and over limit
+    bytes; OSError when a file can't be read."""
+    if os.path.islink(root_dir):
+        raise ValueError("root/ is a link")
+    buf = io.BytesIO()
+    tar = tarfile.open(fileobj=buf, mode='w', format=tarfile.USTAR_FORMAT)
+    def add(rel):
+        for name in sorted(os.listdir(os.path.join(root_dir, rel))):
+            path = os.path.join(rel, name) if rel else name
+            full = os.path.join(root_dir, path)
+            st = os.lstat(full)
+            ti = tarfile.TarInfo(path)
+            ti.mtime, ti.uid, ti.gid, ti.uname, ti.gname = 0, 0, 0, "", ""
+            if stat.S_ISDIR(st.st_mode):
+                ti.type, ti.mode = tarfile.DIRTYPE, 0o755
+                tar.addfile(ti)
+                add(path)
+            elif stat.S_ISREG(st.st_mode):
+                ti.mode = 0o755 if st.st_mode & 0o111 else 0o644
+                # no link followed, no FIFO waited for (opened, then checked)
+                fd = os.open(full, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                with os.fdopen(fd, 'rb') as f:
+                    if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                        raise ValueError("root/%s changed while read" % path)
+                    data = f.read(limit + 1)
+                ti.size = len(data)
+                tar.addfile(ti, io.BytesIO(data))
+            else:
+                raise ValueError("root/%s is not a plain file or folder "
+                                 "(links, FIFOs and devices are refused)"
+                                 % (path,))
+            if buf.tell() > limit:
+                raise ValueError("root/ is over %d MB" % (limit >> 20,))
+    add("")
+    tar.close()
+    data = buf.getvalue()
+    if len(data) > limit:
+        raise ValueError("root/ is over %d MB" % (limit >> 20,))
+    return data, hashlib.sha256(data).hexdigest()
 
-    def _printing(self):
-        ps = self.printer.lookup_object('print_stats', None)
-        return ps is not None and ps.get_status(self._now()).get(
-            'state') in BUSY_STATES
+def root_from_git(plugin_dir):
+    """Whether the plugin's root/ is what its git checkout holds: the
+    plugin folder is a git clone and git sees nothing changed, new or
+    ignored in root/. Files put there any other way (uploaded in Fluidd's
+    file manager, copied by hand) make it False, and so does a git that
+    can't answer."""
+    if not os.path.isdir(os.path.join(plugin_dir, '.git')):
+        return False
+    env = dict(os.environ, GIT_TERMINAL_PROMPT='0', GIT_OPTIONAL_LOCKS='0')
+    env.setdefault('HOME', '/home/klipper')
+    try:
+        res = subprocess.run(
+            ['git', '-C', plugin_dir, 'status', '--porcelain', '--ignored',
+             '--untracked-files=all', '--', 'root'],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, env=env, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return res.returncode == 0 and not res.stdout.strip()
 
-    def _grants(self, plugin):
-        return read_grants(os.path.join(self.grants_dir, plugin + '.grant'))
+def write_new(path, data):
+    """data (bytes) into path as a new file, renamed into place: a link or
+    a FIFO someone put at path is replaced, never written through."""
+    tmp = os.path.join(os.path.dirname(path),
+                       "." + os.path.basename(path) + ".tmp")
+    try:
+        os.unlink(tmp)
+    except FileNotFoundError:
+        pass
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                 0o644)
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+    os.replace(tmp, path)
 
-    def _write(self, gcmd, plugin, line):
-        """One request file: written under a dot-name (root does not read
-        those) and renamed, so root never reads half a line. Returns the
-        request id."""
-        n = max(int(time.time() * 1000), self.last_n + 1)
-        while os.path.exists(os.path.join(self.requests_dir,
-                                          "%s.%d.req" % (plugin, n))):
-            n += 1
-        self.last_n = n
-        base = "%s.%d.req" % (plugin, n)
-        path = os.path.join(self.requests_dir, base)
-        tmp = os.path.join(self.requests_dir, "." + base + ".tmp")
-        try:
-            with open(tmp, "w") as f:
-                f.write(line + "\n")
-            os.rename(tmp, path)
-        except OSError as e:
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
-            raise gcmd.error("Can't write the root request in %s: %s"
-                             % (self.requests_dir, e))
-        return "%s.%d" % (plugin, n)
-
-    def request(self, gcmd):
-        plugin = gcmd.get('PLUGIN').strip().lower()
-        action = gcmd.get('ACTION').strip()
-        if not PLUGIN_NAME_RE.fullmatch(plugin):
-            raise gcmd.error("PLUGIN must be a plugin name (a-z, 0-9, - _)")
-        if not ROOT_ACTION_RE.fullmatch(action):
-            raise gcmd.error("ACTION must be a plain name (letters, digits, "
-                             "- _)")
-        try:
-            args = request_args(gcmd.get('ARGS', ''))
-        except ValueError as e:
-            raise gcmd.error("Refused: %s" % (e,))
-        self.owner.found = scan(self.owner.shipped_dir, self.owner.user_dir)
-        info = self.owner.found.get(plugin)
-        if info is None or info['error']:
-            raise gcmd.error("Plugin %s is not installed, or its plugin.json "
-                             "is bad" % (plugin,))
-        if action not in info['root_actions']:
-            raise gcmd.error("Plugin %s did not declare root action %s "
-                             "(root_actions: %s)" % (
-                                 plugin, action,
-                                 ", ".join(info['root_actions']) or "none"))
-        names, safe = read_action_list(self.actions_file)
-        if names is not None and action not in names:
-            raise gcmd.error("Root action %s is not in this image's list"
-                             % (action,))
-        if self._printing() and action not in safe:
-            raise gcmd.error("Root action %s can't run during a print"
-                             % (action,))
-        granted = self._grants(plugin)
-        if granted is not None and action not in granted:
-            raise gcmd.error("Root action %s is not granted to %s. The owner "
-                             "turns it on at the printer: ad5x-dev-root "
-                             "enable" % (action, plugin))
-        now = self._now()
-        last = self.last_sent.get(plugin)
-        if last is not None and now - last < ROOT_RATE_SECONDS:
-            raise gcmd.error("Plugin %s sent a root request %.0f s ago; one "
-                             "per %.0f s" % (plugin, now - last,
-                                             ROOT_RATE_SECONDS))
-        line = " ".join([plugin, action] + args)
-        rid = self._write(gcmd, plugin, line)
-        self.last_sent[plugin] = now
-        self.pending[rid] = (line, now)
-        note = "" if granted is not None else (
-            " (the grant is not readable from Klipper; root checks it)")
-        gcmd.respond_info("Root request %s sent: %s%s (the result follows)"
-                          % (rid, line, note))
-        self.start_poll()
-
-    def start_poll(self):
-        if not self.polling:
-            self.polling = True
-            reactor = self.printer.get_reactor()
-            reactor.register_timer(self._poll, reactor.monotonic() + .5)
-
-    def _poll(self, eventtime):
-        try:
-            names = sorted(os.listdir(self.results_dir))
-        except OSError:
-            names = []
-        for fn in names:
-            m = ROOT_FILE_RE.fullmatch(fn)
-            if m is None or m.group(3) != 'res' or fn in self.kept:
-                continue
-            self._report("%s.%s" % (m.group(1), m.group(2)),
-                         os.path.join(self.results_dir, fn))
-        for rid, (line, sent) in list(self.pending.items()):
-            if eventtime - sent > ROOT_RESULT_WAIT:
-                del self.pending[rid]
-                self._say("Root request %s (%s): no result after %.0f s; is "
-                          "the root agent running?"
-                          % (rid, line, ROOT_RESULT_WAIT))
-        if self.pending:
-            return eventtime + .5
-        self.polling = False
-        return self.printer.get_reactor().NEVER
-
-    def _report(self, rid, path):
-        """Root writes "<ok or refused: reason> at <time>" on one line."""
-        try:
-            with open(path) as f:
-                first = f.readline(512).strip()
-        except OSError as e:
-            first = "refused: result unreadable (%s)" % (e,)
-        text = re.sub(r" at \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$", "", first)
-        if text != "ok" and not text.startswith("refused: "):
-            text = "unexpected result %s" % (repr(text)[:80],)
-        line = self.pending.pop(rid, ("unknown request",))[0]
-        self._say("Root request %s (%s): %s" % (rid, line, text))
-        self.recent = (self.recent + ["%s: %s" % (rid, text)])[-5:]
-        try:
-            os.remove(path)
-        except OSError as e:
-            # root's results dir is not writable by klipper: keep it in
-            # memory so it is not reported again this start
-            self.kept.add(os.path.basename(path))
-            logging.info("ad5x_plugins: can't remove %s: %s", path, e)
-
-    def _say(self, msg):
-        logging.info("ad5x_plugins: %s", msg)
-        self.gcode.respond_info(msg)
-
-    def status(self, gcmd):
-        self.owner.found = scan(self.owner.shipped_dir, self.owner.user_dir)
-        lines = ["Developer root actions (off until the owner grants them: "
-                 "ad5x-dev-root enable)"]
-        declared = [(n, i) for n, i in sorted(self.owner.found.items())
-                    if i['root_actions']]
-        if not declared:
-            lines.append("No plugin declares root actions.")
-        names, safe = read_action_list(self.actions_file)
-        for name, info in declared:
-            granted = self._grants(name)
-            for action in info['root_actions']:
-                if granted is None:
-                    state = "grant not readable here"
-                else:
-                    state = "granted" if action in granted else "not granted"
-                notes = []
-                if names is not None and action not in names:
-                    notes.append("not in this image's list")
-                if action in safe:
-                    notes.append("print_safe")
-                lines.append("%s: %s %s%s" % (
-                    name, action, state,
-                    "".join(", " + n for n in notes)))
-        try:
-            waiting = sorted(f for f in os.listdir(self.requests_dir)
-                             if ROOT_FILE_RE.fullmatch(f))
-        except OSError:
-            waiting = []
-        lines.append("Requests waiting for root: %s"
-                     % (", ".join(waiting) or "none"))
-        lines.append("Sent here, no result yet: %s"
-                     % (", ".join(sorted(self.pending)) or "none"))
-        lines.append("Recent results: %s"
-                     % ("; ".join(self.recent) or "none"))
-        gcmd.respond_info("\n".join(lines))
+def unlink_quiet(path):
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
 
 class AD5XPlugins:
     def __init__(self, config):
@@ -681,6 +851,12 @@ class AD5XPlugins:
         self.ifs_klipper_flag = config.get('ifs_klipper_flag',
                                            IFS_KLIPPER_FLAG)
         self.generic_ifs_cfg = config.get('generic_ifs_cfg', GENERIC_IFS_CFG)
+        self.factory_cfg = config.get('factory_cfg', FACTORY_CFG)
+        # Root scripts: root's copies, the root update agent's folder
+        self.roots_dir = config.get('plugins_root_dir', PLUGINS_ROOT_DIR)
+        self.agent_dir = config.get('agent_dir', AGENT_DIR)
+        self.root_done = None
+        self.root_updates = []
         self.catalog = read_catalog(self.catalog_file)
         # The last install/update/remove result survives the Klipper restart
         # that enabling a plugin makes (the screen shows it after)
@@ -697,13 +873,17 @@ class AD5XPlugins:
         except (OSError, ValueError):
             pass
         self.proc = None
-        self.found = scan(self.shipped_dir, self.user_dir)
+        self.found = self._scan()
         # Enabled at this start (plugins.cfg as Klipper read it)
         self.loaded = read_enabled(self.plugins_file)[0]
+        # Of those, the ones that run and the ones skipped (plan)
+        self.active, self.skipped = plan(self.loaded, self.found,
+                                         (self.shipped_dir, self.user_dir),
+                                         self.ifs_klipper_flag)
         self.warnings = []
         self.modules = {}
         # The plugin driving the IFS at this start ("": Kiln's [ifs])
-        self.ifs_owner = (ifs_owners(self.loaded, self.found) or [""])[0]
+        self.ifs_owner = (ifs_owners(self.active, self.found) or [""])[0]
         # Also while Klipper isn't ready: a plugin whose config stops
         # Klipper can be disabled from the console (also when the error is
         # raised below, by the IFS owner check or a plugin's extras)
@@ -711,43 +891,76 @@ class AD5XPlugins:
             self.gcode.register_command(cmd, getattr(self, "cmd_" + cmd),
                                         when_not_ready=True,
                                         desc=getattr(self, "cmd_%s_help" % cmd))
+        self._start_active()
         self._check_ifs_owner(config)
         self._load_extras(config)
-        self.dev_root = DevRoot(self, config)
         self.printer.register_event_handler("klippy:ready",
                                             self._handle_ready)
         for cmd in ("INSTALL_PLUGIN", "UPDATE_PLUGIN", "REMOVE_PLUGIN"):
             self.gcode.register_command(cmd, getattr(self, "cmd_" + cmd),
                                         desc=getattr(self, "cmd_%s_help" % cmd))
-        for cmd in ("DEV_ROOT_REQUEST", "DEV_ROOT_STATUS"):
-            self.gcode.register_command(cmd, getattr(self, "cmd_" + cmd),
-                                        desc=getattr(self, "cmd_%s_help" % cmd))
     # Startup
+    def _scan(self):
+        return scan(self.shipped_dir, self.user_dir, self.roots_dir,
+                    self.catalog_file)
     def _warn(self, msg):
         logging.warning("ad5x_plugins: %s", msg)
         self.warnings.append(msg)
         pconfig = self.printer.lookup_object('configfile', None)
         if pconfig is not None and hasattr(pconfig, 'runtime_warning'):
             pconfig.runtime_warning(msg)
-    def _usable(self, name):
-        """Enabled plugin whose code may run: present, valid, compatible."""
-        info = self.found.get(name)
-        if info is None:
-            self._warn("Plugin %s is enabled but missing (no plugin.cfg in "
-                       "%s or %s); skipped" % (name, self.shipped_dir,
-                                               self.user_dir))
-            return None
-        if info['error']:
-            self._warn("Plugin %s: %s; its extras are not loaded"
-                       % (name, info['error']))
-            return None
-        if not info['compatible']:
-            self._warn("Plugin %s needs plugin API %s, this system has %s; "
-                       "its extras are not loaded (DISABLE_PLUGIN NAME=%s)"
-                       % (name, info['requires_os'], PLUGIN_API_VERSION,
-                          name))
-            return None
-        return info
+    def _start_active(self):
+        """One warning per skipped plugin; plugins-active.cfg brought up to
+        date (patch 0009 wrote it just before this config read, S61klipper
+        at boot: normally it already is)."""
+        self.uses_active = uses_active(self.factory_cfg)
+        # An older ad5x.cfg reads plugins.cfg itself: the config is loaded
+        parts = ("config, extras and Moonraker part" if self.uses_active
+                 else "extras and Moonraker part")
+        for name in self.loaded:
+            if name in self.skipped:
+                self._warn("Plugin %s skipped: %s. Its %s are not loaded "
+                           "(DISABLE_PLUGIN NAME=%s)"
+                           % (name, self.skipped[name], parts, name))
+        # Two plugins with the same component, library or section: one
+        # loses without an error, so say which
+        for msg in collisions(self.loaded, self.found,
+                              self.ifs_klipper_flag):
+            self._warn(msg)
+        _ACTIVE_SOURCE.update(plugins_file=self.plugins_file,
+                              shipped_dir=self.shipped_dir,
+                              user_dir=self.user_dir,
+                              factory_cfg=self.factory_cfg,
+                              catalog_file=self.catalog_file,
+                              ifs_flag=self.ifs_klipper_flag)
+        if not self.uses_active:
+            return
+        try:
+            before, text = write_active(
+                self.plugins_file, self.shipped_dir, self.user_dir,
+                self.found, ifs_flag=self.ifs_klipper_flag)[2:]
+        except OSError as e:
+            logging.info("ad5x_plugins: can't write %s: %s",
+                         active_path(self.plugins_file), e)
+            return
+        if before is not None and \
+                effective_lines(before) != effective_lines(text):
+            self._warn("Plugins changed after Klipper read %s; RESTART to "
+                       "load them as plugins.cfg says" % (ACTIVE_NAME,))
+    def _write_active(self):
+        """plugins-active.cfg from plugins.cfg now; the plugins that run."""
+        if not self.uses_active:
+            return plan(read_enabled(self.plugins_file)[0], self.found,
+                        ifs_flag=self.ifs_klipper_flag)[0]
+        try:
+            return write_active(self.plugins_file, self.shipped_dir,
+                                self.user_dir, self.found,
+                                ifs_flag=self.ifs_klipper_flag)[0]
+        except OSError as e:
+            logging.info("ad5x_plugins: can't write %s: %s",
+                         active_path(self.plugins_file), e)
+            return plan(read_enabled(self.plugins_file)[0], self.found,
+                        ifs_flag=self.ifs_klipper_flag)[0]
     def _sync_ifs_mcu(self, names):
         try:
             return sync_ifs_mcu(names, self.found, self.ifs_mcu_dir,
@@ -757,23 +970,15 @@ class AD5XPlugins:
                          self.ifs_mcu_dir, e)
             return False
     def _check_ifs_owner(self, config):
-        """A plugin that owns the IFS: only one, only with the IFS on
-        Klipper firmware, with Kiln's [ifs] off and Kiln's IFS pins left
-        out. Kiln's IFS pins back when no plugin owns it."""
-        owners = ifs_owners(self.loaded, self.found)
-        if len(owners) > 1:
-            raise config.error(
-                "Plugins %s all own the IFS; only one can (DISABLE_PLUGIN "
-                "NAME=%s)" % (", ".join(owners), owners[-1]))
-        if owners and not os.path.exists(self.ifs_klipper_flag):
-            raise config.error(
-                "Plugin %s drives the IFS, which needs the IFS on Klipper "
-                "firmware (/data/ad5x/ifs-klipper.enable, then reboot). "
-                "DISABLE_PLUGIN NAME=%s to use Kiln's IFS module"
-                % (owners[0], owners[0]))
+        """A plugin that owns the IFS: with Kiln's [ifs] off and Kiln's
+        IFS pins left out. Kiln's IFS pins back when no plugin owns it.
+        plan already skipped an owner while the IFS doesn't answer as
+        Klipper, and a second one (the first in plugins.cfg drives the
+        IFS)."""
+        owners = ifs_owners(self.active, self.found)
         # plugins.cfg edited by hand since the link was set: Klipper has
         # read the old pins; fixed for the next start
-        if self._sync_ifs_mcu(self.loaded):
+        if self._sync_ifs_mcu(self.active):
             raise config.error(
                 "The IFS changed hands (%s); RESTART to load its pins"
                 % ("plugin " + owners[0] if owners
@@ -785,26 +990,20 @@ class AD5XPlugins:
     def _load_extras(self, config):
         core = os.path.dirname(os.path.abspath(__file__))
         # Libraries the plugins bring (python/), after Klipper's own
-        for d in plugin_paths(self.loaded, self.found)[0]:
+        for d in plugin_paths(self.loaded, self.found,
+                              self.ifs_klipper_flag)[0]:
             if d not in sys.path:
                 sys.path.append(d)
         wanted = {}
-        for name in self.loaded:
-            info = self._usable(name)
-            if info is None or not info['extras']:
+        for name in self.active:
+            info = self.found[name]
+            if not info['extras']:
                 continue
             ext = os.path.join(info['dir'], 'extras')
-            for fn in sorted(os.listdir(ext)):
-                if fn.endswith('.py'):
-                    mod = fn[:-3]
-                elif os.path.isfile(os.path.join(ext, fn, '__init__.py')):
-                    mod = fn
-                else:
-                    continue
+            for mod, fn in extras_modules(ext):
                 if not MODULE_RE.match(mod):
                     continue
-                if os.path.exists(os.path.join(core, mod + '.py')) or \
-                        os.path.isdir(os.path.join(core, mod)):
+                if is_core_module(mod, core):
                     raise config.error(
                         "Plugin %s: extras/%s has the name of a Klipper "
                         "module; rename it" % (name, fn))
@@ -876,12 +1075,13 @@ class AD5XPlugins:
         # or dropped a plugin's moonraker.conf). Moonraker reads it at its
         # next start.
         self._write_moonraker(self.loaded)
-        # Results of root requests left from before this start
-        self.dev_root.start_poll()
+        # Root scripts of the enabled plugins: update.sh where root/ changed
+        self._check_root_updates()
     def _write_moonraker(self, names):
         try:
             return write_if_changed(self.moonraker_file,
-                                    moonraker_text(names, self.found))
+                                    moonraker_text(names, self.found,
+                                                   self.ifs_klipper_flag))
         except OSError as e:
             logging.info("ad5x_plugins: can't write %s: %s",
                          self.moonraker_file, e)
@@ -908,7 +1108,7 @@ class AD5XPlugins:
                            % (self.found[name]['dir'],))
         write_if_changed(self.plugins_file, "\n".join(out) + "\n")
         names = read_enabled(self.plugins_file)[0]
-        self._sync_ifs_mcu(names)
+        self._sync_ifs_mcu(self._write_active())
         return names
     # Commands
     def _check_idle(self, gcmd):
@@ -918,20 +1118,33 @@ class AD5XPlugins:
                     'state') in BUSY_STATES:
             raise gcmd.error("Plugins can't be switched during a print "
                              "(Klipper restarts)")
-    def _apply(self, gcmd, enable=(), disable=()):
+    def _apply(self, gcmd, enable=(), disable=(), restart=None):
+        """Write plugins.cfg, restart Moonraker if its parts changed, then
+        Klipper (RESTART=0: later). gcmd None: from a background job (root's
+        answer came); restart then says whether to restart."""
+        respond = (gcmd.respond_info if gcmd is not None
+                   else self.gcode.respond_info)
+        if restart is None:
+            restart = gcmd.get_int('RESTART', 1)
         try:
             names = self._write_enabled(enable, disable)
         except OSError as e:
-            raise gcmd.error("Can't write %s: %s" % (self.plugins_file, e))
+            msg = "Can't write %s: %s" % (self.plugins_file, e)
+            if gcmd is not None:
+                raise gcmd.error(msg)
+            raise Exception(msg)
         changed = self._write_moonraker(names)
         if changed or any(touches_moonraker(self.found.get(n))
                           for n in list(enable) + list(disable)):
             self._restart_moonraker(gcmd)
-        if gcmd.get_int('RESTART', 1):
-            gcmd.respond_info("Restarting Klipper")
-            self.gcode.run_script_from_command("RESTART")
+        if restart:
+            respond("Restarting Klipper")
+            if gcmd is not None:
+                self.gcode.run_script_from_command("RESTART")
+            else:
+                self.gcode.run_script("RESTART")
         else:
-            gcmd.respond_info("Takes effect at the next RESTART")
+            respond("Takes effect at the next RESTART")
     def _restart_moonraker(self, gcmd=None):
         """Ask the root update agent to restart Moonraker (it reads the
         plugins' Moonraker parts at its start)."""
@@ -986,37 +1199,195 @@ class AD5XPlugins:
             out = self.proc.stdout.read().decode('utf-8', 'replace')
         self.proc.stdout.close()
         self.proc = None
+        job = self.job
         try:
             msg = self.job_done(rc, out.strip())
             state = 'done'
         except Exception as e:
             msg, state = str(e), 'failed'
-        self.job.update({'state': state, 'message': msg})
-        self._save_job()
-        self.gcode.respond_info("%s %s: %s" % (self.job['action'],
-                                               self.job['name'], msg))
+        self.gcode.respond_info("%s %s: %s" % (job['action'], job['name'],
+                                               msg))
+        # done may have started the next job (ENABLE_PLUGIN ROOT=1 after an
+        # install): that one reports itself
+        if self.job is job:
+            self.job.update({'state': state, 'message': msg})
+            self._save_job()
         return self.printer.get_reactor().NEVER
     def _save_job(self):
         try:
             write_if_changed(self.job_file, json.dumps(self.job))
         except OSError as e:
             logging.info("ad5x_plugins: %s: %s", self.job_file, e)
+    # Root scripts: requests to the root update agent
+    def _root_copy(self, name):
+        return os.path.join(self.roots_dir, name)
+    def _root_request(self, gcmd, name, action, done):
+        """Ask root to run the plugin's root/<action>.sh (install, update,
+        uninstall; lib/plugin-root.sh). In the background, like the git
+        jobs (printer.ad5x_plugins.job): done(answer) is called with root's
+        answer ("ok", "failed: ...", "timed out", "refused: ..."), or with
+        a failure after ROOT_WAIT without one. done reports the end
+        (_end_job); an exception there fails the job with its text."""
+        if self.job['state'] == 'running':
+            raise self.printer.command_error("Busy: %s %s" % (
+                self.job['action'], self.job['name']))
+        tar = os.path.join(self.agent_dir, "plugin-%s.tar" % (name,))
+        request = os.path.join(self.agent_dir, "plugin-request")
+        sha = ""
+        try:
+            if action != 'uninstall':
+                data, sha = pack_root(os.path.join(
+                    self.found[name]['dir'], 'root'))
+        except (KeyError, OSError, ValueError) as e:
+            raise self.printer.command_error(
+                "Plugin %s: its root/ folder can't be packed: %s"
+                % (name, e))
+        try:
+            # an answer to an older request (Klipper restarted meanwhile)
+            unlink_quiet(os.path.join(self.agent_dir, "plugin-status"))
+            if action != 'uninstall':
+                write_new(tar, data)
+            write_new(request, ("%s\n%s\n%s\n" % (action, name, sha))
+                      .encode())
+        except OSError as e:
+            unlink_quiet(tar)
+            raise self.printer.command_error(
+                "Can't ask root to run %s's root/%s.sh: %s"
+                % (name, action, e))
+        self.job = {'name': name, 'action': 'root ' + action,
+                    'state': 'running',
+                    'message': "running root/%s.sh as root..." % (action,)}
+        self.root_done = done
+        reactor = self.printer.get_reactor()
+        self.root_end = reactor.monotonic() + ROOT_WAIT
+        reactor.register_timer(self._poll_root, reactor.monotonic() + 1.)
+        msg = "Plugin %s: %s" % (name, self.job['message'])
+        if gcmd is not None:
+            gcmd.respond_info(msg)
+        else:
+            self.gcode.respond_info(msg)
+    def _poll_root(self, eventtime):
+        status = os.path.join(self.agent_dir, "plugin-status")
+        try:
+            answer = (read_regular(status, 512).strip().splitlines()
+                      or ["failed: empty answer"])[0]
+        except FileNotFoundError:
+            answer = None
+        except (OSError, ValueError) as e:
+            answer = "failed: root's answer can't be read (%s)" % (e,)
+        if answer is None:
+            if eventtime < self.root_end:
+                return eventtime + 1.
+            answer = ("failed: no answer from root in %d s (is "
+                      "S68ad5x-update-agent running?)" % (ROOT_WAIT,))
+        # Klipper's own files: the request and the tar are gone when root
+        # took them; still there, root never saw them
+        name = self.job['name']
+        for f in ("plugin-status", "plugin-request", "plugin-%s.tar" % name):
+            unlink_quiet(os.path.join(self.agent_dir, f))
+        done, self.root_done = self.root_done, None
+        try:
+            done(answer)
+        except Exception as e:
+            self._end_job('failed', str(e))
+        return self.printer.get_reactor().NEVER
+    def _end_job(self, state, msg):
+        """The job's end: state done or failed, saved, in the console."""
+        self.job.update({'state': state, 'message': msg})
+        self._save_job()
+        self.gcode.respond_info("%s %s: %s" % (self.job['action'],
+                                               self.job['name'], msg))
+    def _root_gate(self, gcmd, name, info):
+        """A plugin with root scripts is enabled only with ROOT=1."""
+        if info['root'] and not gcmd.get_int('ROOT', 0):
+            raise gcmd.error(
+                "Plugin %s runs code as root (its root/ scripts run as root "
+                "when it is enabled, updated and disabled). Read them "
+                "first (%s/root); to go ahead: ENABLE_PLUGIN NAME=%s ROOT=1"
+                % (name, info['dir'], name))
+    def _check_root_updates(self):
+        """At klippy:ready: an enabled plugin whose root/ is not what root
+        has a copy of (a plugin update since) gets its update.sh run, one
+        plugin after the other, when root/ is what git checked out or the
+        plugin is shipped; otherwise a warning (ENABLE_PLUGIN ROOT=1 runs
+        it). An enabled plugin with root scripts but no root copy (enabled
+        before it had them) gets a warning."""
+        self.root_updates = []
+        for name in self.active:
+            info = self.found[name]
+            if not info['root']:
+                continue
+            if not info['root_installed']:
+                self._warn("Plugin %s has root scripts that were never "
+                           "installed: DISABLE_PLUGIN NAME=%s, then "
+                           "ENABLE_PLUGIN NAME=%s ROOT=1" % (name, name, name))
+                continue
+            try:
+                changed = self._root_changed(name, info)
+            except (OSError, ValueError) as e:
+                self._warn("Plugin %s: its root/ folder can't be packed, "
+                           "no update.sh: %s" % (name, e))
+                continue
+            if not changed:
+                continue
+            # Run by itself only what the plugin's author shipped (git, the
+            # image); files uploaded or copied in wait for ROOT=1
+            if info['source'] == 'shipped' or root_from_git(info['dir']):
+                self.root_updates.append(name)
+            else:
+                self._warn("Plugin %s: its root/ changed outside git "
+                           "(uploaded or copied in), so update.sh doesn't "
+                           "run by itself. Read %s/root, then: ENABLE_PLUGIN "
+                           "NAME=%s ROOT=1" % (name, info['dir'], name))
+        if self.root_updates:
+            reactor = self.printer.get_reactor()
+            reactor.register_timer(self._next_root_update,
+                                   reactor.monotonic() + 1.)
+    def _root_changed(self, name, info):
+        """Whether the plugin's root/ differs from root's copy (.sha256).
+        OSError or ValueError when root/ can't be packed."""
+        sha = pack_root(os.path.join(info['dir'], 'root'))[1]
+        try:
+            have = read_regular(os.path.join(self._root_copy(name),
+                                             '.sha256'), 128).strip()
+        except (OSError, ValueError):
+            have = ""
+        return have != sha
+    def _update_done(self, answer):
+        if answer == 'ok':
+            self._end_job('done', "root/update.sh ok")
+        else:
+            self._end_job('failed', "root/update.sh %s" % (answer,))
+    def _next_root_update(self, eventtime):
+        if self.job['state'] == 'running':
+            return eventtime + 2.
+        if not self.root_updates:
+            return self.printer.get_reactor().NEVER
+        name = self.root_updates.pop(0)
+        try:
+            self._root_request(None, name, 'update', self._update_done)
+        except Exception as e:
+            self._warn("Plugin %s: update.sh not run: %s" % (name, e))
+        if self.root_updates:
+            return eventtime + 2.
+        return self.printer.get_reactor().NEVER
     def _restart_after(self, info, msg):
         """Restart what a changed enabled plugin needs; returns msg."""
         msg += "; restarting Klipper"
         self.job.update({'state': 'done', 'message': msg})
         self._save_job()
-        # An update may have made it an IFS owner, or not
-        self._sync_ifs_mcu(read_enabled(self.plugins_file)[0])
+        # An update may have made it an IFS owner, or not, or unusable
+        self._sync_ifs_mcu(self._write_active())
         if touches_moonraker(info):
             self._restart_moonraker()
         self.gcode.run_script("RESTART")
         return msg
     cmd_INSTALL_PLUGIN_help = ("Install a plugin from the catalog: NAME= "
-                               "[ENABLE=1]")
+                               "[ENABLE=1 [ROOT=1]]")
     def cmd_INSTALL_PLUGIN(self, gcmd):
         name, entry = self._catalog_entry(gcmd)
         enable = gcmd.get_int('ENABLE', 0)
+        root = gcmd.get_int('ROOT', 0)
         dest = os.path.join(self.user_dir, name)
         if os.path.exists(dest):
             raise gcmd.error("Plugin %s is installed already "
@@ -1038,20 +1409,24 @@ class AD5XPlugins:
                 shutil.rmtree(tmp, ignore_errors=True)
                 raise Exception("not a valid plugin: %s" % (meta['error'],))
             os.rename(tmp, dest)
-            self.found = scan(self.shipped_dir, self.user_dir)
-            if enable:
-                # Saved first: enabling restarts Klipper
+            self.found = self._scan()
+            has_root = name in self.found and self.found[name]['root']
+            if enable and (root or not has_root):
+                # Saved first: enabling restarts Klipper (with root scripts,
+                # after root's answer: that job reports itself)
                 self.job.update({'state': 'done',
                                  'message': "installed and enabled"})
                 self._save_job()
-                self.gcode.run_script("ENABLE_PLUGIN NAME=%s" % (name,))
+                self.gcode.run_script("ENABLE_PLUGIN NAME=%s%s" % (
+                    name, " ROOT=1" if root else ""))
+                if has_root:
+                    return "installed, enabling"
                 return "installed and enabled"
-            msg = "installed (ENABLE_PLUGIN NAME=%s)" % (name,)
-            actions = self.found[name]['root_actions'] if name in \
-                self.found else []
-            if actions:
-                msg += ". " + root_actions_note(name, actions)
-            return msg
+            if has_root:
+                return ("installed, not enabled: it runs code as root (its "
+                        "root/ scripts). Read them, then ENABLE_PLUGIN "
+                        "NAME=%s ROOT=1" % (name,))
+            return "installed (ENABLE_PLUGIN NAME=%s)" % (name,)
         try:
             os.makedirs(self.user_dir, exist_ok=True)
         except OSError as e:
@@ -1080,7 +1455,7 @@ class AD5XPlugins:
             if rc != 0:
                 raise Exception("git pull failed: %s" % (out[-300:],))
             after = head()
-            self.found = scan(self.shipped_dir, self.user_dir)
+            self.found = self._scan()
             if after == before:
                 return "up to date (%s)" % (after,)
             msg = "updated %s -> %s" % (before, after)
@@ -1091,7 +1466,7 @@ class AD5XPlugins:
                         ["git", "-C", d, "pull", "-q", "--ff-only"], done)
     cmd_REMOVE_PLUGIN_help = "Disable and delete an installed plugin: NAME="
     def cmd_REMOVE_PLUGIN(self, gcmd):
-        self.found = scan(self.shipped_dir, self.user_dir)
+        self.found = self._scan()
         name = gcmd.get('NAME').strip().lower()
         info = self.found.get(name)
         d = os.path.join(self.user_dir, name)
@@ -1108,24 +1483,48 @@ class AD5XPlugins:
         if users:
             raise gcmd.error("Plugin %s is needed by %s: disable that first"
                              % (name, ", ".join(users)))
-        if on:
+        root = os.path.isdir(self._root_copy(name))
+        if on or root:
             self._check_idle(gcmd)
-            names = self._write_enabled(disable=[name])
-        shutil.rmtree(d)
-        self.found = scan(self.shipped_dir, self.user_dir)
-        self.job = {'name': name, 'action': 'remove', 'state': 'done',
-                    'message': 'removed'}
+        if root:
+            # root/uninstall.sh first (root's copy), then the removal,
+            # whatever it answered
+            def done(answer):
+                msg = "removed" if answer == 'ok' else \
+                    "removed; root/uninstall.sh %s" % (answer,)
+                if os.path.isdir(self._root_copy(name)):
+                    msg += (". Root's copy of its root/ is still there: "
+                            "DISABLE_PLUGIN NAME=%s runs uninstall.sh "
+                            "again" % (name,))
+                self._remove_now(None, name, info, on, msg,
+                                 'done' if answer == 'ok' else 'failed')
+            self._root_request(gcmd, name, 'uninstall', done)
+            return
+        self._remove_now(gcmd, name, info, on, "removed", 'done')
+    def _remove_now(self, gcmd, name, info, on, msg, state):
+        """REMOVE_PLUGIN's removal: off, deleted, Klipper restarted if it
+        was on. gcmd None: from root's answer (a background job)."""
+        names = self._write_enabled(disable=[name]) if on else None
+        shutil.rmtree(os.path.join(self.user_dir, name))
+        self.found = self._scan()
+        self.job = {'name': name, 'action': 'remove', 'state': state,
+                    'message': msg}
         self._save_job()
-        gcmd.respond_info("Plugin %s removed" % (name,))
+        respond = (gcmd.respond_info if gcmd is not None
+                   else self.gcode.respond_info)
+        respond("Plugin %s %s" % (name, msg))
         if on:
             if self._write_moonraker(names) or touches_moonraker(info):
                 self._restart_moonraker(gcmd)
-            gcmd.respond_info("Restarting Klipper")
-            self.gcode.run_script_from_command("RESTART")
+            respond("Restarting Klipper")
+            if gcmd is not None:
+                self.gcode.run_script_from_command("RESTART")
+            else:
+                self.gcode.run_script("RESTART")
     cmd_ENABLE_PLUGIN_help = ("Enable a plugin and restart Klipper: NAME= "
-                              "[RESTART=0]")
+                              "[ROOT=1] [RESTART=0]")
     def cmd_ENABLE_PLUGIN(self, gcmd):
-        self.found = scan(self.shipped_dir, self.user_dir)
+        self.found = self._scan()
         name = gcmd.get('NAME').strip().lower()
         info = self.found.get(name)
         if info is None:
@@ -1133,6 +1532,14 @@ class AD5XPlugins:
                 name, ", ".join(sorted(self.found)) or "none"))
         enabled = read_enabled(self.plugins_file)[0]
         if name in enabled:
+            if info['root'] and info['root_installed'] and \
+                    self._root_changed(name, info):
+                # root/ changed in a way that doesn't run by itself
+                # (_check_root_updates): ROOT=1 runs update.sh now
+                self._check_idle(gcmd)
+                self._root_gate(gcmd, name, info)
+                self._root_request(gcmd, name, 'update', self._update_done)
+                return
             gcmd.respond_info("Plugin %s is already enabled" % (name,))
             return
         if info['error']:
@@ -1153,26 +1560,51 @@ class AD5XPlugins:
         if info['owns_ifs']:
             owners = ifs_owners(enabled, self.found)
             if owners:
-                raise gcmd.error("Plugin %s drives the IFS already: disable "
-                                 "it first" % (owners[0],))
+                raise gcmd.error("Plugin %s can't be on together with %s: "
+                                 "both drive the IFS and only one can; "
+                                 "disable %s first" % (name, owners[0],
+                                                       owners[0]))
             if not os.path.exists(self.ifs_klipper_flag):
                 raise gcmd.error(
                     "Plugin %s drives the IFS, which needs the IFS on "
                     "Klipper firmware (/data/ad5x/ifs-klipper.enable, then "
                     "reboot)" % (name,))
         self._check_idle(gcmd)
+        self._root_gate(gcmd, name, info)
+        if info['root']:
+            # root/install.sh first; plugins.cfg only after it said ok
+            restart = gcmd.get_int('RESTART', 1)
+            def done(answer):
+                if answer != 'ok':
+                    raise Exception("root/install.sh %s; the plugin stays "
+                                    "off" % (answer,))
+                self._end_job('done', "root/install.sh ok; %s %s enabled "
+                              "(%s)" % (name, info['version'], info['source']))
+                self._apply(None, enable=[name], restart=restart)
+            self._root_request(gcmd, name, 'install', done)
+            return
         gcmd.respond_info("Plugin %s %s enabled (%s)" % (
             name, info['version'], info['source']))
-        if info['root_actions']:
-            gcmd.respond_info(root_actions_note(name, info['root_actions']))
         self._apply(gcmd, enable=[name])
     cmd_DISABLE_PLUGIN_help = ("Disable a plugin and restart Klipper: NAME= "
                                "[RESTART=0]")
     def cmd_DISABLE_PLUGIN(self, gcmd):
-        self.found = scan(self.shipped_dir, self.user_dir)
+        self.found = self._scan()
         name = gcmd.get('NAME').strip().lower()
         enabled = read_enabled(self.plugins_file)[0]
+        # root has a copy of its root/ (enabled with ROOT=1): uninstall.sh
+        root = NAME_RE.match(name) is not None and os.path.isdir(
+            self._root_copy(name))
         if name not in enabled:
+            if root:
+                # off already (an uninstall that was refused, or the plugin
+                # removed since): its root part goes now
+                self._check_idle(gcmd)
+                def done(answer):
+                    self._end_job('done' if answer == 'ok' else 'failed',
+                                  "root/uninstall.sh %s" % (answer,))
+                self._root_request(gcmd, name, 'uninstall', done)
+                return
             if name not in self.found:
                 raise gcmd.error("Unknown plugin '%s'" % (name,))
             gcmd.respond_info("Plugin %s is not enabled" % (name,))
@@ -1183,19 +1615,26 @@ class AD5XPlugins:
             raise gcmd.error("Plugin %s is needed by %s: disable that first"
                              % (name, ", ".join(users)))
         self._check_idle(gcmd)
+        if root:
+            # root/uninstall.sh first (root's copy), then the plugin is
+            # off, whatever it answered
+            restart = gcmd.get_int('RESTART', 1)
+            def done(answer):
+                msg = "disabled" if answer == 'ok' else \
+                    "disabled; root/uninstall.sh %s" % (answer,)
+                if os.path.isdir(self._root_copy(name)):
+                    msg += (". Root's copy of its root/ is still there: "
+                            "DISABLE_PLUGIN NAME=%s runs uninstall.sh "
+                            "again" % (name,))
+                self._end_job('done' if answer == 'ok' else 'failed', msg)
+                self._apply(None, disable=[name], restart=restart)
+            self._root_request(gcmd, name, 'uninstall', done)
+            return
         gcmd.respond_info("Plugin %s disabled" % (name,))
         self._apply(gcmd, disable=[name])
-    cmd_DEV_ROOT_REQUEST_help = ("Ask root for a named action a plugin "
-                                 "declares: PLUGIN= ACTION= [ARGS=\"a b\"]")
-    def cmd_DEV_ROOT_REQUEST(self, gcmd):
-        self.dev_root.request(gcmd)
-    cmd_DEV_ROOT_STATUS_help = ("Show the plugins' root actions, which are "
-                                "granted, and pending requests")
-    def cmd_DEV_ROOT_STATUS(self, gcmd):
-        self.dev_root.status(gcmd)
     cmd_LIST_PLUGINS_help = "List the plugins (shipped and own) and which are on"
     def cmd_LIST_PLUGINS(self, gcmd):
-        self.found = scan(self.shipped_dir, self.user_dir)
+        self.found = self._scan()
         enabled = read_enabled(self.plugins_file)[0]
         lines = ["Plugin API %s" % (PLUGIN_API_VERSION,)]
         for name in sorted(set(self.found) | set(enabled)):
@@ -1215,6 +1654,14 @@ class AD5XPlugins:
                 notes.append("conflicts with " + ", ".join(info['conflicts']))
             if info['owns_ifs']:
                 notes.append("drives the IFS")
+            if info['root']:
+                notes.append("root scripts installed" if
+                             info['root_installed'] else
+                             "runs code as root: ENABLE_PLUGIN ROOT=1")
+            if name in self.skipped and on:
+                notes.append("skipped" if info['error'] or not
+                             info['compatible'] else
+                             "skipped: " + self.skipped[name])
             if on != (name in self.loaded):
                 notes.append("until RESTART")
             lines.append("%s %s %s (%s%s): %s%s" % (
@@ -1231,7 +1678,8 @@ class AD5XPlugins:
             'available': {
                 n: {k: i[k] for k in ('source', 'description', 'version',
                                       'author', 'url', 'requires_os',
-                                      'compatible', 'owns_ifs')}
+                                      'compatible', 'owns_ifs', 'root',
+                                      'root_installed')}
                 for n, i in self.found.items()},
             'ifs_owner': self.ifs_owner,
             'catalog': {
@@ -1248,20 +1696,30 @@ def load_config(config):
 def main(argv):
     """S62moonraker, before Moonraker starts: write the Moonraker include
     list, or print the plugins' library and component directories.
-    S61klipper, before Klipper starts: link Kiln's IFS pins, or not.
+    S61klipper, before Klipper starts: write plugins-active.cfg (next to
+    PLUGINS_CFG; prints the skipped plugins), link Kiln's IFS pins, or not.
     usage: ad5x_plugins.py moonraker [PLUGINS_CFG [OUT]]
            ad5x_plugins.py env [PLUGINS_CFG]
+           ad5x_plugins.py klipper [PLUGINS_CFG]
            ad5x_plugins.py ifs-mcu [PLUGINS_CFG]"""
-    if len(argv) < 2 or argv[1] not in ("moonraker", "env", "ifs-mcu"):
+    modes = ("moonraker", "env", "klipper", "ifs-mcu")
+    if len(argv) < 2 or argv[1] not in modes:
         sys.stderr.write("usage: ad5x_plugins.py moonraker [PLUGINS_CFG "
-                         "[OUT]] | env [PLUGINS_CFG] | ifs-mcu "
-                         "[PLUGINS_CFG]\n")
+                         "[OUT]] | env [PLUGINS_CFG] | klipper "
+                         "[PLUGINS_CFG] | ifs-mcu [PLUGINS_CFG]\n")
         return 2
     plugins_file = argv[2] if len(argv) > 2 else os.path.join(
         CONFIG_DIR, 'plugins.cfg')
+    if argv[1] == "klipper":
+        skipped = write_active(plugins_file, SHIPPED_DIR, USER_DIR)[1]
+        for name in read_enabled(plugins_file)[0]:
+            if name in skipped:
+                sys.stdout.write("plugin %s skipped: %s\n"
+                                 % (name, skipped[name]))
+        return 0
     if argv[1] == "ifs-mcu":
-        names = read_enabled(plugins_file)[0]
         found = scan(SHIPPED_DIR, USER_DIR)
+        names = plan(read_enabled(plugins_file)[0], found)[0]
         sync_ifs_mcu(names, found, IFS_MCU_DIR, IFS_KLIPPER_FLAG,
                      GENERIC_IFS_CFG)
         owners = ifs_owners(names, found)

@@ -3,8 +3,9 @@
 What HelixScreen (touch UI, github.com/prestonbrown/helixscreen) needs from
 Klipper/Moonraker to run on an AD5X with an IFS, and how we close the gap.
 Section 0 is what is implemented (option (a2) below); sections 1-4 are the
-research it is based on, describing our stack before the change. Nothing
-has run on hardware.
+research it is based on, describing our stack before the change. Kiln OS
+now runs HelixScreen v1.1.0-rc.1 with its patches on every printer; the
+sections below keep the state of the day they were written.
 
 Sources (read 2026-10-15):
 
@@ -22,11 +23,14 @@ for `LW` `https://github.com/Hrybmo/lesswaste/blob/3d42421a6ed020baaa7563c94a56a
 
 ## Our patches
 
-`buildroot/package/helixscreen/000*.patch`, listed with what each does in
-`docs/setup-wizard.md` ("HelixScreen side"): the AD5X setup steps (0001,
-0002, 0003, 0006 time zone), the IFS port sensors (0004), Settings >
-Plugins (0005, `docs/plugins.md`) and the speaker with Settings > Sound >
-Printer Sounds (0007, `docs/sound.md`).
+`buildroot/package/helixscreen/*.patch` on HelixScreen v1.1.0-rc.1: 62
+files, `0001` to `0070` (the missing numbers were dropped because upstream
+has them). `docs/setup-wizard.md` ("HelixScreen side") lists `0001` to
+`0019` with what each does: among them the AD5X setup steps (0001, 0002,
+0003, 0006 time zone), the IFS port sensors (0004), Settings > Plugins
+(0005, `docs/plugins.md`) and the speaker with Settings > Sound > Printer
+Sounds (0007, `docs/sound.md`). The later ones are listed in
+`docs/deviations-from-stock.md` (row "HelixScreen source").
 
 ## 0. Implemented (2026-10-15)
 
@@ -359,7 +363,7 @@ subscribe `ifs`, map `selected/channel/inserted/silk/stall/colors`, send
   reason to carry a third AD5X dialect; the natural review answer is "publish
   the module contract". Out-of-tree, we would rebase against a very active
   repo.
-- Gains nothing over (a2) for the user.
+- Gains nothing over (a2) for the printer's owner.
 
 ### Recommendation
 
@@ -449,7 +453,7 @@ lanes empty, unresolved tools (no lane mapped), material mismatch.
 With (a2) these start working; the remap ones additionally need `T0`-`T3` and
 `PRINT_START TOOL=` to go through `tool_map`.
 
-## Fan setup wizard at every boot (fixed on the user's unit, 2026-10-16)
+## Fan setup wizard at every boot (fixed on the developer's printer, 2026-10-16)
 
 HelixScreen's `ad5x` preset (`assets/config/presets/ad5x.json`) names zMod's
 fans: part `fan_generic fanM106`, aux `fan_generic chamber_fan`, board

@@ -12,7 +12,8 @@
 #                      texts, buildroot.config, legal-info.sha256 (sha256 of
 #                      every source file)
 # and uploads the sources to the GitHub release "sources" (a pre-release, so
-# never "latest": the printers' update check reads releases/latest). Each
+# never "latest", which stable printers read; the test channel takes only
+# vX.Y.Z tags, docs/updates.md). Each
 # archive is named after its package version and uploaded once; later
 # releases that use the same version share it:
 #   src-<package>-<version>.tar          from legal-info (tarball + patches)

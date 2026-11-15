@@ -63,8 +63,8 @@ With "level before print" on, steps 2 and 3 run, then `BED_MESH_CALIBRATE`
 LOAD=default`.
 
 Either way the print then starts with `SET_GCODE_OFFSET Z=<zProbeOffset>
-MOVE=1`: the per-unit Z offset tuned on the screen (0.025 on the user's
-unit). Klipper's `Z=` is absolute, so this replaces the drift offset from
+MOVE=1`: the per-unit Z offset tuned on the screen (0.025 on the
+developer's printer). Klipper's `Z=` is absolute, so this replaces the drift offset from
 step 5 a few seconds after it was set (both appear in the stock app's
 log in the sandbox, drift first). On stock the drift therefore has no
 effect on the print; `_CHECK_Z_APPLY` does the same unless
@@ -82,7 +82,7 @@ effect on the print; `_CHECK_Z_APPLY` does the same unless
 
 ## To confirm on hardware
 
-- ~~The board's real reply text~~: read on the user's unit (USB test
+- ~~The board's real reply text~~: read on the developer's printer (USB test
   mode, 2026-10-15, `tools/probe_boards.py`): `H7` →
   `command H7 ok. 8596371 60 g \r\n`, three reads within 1 raw count
   of each other. Fields: raw ADC count, then grams; the fifth field (what

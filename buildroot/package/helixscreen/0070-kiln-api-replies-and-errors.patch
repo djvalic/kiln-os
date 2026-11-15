@@ -1,0 +1,343 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Fri, 13 Nov 2026 16:00:00 -0500
+Subject: [PATCH] kiln: read Kiln OS API replies and errors of v0.1.0-rc1
+
+Kiln OS v0.1.0-rc1 cleans up its Moonraker endpoints: kernel_retry and
+boot_recovery answer the object {"state": "rebooting"} (the JSON-RPC
+result itself, no inner "result"), and every Kiln error has an HTTP
+status by kind (409 refused because of the printer's state, 503 the root
+agent not answering, 400 a bad parameter, 500 a failure) and a reason
+for programs at the start of the message, "[printing] A print is
+running"; over JSON-RPC Moonraker also sends the reason as the error's
+data {"reason": "printing"}. Kiln's Klipper endpoint
+printer.ad5x_setup.control puts the reason in front too (always 400,
+no data: Moonraker passes Klipper errors on that way).
+
+- MoonrakerError::from_json_rpc takes "[reason] " off the message when
+  the data carries the same reason, so every screen that shows a Kiln
+  error (Boot into recovery, service restarts) shows the text only;
+  kiln_reason() gives the reason. strip_kiln_reason() takes it off a
+  message without data.
+- Settings > System > Boot into recovery reads result.state.
+- The AD5X setup wizard shows printer.ad5x_setup.control refusals
+  without the reason.
+
+Tests: the new reply (and the old double result not taken for a
+reboot), refusals and the agent timeout as Moonraker now sends them, the
+reason taken off only when the data matches, and strip_kiln_reason on
+reasons and look-alikes.
+---
+ include/moonraker_error.h                  | 37 +++++++++
+ include/ui_settings_kiln_recovery.h        | 14 ++--
+ src/ui/ui_settings_kiln_recovery.cpp       | 23 ++----
+ src/ui/ui_wizard_ad5x_setup.cpp            |  5 +-
+ tests/unit/test_settings_kiln_recovery.cpp | 92 +++++++++++++++++-----
+ 5 files changed, 129 insertions(+), 42 deletions(-)
+
+diff --git a/include/moonraker_error.h b/include/moonraker_error.h
+index b737de03..cf630ec2 100644
+--- a/include/moonraker_error.h
++++ b/include/moonraker_error.h
+@@ -202,6 +202,35 @@ struct MoonrakerError {
+         return helix::decode_firmware_error_text(extract_message_field(raw));
+     }
+ 
++    /// Kiln OS: the reason of an error from one of its Moonraker endpoints
++    /// (the JSON-RPC error's data {"reason": "printing"}), "" for any other.
++    std::string kiln_reason() const {
++        if (!details.is_object()) {
++            return {};
++        }
++        const auto it = details.find("reason");
++        return it != details.end() && it->is_string() ? it->get<std::string>() : std::string();
++    }
++
++    /// Kiln OS: @p message without the reason its Klipper endpoints put in
++    /// front ("[printing] SETUP_WIZARD_STEP: ..."; Moonraker passes those on
++    /// without data). A reason is lower case letters, digits and '_'.
++    static std::string strip_kiln_reason(const std::string& message) {
++        if (message.size() < 4 || message[0] != '[' || message[1] < 'a' || message[1] > 'z') {
++            return message;
++        }
++        size_t i = 1;
++        while (i < message.size() && ((message[i] >= 'a' && message[i] <= 'z') ||
++                                      (message[i] >= '0' && message[i] <= '9') ||
++                                      message[i] == '_')) {
++            ++i;
++        }
++        if (i + 1 < message.size() && message[i] == ']' && message[i + 1] == ' ') {
++            return message.substr(i + 2);
++        }
++        return message;
++    }
++
+     /// extract_friendly_message() of an error line that may still carry its
+     /// `!!` / `Error:` prefixes (`!! Error: foo`), with them and the
+     /// whitespace after each removed.
+@@ -292,6 +321,14 @@ struct MoonrakerError {
+             err.details = error_obj["data"];
+         }
+ 
++        // Kiln OS: its endpoints' errors start with their reason, "[printing] A
++        // print is running", which Moonraker also sends as the error's data
++        // {"reason": "printing"}. People get the text, programs kiln_reason().
++        const std::string reason = err.kiln_reason();
++        if (!reason.empty() && err.message.rfind("[" + reason + "] ", 0) == 0) {
++            err.message.erase(0, reason.size() + 3);
++        }
++
+         // Map specific error codes to types
+         if (err.code == -32601) { // Method not found
+             err.type = MoonrakerErrorType::VALIDATION_ERROR;
+diff --git a/include/ui_settings_kiln_recovery.h b/include/ui_settings_kiln_recovery.h
+index 25e307d8..578c5001 100644
+--- a/include/ui_settings_kiln_recovery.h
++++ b/include/ui_settings_kiln_recovery.h
+@@ -7,9 +7,12 @@
+  * Moonraker's kiln_os component answers `machine.kiln_os.boot_recovery`
+  * (POST /machine/kiln_os/boot_recovery): Kiln's root update agent points the
+  * boot flag at the recovery OS in slot A and reboots, answering
+- * {"result": "rebooting"}. It refuses while a print may run, before start-up
+- * has finished, or without the recovery OS in slot A; Moonraker then answers
+- * an error "Update agent: refused: <why>".
++ * {"state": "rebooting"}. It refuses while a print may run, before start-up
++ * has finished, or without the recovery OS in slot A: a 409 error
++ * "[<reason>] <why>" with the reason also as the error's data (reasons
++ * `printing`, `starting_up`, `no_recovery`, ...; Kiln OS docs/api.md,
++ * "Errors"). MoonrakerError::from_json_rpc leaves "[<reason>] " out of the
++ * message and keeps the reason in kiln_reason().
+  *
+  * The row shows on HELIX_KILN_AD5X builds only (`kiln_boot_recovery_available`)
+  * and is greyed while a print is active (print_active). It goes through the
+@@ -45,9 +48,8 @@ inline constexpr uint32_t kTimeoutMs = 45000;
+ bool available();
+ void set_available_for_test(std::optional<bool> value);
+ 
+-/// Moonraker's error message without the agent's "Update agent: " and
+-/// "refused: " prefixes: "a print is running", "start-up has not finished
+-/// yet, try again in a minute", ...
++/// Moonraker's error message without a "[<reason>] " in front: "A print is
++/// running", "Start-up has not finished yet, try again in a minute", ...
+ std::string refusal_text(const std::string& message);
+ 
+ /// The answer, on the main thread: @p rebooting true when the printer is
+diff --git a/src/ui/ui_settings_kiln_recovery.cpp b/src/ui/ui_settings_kiln_recovery.cpp
+index 8916df45..d7e3511b 100644
+--- a/src/ui/ui_settings_kiln_recovery.cpp
++++ b/src/ui/ui_settings_kiln_recovery.cpp
+@@ -34,13 +34,6 @@ constexpr bool kBuiltIn = false;
+ 
+ std::optional<bool> g_available_override;
+ 
+-void strip_prefix(std::string& text, const char* prefix) {
+-    const std::string p(prefix);
+-    if (text.compare(0, p.size(), p) == 0) {
+-        text.erase(0, p.size());
+-    }
+-}
+-
+ } // namespace
+ 
+ bool available() {
+@@ -52,11 +45,7 @@ void set_available_for_test(std::optional<bool> value) {
+ }
+ 
+ std::string refusal_text(const std::string& message) {
+-    std::string text = message;
+-    strip_prefix(text, "Update agent: ");
+-    strip_prefix(text, "refused: ");
+-    strip_prefix(text, "failed: ");
+-    return text;
++    return MoonrakerError::strip_kiln_reason(message);
+ }
+ 
+ void request(IMoonrakerClient& client, Done done) {
+@@ -72,11 +61,12 @@ void request(IMoonrakerClient& client, Done done) {
+     client.send_jsonrpc(
+         kMethod, json::object(),
+         [finish](const json& response) {
++            // {"state": "rebooting"}, the JSON-RPC result itself
+             const json* result = json_util::find_member(response, "result");
+-            const json* status = result ? json_util::find_member(*result, "result") : nullptr;
++            const json* state = result ? json_util::find_member(*result, "state") : nullptr;
+             const std::string answer =
+-                status && status->is_string() ? status->get<std::string>() : std::string();
+-            if (answer.rfind("rebooting", 0) == 0) {
++                state && state->is_string() ? state->get<std::string>() : std::string();
++            if (answer == "rebooting") {
+                 spdlog::info("[Kiln recovery] Rebooting into the recovery OS");
+                 finish(true, answer);
+             } else {
+@@ -85,7 +75,8 @@ void request(IMoonrakerClient& client, Done done) {
+             }
+         },
+         [finish](const MoonrakerError& err) {
+-            spdlog::warn("[Kiln recovery] Refused: {}", err.message);
++            spdlog::warn("[Kiln recovery] Refused ({}, {}): {}", err.code, err.kiln_reason(),
++                         err.message);
+             const std::string text = refusal_text(err.message);
+             finish(false, text.empty() ? std::string(lv_tr("Failed")) : text);
+         },
+diff --git a/src/ui/ui_wizard_ad5x_setup.cpp b/src/ui/ui_wizard_ad5x_setup.cpp
+index 4f7c8310..8049f25b 100644
+--- a/src/ui/ui_wizard_ad5x_setup.cpp
++++ b/src/ui/ui_wizard_ad5x_setup.cpp
+@@ -19,6 +19,7 @@
+ #include "i_moonraker_api.h"
+ #include "i_moonraker_client.h"
+ #include "lvgl/src/others/translation/lv_translation.h"
++#include "moonraker_error.h"
+ #include "observer_factory.h"
+ #include "printer_discovery.h"
+ #include "printer_state.h"
+@@ -415,7 +416,9 @@ void Ad5xSetupModel::send(const std::string& action, double delta) {
+         },
+         [this, token, key, action, delta, is_start](const MoonrakerError& err) {
+             const int code = err.code;
+-            const std::string message = err.message;
++            // Kiln's endpoint puts the reason in front ("[printing] ..."),
++            // for programs; the screen shows the rest
++            const std::string message = MoonrakerError::strip_kiln_reason(err.message);
+             token.defer("Ad5xSetupModel::control_error", [this, key, action, delta, is_start,
+                                                           code, message]() {
+                 // Moonraker without the endpoint: same action as G-code.
+diff --git a/tests/unit/test_settings_kiln_recovery.cpp b/tests/unit/test_settings_kiln_recovery.cpp
+index 9549ca8c..413a3a78 100644
+--- a/tests/unit/test_settings_kiln_recovery.cpp
++++ b/tests/unit/test_settings_kiln_recovery.cpp
+@@ -2,7 +2,9 @@
+ //
+ // Kiln OS (issue #47): Settings > System > Boot into recovery asks Moonraker's
+ // kiln_os component (machine.kiln_os.boot_recovery) to restart the printer into
+-// the recovery OS, and shows why when Kiln's update agent refuses.
++// the recovery OS, and shows why when Kiln's update agent refuses. Kiln's
++// replies: the object {"state": "rebooting"}; errors with an HTTP status as
++// the code, "[reason] text" as the message and {"reason": ...} as the data.
+ 
+ #include "ui_settings_kiln_recovery.h"
+ #include "ui_update_queue.h"
+@@ -49,53 +51,105 @@ template <typename Reply> Answer ask(Reply reply) {
+     return answer;
+ }
+ 
+-MoonrakerError agent_error(const std::string& message) {
+-    return MoonrakerError::from_json_rpc({{"code", 400}, {"message", message}},
++/// A Kiln error as Moonraker's JSON-RPC layer sends it
++MoonrakerError kiln_error(int code, const std::string& reason, const std::string& text) {
++    return MoonrakerError::from_json_rpc({{"code", code},
++                                          {"message", "[" + reason + "] " + text},
++                                          {"data", {{"reason", reason}}}},
+                                          "machine.kiln_os.boot_recovery");
+ }
+ 
+ } // namespace
+ 
+-TEST_CASE("Kiln recovery: the agent's prefixes are left out of the refusal",
+-          "[kiln][kiln_recovery]") {
+-    CHECK(recovery::refusal_text("Update agent: refused: a print is running") ==
+-          "a print is running");
+-    CHECK(recovery::refusal_text(
+-              "Update agent: refused: start-up has not finished yet, try again in a minute") ==
+-          "start-up has not finished yet, try again in a minute");
+-    CHECK(recovery::refusal_text("Update agent didn't answer (is S68ad5x-update-agent running?)") ==
+-          "Update agent didn't answer (is S68ad5x-update-agent running?)");
++TEST_CASE("Kiln recovery: the reason is left out of the refusal", "[kiln][kiln_recovery]") {
++    CHECK(recovery::refusal_text("[printing] A print is running") == "A print is running");
++    CHECK(recovery::refusal_text("[starting_up] Start-up has not finished yet, try again in a "
++                                 "minute") ==
++          "Start-up has not finished yet, try again in a minute");
++    CHECK(recovery::refusal_text("A print is running") == "A print is running");
+     CHECK(recovery::refusal_text("Method not found") == "Method not found");
+ }
+ 
++TEST_CASE("Kiln errors: the reason is the data, the message the text", "[kiln][moonraker][error]") {
++    const MoonrakerError err = kiln_error(409, "printing", "A print is running");
++    CHECK(err.code == 409);
++    CHECK(err.kiln_reason() == "printing");
++    CHECK(err.message == "A print is running");
++
++    // Only a "[reason] " that matches the data is taken off
++    const MoonrakerError other = MoonrakerError::from_json_rpc(
++        {{"code", 409}, {"message", "[busy] text"}, {"data", {{"reason", "printing"}}}}, "m");
++    CHECK(other.message == "[busy] text");
++    const MoonrakerError no_data =
++        MoonrakerError::from_json_rpc({{"code", 400}, {"message", "[printing] text"}}, "m");
++    CHECK(no_data.kiln_reason().empty());
++    CHECK(no_data.message == "[printing] text");
++    const MoonrakerError list_data = MoonrakerError::from_json_rpc(
++        {{"code", 424}, {"message", "Agent x RPC error"}, {"data", json::array({1, 2})}}, "m");
++    CHECK(list_data.kiln_reason().empty());
++}
++
++TEST_CASE("Kiln errors: a Klipper endpoint's reason in front comes off",
++          "[kiln][moonraker][error]") {
++    CHECK(MoonrakerError::strip_kiln_reason(
++              "[printing] SETUP_WIZARD_STEP: no setup step during a print") ==
++          "SETUP_WIZARD_STEP: no setup step during a print");
++    CHECK(MoonrakerError::strip_kiln_reason("[step_running] x") == "x");
++    CHECK(MoonrakerError::strip_kiln_reason("[internal_error2] x") == "x");
++    // Not a reason: upper case, spaces, nothing after it, no bracket
++    CHECK(MoonrakerError::strip_kiln_reason("[Errno 2] No such file") ==
++          "[Errno 2] No such file");
++    CHECK(MoonrakerError::strip_kiln_reason("[gcode_macro foo] x") == "[gcode_macro foo] x");
++    CHECK(MoonrakerError::strip_kiln_reason("[printing]x") == "[printing]x");
++    CHECK(MoonrakerError::strip_kiln_reason("[_x] y") == "[_x] y");
++    CHECK(MoonrakerError::strip_kiln_reason("Must home axis first") == "Must home axis first");
++    CHECK(MoonrakerError::strip_kiln_reason("").empty());
++}
++
+ TEST_CASE_METHOD(LVGLTestFixture, "Kiln recovery: Moonraker's answer reaches the caller",
+                  "[kiln][kiln_recovery]") {
+     SECTION("rebooting") {
+         const Answer a = ask([](const FakeMoonrakerClient::RpcCall& call) {
+             REQUIRE(call.success_cb);
+-            call.success_cb(json{{"jsonrpc", "2.0"}, {"result", {{"result", "rebooting"}}}});
++            call.success_cb(json{{"jsonrpc", "2.0"}, {"result", {{"state", "rebooting"}}}});
+         });
+         CHECK(a.rebooting);
+     }
++    SECTION("the old double result is not taken for rebooting") {
++        const Answer a = ask([](const FakeMoonrakerClient::RpcCall& call) {
++            call.success_cb(json{{"jsonrpc", "2.0"}, {"result", {{"result", "rebooting"}}}});
++        });
++        CHECK_FALSE(a.rebooting);
++    }
+     SECTION("refused while printing") {
+         const Answer a = ask([](const FakeMoonrakerClient::RpcCall& call) {
+             REQUIRE(call.error_cb);
+-            call.error_cb(agent_error("Update agent: refused: a print is running"));
++            call.error_cb(kiln_error(409, "printing", "A print is running"));
+         });
+         CHECK_FALSE(a.rebooting);
+-        CHECK(a.text == "a print is running");
++        CHECK(a.text == "A print is running");
+     }
+     SECTION("refused without the recovery OS in slot A") {
+         const Answer a = ask([](const FakeMoonrakerClient::RpcCall& call) {
+-            call.error_cb(agent_error("Update agent: refused: slot A doesn't hold the recovery "
+-                                      "OS (it holds: stock)"));
++            call.error_cb(kiln_error(409, "no_recovery",
++                                     "Slot A doesn't hold the recovery OS (it holds: stock)"));
++        });
++        CHECK_FALSE(a.rebooting);
++        CHECK(a.text == "Slot A doesn't hold the recovery OS (it holds: stock)");
++    }
++    SECTION("the agent didn't answer") {
++        const Answer a = ask([](const FakeMoonrakerClient::RpcCall& call) {
++            call.error_cb(kiln_error(503, "agent_timeout",
++                                     "The update agent didn't answer in 30 s (is "
++                                     "S68ad5x-update-agent running?)"));
+         });
+         CHECK_FALSE(a.rebooting);
+-        CHECK(a.text == "slot A doesn't hold the recovery OS (it holds: stock)");
++        CHECK(a.text ==
++              "The update agent didn't answer in 30 s (is S68ad5x-update-agent running?)");
+     }
+     SECTION("an answer that is not rebooting is not taken for one") {
+         const Answer a = ask([](const FakeMoonrakerClient::RpcCall& call) {
+-            call.success_cb(json{{"jsonrpc", "2.0"}, {"result", {{"result", "queued"}}}});
++            call.success_cb(json{{"jsonrpc", "2.0"}, {"result", {{"state", "queued"}}}});
+         });
+         CHECK_FALSE(a.rebooting);
+         CHECK(a.text == "queued");

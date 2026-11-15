@@ -7,8 +7,9 @@ unpacked on upload: Metadata/plate_<N>.gcode becomes <name>.gcode (several
 plates: <name>_plate<N>.gcode, none started), the .3mf is dropped, and the
 upload goes on as that G-code (metadata, print=true). A .3mf with no
 sliced plate, a broken zip or an implausible size is refused with 400
-and a message. An optional "plate" form field picks the plate of a .3mf
-with several. kiln_3mf.py has only the standard library, so
+and a message that starts with a reason for programs ("[bad_3mf] ...";
+not enough space: 507, "[no_space] ...", docs/api.md "Errors"). An
+optional "plate" form field picks the plate of a .3mf with several. kiln_3mf.py has only the standard library, so
 tools/test_moonraker_3mf.py tests it on the laptop.
 
 Upstream: not submitted (AD5X open OS)
@@ -27,7 +28,7 @@ index cbdd1af..48b245f 100644
              self._file = FileTarget(tmpname)
              self._sha256_target = SHA256Target()
 diff --git a/moonraker/components/file_manager/file_manager.py b/moonraker/components/file_manager/file_manager.py
-index 6fe3ce3..3bb4e45 100644
+index 6fe3ce3..e1bfa63 100644
 --- a/moonraker/components/file_manager/file_manager.py
 +++ b/moonraker/components/file_manager/file_manager.py
 @@ -23,6 +23,7 @@ from inotify_simple import flags as iFlags
@@ -38,7 +39,7 @@ index 6fe3ce3..3bb4e45 100644
  
  # Annotation imports
  from typing import (
-@@ -872,6 +873,25 @@ class FileManager:
+@@ -872,6 +873,26 @@ class FileManager:
          if unzip_ufp:
              filename = os.path.splitext(filename)[0] + ".gcode"
              dest_path = os.path.splitext(dest_path)[0] + ".gcode"
@@ -50,21 +51,22 @@ index 6fe3ce3..3bb4e45 100644
 +        if root == "gcodes" and kiln_3mf.is_3mf(dest_path):
 +            plate_arg = str(upload_args.get("plate", "")).strip()
 +            if plate_arg and not plate_arg.isdigit():
-+                raise self.server.error(f"Invalid plate: {plate_arg}", 400)
++                raise self.server.error(
++                    f"[bad_parameter] Invalid plate: {plate_arg}", 400)
 +            try:
 +                unzip_3mf, single_3mf = kiln_3mf.plan(
 +                    upload_args['tmp_file_path'], filename,
 +                    int(plate_arg) if plate_arg else None,
 +                    shutil.disk_usage(root_path).free)
 +            except kiln_3mf.ThreeMFError as e:
-+                raise self.server.error(str(e), 400)
++                raise self.server.error(f"[{e.reason}] {e}", e.status)
 +            filename = unzip_3mf[0][1]
 +            dest_path = os.path.abspath(os.path.join(root_path, filename))
 +            f_ext = ".gcode"
          if (
              os.path.isfile(dest_path) and
              os.access in os.supports_effective_ids and
-@@ -888,6 +908,8 @@ class FileManager:
+@@ -888,6 +909,8 @@ class FileManager:
              'tmp_file_path': upload_args['tmp_file_path'],
              'start_print': start_print,
              'unzip_ufp': unzip_ufp,
@@ -73,7 +75,7 @@ index 6fe3ce3..3bb4e45 100644
              'ext': f_ext,
              "is_link": os.path.islink(dest_path),
              "user": upload_args.get("current_user")
-@@ -910,7 +932,7 @@ class FileManager:
+@@ -910,7 +933,7 @@ class FileManager:
              upload_info['filename'], finfo).wait()
          started: bool = False
          queued: bool = False
@@ -82,7 +84,7 @@ index 6fe3ce3..3bb4e45 100644
              user: Optional[UserInfo] = upload_info.get("user")
              if can_start:
                  kapis: APIComp = self.server.lookup_component('klippy_apis')
-@@ -964,6 +986,18 @@ class FileManager:
+@@ -964,6 +987,18 @@ class FileManager:
                  tmp_path = upload_info['tmp_file_path']
                  finfo = self.get_path_info(tmp_path, upload_info['root'])
                  finfo['ufp_path'] = tmp_path
@@ -101,21 +103,21 @@ index 6fe3ce3..3bb4e45 100644
              else:
                  dest_path = upload_info['dest_path']
                  if upload_info["is_link"]:
-@@ -972,6 +1006,8 @@ class FileManager:
+@@ -972,6 +1007,8 @@ class FileManager:
                      upload_info['tmp_file_path'], dest_path)
                  finfo = self.get_path_info(upload_info['dest_path'],
                                             upload_info['root'])
 +        except kiln_3mf.ThreeMFError as e:
-+            raise self.server.error(str(e), 400)
++            raise self.server.error(f"[{e.reason}] {e}", e.status)
          except Exception:
              logging.exception("Upload Write Error")
              raise self.server.error("Unable to save file", 500)
 diff --git a/moonraker/components/file_manager/kiln_3mf.py b/moonraker/components/file_manager/kiln_3mf.py
 new file mode 100644
-index 0000000..2ef3dc6
+index 0000000..27b003b
 --- /dev/null
 +++ b/moonraker/components/file_manager/kiln_3mf.py
-@@ -0,0 +1,193 @@
+@@ -0,0 +1,210 @@
 +# Kiln OS: print sliced .gcode.3mf uploads (OrcaSlicer "Use 3MF instead of
 +# G-code", Bambu-style plate files).
 +#
@@ -135,6 +137,7 @@ index 0000000..2ef3dc6
 +#
 +# This file may be distributed under the terms of the GNU GPLv3 license.
 +from __future__ import annotations
++import errno
 +import hashlib
 +import logging
 +import os
@@ -157,7 +160,15 @@ index 0000000..2ef3dc6
 +
 +
 +class ThreeMFError(Exception):
-+    """A .3mf that can't be printed; the message is for the user."""
++    """A .3mf that can't be printed; the message is for the user, the
++    reason for programs and the status for HTTP (docs/api.md, "Errors"):
++    bad_3mf (400) the file, no_space (507) the printer's storage,
++    unpack_failed (500) anything else while writing the G-code."""
++    def __init__(self, message: str, reason: str = "bad_3mf",
++                 status: int = 400) -> None:
++        super().__init__(message)
++        self.reason = reason
++        self.status = status
 +
 +
 +def is_3mf(name: str) -> bool:
@@ -261,7 +272,8 @@ index 0000000..2ef3dc6
 +            total += info.file_size
 +        if free is not None and total > free - FREE_MARGIN:
 +            raise ThreeMFError(f"{os.path.basename(name)}: not enough free "
-+                               f"space for its G-code ({total} bytes)")
++                               f"space for its G-code ({total} bytes)",
++                               "no_space", 507)
 +        several = len(chosen) > 1
 +        return [(p, out_name(name, p, several)) for p in chosen], not several
 +
@@ -303,7 +315,14 @@ index 0000000..2ef3dc6
 +        shutil.move(tmp, dest)
 +    except ThreeMFError:
 +        raise
++    except OSError as e:
++        if e.errno == errno.ENOSPC:
++            raise ThreeMFError(f"plate {plate} could not be unpacked: not "
++                               "enough free space", "no_space", 507)
++        raise ThreeMFError(f"plate {plate} could not be unpacked: {e}",
++                           "unpack_failed", 500)
 +    except Exception as e:
++        # A damaged entry (CRC, truncated data): the file
 +        raise ThreeMFError(f"plate {plate} could not be unpacked: {e}")
 +    finally:
 +        out.close()

@@ -2,8 +2,8 @@
 
 How the AD5X boot loader picks between the two kernel/rootfs slots, how
 stock's updater switches them, and how to put our OS in the spare slot
-and get back. Worked out on the laptop (2026-10-16) from the user's eMMC
-backup (`firmware/unit-ad5x-home/emmc-backup/`, see `docs/emmc-backup.md`)
+and get back. Worked out on the laptop (2026-10-16) from the developer's eMMC
+backup (see `docs/emmc-backup.md`)
 and the stock 3.1.0 updater scripts. Nothing here has been tried on the
 printer.
 
@@ -21,8 +21,9 @@ printer.
   after a failure, no console prompt, no key or GPIO check, and no
   USB or SD boot in the SPL.
 - So a slot-B system that fails before it can switch the flag back
-  stays stuck. The only way out without it is the SoC's USB boot ROM,
-  which hasn't been looked at on this board yet.
+  stays stuck. The way out is the SoC's USB boot ROM, on the bench:
+  a USB cable to **J28** (the mainboard's OTG port, a 5-pin connector)
+  and Ingenic's USBCloner to reprogram the eMMC ("J28", below).
 
 ## Layout of the first MiB (user area of `mmcblk0`)
 
@@ -31,28 +32,67 @@ printer.
 | 0x0 | 0x80 used | Ingenic boot ROM parameter block, magic `INGE`, inside the protective-MBR sector (MBR signature at 0x1FE) |
 | 0x200 | | GPT header (`EFI PART`) |
 | 0x400 | 7 × 128 B | GPT entries (p1–p7) |
-| 0x4400 | 0x4600 | SPL image: header `LPSM` (`MSPL` reversed), then at 0x4500 a second copy of the `INGE` block, then code from 0x4C00. Loaded at 0x80001000 (code at 0x80001800). Ends at 0x8A00 |
-| 0xA400 | 0x2A600 | U-Boot 2013.07 proper, same build (`Sep 26 2024 - 23:34:47`, `-dirty`), linked at 0x80100000. Not started by the SPL in normal boot |
-| 0x34A00 to 0x100000 | | zero |
+| 0x4400 | 0x4600 | SPL image: header `LPSM` (`MSPL` reversed), then at 0x4500 a second copy of the `INGE` block, then code from 0x4C00. Loaded at 0x80001000 (code at 0x80001800). Ends at 0x8A00 in the Sep 2024 build; in the Nov 2025 build its code and data run to about 0x8F40, then `0xFF` fill up to 0xA400 |
+| 0xA400 | 0x2AE40 | U-Boot 2013.07 proper, the same build as the SPL, linked at 0x80100000. In the Nov 2025 build its relocation table runs from 0x34A00 to 0x35240. Not started by the SPL in normal boot |
+| 0x35240 to 0x100000 | | zero; U-Boot's `env_mmc` would keep its environment at 0x8A400 (0x8000 bytes, CRC32 + data), never written so far |
 
 The eMMC boot areas (`mmcblk0boot0/1`) are all zero.
+
+**The boot loader differs between units.** The first unit examined had
+`2013.07` built `Sep 26 2024 - 23:34:47`; the one examined on 2026-11-14
+has `2013.07-00437-g6b5883518-dirty (Nov 11 2025 - 18:29:19)`, SPL and
+U-Boot proper alike. The fixed positions are the same in both (`INGE` at
+0x0, GPT at 0x200/0x400, `LPSM` at 0x4400, the `INGE` copy at 0x4500, code
+at 0x4C00, U-Boot proper at 0xA400), but everything inside the SPL moved:
+its end, its strings and its partition table (below), and the `userdata`
+size. Offsets inside the SPL taken from one dump don't hold for another
+printer: find strings and tables by searching. Reading the first MiB is
+safe (`dd if=/dev/mmcblk0 bs=1M count=1`).
 
 ### U-Boot proper (unused)
 
 Its default environment (file offset 0x2C100) is `bootargs=` (empty),
 `bootcmd=` (empty), `bootdelay=1`, `baudrate=115200`, `loads_echo=1`. It has
 no bootcount, `bootlimit` or `altbootcmd`. No saved environment block
-exists in the first MiB. Where `env_mmc` would write one is unknown. It
+exists in the first MiB: `env_mmc` keeps one block of 0x8000 bytes
+(CRC32 + data) at eMMC byte offset 0x8A400 (`mmc_get_env_addr()`, Nov
+2025 build), all zero so far. With a bad CRC it uses the default. It
 has a prompt (`x2600_base# `), `Hit any key to stop autoboot`, `mmc`,
 `fatload`/`ext4load`, `tftpboot`, `bootm`, a custom `boota` (Android)
 command and `softburn` ("Ingenic usb soft burn"). Because the SPL never
 loads it, none of this is reachable on a stock unit. A way to reach it
 is described under "Recovery options".
 
+It has no console strap of its own: it prints with PC6 low (there is no
+`serial pio` code outside the SPL).
+
+**Chainload test, 2026-11-14 (Nov 2025 build, no eMMC writes):** U-Boot
+proper (0xA400-0x35240, 175,680 bytes) run from the stock kernel with
+`kernel-ingenic66/chainload`, its trampoline's `LOAD_ADDR` changed from
+0x80F00000 to 0x80100000, and PE9/PE10 set to UART0 first (stock sets
+PE11/PE12 only).
+
+1. It prints its banner and `Board: x2600_base`, then hangs at `DRAM:`. Its
+   SoC check reads the eFuse (0x13480000) and polls the ready bit with no
+   timeout, and stock Linux has the eFuse clock off (`CLKGR` 0x10000020
+   bit 0 set, 0xA2742F8B).
+2. With that bit cleared first, it finds `SOC: X2600H`, `512 MiB`,
+   relocates (U-Boot at 0x8FFA0000, `malloc()` from 0x8EF78000) and prints
+   `Now running in RAM - U-Boot at: 8ffa0000`, then nothing more, before
+   `MMC:`, and no answer to keys. Unproven guess: it takes the RAM as one
+   512 MiB block from 0 and lands in the RISC-V co-processor's region
+   (`rtos_size=4M@0xfc00000`; its `malloc()` area also covers
+   `rmem=16M@0xec00000`), and the co-processor, which the SPL started,
+   keeps running through a chainload. If so, the same may happen when the
+   SPL starts it from a kernel slot.
+
+
 ## What the SPL does (from disassembly)
 
 1. Prints its banner (`U-Boot SPL 2013.07-00190-g82c76c87e-dirty`) and
-   `test uboot` on ttyS0. Sets up clocks and DDR (W634GU6QG).
+   `test uboot` on ttyS0 (PE9-PE12, 115200), but only when GPIO 70 (PC6)
+   reads high at start; production boards hold it low (R232/R233), so it
+   prints nothing. Sets up clocks and DDR (W634GU6QG).
 2. Starts MSC0 (0xB3450000, the eMMC) and probes the card as SD, then
    as MMC. It doesn't look at any other boot device.
 3. Looks up `ota` in its **built-in partition table**: 8 entries of
@@ -69,13 +109,21 @@ is described under "Recovery options".
    | usershare | 0x6D000 | 0x200000 | p6 |
    | userdata | 0x26D000 | 0xBAC000 | p7 |
 
+   That is the Sep 2024 build. In the Nov 2025 build the table is at
+   eMMC offset 0x8C64 ({name pointer, start LBA, sectors}, 12 bytes each),
+   p1–p6 the same, and `userdata` **0xB62000** sectors. On each unit
+   examined the GPT matches its own SPL, so `/data`'s size differs between
+   units. The SPL never reads its `userdata` entry.
+
    **Changing the GPT does not move what the SPL boots.** Never move
    p1–p5.
 4. Reads 1 sector of `ota` (LBA 0x6C800) and compares it with
    `ota:kernel2` over 11 bytes (`strncmp`). If it matches, it uses partition
    `kernel2` and the bootargs string with `root=/dev/mmcblk0p4`.
    Otherwise it uses `kernel` and the string with `root=/dev/mmcblk0p2`.
-   Both strings are fixed in the SPL (file offsets 0x81F8 and 0x8474):
+   Both strings are fixed in the SPL (file offsets 0x81F8 and 0x8474 in
+   the Sep 2024 build; in the Nov 2025 build `ota:kernel2` is at 0x8B14
+   and the bootargs follow from about 0x8BBF):
    `console=ttyS0,115200n8 loglevel=8 [mem-start…mem-end] init=/linuxrc
    root=/dev/mmcblk0pN rootwait rootfstype=squashfs ro lpj=11935744`. The
    placeholder is replaced with `mem=`/`rmem=`/`rtos_size=` values.
@@ -91,6 +139,12 @@ is described under "Recovery options".
    with whatever image info it has. The result is undefined, but it never
    tries the other slot. The "kernel not found" path can't happen because the
    table is built in.
+
+**Its inputs, all of them:** the `ota` flag, the first 4 bytes of the
+chosen kernel partition, and GPIO 70 (PC6) for its console only. That is
+the only GPIO it reads (it also sets up the eMMC pins on port D and the
+UART pins on port E), and its serial input routine is never called. There
+is no key, strap or other boot device that sends it into U-Boot proper.
 
 Stock kernel (`xImage-stock`): uImage, Linux 5.10.186, not compressed,
 4,837,376 bytes, load = entry = 0x80F00000. The `kernel` partition is
@@ -154,10 +208,10 @@ Consequences for us:
 | Option | Status |
 |---|---|
 | SPL fallback to the other slot | **None.** No counter, no CRC, no retry. |
-| Boot loader console on ttyS0 | SPL output only, no input handling. U-Boot proper (`bootdelay=1`) is never started. Whether ttyS0 is on a reachable header on the mainboard is unknown. |
+| Boot loader console on ttyS0 | SPL output only, no input handling. U-Boot proper (`bootdelay=1`) is never started. Silent as shipped: the SPL sets PE9-PE12 (the DEBUG header) to UART0, then reads GPIO 70 (PC6) with its pull-up off and prints nothing when it's low. Production boards hold PC6 low with a divider (R233 to 3.3 V, R232 to GND, about 0.63 V). Held at 1.8 V at power-on, the SPL and the stock kernel print on the header ([serial-console.md](serial-console.md)). |
 | SD/USB boot from the loader | None in the SPL (eMMC only). |
-| Raw U-Boot in a kernel slot | Possible in principle: a kernel partition without uImage magic is loaded as U-Boot at 0x80100000 (512 KiB), the address the shipped U-Boot proper is linked at. Writing bytes 0xA400–0x34A00 of the first MiB into `kernel2` might give a U-Boot prompt (bootdelay 1) on ttyS0 when slot B is selected. Untried: what it expects from the SPL, where `saveenv` writes. Needs a serial line. |
-| Ingenic USB boot ROM ("cloner"/usbboot) | Every Ingenic SoC has one in mask ROM. The ROM falls back to it when it finds no valid boot loader, and on some parts boot-select pins force it. X2600 boot-select pins and AD5X board test points are unknown. On NOR-flash Ingenic devices, shorting flash pins during power-on forces it; the eMMC equivalent (holding eMMC CLK or CMD) is untested. Needs Ingenic's cloner with an X2600 config, or a free tool that supports the X2600. |
+| Raw U-Boot in a kernel slot | Possible in principle: a kernel partition without uImage magic is loaded as U-Boot at 0x80100000 (512 KiB), the address the shipped U-Boot proper is linked at. Writing bytes 0xA400–0x35240 of the first MiB into `kernel2` might give a U-Boot prompt (bootdelay 1) on ttyS0 when slot B is selected. Not tried from a slot; the chainload test above stops after relocation. `saveenv` writes at 0x8A400. Needs a serial line. |
+| Ingenic USB boot ROM ("cloner"/usbboot) | **Works, through J28.** Every Ingenic SoC has one in mask ROM; the ROM falls back to it when it finds no valid boot loader. On the AD5X it is on the OTG controller (`13500000`), whose port is **J28**, a 5-pin connector on the mainboard (`GND GND P N 5V`, labelled `USB`). Through it, alexshev86 reprogrammed a printer's eMMC with Ingenic's USBCloner after its boot path was gone (2026-11-14, PR #66). The outside USB-C port is a different controller (downstream port 2 of the internal hub on `13540000`, a host port) and can't be used. How to force USB boot while a valid SPL is on the eMMC (boot-select pins, button) is still unknown. |
 | Stock (slot A) selected again without our OS running | Only by writing `ota` from outside: USB boot ROM, or a U-Boot prompt as above. Nothing on the printer does it by itself. |
 
 Because of this, the safety has to come from our own install procedure
@@ -204,7 +258,7 @@ available, so it belongs in the first init script:
 - Failures *before* init (bad kernel, unreadable squashfs, missing
   `/linuxrc`) can't be caught this way. Steps 3–4 and the earlier USB
   stick test are the protection against those. If one happens anyway,
-  only the USB boot ROM (or a serial U-Boot) can recover.
+  only the USB boot ROM through J28 (or a serial U-Boot) can recover.
 
 Rollback from our OS: `echo ota:kernel > /dev/mmcblk0p5; sync; reboot`.
 Stock in slot A is untouched and boots as before. Offer this as a
@@ -218,9 +272,73 @@ same read-back check), then flip back.
 Never: move or resize p1–p5, write the first MiB, or apply a Flashforge
 package with a kernel part while our OS lives in slot B.
 
+## J28: the OTG port
+
+**J28** on the mainboard (`FFP0302_Main_Board_V3.0.1`) is a white 5-pin
+connector labelled `USB`, pins `GND`, `GND`, `P`, `N`, `5V` (P and N are
+D+ and D-), fitted but unused as shipped. According to alexshev86 (PR #66)
+it is the X2600's OTG controller (`13500000`). Next to it is an empty USB-C
+footprint labelled `USB2`, with test pads `B5`, `RX`, `TX`, `B8` below it;
+what that one connects to isn't known.
+
+J28 serves two purposes:
+
+- **Recovery:** the boot ROM's USB boot mode is on this controller. With
+  Ingenic's USBCloner, the eMMC can be reprogrammed after the boot path is
+  gone (done by alexshev86, PR #66). It is the only known way back from a
+  bad SPL, a kernel slot that hangs before Linux, or a U-Boot that hangs.
+- **A second USB host port** in normal use, separate from the internal
+  hub that the camera, the Wi-Fi and the outside USB-C port share. An EBB42
+  toolhead board (`1d50:614e`, CDC-ACM) works on it as `/dev/ttyACM0` under
+  Klipper: on 5.10 the controller is `dwc2 13500000.otg` and the board
+  `usb 2-1` (full speed); on 7.3.3 it is `dwc2 13500000.usb` and `1-1`.
+
+### Recovery with USBCloner (alexshev86, PR #66)
+
+What worked, restoring a whole eMMC image to a printer whose SPL no
+longer started:
+
+- **Tool:** Ingenic USBCloner **v2.5.36.1** (`cloner-2.5.36.1-windows_alpha`).
+- **Board config:** `configs/x2600/x2600_mmc0_ddr3_linux.cfg` (platform
+  `X2600`, eMMC on MSC0, DDR3).
+- **Config → POLICY:** exactly one entry enabled, all others disabled:
+  type `FILE`, ops `MMC0`, offset `0x0`, attribute the raw image of the
+  whole eMMC main area (on that unit 7,837,587,456 bytes, 15,307,776
+  sectors).
+- **MMC tab:** `Force erase = None` (the image holds everything).
+  **DEBUG tab:** `Readback` and `CRC/Transfer check` on.
+- **Result:** the boot phase ran to 100%, then the policy write, 15-40
+  minutes in all. Power and USB untouched until it finished; the printer
+  booted normally afterwards.
+
+Notes:
+
+- **One whole-disk image, not per partition.** The boot loader and the
+  GPT are in the same range (sectors 0-2047, before p1), so there is no
+  separate SPL or U-Boot step.
+- **`boot0`/`boot1` aren't used on this board** (the loader is in the main
+  area) and the policy leaves them alone. **RPMB isn't covered** either;
+  the printer doesn't appear to use it.
+- **The target eMMC must be at least as large as the image,** or the write
+  fails partway.
+- **A whole-disk clone carries the donor's GPT.** Cloning between boards
+  with different eMMC sizes transplants the partition table too: that is
+  how one unit got a 32 GB `alternate_lba` on an 8 GB part (issue #29).
+  Stock 5.10 tolerated it; mainline's `efi.c` didn't. Fix the GPT after
+  such a clone.
+- **No jumper was needed:** with the SPL gone, USBCloner found the X2600
+  as soon as the cable was on J28. The board has a pad pair **K4** that
+  looks meant to force USB boot, but closing it made no visible
+  difference on that unit; what it does is untested.
+
+To check which port a connector is: plug any USB device into it and see
+whether it appears on the `13500000` controller's bus. Before connecting a
+PC to J28, measure `5V`: if the printer powers it, don't connect a second
+supply.
+
 ## Open questions
 
-- The user's quoted running cmdline has no `lpj=11935744`, but the SPL's
+- The quoted running cmdline (developer's printer) has no `lpj=11935744`, but the SPL's
   string ends with it. Re-read `/proc/cmdline` on the printer to confirm
   the SPL is the cmdline source (or find what strips `lpj`).
 - Does the stock kernel reboot on panic? There's no `panic=` in the
@@ -231,12 +349,21 @@ package with a kernel part while our OS lives in slot B.
 - X2600 boot ROM: boot-select pins, the order of boot media, and how to
   force USB boot on the AD5X mainboard (button, test pads, eMMC CLK/CMD).
   Which cloner/usbboot build supports the X2600?
-- Is ttyS0 broken out on the mainboard (pads, connector)?
-- Would the shipped U-Boot proper run when loaded from a kernel slot by
-  the SPL (any SPL→U-Boot handoff data)? Where does its `env_mmc` store
-  the environment?
+- Why does U-Boot proper stop after relocating under chainload (see
+  "Chainload test")? The co-processor's memory, or a device Linux left
+  running? Would it also stop when the SPL starts it from a kernel slot?
+- How to force the boot ROM's USB mode on J28 while a valid SPL is on
+  the eMMC. With the SPL gone, the ROM falls back to USB by itself. K4
+  looks like the board's "force USB boot" pad, but closing it made no
+  visible difference on one unit; it may need a different state or timing,
+  or serve another purpose. Otherwise: boot-select pins, or holding eMMC
+  CLK or CMD at power-on.
 - What does the `INGE` block at 0x0 hold (SPL offset/size, checksum)?
   This only matters if the first MiB is ever rewritten, which we avoid.
+- The 2026-11-14 unit's eMMC (SanDisk `DA2016`, 30,777,344 sectors,
+  14.7 GiB) is about 7.8 GiB bigger than its last partition: both layouts
+  look sized for an 8 GB part. `userdata` is last, so it could grow
+  without touching what the SPL reads.
 - How the `rtos` image (RISC-V co-processor, `rtos_size=4M@0xfc00000`)
   is loaded: the SPL table has no `rtos` partition, and the stock scripts'
   `local_get_rtos_dev_path` would find none.
@@ -249,7 +376,7 @@ command line has `root=/dev/mmcblk0p4`; `S99ad5x-booted` (last) writes
 init has started comes back up on stock at the next power cycle. Both do
 nothing in USB test mode or when booted from slot A.
 
-## Install log (user's unit)
+## Install log (developer's printer)
 
 | Date | Step | Result |
 |---|---|---|
@@ -284,7 +411,7 @@ writes the idle slot, read-back and mount check (`/etc/ad5x-release`,
 Never touches the running slot. From the laptop:
 
 ```
-ssh root@ad5x.home ad5x-update - $(sha256sum < rootfs.squashfs | cut -d' ' -f1) < rootfs.squashfs
+ssh root@PRINTER ad5x-update - $(sha256sum < rootfs.squashfs | cut -d' ' -f1) < rootfs.squashfs
 ```
 
 `--replace-stock`: when the idle slot holds stock, its root (squashfs
@@ -335,5 +462,5 @@ printer's own stock kernel:
   they differ;
 - `ad5x-restore-stock` writes the saved `kernel.img` back with stock's root.
 
-On the user's unit both kernel partitions already hold the stock kernel
+On the developer's printer both kernel partitions already hold the stock kernel
 (install log above), so nothing changes there.

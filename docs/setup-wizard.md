@@ -1,6 +1,6 @@
 # First-boot setup wizard (design + contract)
 
-Goal: like the stock printer, a fresh install walks the user through tuning on
+Goal: like the stock printer, a fresh install walks you through tuning on
 the touch screen. It also runs again on demand ("Run setup wizard" in
 HelixScreen settings, or the `SETUP_WIZARD` macro).
 
@@ -69,7 +69,10 @@ Moonraker JSON-RPC `printer.ad5x_setup.control` or HTTP
 `POST /printer/ad5x_setup/control`, with params `step`, `action`, `delta`
 and the step options in lower case (`material`, `extruder`, `bed`,
 `keep_bed`, `tube`, `channel`). Reply: `{"state", "step", "message"}`;
-errors come back as a normal Klipper error. **The screen should send
+errors come back as a normal Klipper error (400 through Moonraker), the
+message starting with a reason, e.g. `[step_running] SETUP_WIZARD_STEP:
+step 'pid' is still running (ACTION=abort first)` (`docs/api.md`,
+"Errors"; the G-code command's message has no reason). **The screen should send
 abort this way, and preferably adjust and accept too.**
 
 - `ACTION=start` (default) starts the step and returns at once. The step
@@ -216,8 +219,9 @@ does two things:
   passes it on as `notify_gcode_response`, so a running screen can open
   the wizard at once.
 
-Klipper can't restart HelixScreen itself: Moonraker runs with
-`provider: none` here.
+Klipper can't restart HelixScreen itself (it runs as `klipper`).
+Moonraker's `POST /machine/services/restart?service=helixscreen` can,
+through the root update agent, except while a print runs.
 
 ## Klipper side: implementation notes
 
@@ -437,16 +441,20 @@ only updates about every 0.3 s: roughly ±5 mm at 1200 mm/min, ±15 mm at
 `/usr/share/ad5x/helixscreen-settings.json` is only copied when there is
 no `/data/ad5x/helixscreen/config/settings.json`, i.e. on a fresh install,
 and carries `wizard_completed: false` so the wizard runs once. Printers that
-already have settings (like ad5x.home) keep theirs and see no wizard after
+already have settings keep theirs and see no wizard after
 an update.
 
 ## HelixScreen side (`buildroot/package/helixscreen/000*.patch`)
 
-Patches on HelixScreen v1.1.0-beta.13 (twenty-eight, `0001` to `0028`), applied by Buildroot after
+Patches on HelixScreen v1.1.0-rc.1 (62 files, `0001` to `0070`; the missing
+numbers were dropped because upstream has them), applied by Buildroot after
 extract (after the `GIT_INIT` hook has committed the pristine tree, so
-upstream's own submodule patching is unaffected; they touch only `src/`,
-`include/`, `ui_xml/`, `tests/` and, for 0011, `assets/config/`). Regenerate them from a clean clone of the build
-dir's `import` commit with `git format-patch`.
+upstream's own submodule patching is unaffected; they touch `src/`,
+`include/`, `ui_xml/`, `tests/`, `translations/`, a few `assets/` files, and
+for 0007 and 0057 the build files). The table below covers the setup wizard
+and the first patches, `0001` to `0019`; the later ones are listed in
+`docs/deviations-from-stock.md` (row "HelixScreen source"). Regenerate them
+from a clean clone of the build dir's `import` commit with `git format-patch`.
 
 | Patch | What |
 |---|---|
@@ -494,7 +502,8 @@ Every action (start, abort, adjust, accept) goes to the API endpoint as
 JSON-RPC `printer.ad5x_setup.control` with `step`, `action`, `delta` and
 the step options, so abort and adjust also work while a long command holds
 the G-code lock. If Moonraker answers "method not found", the screen falls
-back to `SETUP_WIZARD_STEP STEP=… ACTION=…` as G-code. Start returns at
+back to `SETUP_WIZARD_STEP STEP=… ACTION=…` as G-code. A refusal shows
+without its `[reason] ` (patch 0070). Start returns at
 once; the card follows `state`. Step options sent: the mesh step gets
 `keep_bed: 1` when the Z offset step is part of the run (always, in both
 the full wizard and the settings session). The Z offset step sends no
@@ -584,7 +593,7 @@ Compiled for the AD5X with Buildroot only; never run (no mock printer has
 `ad5x_setup`, and nothing here has been on the screen). What to check on the
 screen: `docs/helixscreen-integration.md`, section "Setup wizard".
 
-## First run on hardware (ad5x.home, 2026-10-16)
+## First run on hardware (the developer's printer, 2026-10-16)
 
 Run from Settings > Printer > Run Setup Wizard, on update `202610161833-bb18ef9f`.
 
@@ -599,6 +608,6 @@ Run from Settings > Printer > Run Setup Wizard, on update `202610161833-bb18ef9f
 | finish | `ad5x-tuning.cfg` written and SAVE_CONFIG run for the mesh; after the restart everything was active. |
 
 Found and fixed after the run:
-- **The zoffset step refused** because the IFS step leaves the toolhead empty, and the user had to push filament in by hand. The step now loads the slot IFS_TUNE cut out, else T0's slot (`IFS_LOAD`).
+- **The zoffset step refused** because the IFS step leaves the toolhead empty, and the filament had to be pushed in by hand. The step now loads the slot IFS_TUNE cut out, else T0's slot (`IFS_LOAD`).
 - **IFS_TUNE kept the nozzle at 220 C** for the whole speed and load sweep. Heat now covers only the cut and unload.
 - **The save step's button said "Start".** It now says "Save & Restart" (Klipper restarts; the printer does not reboot).

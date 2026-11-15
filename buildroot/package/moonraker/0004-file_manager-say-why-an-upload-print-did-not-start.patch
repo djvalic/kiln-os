@@ -28,10 +28,10 @@ index 48b245f..f4964c4 100644
          item: Dict[str, Any] = result.get('item', {})
          root: Optional[str] = item.get('root', None)
 diff --git a/moonraker/components/file_manager/file_manager.py b/moonraker/components/file_manager/file_manager.py
-index 3bb4e45..f6349aa 100644
+index e1bfa63..45ac352 100644
 --- a/moonraker/components/file_manager/file_manager.py
 +++ b/moonraker/components/file_manager/file_manager.py
-@@ -932,28 +932,44 @@ class FileManager:
+@@ -933,28 +933,44 @@ class FileManager:
              upload_info['filename'], finfo).wait()
          started: bool = False
          queued: bool = False

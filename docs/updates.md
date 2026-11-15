@@ -31,11 +31,15 @@ are built into both images, tested (our Klipper modules, Klipper against
 the boards' flashed firmware, Moonraker start-up, the recovery OS's update
 and the installer), and released only if every test passes. Daily Klipper
 and Moonraker packages go through the same tests inside the newest
-release. Versions: `vMAJOR.MINOR.PATCH`.
+release. Versions: `vMAJOR.MINOR.PATCH`; release candidates
+`vMAJOR.MINOR.PATCH-rcN` come before their release
+(v0.0.61 < v0.1.0-rc1 < v0.1.0-rc2 < v0.1.0). A release candidate is
+published as a pre-release and offered only to printers on the test
+channel (below, "Test channel: how to join and leave").
 
 Release notes: a "What's new" section from `CHANGELOG.md` (the release's
-`## vX.Y.Z` section, else `## Unreleased`, which is renamed after the
-release; `tools/changelog_section.sh`). Gitea's notes also list the
+`## vX.Y.Z (date)` section, else `## Unreleased`, which `tools/release.sh`
+renames after the release; `tools/changelog_section.sh`). Gitea's notes also list the
 commits. After editing the changelog, `tools/publish_github.sh notes TAG`
 rewrites a GitHub release's notes.
 
@@ -80,9 +84,13 @@ is kept in the run's log folder (`update-<version>.zip`). It is never published,
 - Moonraker's `kiln_os` component (`moonraker/components/kiln_os.py`,
   configured in `/usr/share/ad5x/moonraker-updates.conf`) adds "Kiln OS"
   to the update manager. It asks GitHub (`server`/`repo` in
-  `moonraker-updates.conf`; a Gitea server works too) for the newest release (drafts and
-  pre-releases don't count) when the update manager refreshes (daily, or
-  Fluidd's refresh button).
+  `moonraker-updates.conf`; a Gitea server works too) for the newest release
+  of the printer's update channel when the update manager refreshes (daily,
+  or Fluidd's refresh button). On the default **stable** channel that is
+  the server's `releases/latest`: drafts and pre-releases (release
+  candidates, the daily packages) don't count. On the **test** channel it
+  is the newest Kiln OS version among all releases that are not drafts,
+  release candidates included (see "Test channel" below).
 - The update manager's own "klipper" and "moonraker" entries offer the
   newest package that is newer than what runs and whose `os_min` this OS
   meets. Update downloads and checks it, the agent unpacks it into
@@ -126,17 +134,23 @@ is kept in the run's log folder (`update-<version>.zip`). It is never published,
     (line 1 of `failed`), `failed_why` (line 2: stage and last saved
     clock), `ours_failed` (`failed` names ours: the warning is up),
     `unfinished` (unfinished start-ups in a row). The "Kiln OS" entry of
-    `/machine/update/status` has the same under `kernel`.
+    `/machine/update/status` has the same under `kernel`. When the records
+    can't be read it answers 500 with the reason
+    `kernel_records_unreadable` (`kernel` in the update status is
+    `{"error": "..."}` then, so the rest of the status still shows).
   - `POST /machine/kiln_os/kernel_retry`: writes `kernel-retry` in
     `/data/ad5x/kiln-update`; the agent runs `ad5x-kernel retry` and
     reboots, so our kernel is tried at the next boot. A recorded failure
     lasts until this (or `ad5x-kernel retry`): an update doesn't clear it,
     the release string is the same in every build. Answers
-    `{"result": "rebooting"}`; an error while a print may run (the same
-    rule as installs: "refused: a print is running", "no answer from
-    Moonraker", "the print state is unknown"), before start-up has finished (the boot flag still
+    `{"state": "rebooting"}` (and the deprecated `"result": "rebooting"`); refused (409) while a print may run (the
+    same rule as installs: reasons `printing`, `print_state_unknown`),
+    before start-up has finished (`starting_up`: the boot flag still
     points at the recovery OS), when our kernel runs and nothing is
-    recorded as failed, or when the image has no kernel of its own. Example:
+    recorded as failed (`nothing_to_retry`), when the image has no kernel
+    of its own (`no_own_kernel`); 500 when the kernel records can't be
+    read; 503 when the agent doesn't answer (docs/api.md, "Errors").
+    Example:
     `curl -X POST http://PRINTER/machine/kiln_os/kernel_retry` (through
     Fluidd's nginx) or port 7125.
 - The recovery OS on request (issue #47):
@@ -144,11 +158,72 @@ is kept in the run's log folder (`update-<version>.zip`). It is never published,
   `/data/ad5x/kiln-update`; the agent runs `ad5x-boot-recovery` (boot
   flag on the recovery OS in slot A) and reboots. Unlike an interrupted
   start this records nothing against our kernel. Answers
-  `{"result": "rebooting"}`; an error while a print may run (the same rule
-  as installs), before start-up has finished, while the recovery OS is
-  being written into slot A, or when slot A doesn't hold the recovery OS.
+  `{"state": "rebooting"}` (and the deprecated `"result": "rebooting"`); refused (409) while a print may run (the same
+  rule as installs), before start-up has finished, while the recovery OS
+  is being written into slot A (`recovery_updating`), or when slot A
+  doesn't hold the recovery OS (`no_recovery`).
   Example: `curl -X POST http://PRINTER/machine/kiln_os/boot_recovery`.
   Over SSH: `ad5x-boot-recovery`.
+- Service restarts (Fluidd's restart buttons, `managed_services` after an
+  update): `[machine] provider: kiln_agent` (Moonraker patch 0006) writes
+  `service` (`ACTION NAME`, e.g. `restart klipper`) in
+  `/data/ad5x/kiln-update`; the agent runs the init script it maps the
+  name to (klipper, moonraker, nginx, helixscreen, ad5x-camera; moonraker
+  and nginx restart only) and answers `done: ...`. Refused while a print
+  may run (the same rule as installs). For moonraker and nginx the answer
+  comes first and the restart 3 s later, so the reply still gets out.
+
+## Test channel: how to join and leave
+
+Release candidates (`v0.1.0-rc1`, `-rc2`, ...) are published as
+pre-releases. A printer on the **stable** channel (the default) is never
+offered one: it stays on the last `vX.Y.Z` release until the next final
+release (for v0.1.0: on v0.0.6x until v0.1.0 is out). A printer on the
+**test** channel is offered the newest release, pre-releases included,
+so each release candidate and then the final release.
+
+The channel is kept in Moonraker's database (namespace `kiln_os`, key
+`update_channel`, in `printer_data/database`), so it survives Kiln OS
+updates and needs no config edit or restart. Only the endpoint below
+writes it.
+
+**Join** (from a computer on the same network, or over SSH on the printer
+itself with `localhost:7125` for `PRINTER`):
+
+```sh
+curl -X POST 'http://PRINTER/machine/kiln_os/channel?channel=test'
+```
+
+Then press the refresh button in Fluidd's Software Updates: "Kiln OS"
+offers the newest release candidate, and Update installs it as usual.
+On the test channel:
+
+- each new release candidate is offered as it comes out;
+- when the final release is out (`v0.1.0`), a printer on `v0.1.0-rcN` is
+  offered it (`v0.1.0-rcN < v0.1.0`);
+- the Klipper and Moonraker packages are the same as on stable (built and
+  tested on the newest stable release); one is used only when it is newer
+  than the copy in the release candidate's image.
+
+**Leave**:
+
+```sh
+curl -X POST 'http://PRINTER/machine/kiln_os/channel?channel=stable'
+```
+
+Leaving never downgrades. A printer on `v0.1.0-rc2` is then offered
+nothing until a stable release newer than `v0.1.0-rc2` is out, which is
+`v0.1.0` itself, so it simply stays on the candidate until then. To go
+back to the stable release at once, install it by hand: download
+`kiln-os-vX.Y.Z-update.zip` of the release you want from the releases
+page and install it with `ad5x-update --reboot FILE` over SSH, or from a
+USB stick ("From a USB stick" below). Your settings in `/data` stay as
+they are either way.
+
+Which channel a printer is on: `GET /machine/kiln_os/info`
+(`update_channel`), or `channel` in the "Kiln OS" entry of
+`/machine/update/status`. A channel change forgets what the old channel
+offered until the next refresh.
 
 ## From a USB stick
 

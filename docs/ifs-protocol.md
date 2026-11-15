@@ -1,35 +1,46 @@
-# IFS protocol (draft, from static analysis)
+# IFS protocol (stock IFS firmware 3.0.7)
 
 Source: IFS controller firmware `ifs.hex` from stock update 3.1.0 (IFS firmware reports version 3.0.7).
-Method: static analysis of the IFS firmware, describing behaviour only; parts were later checked against the stock app (noted where they were).
+Method: static analysis of the IFS firmware, then use. Kiln OS's `klipper/extras/ifs.py` drives the stock IFS firmware with part of this protocol on every printer; those parts are marked **used by Kiln OS** below. Everything not marked that way comes from the firmware alone and is **unconfirmed**: it has not been seen on the wire.
 
 Clean-room note: this file describes behavior only. Decompiled output stays in scratch and never enters the repo.
 
 ## Transport
 
-- Host side: `/dev/ttyS4` on the printer (the updater flashes the IFS through that port). Not confirmed for normal operation.
-- **115200 baud, 8N1, no flow control** on the IFS MCU's USART1 (TX PA9, RX PA10). From the `USART_Init` call (BaudRate 0x1C200, word length/stop/parity 0, mode TX|RX). PA11 is driven high at the same time: possibly a transceiver or RS-485 driver enable, so check the cable's signalling level before tapping it.
-- Receive uses DMA plus the idle-line interrupt into a 200-byte buffer, so **a command is one burst of bytes followed by a pause**. The firmware needs no line terminator, though the stock host probably sends `\r\n`.
-- The other two USARTs run at **9600** (USART2 and the port at 0x40015400). They are almost certainly the single-wire UARTs to the two TMC drivers, not the host link.
+- Host side (used by Kiln OS): `/dev/ttyS4` on the printer, **RS-485 half-duplex**. The host drives the transceiver's driver enable on PC3 while it sends (`kernel-ingenic66/ad5x.dts`, `patches/0002-*`); without it the IFS gets nothing and does not answer.
+- **115200 baud, 8N1, no flow control** (used by Kiln OS). On the IFS MCU this is USART1 (TX PA9, RX PA10), from the `USART_Init` call (BaudRate 0x1C200, word length/stop/parity 0, mode TX|RX). PA11 is driven high at the same time, probably the IFS side's RS-485 driver enable (unconfirmed).
+- Receive uses DMA plus the idle-line interrupt into a 200-byte buffer, so **a command is one burst of bytes followed by a pause**. The firmware needs no line terminator; Kiln OS sends `\r\n` after each command.
+- The other two USARTs run at **9600** (USART2 and the port at 0x40015400). They are almost certainly the single-wire UARTs to the two TMC drivers, not the host link (unconfirmed).
 - ASCII, G-code style. The controller scans the received line for `F`, parses the integer after it as the command number, then looks for single-letter parameters (`C`, `L`, `S`, `T`, `I`, `D`), each followed by a number.
-- Every reply starts with `F<n> ok` and ends with `\r\n`. Unknown or unimplemented command numbers get **no reply**.
+- Every reply starts with `F<n> ok` (used by Kiln OS). In practice a reply has no line ending at its end (F21 has `\r\n` only between its lines), so `ifs.py` takes a reply as complete when the line goes quiet. Unknown or unimplemented command numbers get **no reply** (from the firmware; unconfirmed).
 
 ## Controller state
 
-A single state byte drives the motion state machine. Values seen so far:
+A single state byte drives the motion state machine (`FFS_state` in the
+F13 reply). Values seen so far; the meanings are inferred from the firmware
+unless marked otherwise:
 
-| Value | Meaning (inferred) |
+| Value | Meaning |
 |---|---|
 | 1 | Set by F18 and F24 (a channel was selected / switch requested) |
-| 5 | Ready / idle. F10, F11 and F39 refuse unless the state is 5 |
+| 5 | Ready / idle. F10, F11 and F39 refuse unless the state is 5. Used by Kiln OS (`STATE_READY`); that every move ends back in 5 is not confirmed |
 | 10 + 11·(ch−1) | Feeding channel `ch` (10, 21, 32, 43) — F10 |
 | 12 + 11·(ch−1) | Releasing channel `ch` (12, 23, 34, 45) — F39 |
 | 14 + 11·(ch−1) | Retracting / exiting channel `ch` (14, 25, 36, 47) — F11 |
+| 0x7e | Homing; stuck here means the IFS can't home (stock error E0114). Used by Kiln OS |
+| 0x7f | A move faulted (stall); F15 clears it. Used by Kiln OS |
 | 0x80 | Set by F30 |
+
+`ifs.py` also names 3, 7, 11 and 15 (polling, clamped, loading,
+unloading), values another IFS module saw on the wire; they are not in this
+analysis.
 
 ## Commands
 
-Channels are 1–4.
+Channels are 1–4. **Used by Kiln OS** with the stock firmware: F10, F11,
+F13, F15, F19, F21, F23, F24, F39, F42 and F112 (`ifs.py`), and F37
+(`tools/flash_iap.py`, to flash the IFS). The other commands are from the
+firmware only and **unconfirmed**.
 
 | Cmd | Params | Effect | Reply |
 |---|---|---|---|
@@ -65,19 +76,19 @@ Implemented but silent: F46–F49. Everything else in F10–F39 not listed above
 ## Hardware hints from the firmware
 
 - Two Trinamic drivers on single-wire UART. The register set (PWMCONF 0x70, DRV_STATUS 0x6F) points to TMC2209/2208. One drives the shared feed motor, the other the channel-switch motor.
-- MCU: Cortex-M with 86 IRQ vectors, app at 0x08010000 (bootloader below that, not in the update), STM32F1-style RCC/GPIO addresses. Exact part comes from the chip marking in Phase 3.
+- MCU: a Nations N32G455 (Cortex-M4; `docs/mcu-flashing.md`), app at 0x08010000 (bootloader below that, not in the update), STM32F1-style RCC/GPIO addresses.
 
-## Open questions for Phase 4
+## Answered and open questions
 
-Partly answered by running the stock app in the sandbox
-(captured from the stock app):
+Partly answered by running the stock app in a sandbox (captured from the stock app)
+and by Kiln OS's own use:
 
-1. Line terminator the host sends, and whether the cable is TTL, RS-232 or RS-485 (PA11 enable pin). Still open.
+1. ~~Line terminator and signalling~~: RS-485 half-duplex (see Transport); Kiln OS sends `\r\n`. What the stock app sends is not confirmed.
 2. ~~Units of `L` and `S`~~: millimetres and mm/min. Stock sends `F10 C<n> L90 S300` together with `G1 E90 F300`.
-3. ~~What the host polls~~: `F13`, about every 0.8 s in the sandbox (482 of 525 commands in a print with one swap). Rate on hardware still to measure.
-4. ~~Order for a full colour swap~~: recorded (`F24`, `F11`, `F112`, `F11`, `F24`, `F10`, `F112`, then per purge round `F10`, `F112`, `F39`, `F23`). F112 is the stop. Stock didn't send F12, F15, F18 or F30 in any run; their meaning is still open.
+3. ~~What the host polls~~: `F13`, about every 0.8 s in the sandbox (482 of 525 commands in a print with one swap). The stock app's rate on hardware is not measured.
+4. ~~Order for a full colour swap~~: recorded (`F24`, `F11`, `F112`, `F11`, `F24`, `F10`, `F112`, then per purge round `F10`, `F112`, `F39`, `F23`). F112 is the stop. Stock didn't send F12, F15, F18 or F30 in any run; F12, F18 and F30 are still open.
 
-## Seen on the user's unit
+## Seen on one printer
 
 Read-only queries in USB test mode (stock app not running), 2026-10-15,
 `tools/probe_boards.py`. Silent until asked.

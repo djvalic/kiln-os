@@ -5,7 +5,7 @@ macro names and parameters, mapped onto this system's own macros:
 
 | zMod | Here |
 |---|---|
-| `START_PRINT EXTRUDER_TEMP= BED_TEMP=` (`FORCE_LEVELING`, `FORCE_KAMP`, `TOOL=`) | `PRINT_START`, then `LINE_PURGE`; a missing temperature: the one the file already set, else 245 / 80 |
+| `START_PRINT EXTRUDER_TEMP= BED_TEMP=` (`FORCE_LEVELING`, `FORCE_KAMP`, `TOOL=`) | `PRINT_START`, then `LINE_PURGE`; a missing temperature: the one the file already set, else 245 / 80; one that is not a number (an unexpanded placeholder), a nozzle outside 170-350 C or a bed above 130 C stops the start with an error (bed 0 = off is accepted) |
 | `END_PRINT` | `PRINT_END` (optional IFS unload first) |
 | `SAVE_ZMOD_DATA USE_TRASH_ON_PRINT=0|1|2` | the purge mode (`use_trash_on_print`, read by the `nopoop` plugin); other zMod settings: a line says where they are here, nothing saved |
 | `_GOTO_TRASH`, `_SBROS_TRASH` | into the purge box / wipe on its edge |

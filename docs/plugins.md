@@ -10,13 +10,24 @@ The interface plugins may rely on is in `docs/plugin-api.md`.
 | What | Where | Changed by |
 |---|---|---|
 | Shipped plugins | `/usr/share/ad5x/plugins/<name>/` (read-only image; repo `klipper/plugins/`) | System updates only |
-| Other people's and your own plugins | `/data/ad5x/plugins/<name>/` (owned by user `klipper`) | You, or Moonraker's update manager; never system updates |
+| Other people's and your own plugins | `/data/ad5x/plugins/<name>/` (owned by user `klipper`); `plugins` in Fluidd's file manager | You (Fluidd, SSH), or Moonraker's update manager; never system updates |
 | Which plugins are on | `printer_data/config/plugins.cfg` | `ENABLE_PLUGIN` / `DISABLE_PLUGIN`, or you |
 | Moonraker parts of the enabled plugins | `printer_data/config/moonraker-plugins.conf` (generated) | Klipper and `S62moonraker`; don't edit |
+| Root's copies of the plugins' root scripts, and their boot scripts | `/data/ad5x/plugins-root/` (owned by root) | The update agent, when a plugin with root scripts is enabled, updated or disabled (`docs/plugin-root-hooks.md`) |
 | Plugin manager | `klipper/extras/ad5x_plugins.py`, `[ad5x_plugins]` in `ad5x.cfg` | System updates |
 
 `printer_data/config` is `/home/klipper/printer_data/config`, the same as
 `/data/ad5x/printer_data/config`.
+
+`printer_data/config/plugins` is a link to `/data/ad5x/plugins`, so
+Fluidd's file manager (**Configuration**) shows the plugins as the
+`plugins` folder: upload a plugin folder there (**Upload Folder**), and
+open and edit its files like config files. Moonraker's `kiln_os` component
+makes the link when it starts and nothing has that name; your own
+`plugins` file, folder or link in the config folder is left alone (the
+plugins are then not shown). Moonraker keeps `.git` folders out of reach.
+Uploading runs nothing: `root/` scripts need `ENABLE_PLUGIN ... ROOT=1`
+(`docs/plugin-root-hooks.md`).
 
 A plugin of yours with the same name as a shipped one replaces it (its
 directory is the one used).
@@ -43,8 +54,11 @@ Klipper (`RESTART=0`: write only, restart later). They refuse:
 - a plugin whose `requires_os` doesn't fit this system's plugin API, whose
   `plugin.json` is missing or broken, which needs a plugin that is off
   (`requires`), or which can't be on together with one that is on
-  (`conflicts`, either side may declare it);
-- disabling a plugin that another enabled plugin requires.
+  (`conflicts`, either side may declare it), or which drives the IFS
+  (`owns_ifs`) while another enabled plugin does;
+- disabling a plugin that another enabled plugin requires;
+- a plugin with root scripts (a `root/` folder with `install.sh`,
+  `update.sh` or `uninstall.sh`) without `ROOT=1` (below).
 
 `LIST_PLUGINS` shows the plugin API version, then one line per plugin:
 `[on]`/`[off]`, name, version, shipped or user, author, description, and
@@ -70,16 +84,65 @@ dropped from a later image) is skipped instead of stopping Klipper, and
 `LIST_PLUGINS` reports it as missing. Hand edits are kept; the commands
 only add or remove plugin lines (and drop duplicates).
 
+### Plugins that run code as root
+
+Some plugins need root for a step, like zMod's plugins do: an nginx server,
+a device permission, a boot-time service. They ship scripts in a `root/`
+folder, and enabling one says so: "runs code as root". Read the scripts in
+the plugin's `root/` folder, then:
+
+```
+ENABLE_PLUGIN NAME=myplugin ROOT=1
+```
+
+`root/install.sh` runs as root first; the plugin is switched on only when it
+succeeded. After that, `root/update.sh` runs by itself when the plugin is
+updated with git (`UPDATE_PLUGIN`, Moonraker's update manager), and
+`root/uninstall.sh` when it is disabled or removed. A `root/` changed any
+other way (uploaded or edited in Fluidd, copied in) waits for
+`ENABLE_PLUGIN NAME=myplugin ROOT=1`. Nothing of
+it runs during a print. Enable only plugins you trust: these scripts can do
+anything on the printer. The details, for plugin authors too, are in
+`docs/plugin-root-hooks.md`; the log is
+`/data/ad5x/kiln-log/plugins-root.log`.
+
 ## How they are loaded
 
 `ad5x.cfg` (read-only, in the image) ends with:
 
 ```
 [ad5x_plugins]
-[include /home/klipper/printer_data/config/plugin[s].cfg]
+[include /home/klipper/printer_data/config/plugins-activ[e].cfg]
 ```
 
-The `[s]` makes the include optional: no `plugins.cfg`, no error. So the
+`plugins-active.cfg` is `plugins.cfg` as Klipper should read it: the
+same lines, but the include line of each enabled plugin that can't run
+is commented out with the reason. Such a plugin is skipped entirely (no
+config, no Python extras, no Moonraker part) and Klipper shows one
+warning for it: it is missing, its `plugin.json` is bad, its
+`plugin.cfg` doesn't parse, its `requires_os` doesn't fit this system,
+a plugin it `requires` isn't loaded (off, or skipped itself), it
+`conflicts` with a plugin listed before it, or it drives the IFS
+(`owns_ifs`) while the IFS didn't answer as Klipper firmware at this boot
+(Kiln's IFS module runs the IFS then) or a plugin listed before it drives
+it already (only one can; the warning names both) (`docs/plugin-api.md`).
+`LIST_PLUGINS` marks it "skipped". `plugins.cfg` itself is not changed:
+fix the cause or `DISABLE_PLUGIN`.
+
+The file is generated next to `plugins.cfg` (don't edit it). Klipper
+writes it just before it reads its config, at every start, `RESTART`
+and `FIRMWARE_RESTART` (host Klipper patch 0009, `docs/klipper-fork-diff.md`),
+so hand edits of `plugins.cfg` apply at the next restart as before, also
+after a start that stopped with a config error. It is also written when
+plugins are switched, installed or updated, and by `S61klipper` before
+Klipper starts (`ad5x_plugins.py klipper`, for a daily Klipper package
+without patch 0009). Klipper warns "RESTART to load them" if it ever
+finds the list behind `plugins.cfg`. With an older OS whose `ad5x.cfg`
+still includes `plugins.cfg` itself (a newer daily Klipper package on
+it), the list isn't used: a skipped plugin's extras and Moonraker part
+stay out, but its config is read as before.
+
+The `[e]` makes the include optional: no file, no error. So the
 order of the whole config is: factory defaults (`ad5x.cfg`, with
 `ifs.cfg` and `setup.cfg` / `ad5x-tuning.cfg`), the printer's editable
 macros (`macros/*.cfg`, `docs/config-layout.md`), then the plugins in
@@ -106,11 +169,16 @@ its modules import each other as Klipper's do, and
 `printer.load_object()` finds them too. No Klipper patch: everything
 stays in our extra. Rules:
 
-- Only enabled plugins' code is loaded, and only when the plugin's
-  `plugin.json` is valid and its `requires_os` fits.
+- Only the code of enabled plugins that aren't skipped is loaded
+  (valid `plugin.json` and `plugin.cfg`, `requires_os` fits, required
+  plugins loaded, no conflict).
 - A module named like a Klipper module (`extras/gcode_macro.py`, ...) or
   like another enabled plugin's module stops Klipper with a config error
   naming the plugin. Rename it.
+- Two enabled plugins with the same Moonraker component, `python/`
+  package or Klipper section don't stop anything: the first plugin's
+  component or package is used, the later plugin's section options win.
+  Klipper shows a warning for each (`docs/plugin-api.md`, "Names").
 - Sections of plugin modules are created when `[ad5x_plugins]` is
   created. Look up other objects in `klippy:connect`, not in `__init__`
   (`printer.load_object()` creates one that isn't there yet).
@@ -124,7 +192,7 @@ stays in our extra. Rules:
 
 A plugin can ship `moonraker.conf` with Moonraker sections, typically its
 own `[update_manager <name>]`. The printer's `moonraker.conf` belongs to
-the user and is never edited by the system, so `S62moonraker` starts
+you and is never edited by the system, so `S62moonraker` starts
 Moonraker on a small top file it writes at each start,
 `/run/moonraker/moonraker.conf`:
 
@@ -134,8 +202,10 @@ Moonraker on a small top file it writes at each start,
 [include /home/klipper/printer_data/config/moonraker-plugins.conf]
 ```
 
-(`moonraker-updates.conf` is the system's own `[update_manager]` with
-Fluidd's update entry, so Fluidd can update itself from Fluidd.)
+(`moonraker-updates.conf` is the system's own Moonraker setup: the
+`[update_manager]` with Fluidd's update entry, so Fluidd can update itself
+from Fluidd, the Kiln OS update entry (`[kiln_os]`) and the IFS slots for
+OrcaSlicer (`[kiln_lanes]`).)
 
 `moonraker-plugins.conf` lists the enabled plugins' `moonraker.conf`
 files; `S62moonraker` regenerates it from `plugins.cfg` just before
@@ -143,8 +213,10 @@ Moonraker starts (`ad5x_plugins.py moonraker`, the same code Klipper
 uses), and Klipper rewrites it whenever plugins change. When at least
 one listed part has `[update_manager ...]` sections, the list adds
 `[update_manager]` with `enable_system_updates: False` (this system has
-no package manager). Moonraker reads it at its next start: after enabling
-a plugin with a Moonraker part, reboot (or restart Moonraker). If you
+no package manager). Moonraker reads it at its start, so when a plugin
+switch changes what Moonraker loads, Klipper asks the root update agent
+(`S68ad5x-update-agent`) to restart Moonraker, which it does unless a print
+runs (then the change waits for the next Moonraker start or reboot). If you
 include `moonraker-plugins.conf` from `moonraker.conf` yourself,
 `S62moonraker` leaves its own include out (Moonraker refuses the same file
 twice).
@@ -204,7 +276,7 @@ below) and updated from Fluidd, separately from Kiln OS:
 
 | Plugin | Repository | What |
 |---|---|---|
-| `spoolman` | [kiln-spoolman](https://github.com/djvalic/kiln-spoolman) | A Spoolman spool per IFS slot: the loaded slot's spool is the active one (plugin API 1.2, `ifs:loaded`) |
+| `spoolman` | [kiln-spoolman](https://github.com/djvalic/kiln-spoolman) | A Spoolman spool per IFS slot: the loaded slot's spool is the active one, and the slot takes the spool's material, colour and temperature (plugin API 1.3, `ifs:loaded`, Moonraker component `spoolman_slots`) |
 | `notify` | [kiln-notify](https://github.com/djvalic/kiln-notify) | Notifications with a camera photo through Apprise (Telegram, Discord, ntfy, e-mail, ...): print events, progress, auto-refill, interrupted prints; set up with `NOTIFY_SETUP` (plugin API 1.3) |
 | `timelapse` | [kiln-timelapse](https://github.com/djvalic/kiln-timelapse) | moonraker-timelapse with an ffmpeg built from source for the printer; Fluidd's Timelapse tab (plugin API 1.3) |
 
@@ -216,12 +288,15 @@ starting with all of them enabled.
 
 ## Writing a plugin
 
+Step by step, with the template and the checker: `docs/plugin-first.md`.
+
 The layout, `plugin.json` fields and an example are in
 `docs/plugin-api.md` ("Plugin layout"). In short: a directory named like
 the plugin, with `plugin.json`, `plugin.cfg`, `README.md`, and optionally
-`extras/*.py` and `moonraker.conf`. Put it in `/data/ad5x/plugins/<name>`
-(as user `klipper`, or `chown -R klipper:klipper` it), then
-`ENABLE_PLUGIN NAME=<name>`.
+`extras/*.py`, `moonraker.conf` and `root/` (scripts that run as root,
+`docs/plugin-root-hooks.md`). Put it in `/data/ad5x/plugins/<name>`
+(upload it into Fluidd's `plugins` folder; over SSH as user `klipper`, or
+`chown -R klipper:klipper` it), then `ENABLE_PLUGIN NAME=<name>`.
 
 ### Installing from the catalog
 
@@ -230,6 +305,7 @@ tested with are in its catalog (`/usr/share/ad5x/plugin-catalog.json`):
 
 ```
 INSTALL_PLUGIN NAME=notify ENABLE=1   (clone it into /data/ad5x/plugins, switch it on)
+INSTALL_PLUGIN NAME=x ENABLE=1 ROOT=1 (the same for a plugin with root scripts)
 UPDATE_PLUGIN NAME=notify             (git pull; restarts what it needs if on)
 REMOVE_PLUGIN NAME=notify             (switch it off and delete it)
 ```
@@ -271,11 +347,12 @@ su klipper -s /bin/sh -c 'git clone https://github.com/someone/ad5x-myplugin.git
 
 then `ENABLE_PLUGIN NAME=myplugin` (Moonraker restarts and reads the new
 `[update_manager]`). Fluidd then shows it under updates.
-This system's Moonraker has no service manager (`provider: none`), so
-`managed_services: klipper` can't restart Klipper after an update: run
-`RESTART` (or `FIRMWARE_RESTART`) yourself. A plugin that isn't enabled
-has no Moonraker part, so it isn't updated either; enable it, or put the
-`[update_manager]` section in `moonraker.conf` yourself.
+After an update Moonraker restarts Klipper (`managed_services: klipper`).
+It asks the root update agent (`[machine] provider: kiln_agent`), the same
+way Fluidd's restart buttons do. The agent refuses while a print is running.
+A plugin that isn't enabled has no Moonraker part, so it isn't updated
+either; enable it, or put the `[update_manager]` section in
+`moonraker.conf` yourself.
 
 Several printers: each printer has its own `plugins.cfg` and its own
 clones; the same repository and the same image work on all of them.

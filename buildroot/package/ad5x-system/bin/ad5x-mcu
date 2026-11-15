@@ -36,8 +36,10 @@
 # power-cycle the screen asks for would start the recovery OS instead.
 #
 # usage: ad5x-mcu boot                 at start-up (S60ad5x-eboard)
-#        ad5x-mcu status               versions on the boards and wanted (not
-#                                      while Klipper runs: it holds the ports)
+#        ad5x-mcu status               versions on the boards and wanted, the
+#                                      IFS on Klipper or Flashforge's firmware
+#                                      (not while Klipper runs: it holds the
+#                                      ports)
 #        ad5x-mcu flash-mainboard      flash the mainboard now (refused while
 #                                      Klipper runs)
 #        ad5x-mcu flash-eboard         flash the eboard now, without a
@@ -47,10 +49,15 @@
 #                                      bootloader already waits; refused
 #                                      while Klipper runs)
 #        ad5x-mcu flash-ifs [HEX]      flash the IFS now: this version, or
-#                                      HEX (refused while Klipper runs). If its
+#                                      HEX (refused while Klipper runs; Klipper
+#                                      only with ifs-klipper.enable). If its
 #                                      bootloader doesn't answer, it keeps
 #                                      trying for 2 minutes: unplug the IFS
-#                                      cable and plug it back in
+#                                      cable and plug it back in. HEX with
+#                                      Flashforge's firmware (stock ifs.hex):
+#                                      no enable file needed, checked with
+#                                      F19, not as Klipper, and
+#                                      ifs-klipper.enable is removed
 #        ad5x-mcu arm-stock            arm stock's own board update
 #        ad5x-mcu tools                check the flashing tools are installed
 # /data/ad5x/mcu.disable: "boot" only starts the eboard, flashes nothing.
@@ -331,6 +338,55 @@ flash_ifs_klipper() {	# HEX [WANT]: Klipper firmware; WANT empty: any version
 	say "ifs: $v"
 }
 
+ifs_hex_stock() {	# HEX: 0 when HEX is Flashforge's IFS firmware (it carries its F19 answer)
+	# Stock's ifs.hex holds "F19 ok. four color. version: 3.0.7" as plain
+	# text; a Klipper build has no such string (its own strings are IDs in a
+	# compressed data dictionary). Kiln's ifs.hex itself is always Klipper.
+	[ -f "$1" ] || return 1
+	[ -f "$AD5X_MCU_FW/ifs.hex" ] && cmp -s "$1" "$AD5X_MCU_FW/ifs.hex" && return 1
+	python3 - "$1" 2>/dev/null <<'EOF'
+import sys
+d = bytearray()
+for l in open(sys.argv[1], errors="replace"):
+    l = l.strip()
+    if not l.startswith(":"):
+        continue
+    try:
+        b = bytes.fromhex(l[1:])
+    except ValueError:
+        continue
+    if len(b) > 4 and b[3] == 0:
+        d += b[4:4 + b[0]]
+sys.exit(0 if b"F19 ok." in d else 1)
+EOF
+}
+
+flash_ifs_stock() {	# HEX: Flashforge's firmware back on the IFS; 0 when it answers F19
+	[ -f "$1" ] || { say "ifs: no $1"; return 1; }
+	flash_ifs "$1" "$1 (Flashforge's firmware)" || return 1
+	rm -f "$ST/ifs"
+	# Klipper is gone from the IFS: "boot" must not write it back, and
+	# S61klipper leaves the IFS to ifs.py's serial link
+	if [ -f "$AD5X_DATA/ad5x/ifs-klipper.enable" ]; then
+		rm -f "$AD5X_DATA/ad5x/ifs-klipper.enable"
+		say "ifs: Klipper IFS off ($AD5X_DATA/ad5x/ifs-klipper.enable removed; create it again to go back to Klipper)"
+	fi
+	sleep 2
+	n=0
+	while :; do
+		v=$(ifs_f19)
+		[ -n "$v" ] && break
+		n=$((n + 1)); [ $n -lt 3 ] || break
+		sleep 1
+	done
+	if [ -z "$v" ]; then
+		say "ifs: Flashforge's firmware written, but it doesn't answer F19 (switch the printer off and on; $ST/ifs.log)"
+		return 1
+	fi
+	echo "flashforge $v" > "$ST/ifs"
+	say "ifs: flashforge $v (Flashforge's firmware, not Klipper)"
+}
+
 boot() {
 	mkdir -p "$ST"
 	if [ -f "$AD5X_DATA/ad5x/mcu.disable" ]; then
@@ -442,22 +498,34 @@ status() {
 		echo "tools=missing"
 	fi
 	[ -f "$AD5X_DATA/ad5x/mcu.disable" ] && echo "disabled=1"
-	# IFS lines only with its enable file: nothing is sent to ttyS4 without it
+	# IFS: Flashforge's firmware (the default) or Klipper with the enable file.
+	# While Klipper runs it holds ttyS4 either way (ifs.py's serial link or
+	# [mcu ifs]): nothing is sent then. Otherwise the likely firmware is asked
+	# first: with the enable file Klipper "identify", then F19; without it
+	# F19 (Flashforge's read-only identify; Klipper drops it as noise), then
+	# "identify" only if F19 got no answer, so Flashforge's firmware never
+	# sees Klipper's binary frames.
+	if klippy_running; then
+		echo "ifs=(in use by Klipper)"
+	elif [ -f "$AD5X_DATA/ad5x/ifs-klipper.enable" ]; then
+		v=$(ifs_ver 2)
+		[ -n "$v" ] || v=$(ifs_f19 | sed 's/^/flashforge /')
+		echo "ifs=$v"
+	else
+		v=$(ifs_f19 | sed 's/^/flashforge /')
+		[ -n "$v" ] || v=$(ifs_ver 2)
+		echo "ifs=$v"
+	fi
+	echo "ifs_flashed=$(cat "$ST/ifs" 2>/dev/null)"
+	if command -v ad5x-flash-ifs >/dev/null 2>&1; then
+		echo "ifs_tools=ok"
+	else
+		echo "ifs_tools=missing"
+	fi
 	if [ -f "$AD5X_DATA/ad5x/ifs-klipper.enable" ]; then
-		if klippy_running; then
-			echo "ifs=(in use by Klipper)"
-		else
-			v=$(ifs_ver 2)
-			[ -n "$v" ] || v=$(ifs_f19 | sed 's/^/flashforge /')
-			echo "ifs=$v"
-		fi
-		echo "ifs_flashed=$(cat "$ST/ifs" 2>/dev/null)"
-		if command -v ad5x-flash-ifs >/dev/null 2>&1; then
-			echo "ifs_tools=ok"
-		else
-			echo "ifs_tools=missing"
-		fi
 		echo "ifs_klipper_enabled=1"
+	else
+		echo "ifs_klipper_enabled=0"
 	fi
 	true
 }
@@ -478,14 +546,22 @@ flash-eboard)
 		eboard_soft_flash
 	fi ;;
 flash-ifs)
-	[ -f "$AD5X_DATA/ad5x/ifs-klipper.enable" ] || { echo "ad5x-mcu: no IFS flashing without $AD5X_DATA/ad5x/ifs-klipper.enable" >&2; exit 1; }
+	# Flashforge's image (the way back to stock) needs no enable file: it is
+	# the IFS's default firmware. Klipper on the IFS is the opt-in.
+	stock=
+	[ -n "$2" ] && ifs_hex_stock "$2" && stock=1
+	[ -n "$stock" ] || [ -f "$AD5X_DATA/ad5x/ifs-klipper.enable" ] || {
+		echo "ad5x-mcu: no Klipper on the IFS without $AD5X_DATA/ad5x/ifs-klipper.enable (Flashforge's ifs.hex needs none)" >&2; exit 1; }
 	klippy_running && { echo "ad5x-mcu: Klipper runs: /etc/init.d/S61klipper stop first" >&2; exit 1; }
 	mkdir -p "$ST"; arm_stock
 	export IFS_WAIT=120
-	case "$2" in
-	"") [ -n "$IFS_WANT" ] && flash_ifs_klipper "$AD5X_MCU_FW/ifs.hex" "$IFS_WANT" ;;
-	*) flash_ifs_klipper "$2" ;;
-	esac ;;
+	if [ -n "$stock" ]; then
+		flash_ifs_stock "$2"
+	elif [ -z "$2" ]; then
+		[ -n "$IFS_WANT" ] && flash_ifs_klipper "$AD5X_MCU_FW/ifs.hex" "$IFS_WANT"
+	else
+		flash_ifs_klipper "$2"	# another Klipper build
+	fi ;;
 arm-stock) mkdir -p "$ST"; arm_stock ;;
 tools) mkdir -p "$ST"; tools ;;
 *) sed -n '2,/^# Log:/p' "$0"; exit 2 ;;

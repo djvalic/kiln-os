@@ -4,11 +4,15 @@
 #   kernel-ingenic66/build.sh   defconfig + fragment, zImage + modules, uImage
 #   JOBS=8 kernel-ingenic66/build.sh     parallelism (default: nproc)
 #   NO_CONFIG=1 kernel-ingenic66/build.sh  keep the existing out-ad5x/.config
+#   SDK_NO_RESET=1 kernel-ingenic66/build.sh  don't check the SDK commit or
+#                             restore its files (an SDK you change by hand)
 #
-# Touches the SDK kernel tree only by (idempotently):
+# The SDK must be at INGENIC_SDK_COMMIT (buildroot/PINS). Its tracked files
+# under kernel/kernel-6.6 are restored to that commit first, then
+# touched only by (idempotently):
 #   - copying ad5x.dts + ad5x-display.dtsi into module_drivers/dts/x2600/
 #   - copying panel-kx070.c into module_drivers/.../ingenic/displays/
-#   - applying patches/0001-* (Kconfig/Makefile hook for the panel)
+#   - applying patches/*.patch (the panel hook, display, serial, Wi-Fi fixes)
 #   SDK=DIR                   Ingenic SDK checkout (default ~/workspace/ingenic-sdk-6.6,
 #                             github.com/Llixuma/ingenic-linux-kernel6.6-x2000-v1.0-20250221)
 # Output: $SDK/out-ad5x/xImage-ad5x-6.6 (legacy uImage, load=entry=0x80f00000)
@@ -29,6 +33,29 @@ MAKE=(make -C "$KSRC" O="$OUT" ARCH=mips CROSS_COMPILE=mipsel-linux-
       HOSTCFLAGS="-Wno-error=incompatible-pointer-types -std=gnu11")
 
 log() { printf '\n=== %s\n' "$*"; }
+
+# The SDK at its pinned commit (INGENIC_SDK_COMMIT in buildroot/PINS); any
+# other commit stops the build. The tree is patched in place below, so the
+# files an earlier run changed (our patches, DIAG=1's hooks) first go back
+# to the commit's version and the patches are applied fresh: a patch that
+# was changed or dropped since can't linger. The builder starts each run
+# from a clean checkout of the same commit (tools/builder/entrypoint.sh),
+# so there this changes nothing. SDK_NO_RESET=1 skips both, for an SDK
+# tree you are changing by hand.
+SDK_PIN=$(sed -n 's/^INGENIC_SDK_COMMIT=//p' "$REPO/buildroot/PINS")
+if [ -n "${SDK_NO_RESET:-}" ]; then
+	echo "SDK_NO_RESET: $KSRC used as it is"
+elif have=$(git -C "$KSRC" rev-parse HEAD 2>/dev/null); then
+	if [ "$have" != "$SDK_PIN" ]; then
+		echo "ERROR: the SDK is at $have, buildroot/PINS wants $SDK_PIN"
+		echo "  (git -C $SDK checkout -f $SDK_PIN, or SDK_NO_RESET=1 to build it anyway)"
+		exit 1
+	fi
+	log "SDK at the pinned ${SDK_PIN:0:12}: patched files back to it"
+	git -C "$KSRC" checkout -q HEAD -- .
+else
+	echo "WARNING: $KSRC is not a git checkout: not checked against $SDK_PIN"
+fi
 
 log "sync AD5X files into $KSRC"
 install -m 0644 "$HERE/ad5x.dts" "$HERE/ad5x-display.dtsi" \

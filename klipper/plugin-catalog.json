@@ -22,8 +22,8 @@
       "title": "Spoolman",
       "description": "A Spoolman spool per IFS slot: the loaded slot's spool is the active one (needs a Spoolman server)",
       "url": "https://github.com/djvalic/kiln-spoolman.git",
-      "requires_os": "1.2",
-      "components": []
+      "requires_os": "1.3",
+      "components": ["spoolman_slots"]
     }
   ]
 }

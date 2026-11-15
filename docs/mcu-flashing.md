@@ -16,7 +16,8 @@ Summary:
   fixed over serial.
 - Eboard: Flashforge's **64 KB serial bootloader** at 0x08000000, app at 0x08010000. The flasher
   never sends addresses, so it can't overwrite the bootloader. It waits after every reset.
-- IFS: own bootloader, app at 0x08010000; stays stock.
+- IFS: own bootloader, app at 0x08010000. Stays on Flashforge's firmware by default; Klipper
+  firmware on it is opt-in (`/data/ad5x/ifs-klipper.enable`, below).
 - Stock reflashes the MCUs at boot **only when flag files exist** (`Update`, `UpdateM`). It does
   not read the firmware version on the MCUs, so mainline on the boards does not trigger a
   re-flash. Stock with mainline MCUs simply fails to talk to them (see "Stock against mainline MCUs").
@@ -33,13 +34,13 @@ every start (`S60ad5x-eboard`), before Klipper:
 
 1. **Mainboard**: asks the firmware for its version (Klipper `identify` on
    `ttyS2`, `ad5x-mcu-version`). Anything else (Flashforge's firmware, an
-   older Klipper, no answer): `ad5x-flash-n32` (or stock `NationsCommand`)
+   older Klipper, no answer): `ad5x-flash-n32`
    through the chip's ROM bootloader, then identify again. The ROM bootloader
    can't be overwritten, so a failed write is retried at the next start.
 2. **Eboard**: its bootloader accepts firmware only while it waits, after
    power-on or after a reset ("Ready" on `ttyS5`). If it waits and the last
    eboard flash on record (`/data/ad5x/mcu/eboard`) isn't this version:
-   `ad5x-flash-iap` (or stock `IAPCommand`), then `A` to start it. If its
+   `ad5x-flash-iap`, then `A` to start it. If its
    application already runs with another version (the SoC restarted without
    a power-cycle), it gets Klipper's serial bootloader request (`~ \x1c
    Request Serial Bootloader!! ~` at 230400; with patch 0002 Kiln OS's
@@ -65,9 +66,8 @@ every start (`S60ad5x-eboard`), before Klipper:
 The flashing tools are Kiln OS's native open-source Python tools
 (`tools/flash_n32.py` and `tools/flash_iap.py`, installed as
 `/usr/bin/ad5x-flash-n32` and `/usr/bin/ad5x-flash-iap`). Proprietary stock
-binaries (`NationsCommand`, `IAPCommand`, `IFSCommand`, `ifsF37`) are no
-longer required, though `ad5x-mcu` retains backward compatibility if they are
-present.
+binaries (`NationsCommand`, `IAPCommand`, `IFSCommand`, `ifsF37`) are not
+used, even when they are present on the printer.
 
 **The way back is armed first.** Before it writes a board, `ad5x-mcu`
 creates `Update` and `UpdateM` in stock's control directory: stock's own
@@ -79,8 +79,36 @@ not a reboot (the eboard must be in its bootloader). With zMod's
 `klipper13` setting on, stock's update writes zMod's Klipper images instead
 (section 3).
 
+**The IFS back to stock over serial.** With Klipper stopped, `ad5x-mcu
+flash-ifs <stock ifs.hex>` writes Flashforge's image with `ad5x-flash-ifs`,
+with or without `/data/ad5x/ifs-klipper.enable`: Flashforge's firmware is
+the IFS's default, so going back to it needs no Klipper opt-in (a Klipper
+image, Kiln's own or another, is still refused without the file). It tells
+the image apart by its content: Flashforge's carries its `F19` answer
+(`F19 ok. four color. version: 3.0.7`) as plain text, a Klipper build has
+no such string, and the image's own `/usr/share/ad5x/mcu/ifs.hex` is always
+taken as Klipper. After writing Flashforge's image it removes
+`ifs-klipper.enable` if it exists (log: "ifs: Klipper IFS off ..."), so
+`boot` doesn't write Klipper back, then asks the IFS `F19` (up to 3 tries)
+instead of Klipper `identify`. An answer is success: "ifs: flashforge 3.0.7
+(Flashforge's firmware, not Klipper)", recorded in `/data/ad5x/mcu/ifs`.
+No answer: "Flashforge's firmware written, but it doesn't answer F19"
+(exit 1); switch the printer off and on, and see `/data/ad5x/mcu/ifs.log`.
+Any other image is checked as Klipper, as before (`tools/test_ifs_flash.sh`
+covers both, and the IFS lines of `status`).
+
 Screens while it works: "Updating the boards", "Switch off and on", "Board
-update failed". `ad5x-mcu status` shows both versions; the log is
+update failed". `ad5x-mcu status` shows both versions and the IFS's
+(`ifs=`): its Klipper version, or `flashforge 3.0.7` for Flashforge's
+firmware (from its `F19` answer), empty when nothing answers. While Klipper
+runs it holds the ports, also the IFS's with Flashforge's firmware
+(`ifs.py`'s serial link), so status sends nothing and shows `(in use by
+Klipper)`. Otherwise it asks the likely firmware first: with
+`ifs-klipper.enable` Klipper `identify`, then `F19`; without it `F19`
+(read-only; Klipper drops it as noise), then `identify` only when `F19` gets
+no answer, so Flashforge's firmware never gets Klipper's binary frames.
+`ifs_flashed=` is the last IFS flash on record, `ifs_klipper_enabled=` 1 or
+0. The log is
 `/data/ad5x/mcu/log`. `/data/ad5x/mcu.disable` turns flashing off (the
 eboard is still started). A new image with newer board firmware (a new
 `FLASHED`) updates the boards the same way at its first start.
@@ -90,8 +118,8 @@ Tested on the laptop with simulated boards and stubbed flashing tools
 as an update with both boards current (nothing flashed), `ad5x-mcu
 flash-mainboard` (tools copied from usershare, stock armed, verified, about
 a minute), and an eboard re-flash at power-on (IAPCommand success, started,
-Klipper ready). Not yet tested on hardware: the round trip through stock
-(stock writing its own images back, then a fresh install).
+Klipper ready). The round trip through stock (stock writing its own images
+back, then a fresh install) was done on 2026-10-19 ("Flash log" below).
 
 ## 1. How stock updates each MCU
 
@@ -99,7 +127,7 @@ Klipper ready). Not yet tested on hardware: the round trip through stock
 
 | Step | Where | What |
 |---|---|---|
-| USB update | `/usr/prog/app_startup.sh` (from `software-3.1.0/app_startup.sh`), run by `S99factory_test_shell` | Finds `/mnt/AD5X-*.tgz`, decrypts it (`mytar`), runs `flashforge_init.sh AD5X 0026`, then sleeps forever: the user power-cycles. Also runs `/mnt/flashforge_init.sh` from a stick (the hook our USB test mode uses). |
+| USB update | `/usr/prog/app_startup.sh` (from `software-3.1.0/app_startup.sh`), run by `S99factory_test_shell` | Finds `/mnt/AD5X-*.tgz`, decrypts it (`mytar`), runs `flashforge_init.sh AD5X 0026`, then sleeps forever: the owner power-cycles. Also runs `/mnt/flashforge_init.sh` from a stick (the hook our USB test mode uses). |
 | Install | `flashforge_init.sh` `update_control` | Unpacks `control-<ver>.tar.xz` to `/usr/prog/PROGRAM/control/<ver>/` after an md5 check. **Does not run** its `run.sh` (commented out). The tar includes two empty flag files, `Update` and `UpdateM`. |
 | Flash | `app_startup.sh`, every boot, **after** the USB-stick loop and **before** `firmwareExe` | Takes the highest-numbered dir in `/usr/prog/PROGRAM/control/` (`sort -Vr`). If `Update` **or** `UpdateM` exists there: `cd` into it, run `./run.sh`, then `reboot -f`. |
 | Flag clear | the flash tools | `IAPCommand` deletes `$PWD/Update` after a successful eboard flash; `NationsCommand` deletes `$PWD/UpdateM` after a successful mainboard flash. A failure leaves the flag, so the next boot tries again (and reboots again). |
@@ -156,7 +184,8 @@ call it; its caller (probably zMod) is unconfirmed. `firmwareExe` starts stock K
 `MachineInfo::doUpdateIfs`, reached only from `on_btnIfs_clicked` (Machine Info screen, when not
 printing): sends `F37`, closes the port, runs
 `/usr/prog/PROGRAM/control/IFSCommand /usr/prog/PROGRAM/control/ifs.hex /dev/ttyS4`, then asks `F19`
-for the version. Never automatic. Leave it alone: the IFS stays stock.
+for the version. Never automatic. Kiln OS leaves the IFS on Flashforge's firmware unless the
+Klipper IFS is turned on (`ifs-klipper.enable`, "Automatic updates" above).
 
 ## 2. Bootloaders and offsets
 
@@ -164,7 +193,7 @@ for the version. Never automatic. Leave it alone: the IFS stays stock.
 |---|---|---|---|---|---|
 | Mainboard | ROM ISP is mask ROM; can't be erased. Lost only through option bytes (read/write protection), which we never touch | Yes: `NationsCommand` with BOOT0/NRST, whatever is in flash | 0x08000000 | `CONFIG_STM32_FLASH_START_0000`, `FLASH_APPLICATION_ADDRESS=0x8000000` ✔ | `AD5X.bin`, SP 0x20020000, reset 0x08006DDD |
 | Eboard | Yes, if the bootloader writes only from 0x08010000 (it picks the address; the tool sends none). Not proven: we have no dump of it | Yes: power-cycle, don't send `A`, run `IAPCommand` | 0x08010000 | `CONFIG_STM32_FLASH_START_10000`, `FLASH_APPLICATION_ADDRESS=0x8010000` ✔ | `ADM_App.hex` 0x08010000–0x08018CAC, reset 0x08016A7D |
-| IFS | Unknown, not touched | `ifsF37` + `IFSCommand` | 0x08010000 | n/a | `ifs.hex` 0x08010000–0x0801A0D0 |
+| IFS | Unknown (no dump of it). Klipper written only with the opt-in Klipper IFS; Flashforge's `ifs.hex` back by hand (`ad5x-mcu flash-ifs`, no opt-in needed) | `ad5x-flash-ifs` (F37, then the write; stock: `ifsF37` + `IFSCommand`), or SWD with a debug probe | 0x08010000 | Opt-in: `ad5x-ifs.mainline.config`, `FLASH_APPLICATION_ADDRESS=0x8010000` | `ifs.hex` 0x08010000–0x0801A0D0 |
 
 Images checked on the laptop: `firmware/builds/v0.13.0-800-g9cb99754c/mainboard.bin` has its vector
 table at 0x08000000 (SP 0x20010000, reset 0x08006CE1). `eboard.hex` covers 0x08010000–0x0801A298
@@ -372,7 +401,7 @@ the reset path writes 0x1234 to the backup registers (`movw r1, #0x1234`, BKP ba
 6. `ls /sys/class/gpio` exists (do **not** export anything).
 7. Note which zMod scripts touch `/dev/ttyS2`/`ttyS5` or run `checkEboard`, and zMod's `klipper13`
    setting (section 3).
-8. Photograph the boards: N32 markings and any SWD pads (needs the case open, the user's call).
+8. Photograph the boards: N32 markings and any SWD pads (needs the case open, the owner's call).
 
 **Phase 2: printer, writes (ask first)**
 
@@ -408,7 +437,7 @@ There is no chip name and no flash size in this reply. The flasher refuses firmw
 
 The UID pin: after the first verified mainboard flash, `ad5x-mcu` writes the chip's UID to `$ST/mainboard.uid` (`/data/ad5x/mcu/mainboard.uid`). A later flash refuses to erase when the chip's UID differs from the pin, so a board swap is not flashed by mistake. To re-allow a flash on a different board, delete that file.
 
-Checked read-only on the user's printer (2026-11-02, `flash_n32.py --check`, Klipper stopped and restarted): BOOT V22, SubVersion V24, UCID `3601113309504e473533383030052c71`, UID `360111504e47353338052c71`. The check resets the chip without writing.
+Checked read-only on the developer's printer (2026-11-02, `flash_n32.py --check`, Klipper stopped and restarted): BOOT V22, SubVersion V24, UCID `3601113309504e473533383030052c71`, UID `360111504e47353338052c71`. The check resets the chip without writing.
 
 ## Open questions (need the printer)
 
@@ -424,7 +453,7 @@ Checked read-only on the user's printer (2026-11-02, `flash_n32.py --check`, Kli
 10. Whether the printer's control dir is 1.1.1 (the version zMod's Klipper 13 images were made for is
     not documented).
 
-## Checked on the user's unit (2026-10-15, USB test mode)
+## Checked on the developer's printer (2026-10-15, USB test mode)
 
 - **Mainboard ROM bootloader reachable** (step 9): `NationsCommand -c --pn /dev/ttyS2 -r`
   (no `-d`: nothing erased or written) connected at 9600, read `BOOT Command Version V:22`,

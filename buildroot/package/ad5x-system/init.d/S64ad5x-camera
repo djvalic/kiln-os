@@ -1,8 +1,12 @@
 #!/bin/sh
 # USB cameras: one ustreamer per UVC camera, behind nginx as /webcam/ (first
-# camera), /webcam2/, ... (stream: /webcam/?action=stream or /webcam/stream,
-# snapshot: /webcam/snapshot). The camera's own MJPEG is passed through
-# (--encoder=HW), so the CPU only copies frames.
+# camera, 127.0.0.1:8090) and /webcam2/ (second camera, 8091). Stream:
+# /webcam/?action=stream or /webcam/stream, snapshot: /webcam/snapshot. The
+# camera's own MJPEG is passed through (--encoder=HW), so the CPU only copies
+# frames. At most two cameras: 8092 is the screen stream (S65ad5x-screen),
+# and nginx has a location only for /webcam/ and /webcam2/ (it is built
+# without PCRE, so each path is a fixed location). Further cameras are
+# logged and not started.
 #
 # /data/ad5x/camera.conf (optional, shell syntax):
 #   CAMERA=off            no cameras
@@ -20,6 +24,8 @@ CONF=/data/ad5x/camera.conf
 CAMERA_IGNORE="0bda:d565"
 RUN=/run/ad5x-camera
 BASE_PORT=8090
+# Cameras 1 and 2 use 8090 and 8091; nginx.conf has a location for each
+MAX_CAMERAS=2
 
 # Capture nodes of UVC cameras, in USB port order: index 0 of each
 # interface (index 1 is the metadata node)
@@ -39,20 +45,88 @@ cameras() {
 	done | sort | cut -d' ' -f2
 }
 
-# Moonraker's webcam list (Fluidd, HelixScreen). Camera n is registered as
-# camera$n once its snapshot answers, and as disabled when it does not, so a
-# camera that is plugged in but dead is not a tile. Only database webcams can
-# be changed through the API (config webcams cannot), hence POST only.
-WEBCAM_API=http://127.0.0.1:7125/server/webcams/item
+# Moonraker's webcam list (Fluidd, HelixScreen). Camera n is registered
+# ("Chamber/Bed", then "Camera n") once its snapshot answers, and as disabled
+# when it does not, so a camera that is plugged in but dead is not a tile.
+# Only cameras that were started are registered. Only database webcams can be
+# changed through the API (config webcams cannot).
+MOONRAKER=http://127.0.0.1:7125
+WEBCAM_API=$MOONRAKER/server/webcams/item
+PYTHON=/usr/bin/python3
+
+# prune_webcams COUNT: tidy Kiln's webcam entries for camera slots that are
+# not running now (slot > COUNT). Slots 1 and 2 (an unplugged camera, or
+# CAMERA=off) are set disabled, not deleted: Fluidd hides them, and a flip or
+# rotation set in Fluidd is still there when the camera returns (its
+# registration sets enabled again and sends neither field). Slots above
+# MAX_CAMERAS can never run ("Camera 3" from a boot before the two-camera cap)
+# and are deleted, as are the old names camera1, camera2, ... (renamed to
+# "Chamber/Bed", "Camera n"). Kiln's entry for slot n is a database webcam
+# named as Kiln names it, with exactly Kiln's URLs for that slot
+# (/webcam$n/stream, /webcam$n/snapshot; slot 1 has no number). Any other
+# entry, the screen and the user's own cameras included, is never touched.
+# BusyBox wget cannot send DELETE or JSON, hence python3.
+prune_webcams() {
+	$PYTHON - "$MOONRAKER" "$1" "$MAX_CAMERAS" <<'PY'
+import json, re, sys, urllib.parse, urllib.request
+base, running, max_cams = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+item = base + "/server/webcams/item"
+try:
+    with urllib.request.urlopen(base + "/server/webcams/list", timeout=5) as r:
+        cams = json.load(r)["result"]["webcams"]
+except Exception:
+    print("camera: could not read Moonraker's webcam list")
+    sys.exit(0)
+for cam in cams:
+    if cam.get("source") != "database":
+        continue
+    m = re.fullmatch(r"/webcam([2-9]|[1-9][0-9]+)?/stream",
+                     str(cam.get("stream_url", "")))
+    if not m:
+        continue
+    suffix = m.group(1) or ""
+    slot = int(suffix or 1)
+    if cam.get("snapshot_url") != "/webcam%s/snapshot" % suffix:
+        continue
+    name = cam.get("name")
+    current = "Chamber/Bed" if slot == 1 else "Camera %d" % slot
+    if name not in (current, "camera%d" % slot):
+        continue                        # not an entry Kiln made
+    if slot <= running and name == current:
+        continue                        # this camera runs now
+    uid = str(cam.get("uid", ""))
+    try:
+        if name == current and slot <= max_cams:
+            if cam.get("enabled") is False:
+                continue                # already hidden
+            req = urllib.request.Request(
+                item, method="POST",
+                data=json.dumps({"uid": uid, "enabled": False}).encode(),
+                headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=5).close()
+            print("camera: webcam '%s' disabled (camera %d is not running)"
+                  % (name, slot))
+            continue
+        req = urllib.request.Request(
+            item + "?" + urllib.parse.urlencode({"uid": uid}), method="DELETE")
+        urllib.request.urlopen(req, timeout=5).close()
+        print("camera: removed webcam '%s' (%s)" % (name,
+              "old name" if name != current else
+              "at most %d cameras" % max_cams))
+    except Exception:
+        print("camera: could not update webcam '%s'" % name)
+PY
+}
 
 sync_webcams() {
 	count=$1
 	# Moonraker (S62) may still be starting: wait for its HTTP port first
 	w=0
-	while [ $w -lt 60 ] && ! wget -q -O /dev/null -T 3 http://127.0.0.1:7125/server/info; do
+	while [ $w -lt 60 ] && ! wget -q -O /dev/null -T 3 $MOONRAKER/server/info; do
 		w=$((w + 1))
 		sleep 2
 	done
+	prune_webcams $count
 	i=1
 	while [ $i -le $count ]; do
 		port=$((BASE_PORT + i - 1))
@@ -140,10 +214,19 @@ start() {
 	[ -x $USTREAMER ] || exit 0
 	CAMERA=on RESOLUTION=1280x720 FPS=15
 	load_conf $CONF
-	[ "$CAMERA" = off ] && { echo "camera: off ($CONF)"; exit 0; }
+	if [ "$CAMERA" = off ]; then
+		echo "camera: off ($CONF)"
+		# Hide the tiles of cameras started on an earlier boot
+		sync_webcams 0 &
+		return 0
+	fi
 	mkdir -p $RUN
 	n=0
 	for dev in $(cameras); do
+		if [ $n -ge $MAX_CAMERAS ]; then
+			echo "camera: $dev not started, at most $MAX_CAMERAS cameras (/webcam/, /webcam2/)"
+			continue
+		fi
 		n=$((n + 1))
 		port=$((BASE_PORT + n - 1))
 		eval res=\${RESOLUTION_$n:-$RESOLUTION}
@@ -156,8 +239,9 @@ start() {
 		echo "camera $n: $dev ${res}@${fps} on /webcam$([ $n -gt 1 ] && echo $n)/"
 	done
 	[ $n -gt 0 ] || echo "camera: none found"
-	# Background: the streams take seconds, and boot must not wait for them
-	[ $n -gt 0 ] && sync_webcams $n &
+	# Background: the streams take seconds, and boot must not wait for them.
+	# Also with no camera, to hide the entries of an earlier boot.
+	sync_webcams $n &
 }
 
 stop() {

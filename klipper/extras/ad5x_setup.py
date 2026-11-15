@@ -240,29 +240,42 @@ class AD5XSetup:
             self._start(step, params, inline=True)
             return
         gcmd.respond_info(self._dispatch(step, action, params, delta))
+    def _refuse(self, reason, msg):
+        """A command error: the G-code console shows MSG as it is, the API
+        endpoint "[REASON] MSG" (docs/api.md, "Errors")"""
+        e = self.printer.command_error(msg)
+        e.reason = reason
+        return e
     def _handle_control(self, web_request):
         try:
             action = str(web_request.get('action', 'start')).lower()
             step = str(web_request.get('step', '')).lower()
             delta = web_request.get('delta', None)
             if delta is not None:
-                delta = float(delta)
+                try:
+                    delta = float(delta)
+                except (TypeError, ValueError):
+                    raise self._refuse("bad_parameter", "SETUP_WIZARD_STEP: "
+                                       "DELTA= must be a number")
             params = {}
             for key in ('material', 'extruder', 'bed', 'keep_bed', 'tube',
                         'channel', 'heaters', 'estimate', 'force'):
                 if web_request.get(key, None) is not None:
                     params[key.upper()] = str(web_request.get(key))
             msg = self._dispatch(step, action, params, delta)
-        except self.printer.command_error:
-            raise
+        except self.printer.command_error as e:
+            # The reason in front, for programs (Moonraker passes Klipper's
+            # message on, always with 400)
+            raise self.printer.command_error("[%s] %s" % (
+                getattr(e, 'reason', 'failed'), e))
         except Exception as e:
             # Anything else would shut Klipper down (webhooks)
             logging.exception("ad5x_setup: control request")
-            raise self.printer.command_error("ad5x_setup: %s" % (e,))
+            raise self.printer.command_error(
+                "[internal_error] ad5x_setup: %s" % (e,))
         web_request.send({'state': self.state, 'step': self.step,
                           'message': msg})
     def _dispatch(self, step, action, params, delta):
-        error = self.printer.command_error
         if action == 'start':
             self._start(step, params, inline=False)
             return "AD5X setup: %s started" % (step,)
@@ -270,31 +283,35 @@ class AD5XSetup:
             return self._abort()
         if action == 'wizard':
             if self._printing():
-                raise error("SETUP_WIZARD_STEP: no setup wizard during a "
-                            "print")
+                raise self._refuse("printing", "SETUP_WIZARD_STEP: no setup "
+                                   "wizard during a print")
             return self._request_wizard()
         if action in ('adjust', 'accept'):
             if self.state != "waiting_user" or self.step not in (
                     ("zoffset", "trash") if action == 'accept'
                     else ("zoffset",)):
-                raise error("SETUP_WIZARD_STEP: ACTION=%s works only while "
-                            "the %s is waiting for you" % (
-                                action, "Z offset test patch" if action
-                                == 'adjust' else "step"))
+                raise self._refuse("not_waiting", "SETUP_WIZARD_STEP: "
+                                   "ACTION=%s works only while the %s is "
+                                   "waiting for you" % (
+                                       action, "Z offset test patch"
+                                       if action == 'adjust' else "step"))
             if action == 'accept':
                 self.z_accept = True
                 return "AD5X setup: %s accepted" % (self.step,)
             if delta is None or abs(delta) > self.max_adjust:
-                raise error("SETUP_WIZARD_STEP: DELTA= must be between -%g "
-                            "and %g" % (self.max_adjust, self.max_adjust))
+                raise self._refuse("bad_parameter", "SETUP_WIZARD_STEP: "
+                                   "DELTA= must be between -%g and %g" % (
+                                       self.max_adjust, self.max_adjust))
             total = self._zoffset() + sum(self.z_deltas) + delta - self.z_start
             if abs(total) > self.max_total_adjust + 1e-9:
-                raise error("SETUP_WIZARD_STEP: Z offset would move more "
-                            "than %g mm from where it started"
-                            % (self.max_total_adjust,))
+                raise self._refuse("bad_parameter", "SETUP_WIZARD_STEP: Z "
+                                   "offset would move more than %g mm from "
+                                   "where it started"
+                                   % (self.max_total_adjust,))
             self.z_deltas = self.z_deltas + [delta]
             return "AD5X setup: Z offset %+.3f" % (delta,)
-        raise error("SETUP_WIZARD_STEP: unknown ACTION '%s'" % (action,))
+        raise self._refuse("bad_parameter", "SETUP_WIZARD_STEP: unknown "
+                           "ACTION '%s'" % (action,))
     def _printing(self):
         ps = self.printer.lookup_object('print_stats', None)
         return ps is not None and ps.get_status(
@@ -302,21 +319,23 @@ class AD5XSetup:
     def _start(self, step, params, inline):
         error = self.printer.command_error
         if step not in STEPS:
-            raise error("SETUP_WIZARD_STEP: STEP must be one of %s" % (
-                ", ".join(STEPS),))
+            raise self._refuse("bad_parameter", "SETUP_WIZARD_STEP: STEP "
+                               "must be one of %s" % (", ".join(STEPS),))
         if getattr(self, 'held_off', None):
-            raise error("SETUP_WIZARD_STEP: %s was left off by an aborted PID "
-                        "test: RESTART Klipper first" % (
-                            ", ".join(self.held_off),))
+            raise self._refuse("restart_needed", "SETUP_WIZARD_STEP: %s was "
+                               "left off by an aborted PID test: RESTART "
+                               "Klipper first" % (", ".join(self.held_off),))
         if self.state in ("running", "waiting_user"):
             if (step == "zoffset" and self.step == "zoffset"
                     and self.state == "waiting_user"):
                 self.z_reprint = True     # another patch beside the last
                 return
-            raise error("SETUP_WIZARD_STEP: step '%s' is still running "
-                        "(ACTION=abort first)" % (self.step,))
+            raise self._refuse("step_running", "SETUP_WIZARD_STEP: step "
+                               "'%s' is still running (ACTION=abort first)"
+                               % (self.step,))
         if self._printing():
-            raise error("SETUP_WIZARD_STEP: no setup step during a print")
+            raise self._refuse("printing", "SETUP_WIZARD_STEP: no setup "
+                               "step during a print")
         self.step = step
         self.state = "running"
         self.abort_requested = False
@@ -949,20 +968,20 @@ class AD5XSetup:
             self._pause(.1)
         self.state = "running"
         self._gcode("G1 Z10 F3000")
-        self._result("trash", "box at X%.1f Y%.1f" % (
-            52.5 + self._trash_offset()[0], 229. + self._trash_offset()[1]))
+        self._result("trash", "box at X%.1f Y%.1f" % self._purge_box_pos())
         self._set("Purge box checked", 1.)
-    def _trash_offset(self):
-        """(x, y) of the purge box from its factory spot: variables.cfg
-        trash_offset (TRASH_OFFSET), else unit.cfg."""
-        t = self._variables().get('trash_offset')
-        if isinstance(t, dict) and 'x' in t and 'y' in t:
-            return float(t['x']), float(t['y'])
-        unit = self.printer.lookup_object('gcode_macro _AD5X_UNIT', None)
-        if unit is None:
-            return 0., 0.
-        return float(unit.variables.get('x_offset', 0.)), float(
-            unit.variables.get('y_offset', 0.))
+    def _purge_box_pos(self):
+        """(x, y) of the purge box as the macro _PURGE_BOX_POS (ad5x.cfg)
+        holds it, the spot _TRASH_CHECK moved to: X 52.5 / Y 229 plus
+        variables.cfg trash_offset (TRASH_OFFSET), else unit.cfg. Its
+        variables are read, not the lookup made again: it runs at Klipper's
+        start and after every TRASH_OFFSET, also one typed during the step.
+        Without the macro (not in this config): the factory spot."""
+        box = self.printer.lookup_object('gcode_macro _PURGE_BOX_POS', None)
+        if box is None:
+            return 52.5, 229.
+        v = box.get_status(self.reactor.monotonic())
+        return float(v.get('x', 52.5)), float(v.get('y', 229.))
     def _step_soak(self, params):
         """Bed heat soak calibration (BED_SOAK_CALIBRATE at 60 C, about 15
         minutes). Optional; starts from a cold bed, as the command requires.

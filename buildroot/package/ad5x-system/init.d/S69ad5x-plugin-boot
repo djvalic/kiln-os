@@ -1,0 +1,189 @@
+#!/bin/sh
+# The plugins' root boot scripts (docs/plugin-root-hooks.md). A plugin's
+# root/install.sh (run as root when the plugin was enabled with ROOT=1) may
+# leave scripts in /data/ad5x/plugins-root/init.d, named
+# S<NN><plugin>[.suffix], like the ones in /etc/init.d. This runs them:
+#   start  in the background: waits until S99ad5x-booted has marked the
+#          boot good (at most 5 minutes) and while the recovery OS is
+#          being written (S99ad5x-install-recovery, S99ad5x-update-recovery;
+#          at most 10 minutes), so a plugin can't get in the way of either.
+#          Then each script with "start", in name order, 30 s each.
+#   stop   (shutdown) each script with "stop", in reverse order, 10 s each.
+# A script runs only when it is a plain file owned by root, not writable by
+# group or others, and its plugin's root copy (plugins-root/<plugin>) is
+# there. A failing script is logged and skipped; Klipper and HelixScreen
+# never wait for this. Output in /data/ad5x/kiln-log/plugins-root.log.
+# /data/ad5x/plugins-root/.off skips them all (create it from the recovery
+# system's SSH when a script keeps the printer from working). Not in the
+# recovery image. Replaces S69ad5x-dev-root (named root actions, removed).
+#
+# "S69ad5x-plugin-boot boot": the boot run in the foreground (tests).
+
+# Files this creates are readable by klipper and www-data, whoever started
+# it (a root SSH session may run with umask 077; issue #31)
+umask 022
+
+. ${AD5X_LIB:-/usr/lib/ad5x}/plugin-root.sh
+
+PID=${AD5X_PLUGIN_BOOT_PID:-/run/ad5x-plugin-boot.pid}
+# The process group of the script running now (pr_limited), for stop
+PR_RUNNING=$PR_RUN/boot-step
+START_SECS=${AD5X_PLUGIN_BOOT_START_SECS:-30}
+STOP_SECS=${AD5X_PLUGIN_BOOT_STOP_SECS:-10}
+# Waits at boot (the laptop test sets them short)
+BOOT_WAIT=${AD5X_PLUGIN_BOOT_WAIT:-300}
+SETTLE=${AD5X_PLUGIN_BOOT_SETTLE:-15}
+WLOCK=${AD5X_RECOVERY_WLOCK:-/run/ad5x-recovery-write.pid}
+WLOCK_MAX=${AD5X_PLUGIN_BOOT_WLOCK_MAX:-600}
+
+# booted: S99ad5x-booted has pointed the boot flag at this slot (no slot,
+# USB test mode: yes). The test names a file instead.
+booted() {
+	if [ -n "${AD5X_PLUGIN_BOOT_BOOTED_FILE:-}" ]; then
+		[ -e "$AD5X_PLUGIN_BOOT_BOOTED_FILE" ]
+		return
+	fi
+	[ -n "${SLOT:-}" ] || return 0
+	[ "$(read_flag 2>/dev/null)" = "$(flag_for "$SLOT")" ]
+}
+
+# writing: the recovery OS is being written into slot A (ad5x-update's lock)
+writing() {
+	local p
+	p=$(cat "$WLOCK" 2>/dev/null)
+	[ -n "$p" ] && kill -0 "$p" 2>/dev/null
+}
+
+# wait_ready: each wait has a cap, then the scripts start anyway
+wait_ready() {
+	local w=0
+	while ! booted; do
+		if [ $w -ge "$BOOT_WAIT" ]; then
+			pr_log "boot: start-up not marked complete after $BOOT_WAIT s; running the boot scripts anyway"
+			break
+		fi
+		sleep 2
+		w=$((w + 2))
+	done
+	# the S99 recovery writers start right after S99ad5x-booted
+	[ "$SETTLE" -gt 0 ] && sleep "$SETTLE"
+	w=0
+	while writing; do
+		if [ $w -ge "$WLOCK_MAX" ]; then
+			pr_log "boot: the recovery OS is still being written after $WLOCK_MAX s; running the boot scripts anyway"
+			break
+		fi
+		[ $w = 0 ] && pr_log "boot: waiting while the recovery OS is written"
+		sleep 2
+		w=$((w + 2))
+	done
+}
+
+# scripts: the boot scripts that may run, in name order, one per line.
+# Each skipped one is logged once per call, with the reason.
+scripts() {
+	local f base rest plugin suffix
+	pr_safe "$PR_DIR" && pr_safe "$PR_INITD" && [ -d "$PR_INITD" ] || {
+		[ -e "$PR_INITD" ] && pr_log "boot scripts skipped: $PR_INITD or its folder is not root's own"
+		return 0
+	}
+	for f in "$PR_INITD"/S[0-9][0-9]*; do
+		[ -e "$f" ] || [ -L "$f" ] || continue
+		base=${f##*/}
+		rest=${base#S??}
+		plugin=${rest%%.*}
+		suffix=${rest#"$plugin"}
+		if ! pr_name "$plugin"; then
+			pr_log "$base skipped: no plugin name after S<NN>"
+		elif case $suffix in *[!A-Za-z0-9._-]*) true ;; *) false ;; esac; then
+			pr_log "$base skipped: characters a boot script's name can't have"
+		elif [ -L "$PR_DIR/$plugin" ] || [ ! -d "$PR_DIR/$plugin" ]; then
+			pr_log "$base skipped: plugin $plugin's root files are not installed"
+		elif [ -L "$f" ] || [ ! -f "$f" ] || ! pr_safe "$f"; then
+			pr_log "$base skipped: not a plain file of root's (owned by root, not writable by group or others)"
+		else
+			echo "$f"
+		fi
+	done
+}
+
+# step FILE ACTION SECS: one script, its result in the log
+step() {
+	local f=$1 base=${1##*/} plugin rc
+	plugin=${base#S??}
+	plugin=${plugin%%.*}
+	set -- "$1" "$2" "$3"
+	[ -x "$f" ] && set -- "$@" "$f" || set -- "$@" /bin/sh "$f"
+	pr_limited "$3" / "$PR_LOG" \
+		env -i PATH="$PR_PATH" HOME=/root LANG=C PLUGIN="$plugin" \
+		PLUGIN_DIR="$(pr_plugin_dir "$plugin")" KILN_ACTION="$2" \
+		"$4" ${5:+"$5"} "$2"
+	rc=$?
+	pr_log "$base $2: $(pr_result $rc)"
+}
+
+boot_start() {
+	local list f
+	[ -d "$PR_INITD" ] || return 0
+	if [ -e "$PR_OFF" ]; then
+		pr_log "boot: plugin boot scripts are off ($PR_OFF), none run"
+		return 0
+	fi
+	# nothing to wait for without a boot script
+	set -- "$PR_INITD"/S[0-9][0-9]*
+	[ -e "$1" ] || [ -L "$1" ] || return 0
+	wait_ready
+	list=$(scripts)
+	for f in $list; do
+		# switched off while the boot waited
+		if [ -e "$PR_OFF" ]; then
+			pr_log "boot: plugin boot scripts are off, no more run"
+			return 0
+		fi
+		step "$f" start $START_SECS
+	done
+}
+
+boot_stop() {
+	local list f rev=
+	[ -d "$PR_INITD" ] && [ ! -e "$PR_OFF" ] || return 0
+	list=$(scripts)
+	for f in $list; do rev="$f $rev"; done
+	for f in $rev; do
+		step "$f" stop $STOP_SECS
+	done
+}
+
+case "$1" in
+start)
+	# -b: its own session, so stop can end it
+	start-stop-daemon -S -b -m -p $PID -x /bin/sh -- $0 boot
+	;;
+boot)
+	# the boot flag check needs lib/slot.sh
+	[ -n "${AD5X_PLUGIN_BOOT_BOOTED_FILE:-}" ] || . ${AD5X_LIB:-/usr/lib/ad5x}/slot.sh
+	boot_start
+	rm -f $PID
+	;;
+stop)
+	# A boot run still going: its shell first (only when the pid in the
+	# file is still that shell: a stale pid may be another program's now),
+	# then the script it runs (its own process group)
+	bp=$(cat $PID 2>/dev/null)
+	case $bp in
+	''|*[!0-9]*) ;;
+	*)
+		tr '\0' ' ' < /proc/$bp/cmdline 2>/dev/null | grep -q 'S69ad5x-plugin-boot boot' &&
+			kill -TERM "$bp" 2>/dev/null ;;
+	esac
+	rm -f $PID
+	rp=$(cat "$PR_RUNNING" 2>/dev/null)
+	case $rp in
+	''|*[!0-9]*) ;;
+	*) kill -TERM "-$rp" 2>/dev/null; sleep 1; kill -KILL "-$rp" 2>/dev/null ;;
+	esac
+	rm -f "$PR_RUNNING"
+	boot_stop
+	;;
+esac
+exit 0

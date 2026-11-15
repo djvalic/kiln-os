@@ -3,7 +3,7 @@
 Rule: the read-only image holds only a plain factory default (what is
 true of every AD5X, and the stock firmware's own behaviour); every choice
 this system makes beyond stock is a file in the printer's config
-directory, which the user can edit in Fluidd.
+directory, which you can edit in Fluidd.
 
 - **Factory (read-only)**: `/usr/share/ad5x/config/` (`ad5x.cfg`,
   `ifs.cfg`, `setup.cfg`) and the shipped plugins in
@@ -36,7 +36,8 @@ printer.cfg                          user, never replaced
     [ad5x_config]                    factory: update notices, CONFIG_BACKUPS
     macros/*.cfg                     user: editable defaults, in name order (optional)
     [ad5x_plugins]
-    plugins.cfg                      user: enabled plugins, in file order (optional)
+    plugins-active.cfg               generated from plugins.cfg (user: enabled plugins,
+                                     in file order; optional), skipped plugins left out
   unit.cfg                           user: per-printer calibration
   local.cfg                          user: overrides, read last
   SAVE_CONFIG block
@@ -45,7 +46,9 @@ printer.cfg                          user, never replaced
 The `macros/` and plugins includes sit at the end of `ad5x.cfg` (the
 image), so an existing `printer.cfg` picks them up without being changed.
 Both are glob patterns: no `macros/` directory or no `plugins.cfg` is no
-error. Klipper sorts the files a glob matches by name.
+error. Klipper reads `plugins-active.cfg`, written next to `plugins.cfg`
+before each config read (host Klipper patch 0009), with each enabled plugin that can't run
+left out (`docs/plugins.md`). Klipper sorts the files a glob matches by name.
 
 Klipper merges sections of the same name across files: a later file's
 option replaces the earlier value of that option, other options stay.
@@ -73,15 +76,16 @@ that file: a `local.cfg` with only `variable_*` lines for it and no
 
 | File | Where | R/W | What's in it | Why there |
 |---|---|---|---|---|
-| `ad5x.cfg` | image `/usr/share/ad5x/config` | RO | MCUs, pins, kinematics, steppers, TMC, homing (stock Z-X-Y order), extruder and bed heaters/sensors and their safety limits (bed `smooth_time: 3.0`, `max_power 0.4`), hotend power pin, probe and strain-gauge tare (`[ad5x_weight]`, `LOAD_CELL_TARE`), bed mesh limits, accelerometer and input shaper, part/board fans with stock's `M106`/`M107`, board-fan watchdog, chamber light, toolhead sensors and runout (`GET_FILAMENT_VALUE`, `GET_CUT_VALUE`), `M900`, `[virtual_sdcard]`, `[pause_resume]` with pass-through `PAUSE`/`RESUME` macros, `[exclude_object]`, `[gcode_arcs]`, `[firmware_retraction]` (0.7 mm / 35 mm/s); stock print macros: `PRINT_START` as the stock app (no mesh unless `LEVEL=1`, first tool always loaded fresh, no prime line), the stock Z check (`_CHECK_Z*`), Z offset saving and applying (`SET_GCODE_OFFSET`, `_APPLY_Z_OFFSET`, `_SEED_ZOFFSET`), `BED_MESH_CALIBRATE` with tare and saved centre, `PRINT_END`, `CANCEL_PRINT`, purge box moves (`_PURGE_BOX`, `_PURGE_WIPE`, `_NOZZLE_BRUSH`), status line `_PRINT_STATUS`; `[ad5x_config]`, `[ad5x_plugins]` | Physically true of every AD5X, or what stock does. Firmware retraction and arcs are capabilities that change nothing unless a file uses `G10`/`G11`/`G2`; the board-fan watchdog protects the electronics; the bed waits only for heating up (`TEMPERATURE_WAIT MINIMUM`), as the stock app |
+| `ad5x.cfg` | image `/usr/share/ad5x/config` | RO | MCUs, pins, kinematics, steppers, TMC, homing (stock Z-X-Y order), extruder and bed heaters/sensors and their safety limits (bed `smooth_time: 3.0`, `max_power 0.4`), hotend power pin, probe and strain-gauge tare (`[ad5x_weight]`, `LOAD_CELL_TARE`), bed mesh limits, accelerometer and input shaper, part/board fans with stock's `M106`/`M107`, board-fan watchdog, chamber light, toolhead sensors and runout (`GET_FILAMENT_VALUE`, `GET_CUT_VALUE`), `M900`, `[virtual_sdcard]`, `[pause_resume]` with pass-through `PAUSE`/`RESUME` macros, `[exclude_object]`, `[gcode_arcs]`, `[firmware_retraction]` (0.7 mm / 35 mm/s); stock print macros: `PRINT_START` as the stock app (no mesh unless `LEVEL=1`, first tool always loaded fresh, no prime line), the stock Z check (`_CHECK_Z*`), Z offset saving and applying (`SET_GCODE_OFFSET`, `_APPLY_Z_OFFSET`, `_SEED_ZOFFSET`), `BED_MESH_CALIBRATE` with tare and saved centre, `PRINT_END`, `CANCEL_PRINT`, purge box moves (`_PURGE_BOX`, `_PURGE_WIPE`, `_NOZZLE_BRUSH`; box spot `_PURGE_BOX_POS`, `TRASH_OFFSET`), status line `_PRINT_STATUS`; `[ad5x_config]`, `[ad5x_plugins]` | Physically true of every AD5X, or what stock does. Firmware retraction and arcs are capabilities that change nothing unless a file uses `G10`/`G11`/`G2`; the board-fan watchdog protects the electronics; the bed waits only for heating up (`TEMPERATURE_WAIT MINIMUM`), as the stock app |
 | `ifs.cfg` | image | RO | `[save_variables]`, `[ifs]` link and lengths/speeds/timeouts (stock values), stock swap templates (`before_gcode`, `cut_gcode`, `unload_gcode`, `purge_start_gcode`, `purge_gcode`, `after_gcode`, from the capture of the stock app), `T0`-`T3`, purge tuning commands `IFS_PURGE_TEST`/`IFS_PURGE_RESULT` | The IFS hardware and the stock swap; tuning commands do nothing until run |
 | `setup.cfg` | image | RO | `[ad5x_setup]` (setup wizard module options), include of `ad5x-tuning.cfg` | Module options only |
 | shipped plugins | image `/usr/share/ad5x/plugins` | RO | `zmod-compat`, `nopoop`, `bambufy-compat`, `recommend` | Opt-in switches: off = stock; which are on is in `plugins.cfg` |
 | `printer.cfg` | config dir | RW, never replaced | Includes `ad5x.cfg`, `unit.cfg`, `local.cfg`; SAVE_CONFIG block (bed mesh) | The printer's own |
 | `unit.cfg` | config dir | RW, never replaced | `[gcode_macro _AD5X_UNIT]`: stock per-unit calibration (Z offset seed, cutter and purge box offsets) | Per printer, from stock's settings at first boot |
 | `nozzle.cfg` | config dir | RW, never replaced; written by `SET_NOZZLE_SIZE` | `[extruder] nozzle_diameter` (the setup wizard's Nozzle Size step, Settings on the touch screen); absent = the factory 0.4 | Included at the end of `ad5x.cfg`: after the factory `[extruder]`, before `unit.cfg` and `local.cfg` |
-| `local.cfg` | config dir | RW, never replaced | The user's lasting overrides (user's printer: `nozzle_diameter: 0.6`, `[ifs] flush_speed: 480`) | Read last: wins over everything |
-| `plugins.cfg` | config dir | RW, never replaced | Enabled plugins (`ENABLE_PLUGIN`/`DISABLE_PLUGIN`) | The user's choice |
+| `local.cfg` | config dir | RW, never replaced | Your lasting overrides (developer's printer: `nozzle_diameter: 0.6`, `[ifs] flush_speed: 480`) | Read last: wins over everything |
+| `plugins.cfg` | config dir | RW, never replaced | Enabled plugins (`ENABLE_PLUGIN`/`DISABLE_PLUGIN`) | Your choice |
+| `plugins-active.cfg` | config dir | Generated (Klipper before each config read, S61klipper) | `plugins.cfg` with the enabled plugins that can't run left out; what Klipper reads | Don't edit |
 | `ad5x-tuning.cfg` | config dir | RW, written by the wizard | PID and input shaper results | Per printer |
 | `variables.cfg` | config dir | RW, Klipper | Saved state: `zoffset`, `ad5x_center_z`, `ifs_loaded`, slot materials, tuning | Per printer |
 | `macros/print_start.cfg` | config dir | RW, refreshed by updates | `PRINT_START` (this system's: mesh of the print area every print `variable_mesh_every_print: 1`, `variable_adaptive_mesh: 1`, `variable_retract: 3`, status line per step, prime line or first tool), `_PRINT_START_TOOL` (first tool already loaded: one purge at the box instead of cut and reload) | Choices beyond stock |
@@ -121,7 +125,7 @@ directory are never replaced. The date in a backup name is the printer's
 clock at boot (it may be wrong before the network time is set; the
 `-n` suffix keeps names unique).
 
-Telling the user: at Klipper start, while `config-updates.txt` exists, its
+Telling you: at Klipper start, while `config-updates.txt` exists, its
 lines go to the console (Fluidd, HelixScreen's console) and the screen
 shows "Macros updated: see CONFIG_BACKUPS" (`M117`). `CONFIG_BACKUPS`
 lists the notices and every `macros/*.bak-*` file; `CONFIG_BACKUPS
@@ -135,7 +139,7 @@ them), `RESTART`, then delete the `.bak` file and `CONFIG_BACKUPS ACK=1`.
 
 ## Moving an existing printer to this layout
 
-Nothing to do by hand. On the user's printer (files: `printer.cfg`
+Nothing to do by hand. On the developer's printer (files: `printer.cfg`
 including `ad5x.cfg`, `unit.cfg`, `local.cfg`; `local.cfg` with
 `nozzle_diameter: 0.6` and `[ifs] flush_speed: 480`; `ad5x-tuning.cfg`;
 `plugins.cfg` with `zmod-compat` and `nopoop`; `variables.cfg` with
@@ -178,7 +182,7 @@ saved offset keeps its meaning: the nozzle-to-bed gap at the probe's
 zero. What changes is that the mesh is now fresh, so bed movement since
 the last full mesh no longer shows up in the first layer. With the old
 mesh plus the "not applied" centre check that movement had to be tuned
-away by hand: the user's offset went -0.36 -> -0.02 -> +0.085 over three
+away by hand: the developer's offset went -0.36 -> -0.02 -> +0.085 over three
 prints. The current 0.085 partly compensates the old mesh's error, so
 **one small Z re-tune may be needed after this change** (baby-step in the
 first print, or the setup wizard's Z offset step, which now also meshes

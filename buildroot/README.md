@@ -1,18 +1,56 @@
-# AD5X Buildroot image
+# Kiln OS Buildroot images
 
-A Buildroot external tree for the open AD5X OS. First stage: **our own
-userspace on the stock kernel**. Nothing here has been put on a printer.
+A Buildroot external tree for Kiln OS: the main OS (`ad5x_defconfig`, slot
+B) and the recovery OS (`ad5x_recovery_defconfig`, slot A, see "Recovery
+image" below). Both run on the printers; releases are built from this tree.
 
 ## Build
 
+Besides Buildroot, the main OS needs two things outside the tree, both for
+the kernels it carries:
+
+- **Ingenic's 6.6 SDK kernel** for `ad5x-kernel66` (`kernel-ingenic66/`):
+  a checkout at `~/workspace/ingenic-sdk-6.6` (or set
+  `BR2_PACKAGE_AD5X_KERNEL66_SDK`), as `kernel-ingenic66/README.md`
+  describes. Releases are built from commit
+  `a98c2e1f22e4263ddd4153a4eca4db4dcfd2777b`.
+- **A prepared linux-5.10.186 tree** for `chainload.ko`, made with this
+  tree's toolchain by `kernel-ingenic66/chainload/setup.sh` (into
+  `~/workspace/chainload-build`, or set `BR2_PACKAGE_AD5X_KERNEL66_KDIR510`).
+  So the toolchain is built first.
+
+The mainline 7.3 kernel (`ad5x-kernel-mainline`) downloads its source and
+Wi-Fi firmware from kernel.org itself (sha256-pinned).
+
 ```
 git clone --depth 1 --branch 2026.02.3 https://github.com/buildroot/buildroot.git buildroot/src
+git clone --filter=blob:none \
+  https://github.com/Llixuma/ingenic-linux-kernel6.6-x2000-v1.0-20250221.git \
+  ~/workspace/ingenic-sdk-6.6
+git -C ~/workspace/ingenic-sdk-6.6 checkout a98c2e1f22e4263ddd4153a4eca4db4dcfd2777b
+export AD5X_VENDOR_FREE=1
+
+# Recovery OS first: the main OS carries it
+make -C buildroot/src O=$PWD/buildroot/output-recovery BR2_EXTERNAL=$PWD/buildroot ad5x_recovery_defconfig
+make -C buildroot/src O=$PWD/buildroot/output-recovery BR2_EXTERNAL=$PWD/buildroot
+
+# Main OS: toolchain, the 5.10 tree for chainload.ko, then the image
 make -C buildroot/src O=$PWD/buildroot/output BR2_EXTERNAL=$PWD/buildroot ad5x_defconfig
-make -C buildroot/src O=$PWD/buildroot/output BR2_EXTERNAL=$PWD/buildroot
+make -C buildroot/src O=$PWD/buildroot/output BR2_EXTERNAL=$PWD/buildroot toolchain
+kernel-ingenic66/chainload/setup.sh
+AD5X_RECOVERY_IMAGE=$PWD/buildroot/output-recovery/images/rootfs.squashfs \
+  make -C buildroot/src O=$PWD/buildroot/output BR2_EXTERNAL=$PWD/buildroot
 ```
 
-`buildroot/src`, `buildroot/dl` and `buildroot/output` are git-ignored.
-Output in `buildroot/output/images/` (see the `README.txt` there).
+Without `AD5X_RECOVERY_IMAGE` the main OS carries no recovery OS, and a
+printer updated with it keeps the one it has. `AD5X_VERSION` sets the
+version the image reports (default: from `git describe`). `tools/release.sh`
+runs the two image builds for a release (with the SDK and the 5.10 tree
+already in place) and makes the update and install files.
+
+`buildroot/src`, `buildroot/dl`, `buildroot/output` and
+`buildroot/output-recovery` are git-ignored. Output in
+`buildroot/output/images/` (see the `README.txt` there).
 
 ### Vendor-free (default) and private builds
 
@@ -56,8 +94,8 @@ From the stock kernel image and root filesystem (3.1.0 updater):
   watchdog are out-of-tree modules in `/module_driver`
   (`vermagic 5.10.186+ SMP preempt MIPS32_R5`), loaded by a stock script.
 - The stock kernel has **no cgroups**, so systemd can't run on it.
-- Storage: 7.6 GB eMMC `mmcblk0`, GPT names, **A/B slots** (read on the
-  user's unit, 2026-10-15):
+- Storage: 7.6 GB eMMC `mmcblk0`, GPT names, **A/B slots** (read on one
+  printer, 2026-10-15):
 
   | Part | Name | Size | Use |
   |---|---|---|---|
@@ -79,11 +117,11 @@ From the stock kernel image and root filesystem (3.1.0 updater):
 - Python 3 with Klipper's dependencies; mainline Klipper at the same commit
   as the MCU images, `c_helper.so` cross-compiled, this project's extras and
   default `printer.cfg` / `ifs.cfg`.
-- Moonraker v0.11.0 (`package/moonraker`, port 7125, user `klipper`,
-  `S62moonraker`), with packages for its missing dependencies
-  (`python-inotify-simple`, `python-libnacl`, `python-streaming-form-data`)
-  and two small patches (stdlib `importlib.metadata`; `smart_open` only
-  for S3/GCS uploads). Runs without Klipper.
+- Moonraker (`package/moonraker`, v0.11.0 plus the commits up to the one
+  `moonraker.mk` pins; port 7125, user `klipper`, `S62moonraker`), with
+  packages for its missing dependencies (`python-inotify-simple`,
+  `python-libnacl`, `python-streaming-form-data`) and Kiln's patches in
+  `package/moonraker/`. Runs without Klipper.
 - Fluidd (`package/fluidd`, release zip, `/usr/share/fluidd`; it updates
   itself from Fluidd into `/data/ad5x/web/fluidd`, `S61ad5x-web`) on
   port 80 through nginx (`S63nginx`; `rootfs-overlay/etc/nginx`), which
@@ -110,14 +148,15 @@ From the stock kernel image and root filesystem (3.1.0 updater):
   networks on the first start; HelixScreen joins and saves networks, its
   switch turns the radio off; `/data/ad5x/wifi.disable`: no Wi-Fi), `S60ad5x-eboard` starts the
   toolhead board (`tools/boot_eboard.py`), `S61klipper` runs klippy as user
-  `klipper` at nice -10. Both start only when `/data/ad5x/klipper.enable`
-  exists: the boards still run stock firmware until they are reflashed.
+  `klipper` at nice -10, only when `/data/ad5x/klipper.enable` exists:
+  `ad5x-mcu boot` (run by `S60ad5x-eboard`) writes the boards' Klipper
+  firmware and creates that file once both boards run it.
 - `S41ad5x-eth`: Ethernet with stock's MAC (`usershare` `/MAC`), then DHCP
   or a static address from `/data/ad5x/network.conf` (`MODE=dhcp|static`,
   `ADDRESS=a.b.c.d/nn`, `GATEWAY=`, `DNS="..."`; shared with the recovery OS,
   helper `/usr/lib/ad5x/network.sh`; an invalid static setup falls back to
   DHCP).
-- HelixScreen v1.1.0-beta.9 (`package/helixscreen`), the touch screen UI,
+- HelixScreen v1.1.0-rc.1 with Kiln's patches (`package/helixscreen`), the touch screen UI,
   built from source (git tag with its vendored submodules: LVGL, libhv,
   spdlog, libnl, wpa client, Lua) with our toolchain: upstream's MIPS
   target (fbdev, evdev, RGB565) but glibc and dynamic, `-march=mips32r5
@@ -126,8 +165,8 @@ From the stock kernel image and root filesystem (3.1.0 updater):
   `/usr/lib/helixscreen` (printer pictures trimmed to FlashForge), settings
   and cache in `/data/ad5x/helixscreen`, log in
   `printer_data/logs/helixscreen.log`. `S70helixscreen` runs `helix-screen`
-  on `/dev/fb0` against Moonraker at 127.0.0.1:7125, only when
-  `/data/ad5x/helixscreen.enable` exists. `/etc/os-release` carries
+  on `/dev/fb0` against Moonraker at 127.0.0.1:7125; it is on by default,
+  and `/data/ad5x/helixscreen.disable` turns it off. `/etc/os-release` carries
   `VERSION_CODENAME="AD5X"` so it picks its AD5X touch calibration.
 - Dropbear SSH, root key from `/data/ad5x/ssh/authorized_keys`. Serial
   login on the debug console, ttyS0 (the other UARTs belong to boards).
@@ -141,14 +180,15 @@ From the stock kernel image and root filesystem (3.1.0 updater):
 | `printer.cfg` | Short: includes `/usr/share/ad5x/config/ad5x.cfg` (factory defaults: hardware and stock behaviour; it includes `ifs.cfg`, `setup.cfg`, then `macros/*.cfg` and `plugins.cfg` from this directory), then `unit.cfg`, then `local.cfg`; Klipper's SAVE_CONFIG block below | Template copied once; SAVE_CONFIG |
 | `macros/*.cfg` | This system's editable defaults beyond stock: `print_start.cfg` (mesh every print, status line), `prime_line.cfg`, `quick_actions.cfg`, `ifs_templates.cfg` (`docs/config-layout.md`) | Copied at first boot from `/usr/share/ad5x/defaults/macros`; an update with a changed template replaces the file, keeping an edited one as `<name>.cfg.bak-<date>` (`config-updates.txt`, `CONFIG_BACKUPS`); `.ad5x-templates.json` records the template versions |
 | `unit.cfg` | Per-printer values from stock's `Adventurer5M.json` | Written once at first boot |
-| `local.cfg` | This printer's own overrides (e.g. nozzle size), read last | The user |
+| `local.cfg` | This printer's own overrides (e.g. nozzle size), read last | You |
 | `plugins.cfg` | Enabled plugins, read at the end of `ad5x.cfg` (`docs/plugins.md`); first boot: zmod-compat, nopoop (+ bambufy-compat / recommend after zMod) | Written once; `ENABLE_PLUGIN` / `DISABLE_PLUGIN` |
+| `plugins-active.cfg` | `plugins.cfg` with the enabled plugins that can't run left out; what `ad5x.cfg` includes | Generated (Klipper before each config read, S61klipper) |
 | `moonraker-plugins.conf` | Enabled plugins' Moonraker parts, read after `moonraker.conf` | Generated (S62moonraker, Klipper) |
 | `variables.cfg` | Saved state: Z offset, loaded lane, colours, centre Z | Klipper |
 | `moonraker.conf` | Moonraker | Template copied once |
 
 Shipped plugins are in `/usr/share/ad5x/plugins` (from `klipper/plugins/`),
-other people's and the user's own in `/data/ad5x/plugins` (never touched by
+other people's and your own in `/data/ad5x/plugins` (never touched by
 updates); plugin API version in `/usr/lib/os-release` (`AD5X_PLUGIN_API`,
 `docs/plugin-api.md`).
 
@@ -177,7 +217,7 @@ and touch drivers), chroots into our root and runs our init scripts, then
 never returns so the stock app doesn't start. Stock's dropbear stays up
 (root/root): the way back in. Log: `ad5x-usb.log` on the stick.
 
-Checked against the user's unit (read-only) and rehearsed with our init
+Checked against one printer (read-only) and rehearsed with our init
 scripts under qemu (`AD5X_USB=1`):
 
 - Stock's dropbear reads the root password and host key from `/etc`, which
@@ -190,9 +230,8 @@ scripts under qemu (`AD5X_USB=1`):
   loopback only). Our dropbear finds port 22 taken and stays off.
 
 Touch screen: the stock boot logo stays on the panel and nothing else uses
-`/dev/fb0`, so HelixScreen can be tried by creating
-`/data/ad5x/helixscreen.enable` (SSH) and running
-`/etc/init.d/S70helixscreen start` (or rebooting).
+`/dev/fb0`, so HelixScreen runs there as on the printer (`S70helixscreen`;
+`/data/ad5x/helixscreen.disable` keeps it off).
 
 Unplug and power-cycle to return to stock. Never put an `AD5X-*.tgz` on
 the stick: stock installs that as a firmware update.
@@ -201,27 +240,33 @@ the stick: stock installs that as a firmware update.
 
 A second configuration in this tree, `ad5x_recovery_defconfig`: a small
 recovery/update OS for slot A (same toolchain and stock kernel; SSH,
-signed SWUpdate updates of slot B, backup/restore, USB rescue). Packages
+SWUpdate updates of slot B, unsigned by default, backup/restore, USB
+rescue). Packages
 `package/ad5x-recovery`, board files `board/ad5x-recovery`. Built into its
 own output directory:
 
 ```
 make -C buildroot/src O=$PWD/buildroot/output-recovery BR2_EXTERNAL=$PWD/buildroot ad5x_recovery_defconfig
-AD5X_SWU_PUBKEY=~/.config/ad5x/swupdate-public.pem \
-  make -C buildroot/src O=$PWD/buildroot/output-recovery BR2_EXTERNAL=$PWD/buildroot
+make -C buildroot/src O=$PWD/buildroot/output-recovery BR2_EXTERNAL=$PWD/buildroot
 ```
+
+That image takes unsigned updates (every file still has its sha256
+checked). For one that requires signed updates, see `docs/recovery-os.md`,
+"Open update mode" (`AD5X_SWU_SIGNED=1` and a public key).
 
 Main-OS updates (rootfs only, no kernel): `tools/make_swu.sh`. Install
 stick / SSH install files: `tools/make_install_stick.sh`. Tests:
 `tools/test_recovery.sh`, `tools/test_install.sh`. Everything else:
 `docs/recovery-os.md`, `docs/install.md`.
 
-## Not done yet
+## Kernels and limits
 
-- Own kernel: Ingenic's 6.6 SDK kernel runs the printer when started from
-  RAM (`kernel-ingenic66/`, chainload: Klipper, IFS, screen, touch);
-  a mainline (7.x / 6.18 LTS) port is prepared in `kernel-mainline/`.
-  Own boot loader: not planned; the stock SPL boots our uImage unchanged.
+- Kernels: the stock 5.10 kernel in the boot slots starts our 6.6 kernel
+  (`kernel-ingenic66/`) from RAM at every boot (`chainload.ko`,
+  `S00ad5x-kernel`); the mainline 7.3 kernel (`kernel-mainline/`) is
+  in the image too, opt-in (`ad5x-kernel mainline on`). Own boot loader:
+  not planned; the stock SPL boots the stock uImage unchanged.
 - First install from stock (USB stick or SSH): `docs/install.md`
-  (`tools/make_install_stick.sh`, `tools/install/`); tested under qemu
-  only. The root slot is 100 MB, so the squashfs must stay under that.
+  (`tools/make_install_stick.sh`, `tools/install/`); done over SSH on a
+  printer, from a USB stick under emulation only. The root slot is 100 MB,
+  so the squashfs must stay under that.

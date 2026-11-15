@@ -9,13 +9,15 @@
 APPS=/data/ad5x/apps
 
 # ver_lt A B: version A is older than B. Both "vX.Y.Z-N-gHASH[-ad5x]"
-# (git describe; N commits after the tag) and "vX.Y.Z[+build]" (Kiln OS)
+# (git describe; N commits after the tag) and "vX.Y.Z[-rcN][+build]" (Kiln
+# OS; a release candidate sorts below its release, rc2 below rc10)
 ver_lt() {
 	awk -v a="$1" -v b="$2" 'function key(v, k,  n, p) {
 		sub(/^v/, "", v); sub(/\+.*/, "", v)
 		n = split(v, p, /[.-]/)
 		k[1] = p[1] + 0; k[2] = p[2] + 0; k[3] = p[3] + 0
 		k[4] = (n >= 4 && p[4] ~ /^[0-9]+$/) ? p[4] + 0 : 0
+		if (n >= 4 && p[4] ~ /^rc[0-9]+$/) k[4] = substr(p[4], 3) - 1000000
 	}
 	BEGIN {
 		key(a, x); key(b, y)

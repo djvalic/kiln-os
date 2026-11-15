@@ -3,7 +3,7 @@
 ## Uploading and printing
 
 Add the printer in OrcaSlicer as a physical printer with host type
-**Octo/Klipper** and the printer's address (e.g. `192.168.1.56`). Moonraker
+**Octo/Klipper** and the printer's address (shown on the touch screen under Settings > Connection > Network Settings). Moonraker
 answers on port 80 through nginx (and on 7125).
 
 G-code and sliced 3MF both print. With "Use 3MF instead of G-code" on, Orca
@@ -125,7 +125,7 @@ ignores `lane_data`.
 
 Read it by hand:
 
-    curl http://192.168.1.56/server/database/item?namespace=lane_data
+    curl http://PRINTER/server/database/item?namespace=lane_data
 
 ## Tools and slots
 

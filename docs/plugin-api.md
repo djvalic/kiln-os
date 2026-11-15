@@ -1,70 +1,91 @@
 # Plugin API
 
 What a plugin (`docs/plugins.md`) may rely on, and how that is versioned.
-Everything not listed here is internal and may change with any system
-update.
+Every command, macro, status field, config option and file listed here
+has a **since** version: the plugin API version from which every Kiln OS
+release has it. Everything not listed here is internal and may change
+with any system update ("Public and internal names" below).
 
 ## Version
 
-Current: **1.5** (1.5, 2026-11-07: additions only: a plugin can drive
-the IFS itself (`owns_ifs`, "A plugin that drives the IFS" below), `[ifs]
-enable: False`, packages in a plugin's `extras/`, `printer.load_object()`
-finding plugin modules, `printer.ad5x_plugins` `ifs_owner` and
-`available.<name>.owns_ifs`.
-1.4, 2026-10-20: additions only: the plugin catalog
-and `INSTALL_PLUGIN`, `UPDATE_PLUGIN`, `REMOVE_PLUGIN`;
-`printer.ad5x_plugins` `catalog`, `job`; Moonraker restarts by itself when
-a switch changes its plugin parts; the bed heat soak: `BED_SOAK_CALIBRATE`,
-`PRINT_START SOAK=`, `printer.ad5x_soak`; the speaker: `M300`,
-`PLAY_MIDI`, `PLAY_SOUND`, `SOUND_STOP`, `SOUND_SETUP`, `printer.ad5x_sound`;
-the nozzle size: `SET_NOZZLE_SIZE`, `printer.ad5x_nozzle`; auto-refill
-colour matching: `IFS_AUTO_REFILL MATCH=`, `printer.ifs` `refill_match`,
-`refill_backups`, `refill_notice`.
-1.3, 2026-10-20: additions only: a plugin's
-`python/` libraries (Klipper and Moonraker) and `moonraker/components/`
-(Moonraker components), and `git` on the printer for installing plugins.
-1.2, 2026-10-20: additions only: the Klipper event
-`ifs:loaded` (slot), `IFS_AUTO_REFILL` and `printer.ifs` `auto_refill`,
-`refill`, power-loss recovery (`RESUME_INTERRUPTED`, `CLEAR_INTERRUPTED`,
-`printer.ad5x_resume`).
-1.1, 2026-10-17: factory/user config split,
-`docs/config-layout.md`. Additions only: `CONFIG_BACKUPS`,
-`printer.ad5x_config`, the `macros/` files in the config order,
-`PRINT_START`'s `mesh_every_print` and `retract`, `_PRIME_LINE`'s new
-variables. The listed macros keep their names and parameters; the ones
-marked "macros/" below now live in the printer's editable `macros/`
-files instead of the image.)
+Current: **1.6**.
 
 - In Klipper: `printer.ad5x_plugins.api_version` (also printed by
   `LIST_PLUGINS`).
-- On the system: `AD5X_PLUGIN_API="1.5"` in `/usr/lib/os-release`
+- On the system: `AD5X_PLUGIN_API="1.6"` in `/usr/lib/os-release`
   (`/etc/os-release`), for scripts.
 - In the code: `PLUGIN_API_VERSION` in `klipper/extras/ad5x_plugins.py`
-  (the build copies it to os-release).
+  (the build copies it to os-release). `tools/test_plugin_api_doc.py`
+  checks that every command and status field of Kiln's Klipper modules
+  is listed on this page or marked internal there.
 
 Rules for system updates:
 
-- **Minor** (1.0 -> 1.1): additions only (new commands, parameters,
+- **Minor** (1.4 -> 1.5): additions only (new commands, parameters,
   status fields, macros). Nothing listed here changes meaning or goes
-  away.
+  away. From 1.6 on, every addition raises the minor version.
 - **Major** (1.x -> 2.0): something listed here changed or was removed;
-  docs list what. Plugins built for 1.x are refused until updated.
+  "Changes" below lists what. Plugins built for 1.x are refused until
+  updated.
 
 A plugin states the version it was written for in `plugin.json`,
 `requires_os: "1.0"`. It is accepted when the major numbers are equal and
 the system's minor is the same or newer: `1.0` runs on 1.0, 1.3; not on
-0.9 or 2.0. Without `requires_os` it is accepted (not recommended).
-`ENABLE_PLUGIN` refuses an incompatible plugin; one enabled before an
-update that made it incompatible stays in `plugins.cfg`, its Python
-extras and Moonraker part are not loaded, and Klipper shows a warning.
+0.9 or 2.0. Without `requires_os` it is accepted (not recommended). Put
+the highest **since** of what your plugin uses there.
+
+`ENABLE_PLUGIN` refuses an incompatible plugin. Each time Klipper starts
+(boot, `RESTART`, `FIRMWARE_RESTART`) an enabled plugin that can't run is
+skipped entirely: its `plugin.cfg`, Python extras and Moonraker part are
+not loaded, and Klipper shows one warning naming the plugin and the
+reason. That is a plugin that is incompatible (enabled before an update
+that made it so), missing, has a bad `plugin.json` or a `plugin.cfg`
+Klipper can't parse, `requires` a plugin that isn't loaded (off, or
+skipped itself), `conflicts` with a plugin listed before it in
+`plugins.cfg`, or drives the IFS (`owns_ifs`) while the IFS isn't on
+Klipper firmware or a plugin listed before it drives it already ("A
+plugin that drives the IFS"). Its line stays in
+`plugins.cfg` (`DISABLE_PLUGIN` removes it); `docs/plugins.md`, "How
+they are loaded".
+
+### History
+
+| Version | Date | First release | What came |
+|---|---|---|---|
+| 1.0 | 2026-10-16 | (none) | The plugin layout, `plugin.json`, the commands, macros and status fields marked 1.0 |
+| 1.1 | 2026-10-16 | v0.0.1 | Factory/user config split (`docs/config-layout.md`): the `macros/` files in the config order, `CONFIG_BACKUPS`, `printer.ad5x_config`, `PRINT_START`'s `mesh_every_print` and `retract`, `_PRIME_LINE`'s variables. The macros marked "macros/" now live in the printer's editable `macros/` files, with the same names and parameters |
+| 1.2 | 2026-10-19 | v0.0.5 | The Klipper event `ifs:loaded`, IFS auto-refill, power-loss recovery |
+| 1.3 | 2026-10-20 | v0.0.6 | A plugin's `python/` libraries and `moonraker/components/`, `git` on the printer |
+| 1.4 | 2026-10-20 | v0.0.7 | The plugin catalog (`INSTALL_PLUGIN`, `UPDATE_PLUGIN`, `REMOVE_PLUGIN`), Moonraker restarted by a switch, the bed heat soak, the speaker, the nozzle size, auto-refill colour matching |
+| 1.5 | 2026-11-07 | v0.0.49 | A plugin that drives the IFS (`owns_ifs`), packages in `extras/`, `printer.load_object()` finding plugin modules; and everything the 1.4 releases added after v0.0.7 that this page now lists (tool map mode, Z offset estimate, IFS operation status, swap abort template, ...) |
+| 1.6 | 2026-11-13 | v0.1.0-rc1 | Root scripts like zMod's plugins have (`root/install.sh`, `update.sh`, `uninstall.sh`, `docs/plugin-root-hooks.md`), `ENABLE_PLUGIN ROOT=1`, `INSTALL_PLUGIN ROOT=1`, `printer.ad5x_plugins` `available.<name>.root` and `root_installed`, the job actions `root install`/`root update`/`root uninstall`; warnings when two plugins bring the same Moonraker component, `python/` package or Klipper section ("Names"); `kiln_` and `ad5x_` module, component, section and macro names refused for plugins that are not Kiln's own ("Names"); Moonraker's `[machine] provider: kiln_agent` (service restarts, "Moonraker"). The named root actions are removed ("Changes") |
+
+**1.5\*** marks the few items that came with a later 1.5 release:
+`LOG_MODE` and `printer.ad5x_log` (v0.0.53), `printer.ad5x_soak.cancel`
+(v0.0.60), and in the release after v0.0.60: `_PURGE_BOX_POS` and Kiln's
+IFS macros stopping with a message while a plugin drives the IFS. A
+plugin that uses them and must also run on an early 1.5 release checks
+first (`'ad5x_log' in printer`, `'cancel' in printer.ad5x_soak`,
+`'gcode_macro _PURGE_BOX_POS' in printer`).
+
+### Changes
+
+- `_PRIME_LINE` `variable_unretract` (1.1) was renamed `variable_owed`
+  in Kiln OS v0.0.30 (the retraction the start left, put back first, then
+  cleared). A plugin or `local.cfg` that set `unretract` sets `owed`.
+- 1.6: the named root actions (`plugin.json` `root_actions`,
+  `DEV_ROOT_REQUEST`, `DEV_ROOT_STATUS`, a developer feature outside the
+  version promise) are removed; root scripts (`root/`,
+  `docs/plugin-root-hooks.md`) replace them. No plugin used them, so this
+  is a minor version.
 
 ## Plugin layout
 
 A plugin is a directory named like the plugin (`a-z`, `0-9`, `-`, `_`;
-starts with a letter or digit; at most 48 characters):
+starts with a letter or digit; at most 48 characters; "Names" below):
 
 ```
-ad5x-myplugin/            the git repository; cloned as /data/ad5x/plugins/myplugin
+myplugin/                 the git repository; cloned as /data/ad5x/plugins/myplugin
   plugin.json             metadata (required)
   plugin.cfg              Klipper config (required, may be only comments)
   README.md               what it does, how to use it
@@ -74,6 +95,10 @@ ad5x-myplugin/            the git repository; cloned as /data/ad5x/plugins/myplu
   moonraker.conf          optional: Moonraker sections (update manager, ...)
   python/                 optional (1.3): pure-Python libraries the plugin needs
   moonraker/components/   optional (1.3): Moonraker components (name.py)
+  root/                   optional (1.6): scripts that run as root (docs/plugin-root-hooks.md)
+    install.sh              on ENABLE_PLUGIN ROOT=1, before the plugin is on
+    update.sh               after an update that changed root/
+    uninstall.sh            on DISABLE_PLUGIN / REMOVE_PLUGIN
 ```
 
 The clone's directory name must match `name` in `plugin.json`
@@ -87,23 +112,23 @@ The clone's directory name must match `name` in `plugin.json`
   "description": "One line for LIST_PLUGINS",
   "version": "1.2.0",
   "author": "Someone",
-  "url": "https://github.com/someone/ad5x-myplugin",
+  "url": "https://github.com/someone/myplugin",
   "requires_os": "1.0",
   "requires": ["zmod-compat"],
   "conflicts": ["other-plugin"]
 }
 ```
 
-| Field | Required | Meaning |
-|---|---|---|
-| `name` | yes | Same as the directory name |
-| `description` | no | Shown by `LIST_PLUGINS` |
-| `version` | no | Free text, shown by `LIST_PLUGINS` |
-| `author`, `url` | no | Shown / available in `printer.ad5x_plugins` |
-| `requires_os` | recommended | Plugin API version written for, `major.minor` |
-| `requires` | no | Plugins that must be enabled first |
-| `conflicts` | no | Plugins that can't be enabled together with this one |
-| `owns_ifs` | no | `true` (1.5): the plugin drives the IFS instead of Kiln's `[ifs]` module ("A plugin that drives the IFS") |
+| Field | Required | Meaning | Since |
+|---|---|---|---|
+| `name` | yes | Same as the directory name | 1.0 |
+| `description` | no | Shown by `LIST_PLUGINS` | 1.0 |
+| `version` | no | Free text, shown by `LIST_PLUGINS` | 1.0 |
+| `author`, `url` | no | Shown / available in `printer.ad5x_plugins` | 1.0 |
+| `requires_os` | recommended | Plugin API version written for, `major.minor` | 1.0 |
+| `requires` | no | Plugins that must be enabled first | 1.0 |
+| `conflicts` | no | Plugins that can't be enabled together with this one | 1.0 |
+| `owns_ifs` | no | `true`: the plugin drives the IFS instead of Kiln's `[ifs]` module ("A plugin that drives the IFS") | 1.5 |
 
 `plugin.cfg` example:
 
@@ -154,10 +179,63 @@ plugin is enabled and compatible:
 - Moonraker is restarted when a switch changes these (1.4; before: at its
   next start).
 
-Rules for plugins:
+## Names
 
-- Prefix your own macros, modules and variables with the plugin name
-  (`_MYPLUGIN_...`, `myplugin_...`).
+Kiln OS keeps these prefixes for itself and its own plugins (the shipped
+ones and the catalog's): `kiln`, `ad5x` (any case, followed by `_`, `-`
+or nothing) for plugin names, macros, commands, Klipper modules and
+sections, Moonraker components, `python/` packages and save variables. A
+plugin of yours doesn't use them, so a later system update can't take
+its names.
+
+The plugin manager enforces the `kiln_` and `ad5x_` prefixes for the names
+it reads from a plugin's files. A plugin using one of them can't be
+enabled (`ENABLE_PLUGIN` refuses it, `LIST_PLUGINS` shows why) and is
+skipped if `plugins.cfg` names it; `tools/check_plugin.py` reports each
+name as an error:
+
+| Name | Refused | Since |
+|---|---|---|
+| Klipper modules | `extras/kiln_*.py`, `extras/ad5x_*.py` and packages of these names | 1.6 |
+| Moonraker components | `moonraker/components/kiln_*.py`, `ad5x_*.py` and packages | 1.6 |
+| Config sections in `plugin.cfg` | `[kiln_...]`, `[ad5x_...]`, also with a name after it (`[ad5x_log]`, `[kiln_x two]`) | 1.6 |
+| Macros in `plugin.cfg` | `[gcode_macro KILN_...]`, `[gcode_macro AD5X_...]`, any case, also with leading `_` (`_AD5X_UNIT`) | 1.6 |
+
+Kiln's own plugins may use them: the shipped ones (`klipper/plugins/`)
+and the catalog's plugins from Kiln's own repositories (a catalog `url`
+starting with `https://github.com/djvalic/kiln-`, such as `kiln-notify`
+with its `kiln_notify` component). A catalog plugin is known by its name,
+so don't name your plugin like one. `tools/check_plugin.py --official`
+checks a Kiln plugin that is not in the catalog yet.
+
+Prefix everything of your own with your plugin's name:
+
+| What | Your name | Example |
+|---|---|---|
+| Macros and commands | `MYPLUGIN_...`; helpers `_MYPLUGIN_...` | `MYPLUGIN_IDLE_LIGHT` |
+| Klipper modules (`extras/`) and their sections | `myplugin_...` | `[myplugin_led]` |
+| Moonraker components | `myplugin...` | `myplugin.py`, `[myplugin]` |
+| `python/` packages | `myplugin...` (not a common library name: that one may arrive with the image later) | `myplugin_util/` |
+| Save variables | `myplugin_...` | `SAVE_VARIABLE VARIABLE=myplugin_level` |
+
+When two names meet anyway:
+
+| Collision | What happens |
+|---|---|
+| A plugin in `/data/ad5x/plugins` named like a shipped one | Yours replaces the shipped one (`LIST_PLUGINS` shows `user`) |
+| An `extras/` module named like a Klipper module, one of Kiln's, or another enabled plugin's | Klipper stops with a config error naming the plugin |
+| A G-code command a module registers twice (two plugins, or a plugin and Kiln) | Klipper stops (`gcode command ... already registered`) |
+| A section two plugins define (`[gcode_macro X]`, `[ifs]`, ...) | Klipper merges them: the plugin later in `plugins.cfg` replaces the earlier one's options (a `gcode:` entirely). Klipper warns, unless the later plugin `requires` the earlier one (then it is meant) |
+| A section a plugin shares with Kiln's config (`ad5x.cfg`, `ifs.cfg`, `macros/`) | Merged, the plugin's options win: that is how a plugin changes a default ("Config order"). No warning |
+| A Moonraker component two plugins have | Moonraker's own components (also Kiln's `kiln_os`, `kiln_lanes`) come first, then the first plugin in `plugins.cfg`; the others' are not loaded. Klipper warns |
+| A `python/` package two plugins have | The image's libraries come first, then the first plugin in `plugins.cfg`. Klipper warns |
+| A save variable two plugins write | Nothing stops it: the last write wins. Use your prefix |
+
+The warnings are Klipper's startup warnings (Fluidd, Mainsail and the
+screen show them) and `printer.ad5x_plugins.warnings`.
+
+## Rules for plugins
+
 - Klipper merges sections of the same name from different files, so a
   `[gcode_macro PRINT_START]` in a plugin replaces options of ours (its
   `gcode:` replaces ours entirely); `rename_existing` can't wrap a macro
@@ -165,10 +243,11 @@ Rules for plugins:
   by Python modules (`SET_PRINT_STATS_INFO`, `M104`, `IFS_SWAP`, ...).
   Prefer new commands of your own over replacing listed macros; a plugin
   that replaces one takes over its upkeep.
-- Don't redefine sections the user owns (`[gcode_macro _AD5X_UNIT]`) or
-  write to files outside the config directory.
-- A module name can't be the name of a Klipper module or another
-  plugin's module (refused at startup).
+- Don't redefine sections that belong to each printer's own calibration
+  (`[gcode_macro _AD5X_UNIT]`), and don't write to files outside the
+  config directory.
+- Call only public commands and macros ("Public and internal names");
+  read only the status fields listed here.
 
 ### A plugin that drives the IFS (1.5)
 
@@ -178,7 +257,20 @@ owner as root; `docs/deviations-from-stock.md`). With `"owns_ifs": true`
 in `plugin.json`:
 
 - `ENABLE_PLUGIN` refuses it unless the IFS answered as Klipper at this
-  boot, and while another plugin drives the IFS.
+  boot, and while another plugin drives the IFS (the message names both
+  and which one to disable).
+- Only one plugin drives the IFS. With two enabled anyway (`plugins.cfg`
+  edited by hand), the first one in `plugins.cfg` drives it and the
+  second is skipped at each Klipper start, like a `conflicts` plugin,
+  with one warning naming both; Klipper starts.
+- Enabled while the IFS didn't answer as Klipper at this boot (no
+  `ifs-klipper.enable`, the IFS back on Flashforge's firmware, or it
+  didn't answer), it is skipped at each Klipper start, with one warning
+  that says why and how to turn the Klipper IFS on (or `DISABLE_PLUGIN`).
+  The printer then works as if the plugin were off: Kiln's `[ifs]`
+  module runs the IFS, and so does a plugin that `requires` it get
+  skipped. S61klipper, Klipper and Moonraker's plugin list decide this
+  from the same record (`/run/ad5x/ifs-klipper`, written at boot).
 - While it is enabled, Kiln's IFS pins (`generic-flashforge-ifs.cfg`:
   `[mcu ifs]`, the feeder and selector steppers, drivers, sensors) are
   left out from the next Klipper start; the plugin's `plugin.cfg` brings
@@ -192,15 +284,15 @@ in `plugin.json`:
 - `T0`-`T3` (`ifs.cfg`) are Kiln's IFS swaps, and `UNLOAD_FILAMENT`
   (`macros/`) only retracts 50 mm without Kiln's IFS: the plugin replaces
   them with its own `[gcode_macro ...]` (plugins.cfg comes after both).
-  Next version: `T0`-`T3` it leaves as they are stop with a message, as do
+- 1.5\*: `T0`-`T3` it leaves as they are stop with a message, as do
   `IFS_TUNE_RUN`, `IFS_TUNE_CLEAR`, `IFS_INFO`, `IFS_PURGE_TEST` and
   `IFS_PURGE_RESULT`; `RESUME_INTERRUPTED` restores no IFS slot, and the
   setup wizard's Z offset step with an empty toolhead asks to load it with
   the plugin.
 - A plugin listed after it in `plugins.cfg` that defines `T0`-`T3` too
-  replaces its tool changes. `bambufy-compat` does (its `T0`-`T3` drive
-  Kiln's IFS); next version: they stop with a message then. Don't enable
-  it together with such a plugin.
+  replaces its tool changes (Klipper warns, "Names"). `bambufy-compat`
+  does (its `T0`-`T3` drive Kiln's IFS; 1.5\*: they stop with a message
+  then). Don't enable it together with such a plugin.
 - Klipper stops with a config error naming the plugin when: two such
   plugins are enabled, the IFS doesn't answer as Klipper, `[ifs]` is still
   on, or `plugins.cfg` was edited by hand so the pins changed hands (then
@@ -217,147 +309,202 @@ printer.cfg
     [ad5x_config]
     macros/*.cfg      editable defaults beyond stock, name order (printer, optional)
     [ad5x_plugins]
-    plugins.cfg       enabled plugins, in file order (printer, optional)
+    plugins-active.cfg  plugins.cfg without the skipped plugins: enabled
+                      plugins, in file order (printer, generated)
   unit.cfg            per-printer calibration (printer)
-  local.cfg           the user's overrides (printer)
+  local.cfg           your own overrides (printer)
   SAVE_CONFIG block
 ```
 
 A plugin's options replace earlier values of the same section and
 option, including those of the `macros/` files; `unit.cfg` and
-`local.cfg` replace a plugin's. Without the `macros/` files the macros
-marked "macros/" below don't exist and `PRINT_START` is the stock one
-(`docs/config-layout.md`): check with `'gcode_macro _PRIME_LINE' in
+`local.cfg` replace a plugin's. Without the `macros/` files (1.1) the
+macros marked "macros/" below don't exist and `PRINT_START` is the stock
+one (`docs/config-layout.md`): check with `'gcode_macro _PRIME_LINE' in
 printer` before calling one.
 
 ## Paths
 
-| Path | |
-|---|---|
-| `/usr/share/ad5x/plugins/<name>` | Shipped plugins (read-only) |
-| `/data/ad5x/plugins/<name>` | Installed plugins (user `klipper` owns the directory) |
-| `/home/klipper/printer_data/config` | Config directory (= `/data/ad5x/printer_data/config`) |
-| `.../config/plugins.cfg` | Enabled plugins |
-| `.../config/variables.cfg` | `[save_variables]` file |
-| `.../config/macros/*.cfg` | The printer's editable macros (refreshed by updates; `docs/config-layout.md`) |
-| `/home/klipper/printer_data/gcodes` | G-code files (`virtual_sdcard`) |
+| Path | | Since |
+|---|---|---|
+| `/usr/share/ad5x/plugins/<name>` | Shipped plugins (read-only) | 1.0 |
+| `/data/ad5x/plugins/<name>` | Installed plugins (user `klipper` owns the directory) | 1.0 |
+| `/home/klipper/printer_data/config` | Config directory (= `/data/ad5x/printer_data/config`) | 1.0 |
+| `.../config/plugins.cfg` | Enabled plugins | 1.0 |
+| `.../config/plugins-active.cfg` | What Klipper reads: `plugins.cfg` with the skipped plugins left out (generated) | 1.5 |
+| `.../config/variables.cfg` | `[save_variables]` file | 1.0 |
+| `.../config/macros/*.cfg` | The printer's editable macros (refreshed by updates; `docs/config-layout.md`) | 1.1 |
+| `/home/klipper/printer_data/gcodes` | G-code files (`virtual_sdcard`) | 1.0 |
 
 ## G-code commands and macros
 
+"macros/": a macro in the printer's editable `macros/` files (1.1).
+
 ### Print
 
-| Command | Parameters | |
-|---|---|---|
-| `PRINT_START` | `BED=` `EXTRUDER=` (temperatures), `TOOL=` (first slicer tool, -1 none), `LEVEL=1|0` (new mesh / the stock Z check; default `mesh_every_print`, 0 in the factory one), `ADAPTIVE=0|1` (mesh only the print area; default `adaptive_mesh`, 0 in the factory one) | Home, heat, purge, brush, Z check or mesh, load the first tool or prime line (macros/ `print_start.cfg`; factory: the stock start) |
-| `PRINT_END` | | Retract, lift, park, heaters/fans/motors off |
-| `CANCEL_PRINT` | | Cancel, park, heaters and fans off |
-| `PAUSE`, `RESUME`, `CLEAR_PAUSE` | Klipper's | |
-| `_PRIME_LINE` | `FORCE=1` | Prime line in front of the print area (`variable_prime_line`); macros/ `prime_line.cfg` |
-| `_PURGE_BOX` | | Into the purge box (no offsets applied) |
-| `_PURGE_WIPE` | | Wipe on the box edge, ending outside |
-| `_NOZZLE_BRUSH` | | Brush the nozzle across the box |
-| `M106` / `M107` | `S` 0-255, `P`/`T` index (2, 101, 102 ignored) | Part fan (`fan_generic fanM106`) |
-| `SET_GCODE_OFFSET` | Klipper's; `Z=`/`Z_ADJUST=` also saved as `zoffset` | Print Z offset |
-| `BED_MESH_CALIBRATE` | Klipper's | Tares the strain gauges first, saves the centre Z after |
-| `WEIGHT_TARE`, `LOAD_CELL_TARE` | | Zero the bed strain gauges |
-| `LOAD_FILAMENT`, `UNLOAD_FILAMENT`, `CLEAR_NOZZLE`, `AUTO_FULL_BED_LEVEL` | as in macros/ `quick_actions.cfg` | Screen quick actions |
-| `_PRINT_STATUS` | `MSG=` (none: clear) | Status line on the screen (`M117`) and the console |
-| `M300` | `[S=Hz]` `[P=ms]` (1.4): a beep on the speaker |
-| `PLAY_MIDI` | `FILE=` (1.4): a MIDI file from the config folder's `midi/` or the image's sounds |
-| `PLAY_SOUND`, `SOUND_STOP` | `EVENT=` startup\|start\|complete\|error\|cancelled\|paused\|refill (1.4) |
-| `SOUND_SETUP` | `[ENABLE=0\|1]` `[VOLUME=0-100]` `[<EVENT>=<file>\|0]` (1.4) |
-| `BED_SOAK_CALIBRATE` | `BED=` `[POINTS=5\|1]` `[NOZZLE=140]` `[INTERVAL=]` `[STABLE=0.005]` `[WINDOW=120]` `[MAX=1500]` `[FORCE=1]` (1.4): measure the bed's settling after heating (`docs/print-start.md`) |
-| `SET_NOZZLE_SIZE` | `SIZE=` 0.2\|0.25\|0.4\|0.6\|0.8\|1.0 `[RESTART=0]` (1.4): saved in `nozzle.cfg`, Klipper restarts |
-| `SETUP_WIZARD_STEP STEP=pid HEATERS=` | `extruder`\|`bed`\|`both` (1.4; default both) |
-| `BED_SOAK_ENABLE` | `[ENABLE=0\|1]` (1.4): the soak on/off for every print, saved |
-| `BED_SOAK_START`, `BED_SOAK_WAIT` | `PRINT_START`'s soak (1.4; `BED=` `FROM=` `[SECONDS=]` `[MODE=time\|probe]` `[POINTS=]`) |
-| `CONFIG_BACKUPS` | `ACK=1` (clear the notice) | List `macros/` files an update replaced and the backups of edited ones |
-| `G10`, `G11`, `SET_RETRACTION` | Klipper's `[firmware_retraction]` | |
-| `G2`, `G3`, `G17`-`G19` | Klipper's `[gcode_arcs]` | |
+| Command | Parameters | What | Since |
+|---|---|---|---|
+| `PRINT_START` | `BED=` `EXTRUDER=` (temperatures), `TOOL=` (first slicer tool, -1 none), `LEVEL=1\|0` (new mesh / the stock Z check; default `mesh_every_print`, 0 in the factory one), `ADAPTIVE=0\|1` (mesh only the print area; default `adaptive_mesh`, 0 in the factory one); 1.4: `SOAK=` (bed heat soak seconds, 0 none) | Home, heat, purge, brush, Z check or mesh, load the first tool or prime line (macros/ `print_start.cfg`; factory: the stock start) | 1.0 |
+| `PRINT_END` | | Retract, lift, park, heaters/fans/motors off | 1.0 |
+| `CANCEL_PRINT` | | Cancel, park, heaters and fans off | 1.0 |
+| `PAUSE`, `RESUME`, `CLEAR_PAUSE` | Klipper's | | 1.0 |
+| `_PRIME_LINE` | `FORCE=1` | Prime line in front of the print area (`variable_prime_line`); macros/ `prime_line.cfg` | 1.0 |
+| `_PURGE_BOX` | | Into the purge box (no offsets applied) | 1.0 |
+| `_PURGE_WIPE` | | Wipe on the box edge, ending outside | 1.0 |
+| `_NOZZLE_BRUSH` | | Brush the nozzle across the box | 1.0 |
+| `TRASH_OFFSET` | `X=` `Y=` (mm from the factory spot, -10..10 / -14..2), `DX=` `DY=` (added), `[MOVE=1]`, or `RESET=1` (back to unit.cfg's) | Move the purge box spot, saved; shows it without parameters | 1.5 |
+| `M106` / `M107` | `S` 0-255, `P`/`T` index (2, 101, 102 ignored) | Part fan (`fan_generic fanM106`) | 1.0 |
+| `M900` | `K=` `[E=]` | Pressure advance, Marlin style | 1.0 |
+| `SET_GCODE_OFFSET` | Klipper's; `Z=`/`Z_ADJUST=` also saved as `zoffset` | Print Z offset | 1.0 |
+| `BED_MESH_CALIBRATE` | Klipper's | Tares the strain gauges first, saves the centre Z after | 1.0 |
+| `SAVE_CONFIG` | Klipper's | PID and input shaper results go to `ad5x-tuning.cfg`, a probe `z_offset` becomes the saved print Z offset; the rest as Klipper | 1.5 |
+| `WEIGHT_TARE`, `LOAD_CELL_TARE` | | Zero the bed strain gauges | 1.0 |
+| `Z_OFFSET_ESTIMATE` | `[X=]` `[Y=]` `[MAX_FORCE=]` `[STEP=]` `[CLEAN=0]` `[SAVE=1]` | Estimate the print Z offset from the bed load cells (homed first); result in `printer.ad5x_zestimate`; `SAVE=1` sets it when the fit is good | 1.5 |
+| `LOAD_FILAMENT`, `UNLOAD_FILAMENT`, `CLEAR_NOZZLE`, `AUTO_FULL_BED_LEVEL` | as in macros/ `quick_actions.cfg` | Screen quick actions | 1.0 |
+| `_PRINT_STATUS` | `MSG=` (none: clear) | Status line on the screen (`M117`) and the console | 1.0 |
+| `GET_FILAMENT_VALUE`, `GET_CUT_VALUE` | | Raw ADC of the toolhead filament sensor / the cutter sensor (stock names) | 1.0 |
+| `HEATER_IDLE_TIMEOUT` | `[MINUTES=]` (at least 5) | Minutes with no print and no heater change before the heaters go off; saved; shows it without parameters | 1.5 |
+| `M300` | `[S=Hz]` `[P=ms]` | A beep on the speaker | 1.4 |
+| `PLAY_MIDI` | `FILE=` | A MIDI file from the config folder's `midi/` or the image's sounds | 1.4 |
+| `PLAY_SOUND`, `SOUND_STOP` | `EVENT=` startup\|start\|complete\|error\|cancelled\|paused\|refill | An event's sound / stop | 1.4 |
+| `SOUND_SETUP` | `[ENABLE=0\|1]` `[VOLUME=0-100]` `[<EVENT>=<file>\|0]` | Speaker settings | 1.4 |
+| `BED_SOAK_CALIBRATE` | `BED=` `[POINTS=5\|1]` `[NOZZLE=140]` `[INTERVAL=]` `[STABLE=0.005]` `[WINDOW=120]` `[MAX=1500]` `[FORCE=1]` | Measure the bed's settling after heating (`docs/print-start.md`) | 1.4 |
+| `BED_SOAK_ENABLE` | `[ENABLE=0\|1]` | The soak on/off for every print, saved | 1.4 |
+| `BED_SOAK_START`, `BED_SOAK_WAIT` | `BED=` `FROM=` `[SECONDS=]` `[MODE=time\|probe]` `[POINTS=]` | `PRINT_START`'s soak | 1.4 |
+| `SET_NOZZLE_SIZE` | `SIZE=` 0.2\|0.25\|0.4\|0.6\|0.8\|1.0 `[RESTART=0]` | Saved in `nozzle.cfg`, Klipper restarts | 1.4 |
+| `CONFIG_BACKUPS` | `ACK=1` (clear the notice) | List `macros/` files an update replaced and the backups of edited ones | 1.1 |
+| `LOG_MODE` | `[MODE=short\|extended]` `[HOURS=]` | How much of Klipper's Stats line goes to `klippy.log` (short: once a minute while active; extended: every second, as upstream); `HOURS=` back to short after that long; saved; shows it without `MODE` (`docs/logs.md`) | 1.5\* |
+| `G10`, `G11`, `SET_RETRACTION` | Klipper's `[firmware_retraction]` | | 1.0 |
+| `G2`, `G3`, `G17`-`G19` | Klipper's `[gcode_arcs]` | | 1.0 |
 
 ### IFS (`klipper/extras/ifs.py`)
 
-| Command | Parameters |
-|---|---|
-| `T0`-`T3` | Load the slot the tool map names (macros in `ifs.cfg`) |
-| `IFS_SWAP` | `CHANNEL=` `[TEMP=]` `[FLUSH=mm]` `[ROUNDS=]` `[PURGE=0|1]` |
-| `IFS_LOAD` | `SLOT=` `[TEMP=]` `[PURGE=0|1]` |
-| `IFS_UNLOAD` | `[SLOT=]` `[TEMP=]` |
-| `IFS_EJECT` | `SLOT=` |
-| `IFS_MAP_TOOL` | `TOOL=` `SLOT=`, or `RESET=1` |
-| `IFS_SET_MATERIAL` | `SLOT=` `[TYPE=]` `[COLOR=]` `[TEMP=]` |
-| `IFS_SET_COLOR` | `CHANNEL=` `COLOR=` |
-| `IFS_SET_CHANNEL` | `CHANNEL=` (0 = none loaded) |
-| `IFS_STATUS`, `IFS_MATERIALS`, `IFS_STOP`, `IFS_RESET_DRIVER` | |
-| `IFS_AUTO_REFILL` | `[ENABLE=0|1]` (1.2) `[MATCH=exact|similar|any]` (1.4) |
-| `IFS_PURGE_TEST`, `IFS_PURGE_RESULT`, `IFS_SET_FLUSH` | Purge tuning |
-| `IFS_TUNE`, `IFS_TUNE_RESET` | Swap tuning |
+| Command | Parameters | What | Since |
+|---|---|---|---|
+| `T0`-`T3` | | Load the slot the tool map names (macros in `ifs.cfg`) | 1.0 |
+| `IFS_SWAP` | `CHANNEL=` `[TEMP=]` `[FLUSH=mm]` `[ROUNDS=]` `[PURGE=0\|1]` | Change to a slot | 1.0 |
+| `IFS_LOAD` | `SLOT=` `[TEMP=]` `[PURGE=0\|1]` | Load a slot, unloading the loaded one first | 1.0 |
+| `IFS_UNLOAD` | `[SLOT=]` `[TEMP=]` | Cut and unload; the lane stays threaded | 1.0 |
+| `IFS_EJECT` | `SLOT=` | Pull a slot's filament out of the IFS (unloads the nozzle first when it is the loaded one) | 1.0 |
+| `IFS_PREFEED` | `CHANNEL=` (not the loaded one) | Feed a new spool up to the IFS, as stock does | 1.0 |
+| `IFS_MAP_TOOL` | `TOOL=` `SLOT=`, or `RESET=1` | Tool map for this print | 1.0 |
+| `IFS_MAP_MODE` | `[MODE=fixed\|loaded]` `[ZMOD=1]` | Tool map mode, saved: fixed (`T0`-`T3` -> slots 1-4) or loaded (tools use the slots with filament); `ZMOD=1` puts the mode back at the print's end (zmod-compat's `START_PRINT`); shows it without `MODE` | 1.5 |
+| `IFS_SET_MATERIAL` | `SLOT=` `[TYPE=]` `[COLOR=]` `[TEMP=]` | Slot material | 1.0 |
+| `IFS_SET_COLOR` | `CHANNEL=` `COLOR=` | Slot colour | 1.0 |
+| `IFS_SET_CHANNEL` | `CHANNEL=` (0 = none loaded) | Tell the module what is loaded | 1.0 |
+| `IFS_STATUS`, `IFS_MATERIALS`, `IFS_STOP`, `IFS_RESET_DRIVER` | | Show state / materials, stop feeding, recover after a fault | 1.0 |
+| `IFS_AUTO_REFILL` | `[ENABLE=0\|1]` (1.2) `[MATCH=exact\|similar\|any]` (1.4) | Auto-refill on runout | 1.2 |
+| `IFS_PURGE_TEST`, `IFS_PURGE_RESULT`, `IFS_SET_FLUSH` | `IFS_SET_FLUSH LENGTH=` or `RESET=1` | Purge tuning | 1.0 |
+| `IFS_TUNE` | `[CHANNEL=]` `[SPEED=1]` `[LOAD=1]` `[UNLOAD=1]` `[TUBE=0]` `[TEMP=]` | Swap tuning, all steps; saved in `variables.cfg` | 1.0 |
+| `IFS_TUNE_SPEED`, `IFS_TUNE_LOAD` | `[CHANNEL=]` | One tuning step: the feed speed / each slot's load distance | 1.0 |
+| `IFS_TUNE_UNLOAD` | `[CHANNEL=]` (loads it first when nothing is loaded) `[TUBE=1]` | One tuning step: the unload length | 1.0 |
+| `IFS_TUNE_RESET` | | Forget the tuning | 1.0 |
 
-Swap templates in `[ifs]` a plugin may replace (same parameters):
-`before_gcode` (`OLD`, `NEW`), `cut_gcode` (`OLD`, `NEW`; next version:
-`AT_PRINT=1` when the swap primes at the print: go back to the print
-position, before_gcode's saved state `ifs_swap`, instead of the box),
-`unload_gcode` (`OLD`, `NEW`, `LENGTH`, `SPEED`, `RETRACT`: 1 when the template retracts the extruder, 0 on IFS Klipper firmware where the module retracts it with the feeder), `purge_start_gcode`
-(`OLD`, `NEW`, `ROUND`, `ROUNDS`), `purge_gcode` (`OLD`, `NEW`,
-`ROUND`, `ROUNDS`, `FLUSH`, `FLUSH_SPEED`), `prime_gcode` (`OLD`,
-`NEW`; in macros/ `ifs_templates.cfg`), `prime_at_print_gcode` (`OLD`,
-`NEW`; next version, in macros/ `ifs_templates.cfg`: after a prime at the
-print position, instead of `prime_gcode`), `after_gcode` (`OLD`, `NEW`).
-A later definition replaces a whole template. Templates must not call
-`IFS_*` commands. Options a plugin may set: `purge_mode_variable`,
-`prime_length`, `prime_at_print` (next version), and the documented
-lengths, speeds and timeouts in `ifs.cfg`.
+Swap templates in `[ifs]` a plugin may replace (same parameters). A
+later definition replaces a whole template. Templates must not call
+`IFS_*` commands.
+
+| Template | Parameters | When | Since |
+|---|---|---|---|
+| `before_gcode` | `OLD`, `NEW` | Start of a swap (saves the G-code state `ifs_swap`) | 1.0 |
+| `cut_gcode` | `OLD`, `NEW`; 1.5: `AT_PRINT=1` when the swap primes at the print (go back to the print position, before_gcode's saved state, instead of the box) | The cut | 1.0 |
+| `unload_gcode` | `OLD`, `NEW`, `LENGTH`, `SPEED`, `RETRACT` (1 when the template retracts the extruder, 0 on IFS Klipper firmware where the module retracts it with the feeder) | The unload | 1.0 |
+| `purge_start_gcode` | `OLD`, `NEW`, `ROUND`, `ROUNDS` | Before each purge round | 1.0 |
+| `purge_gcode` | `OLD`, `NEW`, `ROUND`, `ROUNDS`, `FLUSH`, `FLUSH_SPEED` | Each purge round | 1.0 |
+| `prime_gcode` | `OLD`, `NEW` | After a prime-only swap at the box (macros/ `ifs_templates.cfg`) | 1.0 |
+| `prime_at_print_gcode` | `OLD`, `NEW` | After a prime at the print position, instead of `prime_gcode` (macros/ `ifs_templates.cfg`) | 1.5 |
+| `after_gcode` | `OLD`, `NEW` | End of a swap | 1.0 |
+| `abort_gcode` | `OLD`, `NEW` | A swap failed or was stopped after `before_gcode` ran: put back the state without moving | 1.5 |
+
+Options a plugin may set: `purge_mode_variable`, `prime_length`,
+`prime_at_print` (1.5), `enable` (1.5, "A plugin that drives the IFS"),
+and the documented lengths, speeds and timeouts in `ifs.cfg` (1.0).
 
 Purge decision of a swap: `PURGE=` if given; else, while
 `print_stats.state` is `printing` and `purge_mode_variable` is set, that
 save variable: 0 or 2 = prime only, other = purge; else purge. A swap
-that only primes does it at the print position (no `purge_start_gcode`)
-when `prime_at_print` is on, the variable is 0, `print_stats.info.current_layer`
-is 2 or more, the toolhead had filament to cut, and `exclude_object` lists
-objects with outlines, none of them current, the print position at least
-5 mm outside each outline's bounding box; else at the box.
+that only primes does it at the print position (1.5; no
+`purge_start_gcode`) when `prime_at_print` is on, the variable is 0,
+`print_stats.info.current_layer` is 2 or more, the toolhead had filament
+to cut, and `exclude_object` lists objects with outlines, none of them
+current, the print position at least 5 mm outside each outline's
+bounding box; else at the box.
 
-### Power-loss recovery (`klipper/extras/ad5x_resume.py`, 1.2)
+### Power-loss recovery (`klipper/extras/ad5x_resume.py`)
 
-| Command | |
-|---|---|
-| `RESUME_INTERRUPTED` | `CONFIRM=1`: continue the print a power cut ended |
-| `CLEAR_INTERRUPTED` | Forget it |
+| Command | Parameters | What | Since |
+|---|---|---|---|
+| `RESUME_INTERRUPTED` | `CONFIRM=1` | Continue the print a power cut ended | 1.2 |
+| `CLEAR_INTERRUPTED` | | Forget it | 1.2 |
 
 ### Setup wizard and plugins
 
-| Command | |
-|---|---|
-| `SETUP_WIZARD_STEP` | `STEP=selfcheck|pid|mesh|shaper|ifs|zoffset|finish`, `ACTION=start|abort|adjust|accept|wizard` (`docs/setup-wizard.md`); API endpoint `ad5x_setup/control` |
-| `SETUP_WIZARD` | Run the wizard again on the screen (macros/ `quick_actions.cfg`; `SETUP_WIZARD_STEP ACTION=wizard` does the same) |
-| `ENABLE_PLUGIN`, `DISABLE_PLUGIN` | `NAME=` `[RESTART=0]` |
-| `LIST_PLUGINS` | |
-| `INSTALL_PLUGIN` | `NAME=` (a catalog plugin) `[ENABLE=1]` (1.4) |
-| `UPDATE_PLUGIN`, `REMOVE_PLUGIN` | `NAME=` (a plugin in `/data/ad5x/plugins`) (1.4) |
+| Command | Parameters | What | Since |
+|---|---|---|---|
+| `SETUP_WIZARD_STEP` | `STEP=selfcheck\|pid\|mesh\|shaper\|ifs\|trash\|zoffset\|soak\|summary\|finish`, `ACTION=start\|abort\|adjust\|accept\|wizard`; 1.4: `STEP=pid HEATERS=extruder\|bed\|both` | One wizard step (`docs/setup-wizard.md`); API endpoint `ad5x_setup/control` | 1.0 |
+| `SETUP_WIZARD` | | Run the wizard again on the screen (macros/ `quick_actions.cfg`; `SETUP_WIZARD_STEP ACTION=wizard` does the same) | 1.0 |
+| `ENABLE_PLUGIN`, `DISABLE_PLUGIN` | `NAME=` `[RESTART=0]`; 1.6: `ENABLE_PLUGIN ROOT=1`, needed for a plugin with root scripts (`docs/plugin-root-hooks.md`) | Switch a plugin | 1.0 |
+| `LIST_PLUGINS` | | The plugins and the API version | 1.0 |
+| `INSTALL_PLUGIN` | `NAME=` (a catalog plugin) `[ENABLE=1]`; 1.6: `[ROOT=1]` | Clone it into `/data/ad5x/plugins` | 1.4 |
+| `UPDATE_PLUGIN`, `REMOVE_PLUGIN` | `NAME=` (a plugin in `/data/ad5x/plugins`) | `git pull` / switch off and delete | 1.4 |
+
+### Buttons (macros/ `system.cfg`)
+
+Fluidd lists only macros, not module commands; these run one command
+each, for its macro panel.
+
+| Macro | Runs | Since |
+|---|---|---|
+| `PLUGINS_LIST`, `PLUGIN_ENABLE NAME=`, `PLUGIN_DISABLE NAME=` | `LIST_PLUGINS`, `ENABLE_PLUGIN`, `DISABLE_PLUGIN` | 1.1 |
+| `IFS_TUNE_RUN [CHANNEL=]`, `IFS_TUNE_CLEAR`, `IFS_INFO` | `IFS_TUNE`, `IFS_TUNE_RESET`, `IFS_STATUS` | 1.1 |
+| `CONFIG_BACKUPS_SHOW [ACK=1]` | `CONFIG_BACKUPS` | 1.1 |
+
+## Public and internal names
+
+**Public** (plugins, slicer G-code, the screen and other clients may call
+them): every command and macro in the tables above. They keep their
+names and parameters within a major version.
+
+**Internal** (may change or go in any update; don't call them):
+
+- Every name starting with `_` that is not in the tables above. The
+  public ones that start with `_` are older names kept as they were:
+  `_PRIME_LINE`, `_PURGE_BOX`, `_PURGE_WIPE`, `_NOZZLE_BRUSH`,
+  `_PRINT_STATUS`, and the variables of `_AD5X_UNIT` and
+  `_PURGE_BOX_POS` (read only). New public names don't start with `_`.
+- These commands, bench and debugging tools: `IFS_SEND`, `IFS_SELECT`,
+  `IFS_FEED`, `IFS_RETRACT`, `IFS_RELEASE`, `IFS_RESET`,
+  `IFS_SET_CURRENT`, `WEIGHT_READ`, `WEIGHT_SEND`.
+
+The test `tools/test_plugin_api_doc.py` keeps this list and the code in
+step.
 
 ## Printer objects and status fields
 
-| Object | Fields |
-|---|---|
-| `printer.ifs` | `connected`, `version`, `busy`, `channel` (loaded, 0 none), `state`, `selected`, `inserted[4]`, `colors[4]`, `channel_count`, `active_channel`, `loaded_channels`, `pending_insert_channels`, `activity`, `activity_channel`, `error`, `tool_map` (`"0"`-`"3"` -> slot), `tune`, `auto_refill`, `refill` (1.2: last auto-refill message), `refill_match`, `refill_backups` (`"1"`-`"4"` -> the slots that would take over, nearest colour first; `[]` none), `refill_notice` (a print loaded a slot with no backup; "" otherwise) (1.4); next version: `mode` (`mcu`/`serial`), `operation`, `phase`, `target_channel`, `error_channel`, `tune.flush` (`docs/helixscreen-integration.md`, section 0) |
-| `printer.ad5x_nozzle` | `size` (running), `saved` (nozzle.cfg, null), `local` (local.cfg sets it), `sizes` (1.4) |
-| `printer.ad5x_sound` | `speaker`, `enabled`, `volume`, `events` (event -> file, "" off), `files`, `playing` (1.4) |
-| `printer.ad5x_soak` | `enabled`, `calibration` (1.4: per bed temperature `settle`, `drift`, `warp`, `points`, `from`, `stable`, `date`), `running`, `soak`, `last` |
-| `printer.ad5x_resume` | `available`, `file`, `z`, `time` (1.2: an interrupted print) |
-| `printer.ifs_materials` | `available`, `channel_count`, `slots` (`"1"`-`"4"`: `type`, `color`, `temp`), `loaded`, `temperatures` |
-| `printer.ad5x_setup` | `step`, `state`, `message`, `progress`, `results`, `checks`, `pending_save`, `zoffset` |
-| `printer.ad5x_config` | `notices` (lines of `config-updates.txt`), `backups` (`macros/*.bak-*`) |
-| `printer.ad5x_plugins` | `api_version`, `enabled`, `available` (per plugin: `source`, `description`, `version`, `author`, `url`, `requires_os`, `compatible`, `owns_ifs` (1.5)), `ifs_owner` (1.5: the plugin driving the IFS at this start, "" Kiln's `[ifs]`), `catalog` (1.4, per plugin: `title`, `description`, `url`, `requires_os`, `compatible`, `installed`), `job` (1.4: `name`, `action`, `state` idle/running/done/failed, `message`), `warnings` |
-| `printer.ad5x_weight` | `connected`, `weight` |
-| `printer['gcode_macro _AD5X_UNIT']` | `z_offset`, `cut_x_offset`, `cut_y_offset`, `x_offset`, `y_offset` (purge box at X 52.5 + `x_offset`, Y 229 + `y_offset`; cut at X `cut_x_offset` - 2.5, Y `cut_y_offset` - 7.5) |
-| `printer['filament_switch_sensor toolhead']` | Klipper's runout fields (`enabled`, `filament_detected`); also `adc_filament_sensor toolhead`; `SET_FILAMENT_SENSOR SENSOR=toolhead` |
-| `printer['fan_generic fanM106']`, `printer['fan_generic pcb_fan']` | Part fan, board fan |
-| `printer['led chamber_led']` | Chamber light (`SET_LED LED=chamber_led WHITE=`) |
-| `printer['temperature_sensor filamentValue']`, `printer['temperature_sensor cutValue']` | Toolhead filament and cutter ADCs (`QUERY_ADC`) |
-| `printer['gcode_macro PRINT_START']` | `mesh_every_print`, `adaptive_mesh`, `retract` (with macros/ `print_start.cfg`) |
-| `printer['gcode_macro _PRIME_LINE']` | `prime_line`, `length`, `height`, `width` (0 = 2.5 x nozzle), `gap`, `flow`, `speed`, `unretract`, `prime`, `prime_speed`, `margin`, `wipe`, `retract` (with macros/ `prime_line.cfg`) |
+| Object | Fields | Since |
+|---|---|---|
+| `printer.ifs` | `connected`, `version`, `busy`, `channel` (loaded, 0 none), `state`, `selected`, `inserted[4]`, `colors[4]`, `silk[4]`, `stall[4]` (raw per-slot sensor counts as the IFS reports them, for diagnostics), `channel_count`, `active_channel`, `loaded_channels`, `pending_insert_channels`, `activity`, `activity_channel`, `error`, `tool_map` (`"0"`-`"3"` -> slot), `tune` (`speed`, `load_dist` (`"1"`-`"4"`), `unload_dist`, `tube_unload`, `running`, `progress`, `message`; tuned values, null where the `[ifs]` defaults apply); 1.2: `auto_refill`, `refill` (last auto-refill message); 1.4: `refill_match`, `refill_backups` (`"1"`-`"4"` -> the slots that would take over, nearest colour first; `[]` none), `refill_notice` (a print loaded a slot with no backup; "" otherwise); 1.5: `map_mode` (`fixed`/`loaded`), `mode` (`mcu`/`serial`), `operation`, `phase`, `target_channel`, `error_channel`, `tune.flush` (`docs/helixscreen-integration.md`, section 0) | 1.0 |
+| `printer.ifs_materials` | `available`, `channel_count`, `slots` (`"1"`-`"4"`: `type`, `color`, `temp`), `loaded`, `temperatures` | 1.0 |
+| `printer.ad5x_setup` | `step`, `state`, `message`, `progress`, `results`, `checks`, `pending_save`, `zoffset`; 1.5: `estimate` (the Z offset step uses `Z_OFFSET_ESTIMATE`: setup.cfg `zoffset_estimate`) (`docs/setup-wizard.md`) | 1.0 |
+| `printer.ad5x_weight` | `connected`, `weight` | 1.0 |
+| `printer.ad5x_config` | `notices` (lines of `config-updates.txt`), `backups` (`macros/*.bak-*`) | 1.1 |
+| `printer.ad5x_resume` | `available`, `file`, `z`, `time` (an interrupted print) | 1.2 |
+| `printer.ad5x_nozzle` | `size` (running), `saved` (nozzle.cfg, null), `local` (local.cfg sets it), `sizes` | 1.4 |
+| `printer.ad5x_sound` | `speaker`, `enabled`, `volume`, `events` (event -> file, "" off), `files`, `playing` | 1.4 |
+| `printer.ad5x_soak` | `enabled`, `calibration` (per bed temperature `settle`, `drift`, `warp`, `points`, `from`, `stable`, `date`), `running`, `soak`, `last`; 1.5\*: `cancel` (a cancel arrived during the print start and waits for it to end) | 1.4 |
+| `printer.ad5x_zestimate` | Empty until the first `Z_OFFSET_ESTIMATE`, then: `estimate` (mm, the print Z offset it suggests), `press_in` (mm, first contact relative to where the probe fires), `stiffness` (g/mm), `r2` (fit quality, below 0.95 poor), `points`, `trigger_force` (g, null), `saved` (the saved Z offset then, null), `drift` (g), `first_touch` (mm above the trigger, null) | 1.5 |
+| `printer.ad5x_log` | `mode` (`short`/`extended`), `until` (Unix time back to short, null) | 1.5\* |
+| `printer.ad5x_plugins` | `api_version`, `enabled`, `available` (per plugin: `source`, `description`, `version`, `author`, `url`, `requires_os`, `compatible`; 1.5: `owns_ifs`; 1.6: `root` (it has root scripts), `root_installed` (its `install.sh` ran)), `warnings`; 1.4: `catalog` (per plugin: `title`, `description`, `url`, `requires_os`, `compatible`, `installed`), `job` (`name`, `action`, `state` idle/running/done/failed, `message`; 1.6: `action` `root install`/`root update`/`root uninstall` for the root scripts); 1.5: `ifs_owner` (the plugin driving the IFS at this start, "" Kiln's `[ifs]`) | 1.0 |
+| `printer['gcode_macro _AD5X_UNIT']` | `z_offset`, `cut_x_offset`, `cut_y_offset`, `x_offset`, `y_offset` (purge box at X 52.5 + `x_offset`, Y 229 + `y_offset`; cut at X `cut_x_offset` - 2.5, Y `cut_y_offset` - 7.5) | 1.0 |
+| `printer['gcode_macro _PURGE_BOX_POS']` | `x`, `y` (the purge box spot, with the saved `TRASH_OFFSET`), `dx`, `dy` (its offset from X 52.5 / Y 229: `TRASH_OFFSET`, else unit.cfg's `x_offset`/`y_offset`); what every Kiln box move uses | 1.5\* |
+| `printer['filament_switch_sensor toolhead']` | Klipper's runout fields (`enabled`, `filament_detected`); also `adc_filament_sensor toolhead`; `SET_FILAMENT_SENSOR SENSOR=toolhead` | 1.0 |
+| `printer['fan_generic fanM106']`, `printer['fan_generic pcb_fan']` | Part fan, board fan | 1.0 |
+| `printer['led chamber_led']` | Chamber light (`SET_LED LED=chamber_led WHITE=`) | 1.0 |
+| `printer['temperature_sensor filamentValue']`, `printer['temperature_sensor cutValue']` | Toolhead filament and cutter ADCs (`QUERY_ADC`) | 1.0 |
+| `printer['gcode_macro PRINT_START']` | `mesh_every_print`, `adaptive_mesh`, `retract`; 1.4: `soak_per_degree`, `soak_max`, `soak_mode`, `soak_points` (with macros/ `print_start.cfg`) | 1.1 |
+| `printer['gcode_macro _PRIME_LINE']` | `prime_line`, `length`, `height`, `width` (0 = 2.5 x nozzle), `gap`, `flow`, `speed`, `prime`, `prime_speed`, `margin`, `wipe`, `retract`; 1.5: `owed` (was `unretract`, "Changes") (with macros/ `prime_line.cfg`) | 1.1 |
 
-Save variables (`printer.save_variables.variables`): `ifs_loaded`,
+Save variables (`printer.save_variables.variables`, 1.0): `ifs_loaded`,
 `ifs_materials`, `zoffset` (`{'z': ..}`), `ad5x_center_z`,
 `use_trash_on_print` (nopoop), the `IFS_TUNE` values (`ifs_speed`,
 `ifs_load_dist_<n>`, `ifs_unload_dist`, `ifs_tube_unload`, `ifs_flush`).
@@ -368,7 +515,7 @@ Read them; write only your own (prefixed) variables, except
 
 - Loaded by `[ad5x_plugins]` as `extras.<module>`, only for enabled,
   compatible plugins; `load_config(config)` / `load_config_prefix(config)`
-  as for any Klipper module (`docs/plugins.md`, "Python extras").
+  as for any Klipper module (`docs/plugins.md`, "Python extras"; 1.0).
 - 1.5: `extras/` may hold packages (`extras/<name>/__init__.py`); the
   plugin's modules import each other as Klipper's do (`from .mylib import
   x`), and `printer.load_object(config, '<module> <name>')` also finds
@@ -386,6 +533,8 @@ Read them; write only your own (prefixed) variables, except
 ## Moonraker
 
 A plugin's `moonraker.conf` is included after the printer's
-`moonraker.conf` while the plugin is enabled (`docs/plugins.md`,
-"Moonraker parts"). Moonraker v0.11.0, `[machine] provider: none` (no
+`moonraker.conf` while the plugin is enabled (1.0; `docs/plugins.md`,
+"Moonraker parts"). Moonraker v0.11.0, `[machine] provider: kiln_agent`
+(1.6: klipper, moonraker, nginx, helixscreen and ad5x-camera restart
+through the root agent, not while printing; before: `provider: none`, no
 service restarts), no package manager.

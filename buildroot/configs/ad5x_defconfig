@@ -89,8 +89,8 @@ BR2_PACKAGE_FLUIDD=y
 # BR2_PACKAGE_NGINX_HTTP_UWSGI_MODULE is not set
 # BR2_PACKAGE_NGINX_HTTP_SCGI_MODULE is not set
 # BR2_PACKAGE_NGINX_HTTP_MEMCACHED_MODULE is not set
-# Touch screen UI on the panel (S70helixscreen, gated on
-# /data/ad5x/helixscreen.enable)
+# Touch screen UI on the panel (S70helixscreen, on by default;
+# /data/ad5x/helixscreen.disable keeps it off)
 BR2_PACKAGE_HELIXSCREEN=y
 BR2_PACKAGE_AD5X_SYSTEM=y
 

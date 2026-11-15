@@ -10,6 +10,7 @@ config BR2_PACKAGE_HELIXSCREEN
 	  HelixScreen, an LVGL touch screen UI for Klipper/Moonraker,
 	  built from source for the panel: DRM/KMS, or the framebuffer
 	  (fbdev) on kernels without a DRM driver, and evdev touch. In /usr/lib/helixscreen; started by
-	  S70helixscreen when /data/ad5x/helixscreen.enable exists.
+	  S70helixscreen at every boot unless /data/ad5x/helixscreen.disable
+	  exists.
 
 	  https://github.com/prestonbrown/helixscreen

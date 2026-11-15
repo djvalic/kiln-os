@@ -69,9 +69,11 @@ SWUpdate 2025.05 (Buildroot package), configured in
 `package/ad5x-recovery/swupdate/swupdate.config`. It runs as a "single copy"
 rescue-system updater that writes the *other* slot (B):
 
-- **Signed images only.** The signature is RSA PKCS#1.5 with SHA-256 over
+- **Unsigned by default, signing optional.** Every artifact carries a
+  sha256 in `sw-description`, which SWUpdate checks (`HASH_VERIFY`). A
+  recovery image built for signed updates (see "Open update mode" below)
+  also requires an RSA PKCS#1.5 signature with SHA-256 over
   `sw-description`, checked with mbedTLS against `/etc/swupdate/public.pem`.
-  Every artifact carries a sha256 in the signed `sw-description`.
   `hardware-compatibility` `"1.0"` is checked against `/etc/hwrevision`
   (`ad5x 1.0`).
 - **Handlers.** `raw` writes `/dev/disk/by-partlabel/rootfs2` and `kernel2`,
@@ -87,7 +89,7 @@ rescue-system updater that writes the *other* slot (B):
   holds none, recovery copies its own kernel (p1, the printer's stock kernel)
   there first, read back. With no kernel in either, the update is refused
   before anything is written. Then the raw writes. Then `postinst`: it reads rootfs2 and
-  kernel2 back and compares them with the sha256s and sizes from the signed
+  kernel2 back and compares them with the sha256s and sizes from the
   `sw-description`, mounts rootfs2 read-only and requires `/etc/ad5x-release`
   and `/linuxrc`, and only then writes **`ota:kernel2`**. On any failure the
   flag stays on A (`postfailure` makes sure of it), so the printer stays in
@@ -131,7 +133,11 @@ script refuses a rootfs without `/etc/ad5x-release` or `/linuxrc`, or one
 that is the recovery OS. Check a file before publishing it with
 `tools/check_vendor_free.sh`.
 
-### Keys
+### Keys (only for signed updates)
+
+Releases are unsigned and the default recovery image takes them without a
+key. The keys below matter only if you build a recovery image with signing
+on (`AD5X_SWU_SIGNED=1`, "Open update mode" below; `docs/update-signing.md`).
 
 - **Private key**: `AD5X_SWU_KEY`, default
   `~/.config/ad5x/swupdate-private.pem`. Make it with
@@ -146,14 +152,15 @@ that is the recovery OS. Check a file before publishing it with
   256 signature bytes (`corelib/swupdate_rsa_verify_mbedtls.c`), so a 4096-bit
   signature fails as "Compatible SW not found". `make_swu.sh` checks this.
   **Never commit it.** `make_swu.sh` refuses a key path inside the repo.
-- **Public key in the recovery image** (`board/ad5x-recovery/post-build.sh`):
-  `AD5X_SWU_PUBKEY` if set, else `~/.config/ad5x/swupdate-public.pem`, else
+- **Public key in the recovery image** (`board/ad5x-recovery/post-build.sh`,
+  only with `AD5X_SWU_SIGNED=1`): `AD5X_SWU_PUBKEY` if set, else `~/.config/ad5x/swupdate-public.pem`, else
   derived from the private key (`AD5X_SWU_KEY` or its default path).
-  Without any of these the image is built with no key and SWUpdate doesn't
-  start. The post-build refuses a private key given as the public one.
+  With signing on but none of these, the image is built with no key and
+  SWUpdate doesn't start; without `AD5X_SWU_SIGNED=1` no key goes in and
+  the image takes unsigned updates. The post-build refuses a private key given as the public one.
   Example build with a throwaway test key:
   ```
-  AD5X_SWU_PUBKEY=/path/to/swupdate-public.pem \
+  AD5X_SWU_SIGNED=1 AD5X_SWU_PUBKEY=/path/to/swupdate-public.pem \
     make -C buildroot/src O=$PWD/buildroot/output-recovery BR2_EXTERNAL=$PWD/buildroot
   ```
   Changing keys means rebuilding and reinstalling the recovery image.
@@ -224,7 +231,7 @@ and the main OS running in slot B. Slot A currently holds stock.
 
 1. **Save stock first** (from the main OS in slot B, slot A idle):
    ```
-   ssh root@ad5x.home 'mkdir -p /data/ad5x/stock && cd /data/ad5x/stock &&
+   ssh root@PRINTER 'mkdir -p /data/ad5x/stock && cd /data/ad5x/stock &&
      used=$(od -An -t u8 -j 40 -N 8 /dev/mmcblk0p2 | tr -d " ") &&
      head -c $used /dev/mmcblk0p2 > rootfs.squashfs &&
      cat /dev/mmcblk0p1 > kernel.img &&
@@ -244,7 +251,7 @@ and the main OS running in slot B. Slot A currently holds stock.
    flips the flag to A**. That is fine (it boots recovery once to test it;
    `ad5x-boot-main` then goes back), but be aware of it.
 4. Test: `echo ota:kernel > /dev/mmcblk0p5; reboot`. Recovery should come up
-   with SSH, the logo and `http://ad5x.home:8080`. Then `ad5x-boot-main`.
+   with SSH, the logo and `http://PRINTER:8080`. Then `ad5x-boot-main`.
 
 Going back to stock in slot A: from the main OS, write
 `/data/ad5x/stock/rootfs.squashfs` to p2 and `kernel.img` to p1 (or use the
@@ -530,15 +537,15 @@ checks `SHA256SUMS`, and packs the same `sw-description` (shared generator
 has, so both formats install the same way. Needs BusyBox `cpio -o`
 (`board/ad5x-recovery/busybox.fragment`).
 
-## Install log (unit ad5x.home, 2026-10-16)
+## Install log (the developer's printer, 2026-10-16)
 
 1. From the main OS in slot B: `ad5x-update --install-recovery --replace-stock`
    wrote the recovery image (7.0 MB, sha256 `076a7340…`) into slot A. Stock root
    and kernel were saved first to `/data/ad5x/stock/` (rootfs `02d814b2…`, kernel
    `3144440…`, which matches the eMMC backup).
-2. Flag `ota:kernel`, then power cycle: recovery booted in 11.2 s with DHCP
-   192.168.1.50, SSH, the SWUpdate web page on 8080, and the touch UI. The user
-   confirmed touch works.
+2. Flag `ota:kernel`, then power cycle: recovery booted in 11.2 s with a DHCP
+   address, SSH, the SWUpdate web page on 8080, and the touch UI. Touch was
+   confirmed to work.
 3. Main OS zip `202610161726-c5bbe689` (69,243,794 bytes, sha256 `589ef2c4…`) was
    copied over SSH and installed with `ad5x-swu-apply`:
    - preinst wrote slot B;

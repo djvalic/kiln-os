@@ -22,6 +22,15 @@
 # slot A) and reboots; refused as kernel-retry is. The recovery OS then
 # installs what is waiting (an update zip on a stick with ad5x-autoupdate,
 # docs/updates.md) or shows its touch UI.
+# Also: "plugin-request" (written by Klipper's ad5x_plugins): a plugin's
+# root script (root/install.sh, update.sh, uninstall.sh) from the packed
+# root/ folder next to it, answered in "plugin-status"; refused as the
+# installs are while a print may run. The code is in
+# /usr/lib/ad5x/plugin-root.sh (docs/plugin-root-hooks.md), the log in
+# kiln-log/plugins-root.log. This loop does one thing at a time, so a
+# plugin's script never overlaps an update install.
+# Also: "service" (Fluidd's service buttons through Moonraker's kiln_agent
+# provider, components/kiln_os.py): "ACTION NAME", see service_request.
 # A Kiln OS update is also refused before start-up has finished: the
 # reboot would leave our kernel's start marker behind, which counts as an
 # unfinished start of it (issue #47).
@@ -56,22 +65,28 @@ LOG=$LOGD/agent.log
 STAGE=${AD5X_DATA:-/data}/ad5x/kiln-stage
 . ${AD5X_LIB:-/usr/lib/ad5x}/apps.sh
 . ${AD5X_LIB:-/usr/lib/ad5x}/slot.sh
+# The plugins' root scripts (plugin_request, pr_setup)
+[ -f ${AD5X_LIB:-/usr/lib/ad5x}/plugin-root.sh ] && . ${AD5X_LIB:-/usr/lib/ad5x}/plugin-root.sh
 
 log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >> $LOG; }
+
+# The file say writes in $D: Moonraker's "status"; a plugin request answers
+# Klipper in "plugin-status" instead (lib/plugin-root.sh)
+ANSWER=status
 
 # say TEXT: the status Moonraker waits for, renamed into place from $STAGE
 say() {
 	local t
 	mkdir -p $STAGE && chmod 700 $STAGE && t=$(mktemp $STAGE/s.XXXXXX) || return 1
-	if [ -d $D/status ] && [ ! -L $D/status ]; then
-		rm -f "$t"; log "no status written: $D/status is a folder"; return 1
+	if [ -d $D/$ANSWER ] && [ ! -L $D/$ANSWER ]; then
+		rm -f "$t"; log "no status written: $D/$ANSWER is a folder"; return 1
 	fi
 	# -T: never into a folder klipper links there (BusyBox refuses, GNU
 	# replaces the link). The name is removed first (unlink never follows a
 	# link), so a link to a folder doesn't keep the answer from Moonraker.
-	rm -f $D/status 2>/dev/null
-	printf '%s\n' "$*" > "$t" && chmod 644 "$t" && mv -T -f "$t" $D/status && return 0
-	rm -f "$t"; log "no status written: $D/status is not a file"; return 1
+	rm -f $D/$ANSWER 2>/dev/null
+	printf '%s\n' "$*" > "$t" && chmod 644 "$t" && mv -T -f "$t" $D/$ANSWER && return 0
+	rm -f "$t"; log "no status written: $D/$ANSWER is not a file"; return 1
 }
 
 # S99ad5x-booted has pointed the boot flag back at this slot
@@ -213,6 +228,61 @@ install_app() {
 	fi
 }
 
+# service_request: Moonraker's "service", one line "ACTION NAME" (Fluidd's
+# service buttons, the update manager's restarts): runs the init script
+# this maps NAME to, never a path from klipper. Refused while a print may
+# run (busy). Moonraker and nginx carry the answer back (Moonraker is the
+# one asking, nginx passes its reply on): for them the answer comes first
+# and the restart 3 s later. Only restart for those two; start, stop and
+# restart for the others. AD5X_INITD overrides /etc/init.d (tests).
+service_request() {
+	local req r act name sc
+	if ! req=$(stage service); then
+		log "ignored a service request that is not a plain file"
+		say "failed: bad request"; return
+	fi
+	r=$(head -c 64 "$req" | head -n 1)
+	unstage "$req"
+	act=${r%% *} name=${r#* }
+	case $name in
+	klipper) sc=S61klipper ;;
+	moonraker) sc=S62moonraker ;;
+	nginx) sc=S63nginx ;;
+	ad5x-camera) sc=S64ad5x-camera ;;
+	helixscreen) sc=S70helixscreen ;;
+	*) sc= ;;
+	esac
+	case $act:$name in
+	restart:*) ;;
+	start:moonraker|stop:moonraker|start:nginx|stop:nginx) sc= ;;
+	start:*|stop:*) ;;
+	*) sc= ;;
+	esac
+	if [ -z "$sc" ]; then
+		log "ignored a service request without a known service and action"
+		say "failed: bad request"; return
+	fi
+	busy "$name $act" && return
+	sc=${AD5X_INITD:-/etc/init.d}/$sc
+	case $name in
+	moonraker|nginx)
+		log "restarting $name"
+		say "done: restarting $name"
+		sleep 3
+		$sc restart < /dev/null >> $LOG 2>&1 ;;
+	*)
+		log "$act $name"
+		if $sc $act < /dev/null >> $LOG 2>&1; then
+			case $act in
+			stop) say "done: stopped $name" ;;
+			*) say "done: ${act}ed $name" ;;
+			esac
+		else
+			say "failed: $act $name, see $LOG"
+		fi ;;
+	esac
+}
+
 agent_once() {
 	if [ -f $D/restart-moonraker ]; then
 		rm -f $D/restart-moonraker
@@ -261,8 +331,20 @@ agent_once() {
 			say "refused: ${out#ad5x-boot-recovery: }"
 		fi
 	fi
+	if [ -e $D/service ] || [ -L $D/service ]; then
+		service_request
+	fi
 	if [ -e $D/install ] || [ -L $D/install ]; then
 		install_request
+	fi
+	if [ -e $D/plugin-request ] || [ -L $D/plugin-request ]; then
+		# In a subshell: the request's answer file and variables stay its own
+		if command -v plugin_request > /dev/null; then
+			( plugin_request )
+		else
+			rm -f $D/plugin-request
+			( ANSWER=plugin-status; say "failed: this system has no plugin root scripts" )
+		fi
 	fi
 }
 
@@ -340,12 +422,15 @@ start)
 	[ -f /data/ad5x/kiln-os.token ] &&
 		chown root:klipper /data/ad5x/kiln-os.token &&
 		chmod 640 /data/ad5x/kiln-os.token
-	rm -f $D/install $D/kernel-retry $D/boot-recovery $D/status
+	rm -f $D/install $D/kernel-retry $D/boot-recovery $D/service $D/status
 	# Staged files a reboot left behind (root's own; a folder klipper
 	# swapped in stays)
 	mkdir -p $STAGE && chown root:root $STAGE && chmod 700 $STAGE
 	rm -rf $STAGE/r.*/klipper $STAGE/r.*/moonraker
 	rm -f $STAGE/r.*/* 2>/dev/null; rmdir $STAGE/r.* 2>/dev/null; rm -f $STAGE/s.*
+	# The plugins' root folder; no plugin request survives a reboot. No
+	# plugin script runs here (S69ad5x-plugin-boot runs the boot scripts).
+	command -v pr_setup > /dev/null && pr_setup
 	start-stop-daemon -S -b -m -p $PID -x /bin/sh -- $0 run
 	;;
 run)

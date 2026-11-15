@@ -1,0 +1,75 @@
+From: valix <djvalic.wc@gmail.com>
+Date: Fri, 13 Nov 2026 12:00:00 -0500
+Subject: [PATCH] serialposix: custom baud rates on Linux MIPS
+
+pyserial 3.5 uses the asm-generic TCGETS2/TCSETS2 numbers and writes the
+custom speed at termios2 index 9/10 on every Linux machine. MIPS encodes
+ioctl directions differently (_IOC_READ 2, _IOC_WRITE 4, 3 dir bits) and
+its struct termios2 has NCCS 23, so it is 48 bytes with c_ispeed and
+c_ospeed at int index 10 and 11. The asm-generic numbers end in ENOTTY
+("[Errno 25] Inappropriate ioctl for device"), so every baud rate that is
+not a B* constant, Klipper's default 250000 among them, fails to open.
+
+Backport of the MIPS branch as it stands on pyserial master
+(a5c48d445fbc1943d4fabf8d9090a50fda3172fd); pyserial has had no release
+after 3.5:
+ - 5ce1773fdce16a0b184363695a7d7d9483c4da0c, PR #496 (merge baa7c78a):
+   "Add support for setting a custom baudrate on the MIPS platform",
+   the MIPS TCGETS2/TCSETS2/BAUDRATE_OFFSET values and
+   buf[BAUDRATE_OFFSET] = buf[BAUDRATE_OFFSET + 1]
+ - 2aea0ba436d7a6af2f9f81b0daf245946b76dfe3 and
+   5fb3bc6b52376289990f47fb4f293a0332363d31, PR #723: the machine test
+   becomes platform.machine().startswith('mips')
+ - 5eb1eafe1091d38c5478c16ecbb04e6c82d7eb47 (Linux ppc): only its move
+   of BOTHER into each branch is taken, with the same value as before;
+   the ppc branch itself and its whitespace changes are left out.
+The 64-int termios2 buffer is already in 3.5, nothing to take there.
+
+Upstream: https://github.com/pyserial/pyserial/commit/5ce1773fdce16a0b184363695a7d7d9483c4da0c
+Upstream: https://github.com/pyserial/pyserial/commit/5fb3bc6b52376289990f47fb4f293a0332363d31
+Kiln OS issue: https://github.com/djvalic/kiln-os/issues/59
+---
+ serial/serialposix.py | 16 ++++++++++++----
+ 1 file changed, 12 insertions(+), 4 deletions(-)
+
+diff --git a/serial/serialposix.py b/serial/serialposix.py
+index 7aceb76..4e9bb7f 100644
+--- a/serial/serialposix.py
++++ b/serial/serialposix.py
+@@ -32,6 +32,7 @@ from __future__ import absolute_import
+ import errno
+ import fcntl
+ import os
++import platform
+ import select
+ import struct
+ import sys
+@@ -80,9 +81,16 @@ if plat[:5] == 'linux':    # Linux (confirmed)  # noqa
+     CMSPAR = 0o10000000000  # Use "stick" (mark/space) parity
+ 
+     # baudrate ioctls
+-    TCGETS2 = 0x802C542A
+-    TCSETS2 = 0x402C542B
+-    BOTHER = 0o010000
++    if platform.machine().startswith('mips'):
++        TCGETS2 = 0x4030542A
++        TCSETS2 = 0x8030542B
++        BAUDRATE_OFFSET = 10
++        BOTHER = 0o010000
++    else:
++        TCGETS2 = 0x802C542A
++        TCSETS2 = 0x402C542B
++        BAUDRATE_OFFSET = 9
++        BOTHER = 0o010000
+ 
+     # RS485 ioctls
+     TIOCGRS485 = 0x542E
+@@ -154,7 +162,7 @@ if plat[:5] == 'linux':    # Linux (confirmed)  # noqa
+                 # set custom speed
+                 buf[2] &= ~termios.CBAUD
+                 buf[2] |= BOTHER
+-                buf[9] = buf[10] = baudrate
++                buf[BAUDRATE_OFFSET] = buf[BAUDRATE_OFFSET + 1] = baudrate
+ 
+                 # set serial_struct
+                 fcntl.ioctl(self.fd, TCSETS2, buf)

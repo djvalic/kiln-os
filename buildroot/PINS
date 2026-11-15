@@ -1,0 +1,31 @@
+# Pinned inputs of the Kiln OS build that Buildroot's own package files
+# don't cover (docs/builder.md, "Pins"). One KEY=VALUE per line; the
+# scripts read these lines with sed, so no quotes and no spaces.
+#
+# Packages built by Buildroot are pinned where Buildroot expects it:
+# buildroot/package/NAME/NAME.mk (version or commit) and NAME.hash (sha256
+# of the download), e.g. klipper.mk and klipper.hash. tools/bump_upstream.py
+# rewrites both when a package is bumped.
+#
+# Checked by: tools/autobuild.sh (Buildroot), kernel-ingenic66/build.sh
+# (SDK), kernel-ingenic66/chainload/setup.sh (5.10 tarball);
+# tools/test_release_process.py checks that the builder files agree with this file.
+
+# Buildroot: tag 2026.02.3 (git clone --branch in tools/builder/entrypoint.sh,
+# BR_VERSION there must match)
+BUILDROOT_VERSION=2026.02.3
+BUILDROOT_COMMIT=679b9ead7620bbf193620d1ebf56f53c1764d37a
+
+# Ingenic X2600 SDK with the 6.6 kernel (SDK_REV in tools/builder/entrypoint.sh
+# must match)
+INGENIC_SDK_URL=https://github.com/Llixuma/ingenic-linux-kernel6.6-x2000-v1.0-20250221.git
+INGENIC_SDK_COMMIT=a98c2e1f22e4263ddd4153a4eca4db4dcfd2777b
+
+# linux-5.10.186, the tree chainload.ko is built against (same sha256 as
+# kernel.org's sha256sums.asc)
+LINUX_510_URL=https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.10.186.tar.xz
+LINUX_510_SHA256=1e60296a135d272bb7ce645f6ae68fbd4ffd1972cb4b82c38c6faa1172481be3
+
+# The builder image's base (FROM in tools/builder/Dockerfile must match):
+# the multi-arch index of debian:trixie-slim as of 2026-11-04
+BUILDER_BASE_IMAGE=docker.io/library/debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2

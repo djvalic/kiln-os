@@ -11,7 +11,8 @@
 # The series (patches/*.patch, git format-patch output) is written to
 # mainline rules: see README.md. check.sh lints it.
 # Output: $O/xImage-ad5x-mainline (legacy uImage, load = entry = 0x80f00000,
-# for chainload / ad5x-kernel test).
+# for chainload: the image's /usr/lib/ad5x/kernel-mainline, started with
+# "ad5x-kernel mainline on", or a test boot with chainload.sh, README.md).
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

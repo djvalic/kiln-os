@@ -7,9 +7,14 @@ set -euo pipefail
 W=${1:-$HOME/workspace/chainload-build}
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 export PATH=${TOOLBIN:-$REPO/buildroot/output/host/bin}:$PATH
+# The tarball's URL and sha256 are pinned in buildroot/PINS
+URL=$(sed -n 's/^LINUX_510_URL=//p' "$REPO/buildroot/PINS")
+SHA=$(sed -n 's/^LINUX_510_SHA256=//p' "$REPO/buildroot/PINS")
+[ -n "$URL" ] && [ -n "$SHA" ] || { echo "no LINUX_510_* in buildroot/PINS" >&2; exit 1; }
 mkdir -p "$W"; cd "$W"
-[ -f linux-5.10.186.tar.xz ] ||
-	curl -fLO https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.10.186.tar.xz
+[ -f linux-5.10.186.tar.xz ] || curl -fLO "$URL"
+echo "$SHA  linux-5.10.186.tar.xz" | sha256sum -c --quiet ||
+	{ echo "linux-5.10.186.tar.xz: sha256 differs from buildroot/PINS (delete it to fetch again)" >&2; exit 1; }
 [ -d linux-5.10.186 ] || tar xf linux-5.10.186.tar.xz
 cd linux-5.10.186
 M=(make ARCH=mips CROSS_COMPILE=mipsel-linux- HOSTCFLAGS=-std=gnu11 KCFLAGS=-Wno-error)

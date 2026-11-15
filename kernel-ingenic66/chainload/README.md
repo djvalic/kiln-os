@@ -1,14 +1,18 @@
-# chainload: test-boot a kernel from RAM, no cables
+# chainload: start a kernel from RAM, no cables
 
-Boots the 6.6 test kernel (`../build.sh` output) from the running stock
-5.10 kernel without writing the eMMC or the boot flag. If the test kernel
-hangs, a power cycle boots the installed system as before. The stock kernel
+Starts Kiln's kernel (6.6 from `../build.sh`, or the opt-in mainline 7.3)
+from the running stock 5.10 kernel without writing the eMMC or the boot
+flag. Since 2026-10-20 this is how every boot of Kiln OS starts its kernel
+(`S00ad5x-kernel`, "At boot" below); it began as a tool to test-boot a
+kernel, and still serves for that ("Test on the printer"). If a kernel
+hangs, a power cycle starts from the stock kernel again, and
+`S00ad5x-kernel` records the failed start. The stock kernel
 has no kexec, so this is a minimal one: a module that stages the image and
 argv in RAM, shuts devices down (`kernel_restart_prepare`, address from
 `/proc/kallsyms`), and enters a small trampoline that copies the image to
 0x80f00000, flushes L1/L2 and jumps there with argc/argv like the stock SPL.
 
-**Status: works.** First run 2026-10-17: the 6.6 kernel was up on SSH
+**Status: in use at every boot.** First run 2026-10-17: the 6.6 kernel was up on SSH
 34 s after the jump; `reboot` from it returns to the installed system. On
 6.6: both cores, RAM, eMMC, ttyS0/2/3/4/5/7, Ethernet, both USB buses
 (cameras, hub, Wi-Fi adapter), touch (tsc2007) and keys worked. Not yet:

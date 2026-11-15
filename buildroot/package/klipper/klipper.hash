@@ -1,0 +1,3 @@
+# sha256 of the GitHub archive of KLIPPER_VERSION (tools/bump_upstream.py
+# rewrites it on a bump)
+sha256  f1333eac398b2812dbec089fb0939d1c032e7e3dba03486accd7d6e54b28ab1b  klipper-29d4ec2d6d840ee839333306003a400da186d41d.tar.gz

@@ -1,10 +1,16 @@
 #!/bin/sh
-# Remove the old static [webcam screen] section from a printer's moonraker.conf.
-# The screen tile is registered at boot by S65ad5x-screen as a database webcam,
-# and a config webcam of the same name makes that registration fail ("Cannot
-# overwrite webcam 'screen' sourced from Moonraker configuration"). Only the
-# exact section the image used to ship is removed; an edited one is left alone.
-# A backup is kept as moonraker.conf.bak-<date>, and config-updates.txt says so.
+# Bring a printer's moonraker.conf up to date with what the image now ships.
+# Only the exact lines the image used to ship are changed; edited ones are
+# left alone. A backup is kept as moonraker.conf.bak-<date>, and
+# config-updates.txt says what changed.
+#  - The old static [webcam screen] section is removed. The screen tile is
+#    registered at boot by S65ad5x-screen as a database webcam, and a config
+#    webcam of the same name makes that registration fail ("Cannot
+#    overwrite webcam 'screen' sourced from Moonraker configuration").
+#  - [machine] "provider: none" under the shipped comment becomes
+#    "provider: kiln_agent" (Fluidd's service buttons through the root
+#    agent, S68ad5x-update-agent). Another provider, or "none" without that
+#    comment (set by hand), is kept.
 #
 # usage: ad5x-moonraker-migrate FILE
 f=$1
@@ -14,9 +20,12 @@ import os, shutil, sys, time
 path = sys.argv[1]
 text = open(path, encoding="utf-8").read()
 lines = text.split("\n")
+notes = []
+
+# 1. the old [webcam screen] section
 COMMENT = "# The touch screen with touch (S65ad5x-screen), as a page inside Fluidd"
 KEYS = ["service: iframe", "stream_url: /screen/", "snapshot_url: /screen/?action=snapshot"]
-out, i, removed = [], 0, False
+out, i = [], 0
 while i < len(lines):
     if lines[i] == "[webcam screen]" and lines[i + 1:i + 4] == KEYS:
         if out and out[-1] == COMMENT:
@@ -24,23 +33,48 @@ while i < len(lines):
         i += 4
         if i < len(lines) and lines[i] == "":
             i += 1
-        removed = True
+        if not notes:
+            notes.append(("the old [webcam screen] section was removed; the screen "
+                          "tile is now registered at boot",
+                          "removed the old [webcam screen] section"))
         continue
     out.append(lines[i])
     i += 1
-if not removed:
-    print("moonraker: no old [webcam screen] section, nothing to do")
+lines = out
+
+# 2. [machine] provider: none, as shipped -> kiln_agent
+OLD_PROVIDER = ["# BusyBox init, no systemd or PolicyKit: Moonraker doesn't manage services",
+                "provider: none"]
+NEW_PROVIDER = ["# BusyBox init, no systemd: Fluidd's service buttons go to the root agent",
+                "# (S68ad5x-update-agent), which refuses them while a print runs",
+                "provider: kiln_agent"]
+section = None
+for i, line in enumerate(lines):
+    s = line.strip()
+    if s.startswith("[") and s.endswith("]"):
+        section = s[1:-1].strip()
+    elif (section == "machine" and s.split(":")[0].strip() == "provider" and
+          [l.rstrip() for l in lines[i - 1:i + 1]] == OLD_PROVIDER):
+        lines[i - 1:i + 1] = NEW_PROVIDER
+        notes.append(("[machine] provider: none became kiln_agent (Fluidd's service "
+                      "restart buttons, refused while printing)",
+                      "[machine] provider: kiln_agent"))
+        break
+
+if not notes:
+    print("moonraker: nothing to do")
     sys.exit(0)
 stamp = time.strftime("%Y%m%d-%H%M%S")
 bak = path + ".bak-" + stamp
 shutil.copy2(path, bak)
 # write in place so the file keeps its owner (klipper) and mode
 with open(path, "w", encoding="utf-8") as fh:
-    fh.write("\n".join(out))
+    fh.write("\n".join(lines))
 notice = os.path.join(os.path.dirname(path), "config-updates.txt")
 with open(notice, "a", encoding="utf-8") as fh:
-    fh.write(time.strftime("%Y-%m-%d %H:%M") + " moonraker.conf: the old [webcam screen] section "
-             "was removed; the screen tile is now registered at boot. Your copy is "
-             + os.path.basename(bak) + "\n")
-print("moonraker: removed the old [webcam screen] section (backup " + os.path.basename(bak) + ")")
+    for long, _ in notes:
+        fh.write(time.strftime("%Y-%m-%d %H:%M") + " moonraker.conf: " + long +
+                 ". Your copy is " + os.path.basename(bak) + "\n")
+print("moonraker: " + "; ".join(short for _, short in notes) +
+      " (backup " + os.path.basename(bak) + ")")
 PY

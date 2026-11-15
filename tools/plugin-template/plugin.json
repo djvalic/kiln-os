@@ -1,0 +1,10 @@
+{
+  "name": "__NAME__",
+  "description": "What __NAME__ does, in one line",
+  "version": "0.1.0",
+  "author": "",
+  "url": "",
+  "requires_os": "__API__",
+  "requires": [],
+  "conflicts": []
+}

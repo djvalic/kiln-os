@@ -42,6 +42,14 @@ start)
 			echo "[include $PL]"
 		fi
 	} > $TOP
+	# A daily package from before the kiln_agent provider (Moonraker patch
+	# 0006) would stop at "Invalid Provider": the image's copy runs then
+	if [ "$MROOT" != /usr/lib/moonraker ] &&
+	   grep -q '^provider *[:=] *kiln_agent' $PD/config/moonraker.conf &&
+	   ! grep -q kiln_agent $MROOT/moonraker/components/machine.py 2>/dev/null; then
+		echo "moonraker: $MROOT has no kiln_agent provider, running the image's"
+		MROOT=/usr/lib/moonraker
+	fi
 	[ "$MROOT" = /usr/lib/moonraker ] || echo "moonraker: $(cat $MROOT/moonraker/.version) from $MROOT"
 	# The enabled plugins' Python libraries and Moonraker components
 	# (plugin API 1.3; our patch to Moonraker's components package)
