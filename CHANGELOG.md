@@ -11,6 +11,8 @@ the issue: it is closed by hand after the release.
 
 ## Unreleased
 
+- **Plugins can bring another project's Klipper modules** (plugin API 1.7, issue #48, by DIEHARDave): Klipper module names may now have capitals (`AFC_lane.py`, `[AFC_lane lane1]`), and `plugin.json` can list more module folders inside the plugin with `module_dirs`, such as a checkout of AFC-Klipper-Add-On (`"module_dirs": ["AFC-Klipper-Add-On/extras"]`). Their modules are imported only when a config section, `printer.load_object()` or another module needs them, so modules for hardware the printer doesn't have stay out. A folder that isn't there yet is a warning, not an error. `tools/check_plugin.py` checks the new field. Plugins that use either need `"requires_os": "1.7"`; nothing changes for the others.
+
 ## v1.0.0-rc2 (2026-11-15)
 
 - **Release candidates lead to v1.0.0**: the stable release after these candidates is v1.0.0, not v0.1.0, and the next candidate is v1.0.0-rc2 (the count goes on). Printers on the test channel get it as usual; `docs/stability.md` describes what stays the same in 1.x.

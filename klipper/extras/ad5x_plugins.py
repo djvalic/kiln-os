@@ -45,6 +45,12 @@
 # hold packages (extras/<name>/__init__.py; the plugin's extras/ joins the
 # extras package path, so its modules import each other as Klipper's do),
 # and printer.load_object() also finds plugin modules.
+# Plugin API 1.7: module names may have capitals (AFC_lane), and
+# plugin.json "module_dirs" lists more folders of Klipper modules inside
+# the plugin (a checkout of another project, e.g. AFC-Klipper-Add-On/extras).
+# They join the extras package path too, but their modules are imported
+# only when needed: a config section or printer.load_object() names one,
+# or another module imports it. A missing folder is a warning.
 #
 # Name collisions between running plugins: an extras module two plugins
 # have stops Klipper (above). A Moonraker component or python/ library two
@@ -135,7 +141,7 @@ import tarfile
 # The plugin API this system offers (docs/plugin-api.md): major.minor.
 # Minor: additions only. Major: something plugins may use changed or went.
 # post-build.sh copies it to /usr/lib/os-release as AD5X_PLUGIN_API.
-PLUGIN_API_VERSION = "1.6"
+PLUGIN_API_VERSION = "1.7"
 
 CONFIG_DIR = "/home/klipper/printer_data/config"
 SHIPPED_DIR = "/usr/share/ad5x/plugins"
@@ -161,11 +167,16 @@ GENERIC_IFS_CFG = "/usr/share/ad5x/config/generic-flashforge-ifs.cfg"
 FACTORY_CFG = "/usr/share/ad5x/config/ad5x.cfg"
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
-MODULE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+# Klipper module names (extras/, module_dirs): capitals allowed since
+# plugin API 1.7 (AFC's AFC_lane, ...)
+MODULE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+# plugin.json module_dirs (plugin API 1.7): at most this many folders
+MODULE_DIRS_MAX = 8
 # plugin.json keys read_metadata reads; others are ignored here and
 # reported by tools/check_plugin.py
 PLUGIN_JSON_KEYS = ('name', 'description', 'version', 'author', 'url',
-                    'requires_os', 'requires', 'conflicts', 'owns_ifs')
+                    'requires_os', 'requires', 'conflicts', 'owns_ifs',
+                    'module_dirs')
 # Name prefixes kept for Kiln OS and its official plugins (plugin API 1.6,
 # docs/plugin-api.md "Names"): Klipper modules, Moonraker components,
 # plugin.cfg sections and macros of any other plugin starting with them
@@ -267,7 +278,7 @@ def read_metadata(plugin_dir, name):
     the file is unusable (the plugin can't be enabled then)."""
     meta = {'name': name, 'description': "", 'version': "", 'author': "",
             'url': "", 'requires_os': "", 'requires': [], 'conflicts': [],
-            'owns_ifs': False, 'error': None}
+            'owns_ifs': False, 'module_dirs': [], 'error': None}
     path = os.path.join(plugin_dir, 'plugin.json')
     try:
         data = json.loads(read_regular(path))
@@ -288,13 +299,48 @@ def read_metadata(plugin_dir, name):
             val = [v.strip() for v in val.split(",")]
         meta[key] = [str(v).strip().lower() for v in val if str(v).strip()]
     meta['owns_ifs'] = data.get('owns_ifs') is True
+    dirs, dirs_error = parse_module_dirs(data.get('module_dirs'))
+    meta['module_dirs'] = dirs
     if data.get('name') not in (None, name):
         meta['error'] = "plugin.json name '%s' differs from the directory" % (
             data.get('name'),)
     elif meta['requires_os'] and parse_version(meta['requires_os']) is None:
         meta['error'] = "requires_os '%s' is not major.minor" % (
             meta['requires_os'],)
+    elif dirs_error:
+        meta['error'] = "plugin.json: module_dirs: %s" % (dirs_error,)
     return meta
+
+def parse_module_dirs(val):
+    """(folders, error) for plugin.json module_dirs: a list of folders
+    inside the plugin, relative to it, '/' separated ("AFC/extras"). No
+    absolute paths, no "..", no "extras" (always read), at most
+    MODULE_DIRS_MAX. ([], None) when the key is absent."""
+    if val is None:
+        return [], None
+    if not isinstance(val, list) or not all(isinstance(v, str) for v in val):
+        return [], "must be a list of folder names"
+    if len(val) > MODULE_DIRS_MAX:
+        return [], "at most %d folders" % (MODULE_DIRS_MAX,)
+    out = []
+    for v in val:
+        parts = [p for p in v.strip().split('/') if p not in ('', '.')]
+        if v.startswith('/') or '\\' in v or not parts or '..' in parts:
+            return [], "'%s' is not a folder inside the plugin" % (v,)
+        rel = '/'.join(parts)
+        if rel == 'extras':
+            return [], "extras is always read, leave it out"
+        if rel not in out:
+            out.append(rel)
+    return out, None
+
+def module_dirs(plugin_dir):
+    """The plugin's extra module folders (plugin.json module_dirs) as
+    absolute paths, whether they exist or not; [] when plugin.json has none
+    or can't be read."""
+    meta = read_metadata(plugin_dir, os.path.basename(plugin_dir))
+    return [os.path.join(plugin_dir, *d.split('/'))
+            for d in meta['module_dirs']]
 
 def unknown_keys(data):
     """plugin.json keys this plugin manager doesn't read, sorted."""
@@ -346,13 +392,15 @@ def reserved_names(plugin_dir):
     "extras/kiln_x.py", "moonraker/components/kiln_x.py",
     "plugin.cfg [kiln_x]"; [] when there is none."""
     out = []
-    ext = os.path.join(plugin_dir, 'extras')
-    if os.path.isdir(ext):
-        out += ["extras/%s" % fn for mod, fn in extras_modules(ext)
-                if MODULE_RE.match(mod) and mod.startswith(RESERVED_PREFIXES)]
+    for ext in [os.path.join(plugin_dir, 'extras')] + module_dirs(plugin_dir):
+        if os.path.isdir(ext):
+            rel = os.path.relpath(ext, plugin_dir).replace(os.sep, '/')
+            out += ["%s/%s" % (rel, fn) for mod, fn in extras_modules(ext)
+                    if MODULE_RE.match(mod)
+                    and mod.lower().startswith(RESERVED_PREFIXES)]
     comps = os.path.join(plugin_dir, 'moonraker', 'components')
     for mod in _module_names(comps):
-        if mod.startswith(RESERVED_PREFIXES):
+        if mod.lower().startswith(RESERVED_PREFIXES):
             fn = mod + '.py' if os.path.isfile(
                 os.path.join(comps, mod + '.py')) else mod
             out.append("moonraker/components/%s" % (fn,))
@@ -407,6 +455,8 @@ def scan(shipped_dir=SHIPPED_DIR, user_dir=USER_DIR,
                 'dir': d, 'source': source, 'official': official,
                 'compatible': api_compatible(info['requires_os']),
                 'extras': os.path.isdir(os.path.join(d, 'extras')),
+                'module_dirs': [os.path.join(d, *m.split('/'))
+                                for m in info['module_dirs']],
                 'moonraker': os.path.isfile(os.path.join(d,
                                                          'moonraker.conf')),
                 'python': os.path.isdir(os.path.join(d, 'python')),
@@ -882,6 +932,9 @@ class AD5XPlugins:
                                          self.ifs_klipper_flag)
         self.warnings = []
         self.modules = {}
+        # Modules of the plugins' module_dirs, imported when first needed:
+        # name -> (plugin, folder)
+        self.lazy = {}
         # The plugin driving the IFS at this start ("": Kiln's [ifs])
         self.ifs_owner = (ifs_owners(self.active, self.found) or [""])[0]
         # Also while Klipper isn't ready: a plugin whose config stops
@@ -995,23 +1048,36 @@ class AD5XPlugins:
             if d not in sys.path:
                 sys.path.append(d)
         wanted = {}
+        lazy = {}
         for name in self.active:
             info = self.found[name]
-            if not info['extras']:
-                continue
-            ext = os.path.join(info['dir'], 'extras')
-            for mod, fn in extras_modules(ext):
-                if not MODULE_RE.match(mod):
-                    continue
-                if is_core_module(mod, core):
-                    raise config.error(
-                        "Plugin %s: extras/%s has the name of a Klipper "
-                        "module; rename it" % (name, fn))
-                if mod in wanted:
-                    raise config.error(
-                        "Plugins %s and %s both have extras/%s"
-                        % (wanted[mod][0], name, fn))
-                wanted[mod] = (name, ext)
+            dirs = []
+            if info['extras']:
+                dirs.append((os.path.join(info['dir'], 'extras'), wanted))
+            for d in info.get('module_dirs', []):
+                if os.path.isdir(d):
+                    dirs.append((d, lazy))
+                else:
+                    self._warn("Plugin %s: module folder %s is missing, its "
+                               "modules are not loaded" % (
+                                   name, os.path.relpath(d, info['dir'])))
+            for ext, into in dirs:
+                rel = os.path.relpath(ext, info['dir']).replace(os.sep, '/')
+                for mod, fn in extras_modules(ext):
+                    if not MODULE_RE.match(mod):
+                        continue
+                    if is_core_module(mod, core):
+                        raise config.error(
+                            "Plugin %s: %s/%s has the name of a Klipper "
+                            "module; rename it" % (name, rel, fn))
+                    other = wanted.get(mod) or lazy.get(mod)
+                    if other is not None:
+                        raise config.error(
+                            "Plugins %s and %s both have a module %s"
+                            % (other[0], name, mod) if other[0] != name else
+                            "Plugin %s has module %s twice (%s)"
+                            % (name, mod, rel))
+                    into[mod] = (name, ext)
         # The plugins' extras/ dirs join the extras package path (after
         # Klipper's own), so plugin modules and packages import as
         # extras.<module> and import each other. A RESTART starts over:
@@ -1026,10 +1092,13 @@ class AD5XPlugins:
                 del sys.modules[full]
         del _PLUGIN_EXTRAS_DIRS[:]
         _PLUGIN_MODULES.clear()
-        for name, ext in wanted.values():
+        for name, ext in list(wanted.values()) + list(lazy.values()):
             if ext not in path:
                 path.append(ext)
                 _PLUGIN_EXTRAS_DIRS.append(ext)
+        # imported later (or by another module): dropped at the next start
+        _PLUGIN_MODULES.update(lazy)
+        self.lazy = lazy
         for mod, (name, ext) in sorted(wanted.items()):
             full = 'extras.' + mod
             _PLUGIN_MODULES.add(mod)
@@ -1043,7 +1112,7 @@ class AD5XPlugins:
                                    "%s" % (name, mod, e))
             self.modules[mod] = module
             logging.info("ad5x_plugins: loaded %s from plugin %s", mod, name)
-        if not self.modules:
+        if not self.modules and not self.lazy:
             return
         # printer.load_object() only looks in klippy/extras: also find the
         # plugin modules (a plugin module may load another's section)
@@ -1053,11 +1122,32 @@ class AD5XPlugins:
         # loader makes them for its own
         for section in config.get_prefix_sections(''):
             sname = section.get_name()
-            if sname.split()[0] in self.modules:
+            if sname.split()[0] in self.modules or \
+                    sname.split()[0] in self.lazy:
                 self._load_object(config, sname)
+    def _module(self, config, mod):
+        """The plugin module named mod, importing a module_dirs one the
+        first time it is needed; None for a module no plugin has."""
+        module = self.modules.get(mod)
+        if module is not None or mod not in self.lazy:
+            return module
+        name, ext = self.lazy[mod]
+        full = 'extras.' + mod
+        try:
+            module = importlib.import_module(full)
+        except Exception as e:
+            sys.modules.pop(full, None)
+            logging.exception("ad5x_plugins: loading %s from %s", mod, ext)
+            rel = os.path.relpath(ext, self.found[name]['dir'])
+            raise config.error("Plugin %s: %s/%s failed to load: %s" % (
+                name, rel.replace(os.sep, '/'), mod, e))
+        self.modules[mod] = module
+        logging.info("ad5x_plugins: loaded %s from plugin %s (%s)", mod,
+                     name, ext)
+        return module
     def _load_object(self, config, section, *default):
         parts = section.split()
-        module = self.modules.get(parts[0])
+        module = self._module(config, parts[0]) if parts else None
         if module is None or self.printer.lookup_object(
                 section, None) is not None:
             return self._klipper_load_object(config, section, *default)

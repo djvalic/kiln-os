@@ -166,7 +166,10 @@ creates the objects for the config sections named after those modules,
 the way Klipper's own loader does (`load_config` / `load_config_prefix`).
 The plugin's `extras/` joins the path of Klipper's `extras` package, so
 its modules import each other as Klipper's do, and
-`printer.load_object()` finds them too. No Klipper patch: everything
+`printer.load_object()` finds them too. Plugin API 1.7: the folders a
+plugin lists in `plugin.json` `module_dirs` join that path as well, and
+their modules are imported when a section, `printer.load_object()` or
+another module first needs them (`docs/plugin-api.md`). No Klipper patch: everything
 stays in our extra. Rules:
 
 - Only the code of enabled plugins that aren't skipped is loaded

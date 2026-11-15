@@ -145,6 +145,7 @@ class Checker:
             self.warn("no README.md (what it does, how to use it)")
         self.check_python()
         self.check_extras()
+        self.check_module_dirs()
         self.check_moonraker()
         self.check_names()
         self.check_root()
@@ -231,6 +232,15 @@ class Checker:
                               "shipped nor in the catalog" % (other,))
         if 'owns_ifs' in data and not isinstance(data['owns_ifs'], bool):
             self.error("plugin.json: owns_ifs must be true or false")
+        if 'module_dirs' in data:
+            dirs, err = ap.parse_module_dirs(data['module_dirs'])
+            if err:
+                self.error("plugin.json: module_dirs: %s" % (err,))
+            for d in dirs:
+                if not os.path.isdir(os.path.join(self.dir, *d.split('/'))):
+                    self.warn("plugin.json: module_dirs: %s is not there "
+                              "(fine if the plugin fetches it itself; its "
+                              "modules load once it is)" % (d,))
 
     # root/: scripts that run as root (docs/plugin-root-hooks.md), packed
     # the way the plugin manager sends them to root
@@ -318,13 +328,14 @@ class Checker:
         prefix = self.name.replace('-', '_')
         for mod, fn in ap.extras_modules(ext):
             if not ap.MODULE_RE.match(mod):
-                self.warn("extras/%s is not loaded: module names are a-z, "
-                          "0-9 and _, starting with a letter" % (fn,))
+                self.warn("extras/%s is not loaded: module names are "
+                          "letters, digits and _, starting with a letter"
+                          % (fn,))
                 continue
             if any(ap.is_core_module(mod, c) for c in cores):
                 self.error("extras/%s has the name of a Klipper or Kiln OS "
                            "module; rename it (%s_...)" % (fn, prefix))
-            elif mod.startswith(ap.RESERVED_PREFIXES):
+            elif mod.lower().startswith(ap.RESERVED_PREFIXES):
                 pass    # check_names
             elif not mod.startswith(prefix):
                 self.warn("extras/%s: start module names with the plugin "
@@ -338,6 +349,31 @@ class Checker:
         if not self.klippy:
             self.note("Klipper's own module names not checked (--klippy "
                       "DIR)")
+
+    # plugin.json module_dirs (plugin API 1.7): more Klipper module
+    # folders, imported when needed; only names that would stop Klipper
+    def check_module_dirs(self):
+        cores = [os.path.join(REPO, "klipper", "extras")]
+        if self.klippy:
+            cores.append(os.path.join(self.klippy, "extras"))
+        seen = {}
+        ext = os.path.join(self.dir, "extras")
+        if os.path.isdir(ext):
+            seen.update((mod, "extras") for mod, fn in ap.extras_modules(ext))
+        for d in ap.module_dirs(self.dir):
+            if not os.path.isdir(d):
+                continue
+            rel = self.rel(d)
+            for mod, fn in ap.extras_modules(d):
+                if not ap.MODULE_RE.match(mod):
+                    continue
+                if any(ap.is_core_module(mod, c) for c in cores):
+                    self.error("%s/%s has the name of a Klipper or Kiln OS "
+                               "module: Klipper would stop" % (rel, fn))
+                elif mod in seen:
+                    self.error("%s/%s: a module %s is in %s too: Klipper "
+                               "would stop" % (rel, fn, mod, seen[mod]))
+                seen.setdefault(mod, rel)
 
     # moonraker.conf and moonraker/components/
     def check_moonraker(self):

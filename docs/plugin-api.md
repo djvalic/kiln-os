@@ -8,11 +8,11 @@ with any system update ("Public and internal names" below).
 
 ## Version
 
-Current: **1.6**.
+Current: **1.7**.
 
 - In Klipper: `printer.ad5x_plugins.api_version` (also printed by
   `LIST_PLUGINS`).
-- On the system: `AD5X_PLUGIN_API="1.6"` in `/usr/lib/os-release`
+- On the system: `AD5X_PLUGIN_API="1.7"` in `/usr/lib/os-release`
   (`/etc/os-release`), for scripts.
 - In the code: `PLUGIN_API_VERSION` in `klipper/extras/ad5x_plugins.py`
   (the build copies it to os-release). `tools/test_plugin_api_doc.py`
@@ -59,6 +59,7 @@ they are loaded".
 | 1.4 | 2026-10-20 | v0.0.7 | The plugin catalog (`INSTALL_PLUGIN`, `UPDATE_PLUGIN`, `REMOVE_PLUGIN`), Moonraker restarted by a switch, the bed heat soak, the speaker, the nozzle size, auto-refill colour matching |
 | 1.5 | 2026-11-07 | v0.0.49 | A plugin that drives the IFS (`owns_ifs`), packages in `extras/`, `printer.load_object()` finding plugin modules; and everything the 1.4 releases added after v0.0.7 that this page now lists (tool map mode, Z offset estimate, IFS operation status, swap abort template, ...) |
 | 1.6 | 2026-11-13 | v0.1.0-rc1 | Root scripts like zMod's plugins have (`root/install.sh`, `update.sh`, `uninstall.sh`, `docs/plugin-root-hooks.md`), `ENABLE_PLUGIN ROOT=1`, `INSTALL_PLUGIN ROOT=1`, `printer.ad5x_plugins` `available.<name>.root` and `root_installed`, the job actions `root install`/`root update`/`root uninstall`; warnings when two plugins bring the same Moonraker component, `python/` package or Klipper section ("Names"); `kiln_` and `ad5x_` module, component, section and macro names refused for plugins that are not Kiln's own ("Names"); Moonraker's `[machine] provider: kiln_agent` (service restarts, "Moonraker"). The named root actions are removed ("Changes") |
+| 1.7 | (next) | (next) | Klipper module names with capitals (`extras/AFC_lane.py`); `plugin.json` `module_dirs`: more Klipper module folders inside the plugin (a checkout of another project), imported when needed ("Plugin layout") |
 
 **1.5\*** marks the few items that came with a later 1.5 release:
 `LOG_MODE` and `printer.ad5x_log` (v0.0.53), `printer.ad5x_soak.cancel`
@@ -96,6 +97,7 @@ myplugin/                 the git repository; cloned as /data/ad5x/plugins/myplu
   python/                 optional (1.3): pure-Python libraries the plugin needs
   moonraker/components/   optional (1.3): Moonraker components (name.py)
   root/                   optional (1.6): scripts that run as root (docs/plugin-root-hooks.md)
+  vendor/extras/          optional (1.7): more Klipper modules, listed in plugin.json module_dirs
     install.sh              on ENABLE_PLUGIN ROOT=1, before the plugin is on
     update.sh               after an update that changed root/
     uninstall.sh            on DISABLE_PLUGIN / REMOVE_PLUGIN
@@ -103,6 +105,30 @@ myplugin/                 the git repository; cloned as /data/ad5x/plugins/myplu
 
 The clone's directory name must match `name` in `plugin.json`
 (`git clone <url> myplugin`).
+
+Klipper module names are letters, digits and `_`, starting with a letter;
+since 1.7 they may have capitals, as other projects' modules do
+(`AFC_lane.py`, section `[AFC_lane lane1]`).
+
+**Module folders (`module_dirs`, 1.7).** A plugin that runs another
+project's Klipper modules (AFC-Klipper-Add-On, cloned into the plugin
+folder at a pinned commit) lists their folder in `plugin.json`:
+
+```json
+  "module_dirs": ["AFC-Klipper-Add-On/extras"]
+```
+
+Each folder joins the `extras` package path like the plugin's own
+`extras/`, so its modules import each other (`from extras.AFC_utils import
+...`) and `printer.load_object()` finds them. Unlike `extras/`, their
+modules are imported only when needed: a config section names one
+(`[AFC]`, `[AFC_stepper lane1]`), `printer.load_object()` asks for one, or
+another module imports it. Modules for hardware the printer doesn't have
+are never imported. The same name rules apply: a module named like a
+Klipper module or another module of an enabled plugin stops Klipper, and
+`kiln_`/`ad5x_` names are refused ("Names"). A folder that isn't there
+(yet) gives a warning, and the rest of the plugin loads; a `RESTART` picks
+its modules up once it is.
 
 `plugin.json`:
 
@@ -129,6 +155,7 @@ The clone's directory name must match `name` in `plugin.json`
 | `requires` | no | Plugins that must be enabled first | 1.0 |
 | `conflicts` | no | Plugins that can't be enabled together with this one | 1.0 |
 | `owns_ifs` | no | `true`: the plugin drives the IFS instead of Kiln's `[ifs]` module ("A plugin that drives the IFS") | 1.5 |
+| `module_dirs` | no | More folders of Klipper modules inside the plugin, relative to it (`["AFC-Klipper-Add-On/extras"]`, at most 8; no `..`, not `extras`). For code from another project that the plugin carries or fetches; see below | 1.7 |
 
 `plugin.cfg` example:
 
@@ -196,7 +223,7 @@ name as an error:
 
 | Name | Refused | Since |
 |---|---|---|
-| Klipper modules | `extras/kiln_*.py`, `extras/ad5x_*.py` and packages of these names | 1.6 |
+| Klipper modules | `extras/kiln_*.py`, `extras/ad5x_*.py` and packages of these names; 1.7: any case (`Kiln_x.py`), and in `module_dirs` too | 1.6 |
 | Moonraker components | `moonraker/components/kiln_*.py`, `ad5x_*.py` and packages | 1.6 |
 | Config sections in `plugin.cfg` | `[kiln_...]`, `[ad5x_...]`, also with a name after it (`[ad5x_log]`, `[kiln_x two]`) | 1.6 |
 | Macros in `plugin.cfg` | `[gcode_macro KILN_...]`, `[gcode_macro AD5X_...]`, any case, also with leading `_` (`_AD5X_UNIT`) | 1.6 |

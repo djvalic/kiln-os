@@ -202,7 +202,7 @@ curl http://PRINTER/machine/kiln_os/info
 ```json
 {"result": {
   "os_version": "v0.1.0-rc1",
-  "api_version": "1.6",
+  "api_version": "1.7",
   "kernel": "6.6.18-ad5x",
   "features": ["ifs", "soak", "setup_wizard", "plugins", "kernel_retry",
                "boot_recovery", "3mf_upload", "print_error", "updates",
