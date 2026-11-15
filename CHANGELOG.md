@@ -11,6 +11,8 @@ the issue: it is closed by hand after the release.
 
 ## Unreleased
 
+- **Mainsail and Fluidd no longer freeze Moonraker for a minute with big plugins installed** (by DIEHARDave): since v0.1.0-rc1 the config folder holds the `plugins` folder (a link to `/data/ad5x/plugins`), and Moonraker's flat list of the config folder, which Mainsail and Fluidd ask for at each page load, walked every installed plugin file. That list runs on Moonraker's event loop at about 14 ms per file on the AD5X, so with kiln-notify and afc-kiln installed (about 2200 files) each page load blocked Moonraker for close to a minute: the web pages didn't load and the connection to Klipper dropped. The plugin files are now left out of that list (Moonraker patch 0007); the `plugins` folder still opens, and editing and uploading in it work as before. If you put a `plugins` file in the config folder to work around it, delete it and restart Moonraker to get the folder back.
+
 ## v1.0.0-rc2 (2026-11-15)
 
 - **Release candidates lead to v1.0.0**: the stable release after these candidates is v1.0.0, not v0.1.0, and the next candidate is v1.0.0-rc2 (the count goes on). Printers on the test channel get it as usual; `docs/stability.md` describes what stays the same in 1.x.

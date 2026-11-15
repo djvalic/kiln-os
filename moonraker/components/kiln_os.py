@@ -933,7 +933,14 @@ class KilnOS:
                 logging.exception("kiln_os: database namespace")
         fm = self.server.lookup_component("file_manager", None)
         cfg_dir = fm.get_directory("config") if fm is not None else ""
-        logging.info(f"kiln_os: plugin folder: {link_plugins(cfg_dir)}")
+        linked = link_plugins(cfg_dir)
+        logging.info(f"kiln_os: plugin folder: {linked}")
+        # Browsable, but left out of recursive file lists: every file there
+        # costs ~14 ms on the AD5X, on the event loop, and Mainsail and
+        # Fluidd list the config root at each page load (a plugin carrying
+        # another project's checkout froze Moonraker for a minute)
+        if linked in ("linked", "link made") and                 hasattr(fm, "add_unlisted_path"):
+            fm.add_unlisted_path(PLUGINS_DIR)
         st = safe_kernel_status()
         notice = kernel_notice(st)
         if notice:

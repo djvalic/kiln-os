@@ -1,0 +1,62 @@
+file_manager: folders that recursive file lists don't walk
+
+server.files.list walks a root recursively, on the event loop, and costs
+~14 ms per file on the AD5X (a resolve() and the reserved path checks
+for each one). Mainsail and Fluidd ask for the config root at each page
+load. Since v0.1.0-rc1 the config folder holds the "plugins" link to
+/data/ad5x/plugins (kiln_os.link_plugins), so the listing walks every
+installed plugin too: with kiln-notify and afc-kiln (~2200 files) each
+page load blocked Moonraker for about a minute (EVENT LOOP BLOCKED 56-58
+s), the web UIs stopped loading and the Klippy connection dropped.
+
+add_unlisted_path() marks a folder that get_file_list() doesn't enter.
+Clients still browse it with get_directory, and its files can be read,
+edited and uploaded as before; they are only missing from the flat
+config list. kiln_os registers the plugins folder once it is linked.
+
+Upstream: not submitted (AD5X open OS)
+
+diff --git a/moonraker/components/file_manager/file_manager.py b/moonraker/components/file_manager/file_manager.py
+--- a/moonraker/components/file_manager/file_manager.py
++++ b/moonraker/components/file_manager/file_manager.py
+@@ -69,6 +69,9 @@
+         self.server = config.get_server()
+         self.event_loop = self.server.get_event_loop()
+         self.reserved_paths: Dict[str, Tuple[pathlib.Path, bool]] = {}
++        # Kiln OS: folders clients can browse that recursive file lists
++        # (server.files.list) don't walk (add_unlisted_path)
++        self.unlisted_paths: Set[pathlib.Path] = set()
+         self.full_access_roots: Set[str] = set()
+         self.file_paths: Dict[str, str] = {}
+         app_args = self.server.get_app_args()
+@@ -349,6 +352,17 @@
+                 )
+         return False
+ 
++    def add_unlisted_path(self, path: StrOrPath) -> None:
++        """Kiln OS: a folder (or a link to one) inside a root that
++        get_file_list() doesn't walk into. It stays browsable with
++        get_directory and its files stay readable and writable as before.
++        For big trees under a root, such as the plugins folder linked into
++        config: each file costs a resolve() and the reserved path checks,
++        and the listing runs on the event loop."""
++        if isinstance(path, str):
++            path = pathlib.Path(path)
++        self.unlisted_paths.add(path.expanduser().resolve())
++
+     def add_reserved_path(
+         self, name: str, res_path: StrOrPath, read_access: bool = True
+     ) -> bool:
+@@ -1056,6 +1070,12 @@
+                 key = (st.st_dev, st.st_ino)
+                 if key not in visited_dirs:
+                     visited_dirs.add(key)
++                    if (
++                        self.unlisted_paths and
++                        pathlib.Path(full_path).resolve() in
++                        self.unlisted_paths
++                    ):
++                        continue
+                     if not self.check_reserved_path(full_path, False, False):
+                         scan_dirs.append(dname)
+             dir_names[:] = scan_dirs

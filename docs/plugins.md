@@ -26,6 +26,10 @@ open and edit its files like config files. Moonraker's `kiln_os` component
 makes the link when it starts and nothing has that name; your own
 `plugins` file, folder or link in the config folder is left alone (the
 plugins are then not shown). Moonraker keeps `.git` folders out of reach.
+The plugin files are left out of Moonraker's flat file list of the config
+folder (`server.files.list`, Moonraker patch 0007), which Mainsail and
+Fluidd ask for at each page load: with big plugins it took a minute on
+the AD5X. Browsing the folder, editing and uploading work as before.
 Uploading runs nothing: `root/` scripts need `ENABLE_PLUGIN ... ROOT=1`
 (`docs/plugin-root-hooks.md`).
 
