@@ -72,8 +72,8 @@ BR2_PACKAGE_E2FSPROGS=y
 BR2_PACKAGE_CA_CERTIFICATES=y
 # ip -json, for Moonraker's network status
 BR2_PACKAGE_IPROUTE2=y
-# sudo, for one thing: Moonraker's host reboot runs "sudo reboot" as klipper;
-# /etc/sudoers (rootfs overlay) allows that and nothing else
+# sudo: /etc/sudoers (rootfs overlay) grants klipper nothing; Moonraker's
+# reboot and shutdown go through Kiln's root update agent
 BR2_PACKAGE_SUDO=y
 # git over https: plugins from their own repositories (docs/plugins.md),
 # cloned and kept up to date by Moonraker's update manager. Trimmed in

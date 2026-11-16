@@ -1,0 +1,86 @@
+From 93608e95ac45ac792dd0abb86d424e765193a563 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sat, 14 Nov 2026 15:10:05 -0700
+Subject: [PATCH 04/10] mmc: x2600_sdhci: Let the CGU divider settle after the
+ clock is on
+
+A new MSCnCDR divider only takes effect (its busy flag clears) once the
+controller runs its clock again, which the SDHCI core does after the
+set_clock hook. Set the change-enable bit there and wait for busy in
+set_ios_post instead, then clear it.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ drivers/mmc/x2600_sdhci.c | 31 +++++++++++++++++++++++--------
+ 1 file changed, 23 insertions(+), 8 deletions(-)
+
+diff --git a/drivers/mmc/x2600_sdhci.c b/drivers/mmc/x2600_sdhci.c
+index 45ec79d7..3789b224 100644
+--- a/drivers/mmc/x2600_sdhci.c
++++ b/drivers/mmc/x2600_sdhci.c
+@@ -51,7 +51,6 @@ static void x2600_msc_set_rate(struct x2600_sdhci_plat *plat, ulong rate)
+ {
+ 	ulong parent_rate;
+ 	u32 parent, div, val;
+-	int timeout;
+ 
+ 	if (rate <= EXCLK_MAX_CARD_RATE) {
+ 		parent = CDR_PARENT_EXCLK;
+@@ -69,8 +68,9 @@ static void x2600_msc_set_rate(struct x2600_sdhci_plat *plat, ulong rate)
+ 	/*
+ 	 * Only the parent and divider fields change: the others (stock sets
+ 	 * bits 21 and 15) stay as the SPL or Linux left them. The parent only
+-	 * switches while the clock is gated; the divider only takes effect
+-	 * (busy clears) while it runs.
++	 * switches while the clock is gated. A new divider takes effect (busy
++	 * clears) only once the controller runs its clock again, which the
++	 * SDHCI core does after this: x2600_sdhci_set_ios_post() waits for it.
+ 	 */
+ 	val = readl(plat->cdr);
+ 	if (((val >> CDR_PARENT_SHIFT) & 3) != parent) {
+@@ -82,15 +82,29 @@ static void x2600_msc_set_rate(struct x2600_sdhci_plat *plat, ulong rate)
+ 	clrbits_le32(CGU_CLKGR0, plat->gate);
+ 
+ 	val &= ~(CDR_DIV_MASK | CDR_STOP);
+-	val |= div | CDR_CE;
+-	writel(val, plat->cdr);
+-	for (timeout = 100000; timeout && (readl(plat->cdr) & CDR_BUSY);
++	writel(val | div | CDR_CE, plat->cdr);
++}
++
++/* After the core has set the clock: let the CGU divider settle */
++static int x2600_sdhci_set_ios_post(struct sdhci_host *host)
++{
++	struct x2600_sdhci_plat *plat = dev_get_plat(host->mmc->dev);
++	u32 val = readl(plat->cdr);
++	int timeout;
++
++	if (!(val & CDR_CE))
++		return 0;
++
++	for (timeout = 10000; timeout && (readl(plat->cdr) & CDR_BUSY);
+ 	     timeout--)
+ 		udelay(1);
+-	writel(val & ~CDR_CE, plat->cdr);
++	writel(readl(plat->cdr) & ~CDR_CE, plat->cdr);
+ 
+-	if (!timeout)
++	if (!timeout) {
+ 		printf("x2600-sdhci: CGU divider stays busy\n");
++		return -ETIMEDOUT;
++	}
++	return 0;
+ }
+ 
+ static void x2600_sdhci_set_clock(struct sdhci_host *host, u32 div)
+@@ -103,6 +117,7 @@ static void x2600_sdhci_set_clock(struct sdhci_host *host, u32 div)
+ 
+ static const struct sdhci_ops x2600_sdhci_ops = {
+ 	.set_clock	= x2600_sdhci_set_clock,
++	.set_ios_post	= x2600_sdhci_set_ios_post,
+ };
+ 
+ static int x2600_sdhci_probe(struct udevice *dev)
+-- 
+2.43.0
+

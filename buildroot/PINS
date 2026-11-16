@@ -5,7 +5,10 @@
 # Packages built by Buildroot are pinned where Buildroot expects it:
 # buildroot/package/NAME/NAME.mk (version or commit) and NAME.hash (sha256
 # of the download), e.g. klipper.mk and klipper.hash. tools/bump_upstream.py
-# rewrites both when a package is bumped.
+# rewrites both when a package is bumped. Buildroot's own packages at a
+# newer version than Buildroot has (recovery OS: mbedTLS) are set in
+# buildroot/board/ad5x-recovery/package-override.mk, their sha256 in
+# buildroot/board/ad5x-recovery/patches/NAME/VERSION/NAME.hash.
 #
 # Checked by: tools/autobuild.sh (Buildroot), kernel-ingenic66/build.sh
 # (SDK), kernel-ingenic66/chainload/setup.sh (5.10 tarball);

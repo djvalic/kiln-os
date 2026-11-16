@@ -30,6 +30,7 @@
 #ifdef RUI_FBDEV
 #include <linux/fb.h>
 #include <linux/input.h>
+#include <linux/kd.h>
 #endif
 
 #define W 800
@@ -190,6 +191,28 @@ static void fb_pan0(const char *dev)
 	close(fd);
 }
 
+/* Our 6.6 kernel has a framebuffer console on fb0: its cursor and kernel
+ * messages would be drawn into the UI, and LVGL repaints only what
+ * changes, so they would stay. The console's graphics mode stops that, as
+ * HelixScreen does on the main OS. The mode belongs to the console, not
+ * to this process: it stays when the UI exits and S80 starts it again.
+ * The stock kernel has no such console (no /dev/tty0): nothing to do. */
+static void console_off(void)
+{
+	static const char *const tty[] = { "/dev/tty0", "/dev/tty1" };
+	for (size_t i = 0; i < sizeof(tty) / sizeof(tty[0]); i++) {
+		int fd = open(tty[i], O_WRONLY | O_CLOEXEC);
+		if (fd < 0)
+			continue;
+		int ok = !ioctl(fd, KDSETMODE, KD_GRAPHICS);
+		close(fd);
+		if (ok) {
+			slog("console: %s in graphics mode", tty[i]);
+			return;
+		}
+	}
+}
+
 /* /dev/input/eventN whose name is PATH_TOUCH_NAME */
 static bool find_touch(char *path, size_t cap)
 {
@@ -229,17 +252,24 @@ static void touch_try(lv_timer_t *t)
 	slog("touch: %s (%s)", p, rui_get(PATH_TOUCH_NAME));
 	/* The calibration (touch_cal.h): AD5X_RUI_TOUCH_CAL="minx miny maxx
 	 * maxy" from S80ad5x-recovery-ui (swap min/max to invert), else the
-	 * panel's usual range; AD5X_RUI_TOUCH_SWAP=1 swaps X and Y */
+	 * panel's usual range, both in stock units; converted to raw units
+	 * on our kernel (AD5X_RUI_TOUCH_UNITS=raw); AD5X_RUI_TOUCH_SWAP=1
+	 * swaps X and Y */
 	const char *cal = getenv("AD5X_RUI_TOUCH_CAL");
+	const char *units = getenv("AD5X_RUI_TOUCH_UNITS");
+	bool raw = units && !strcmp(units, "raw");
 	int v[4];
 	bool from_env = touch_cal_from_env(cal, v);
+	if (raw)
+		touch_cal_to_raw(v);
 	lv_evdev_set_calibration(touch, v[0], v[1], v[2], v[3]);
 	if (from_env)
-		slog("touch calibration: X %d..%d Y %d..%d (AD5X_RUI_TOUCH_CAL)",
-		     v[0], v[2], v[1], v[3]);
+		slog("touch calibration: X %d..%d Y %d..%d, %s units (AD5X_RUI_TOUCH_CAL)",
+		     v[0], v[2], v[1], v[3], raw ? "raw" : "stock");
 	else
-		slog("touch calibration: X %d..%d Y %d..%d (default; AD5X_RUI_TOUCH_CAL %s)",
-		     v[0], v[2], v[1], v[3], cal ? "not usable" : "not set");
+		slog("touch calibration: X %d..%d Y %d..%d, %s units (default; AD5X_RUI_TOUCH_CAL %s)",
+		     v[0], v[2], v[1], v[3], raw ? "raw" : "stock",
+		     cal ? "not usable" : "not set");
 	const char *sw = getenv("AD5X_RUI_TOUCH_SWAP");
 	if (sw && *sw == '1')
 		lv_evdev_set_swap_axes(touch, true);
@@ -276,6 +306,7 @@ int main(int argc, char **argv)
 
 	lv_display_t *disp = NULL;
 #if defined(RUI_FBDEV)
+	console_off();
 	fb_pan0(rui_get(PATH_FBDEV));
 	disp = lv_linux_fbdev_create();
 	if (!disp || lv_linux_fbdev_set_file(disp, rui_get(PATH_FBDEV)) != LV_RESULT_OK) {

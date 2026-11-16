@@ -40,6 +40,27 @@
 # fails the same way, the release goes into failed-mainline instead of
 # failed and this boot goes on to 6.6 at once; 6.6's own failure still
 # falls back to the stock kernel. "ad5x-kernel retry" clears both.
+# Started directly: a boot loader of our own may start our kernel without
+# the stock 5.10 pass first. On our kernel, no pending marker means that
+# (with or without ad5x.kernel=own): nothing to chainload, the start is
+# recorded in started with a fifth word "direct" ("UPTIME slot S RELEASE
+# direct"), which S99ad5x-booted turns into last-ok as any other. The stock
+# pass drops such a started marker without counting it (it is not a start
+# of this chain), so a direct start never counts as a failure here.
+# Started by Kiln's U-Boot (ad5x.uboot=1): U-Boot chose the kernel and
+# counts the start itself (u-boot/README.md, "Boot rules"), so this never
+# chainloads, whatever kernel runs (a stock kernel a bootm typed at
+# U-Boot's prompt started, or an older U-Boot build's stock rung), and
+# keeps no stock-pass records. On our kernel it is a direct start as
+# above, also with ad5x.kernel=own (which U-Boot adds); a pending marker
+# left from the chain is dropped with a history line (no stock pass will
+# come to read it).
+# Started by Kiln's SPL alone (U-Boot proper missing or failed; under
+# Kiln's boot loader both slots hold Kiln's 6.6, so the SPL starts it
+# directly with the stock command line: no ad5x.uboot=1, no
+# ad5x.kernel=own): a direct start as above; a pending from the chain is
+# dropped the same way (lib/slot.sh, boot_loader: Kiln's SPL in the first
+# MiB). S01ad5x-tryboot's try-once then guards the start, as on the chain.
 # AD5X_LIB overrides /usr/lib/ad5x (tools/test_kernel_fallback.sh).
 
 # Files this creates are readable by klipper and www-data, whoever started
@@ -102,16 +123,55 @@ give_up() {
 case "$1" in
 start)
 	[ -n "$SLOT" ] || exit 0
+	uboot=
+	case " $(cat /proc/cmdline) " in *" ad5x.uboot=1 "*) uboot=1 ;; esac
+	if [ -n "$uboot" ] && [ $KERNEL != own ]; then
+		echo "ad5x-kernel: started by Kiln's U-Boot on the stock kernel: no chainload (U-Boot chose the kernel)"
+		ad5x-bootlog "  Kiln's U-Boot, stock kernel: no chainload"
+		exit 0
+	fi
 	if [ $KERNEL = own ]; then
-		# Our kernel, started by this script: it reached userspace
-		case " $(cat /proc/cmdline) " in *" ad5x.kernel=own "*) ;; *) exit 0 ;; esac
+		chain=
+		case " $(cat /proc/cmdline) " in *" ad5x.kernel=own "*) chain=1 ;; esac
+		[ -n "$uboot" ] && chain=
 		mount_data || exit 0
-		if [ -f $d/pending ]; then
-			mv $d/pending $d/started
+		# Kiln's SPL started our kernel directly from the slot (U-Boot
+		# proper missing or failed; the slot holds Kiln's 6.6): no stock
+		# pass will come either
+		who=
+		if [ -n "$uboot" ]; then who="a start by Kiln's U-Boot"
+		elif [ -z "$chain" ] && [ -f $d/pending ] && [ "$(boot_loader)" = kiln ]; then
+			who="a direct start by Kiln's SPL"
+		fi
+		if [ -n "$who" ] && [ -f $d/pending ]; then
+			echo "$(cut -d' ' -f1-4 $d/pending) unfinished: chainload start never reached userspace (dropped at $who)" >> $d/history
+			rm -f $d/pending
 			sync
 		fi
+		if [ -f $d/pending ]; then
+			# Our kernel, started by this script: it reached userspace.
+			# Without ad5x.kernel=own it was not: a boot loader started
+			# this one, and the chainload start that wrote pending never
+			# got here. Left alone for the next stock pass, but noted in
+			# the history (once), as S99ad5x-booted removes it.
+			if [ -n "$chain" ]; then
+				mv $d/pending $d/started
+				sync
+			else
+				h="$(cut -d' ' -f1-4 $d/pending) unfinished: chainload start never reached userspace (found at a direct start)"
+				grep -qxF "$h" $d/history 2>/dev/null || { echo "$h" >> $d/history; sync; }
+			fi
+			umount $M
+			[ -n "$chain" ] &&
+				echo "$(cut -d' ' -f1 /proc/uptime)   own kernel reached userspace" >> /run/ad5x-boot.log 2>/dev/null
+			exit 0
+		fi
+		# No pending: a boot loader started our kernel directly, not the
+		# stock pass. A normal start, which S99ad5x-booted completes.
+		echo "$(cut -d' ' -f1 /proc/uptime)s slot $SLOT $(uname -r) direct" > $d/started
+		sync
 		umount $M
-		echo "$(cut -d' ' -f1 /proc/uptime)   own kernel reached userspace" >> /run/ad5x-boot.log 2>/dev/null
+		echo "$(cut -d' ' -f1 /proc/uptime)   own kernel started directly" >> /run/ad5x-boot.log 2>/dev/null
 		exit 0
 	fi
 	[ -f $K/xImage ] && [ -f $K/chainload.ko ] || exit 0
@@ -121,6 +181,13 @@ start)
 	rel=$(cat $K/release 2>/dev/null)
 	relm=
 	[ -f $KM/xImage ] && relm=$(cat $KM/release 2>/dev/null)
+	# Our kernel started directly by a boot loader (above) didn't finish
+	# starting: not a start of this chain, not counted
+	if [ -f $d/started ] && [ "$(cut -d' ' -f5 $d/started)" = direct ]; then
+		echo "ad5x-kernel: the last start (our kernel, started directly by a boot loader) didn't finish; not counted"
+		echo "$(cut -d' ' -f1-4 $d/started) unfinished: started directly by a boot loader, not counted" >> $d/history
+		rm -f $d/started
+	fi
 	[ -f $d/pending ] && give_up pending "before userspace"
 	if [ -f $d/started ]; then
 		if [ -f $M/ad5x/install/recovery.squashfs ]; then

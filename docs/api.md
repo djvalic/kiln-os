@@ -108,11 +108,11 @@ inside Moonraker's `result`; their replies keep that inner `result`
 |---|---|---|---|
 | `bad_parameter` | 400 | A parameter is missing, unknown or out of range | `channel`, service actions, `ad5x_setup/control`, upload `plate` |
 | `bad_3mf` | 400 | The uploaded `.3mf` can't be printed (no sliced plate, not a zip, encrypted, damaged, too large) | upload |
-| `printing` | 409 | A print is running or paused | `kernel_retry`, `boot_recovery`, service actions, Kiln OS and package updates, `ad5x_setup/control` |
+| `printing` | 409 | A print is running or paused | `kernel_retry`, `boot_recovery`, service actions, reboot and shutdown, Kiln OS and package updates, `ad5x_setup/control` |
 | `print_state_unknown` | 409 | The agent couldn't tell whether a print is running (Klipper or Moonraker didn't say); try again | as `printing`, not `ad5x_setup/control` |
-| `starting_up` | 409 | Start-up hasn't finished (the boot flag still points elsewhere); try again in a minute | `kernel_retry`, `boot_recovery`, Kiln OS update |
-| `recovery_updating` | 409 | The recovery OS is being written into slot A; try again in a few minutes | `boot_recovery` |
-| `no_recovery` | 409 | Slot A doesn't hold the recovery OS | `boot_recovery` |
+| `starting_up` | 409 | Start-up hasn't finished (the boot flag still points elsewhere, or `S99ad5x-booted` hasn't marked this boot's start-up finished); try again in a minute | `kernel_retry`, `boot_recovery`, Kiln OS update, reboot and shutdown (only in the first 10 minutes after boot) |
+| `recovery_updating` | 409 | The recovery OS is being written into slot A; try again in a few minutes | `boot_recovery`, Kiln OS update, reboot and shutdown |
+| `no_recovery` | 409 | Slot A doesn't hold the recovery OS, or not its whole kernel | `boot_recovery`, Kiln OS update |
 | `refused` | 409 | Another refusal of the agent (the message says why) | `boot_recovery` |
 | `nothing_to_retry` | 409 | Kiln's kernel runs and nothing is recorded as failed | `kernel_retry` |
 | `no_own_kernel` | 409 | This image has no kernel of its own | `kernel_retry` |
@@ -125,8 +125,8 @@ inside Moonraker's `result`; their replies keep that inner `result`
 | `failed` | 500 (400 through Moonraker) | Another failure in a Kiln Klipper module (the message says what) | `ad5x_setup/control` |
 | `internal_error` | 500 (400 through Moonraker) | An unexpected error in a Kiln Klipper module (a bug: please report it) | `ad5x_setup/control` |
 | `download_failed` | 502 | The update download failed or doesn't match `SHA256SUMS` | Kiln OS and package updates |
-| `agent_unavailable` | 503 | The root update agent's request folder isn't there (`S68ad5x-update-agent` never started) | `kernel_retry`, `boot_recovery`, service actions, updates |
-| `agent_timeout` | 503 | The root update agent didn't answer in time | `kernel_retry`, `boot_recovery`, service actions, updates |
+| `agent_unavailable` | 503 | The root update agent's request folder isn't there (`S68ad5x-update-agent` never started) | `kernel_retry`, `boot_recovery`, service actions, reboot and shutdown, updates |
+| `agent_timeout` | 503 | The root update agent didn't answer in time | `kernel_retry`, `boot_recovery`, service actions, reboot and shutdown, updates |
 | `database_unavailable` | 503 | Moonraker's database isn't loaded | `channel` |
 | `no_space` | 507 | Not enough free space for the G-code of a `.3mf` | upload |
 
@@ -164,6 +164,7 @@ manager's `Kiln OS` entry (`version`) there.
 | `plugins` | Plugins: `printer.ad5x_plugins`, `ENABLE_PLUGIN` and friends |
 | `kernel_retry` | `GET /machine/kiln_os/kernel`, `POST /machine/kiln_os/kernel_retry` |
 | `boot_recovery` | `POST /machine/kiln_os/boot_recovery` |
+| `return_stock` | `POST /machine/kiln_os/return_stock` |
 | `3mf_upload` | Uploads of sliced `.gcode.3mf` are unpacked to G-code; form field `plate` |
 | `print_error` | Upload replies carry `print_error` when a requested print didn't start |
 | `updates` | The update manager has the `Kiln OS` entry (present unless `[kiln_os]` lost its `[update_manager]`) |
@@ -181,11 +182,12 @@ Klipper has started (`printer.objects.list`).
 | `GET /machine/kiln_os/kernel` | `machine.kiln_os.kernel` | v0.0.50 |
 | `POST /machine/kiln_os/kernel_retry` | `machine.kiln_os.kernel_retry` | v0.0.50 |
 | `POST /machine/kiln_os/boot_recovery` | `machine.kiln_os.boot_recovery` | v0.0.55 |
+| `POST /machine/kiln_os/return_stock` | `machine.kiln_os.return_stock` | v1.0.0 |
 | `POST /machine/kiln_os/channel` | `machine.kiln_os.channel` | v0.1.0-rc1 |
 | `GET\|POST /printer/ad5x_setup/control` | `printer.ad5x_setup.control` | v0.0.1 |
 | `GET\|POST /printer/ad5x_soak/abort` | `printer.ad5x_soak.abort` | v0.0.10 |
 
-The first five are Moonraker's `kiln_os` component
+The first six are Moonraker's `kiln_os` component
 (`moonraker/components/kiln_os.py`); the last two come from Klipper
 (`klipper/extras/ad5x_setup.py`, `ad5x_soak.py`) and Moonraker passes them
 on.
@@ -202,11 +204,11 @@ curl http://PRINTER/machine/kiln_os/info
 ```json
 {"result": {
   "os_version": "v0.1.0-rc1",
-  "api_version": "1.6",
+  "api_version": "1.7",
   "kernel": "6.6.18-ad5x",
   "features": ["ifs", "soak", "setup_wizard", "plugins", "kernel_retry",
-               "boot_recovery", "3mf_upload", "print_error", "updates",
-               "lane_data"],
+               "boot_recovery", "3mf_upload", "print_error", "return_stock",
+               "updates", "lane_data"],
   "update_channel": "stable"
 }}
 ```
@@ -272,7 +274,7 @@ curl http://PRINTER/machine/kiln_os/kernel
   "failed_why": "start-up unfinished, 2 in a row",
   "ours_failed": true,
   "unfinished": 0,
-  "mainline": "7.3.3-ad5x",
+  "mainline": "7.3.4-ad5x",
   "mainline_on": false,
   "mainline_failed": false,
   "mainline_failed_why": ""
@@ -373,13 +375,35 @@ Errors:
 | 409 | `print_state_unknown` | `The print state is unknown, try again`, `No answer from Moonraker` | The agent couldn't tell |
 | 409 | `starting_up` | `Start-up has not finished yet, try again in a minute` | Right after boot |
 | 409 | `recovery_updating` | `The recovery OS is being written into slot A (...); try again in a few minutes` | A new recovery OS is being installed |
-| 409 | `no_recovery` | `Slot A doesn't hold the recovery OS (it holds: ...)` | |
+| 409 | `no_recovery` | `Slot A doesn't hold the recovery OS (it holds: ...)`, or `Slot A doesn't hold the recovery OS's kernel: no complete uImage in ... (header or data CRC wrong)` | The second: the recovery OS's kernel is incomplete (a reboot cut its write short) |
 | 409 | `refused` | (the agent's text) | Any other refusal |
 | 500 | `agent_failed` | `The update agent failed: can't write the boot flag` | |
 | 503 | `agent_timeout`, `agent_unavailable` | As `kernel_retry` | |
 
 Since v0.0.55; `state` and these statuses and reasons since v0.1.0-rc1
 (before: `{"result": {"result": "rebooting"}}`, 400).
+
+### POST /machine/kiln_os/return_stock
+
+Reboots into the recovery OS, which then opens "Return to Flashforge
+firmware" on its screen: it looks for Flashforge's files (the stock copy
+on the printer, on usershare, or on a USB stick, or Flashforge's own
+`AD5X-*.tgz` there) and puts Flashforge's firmware back only after a tap
+there (`docs/install.md`, "Going back to stock"). This request itself
+writes only the boot flag and the request file
+`/data/ad5x/return-stock/request`. No parameters; the same answer, checks
+and errors as `boot_recovery`. The touch screen's Settings > System >
+"Return to Flashforge firmware" uses it.
+
+```sh
+curl -X POST http://PRINTER/machine/kiln_os/return_stock
+```
+
+```json
+{"result": {"state": "rebooting", "result": "rebooting"}}
+```
+
+Since v1.0.0.
 
 ### /printer/ad5x_setup/control
 
@@ -534,6 +558,18 @@ HTTP reason phrase, not only in Moonraker's log.
 
 Since v0.0.45.
 
+### GET /server/files/list (`root=config`)
+
+The flat list of the config root leaves out the files of the `plugins`
+folder (the link to `/data/ad5x/plugins` that Kiln's `kiln_os` component
+makes; Moonraker patch 0008). The list runs on Moonraker's event loop at
+about 14 ms per file on the AD5X, and large plugins blocked Moonraker for
+a minute at each call. To show plugin files, list the folder with
+`GET /server/files/directory?path=config/plugins` (and its subfolders);
+reading, uploading, moving and deleting there work as upstream, and
+`notify_filelist_changed` still reports changes in it. Other roots and
+folders are listed as upstream.
+
 ### POST /printer/print/cancel during the print start
 
 Upstream queues the cancel behind the running G-code command, which during
@@ -565,6 +601,36 @@ doesn't offer (`stop` for `nginx`) answers 400 `bad_parameter`; Moonraker
 itself refuses services it doesn't list (400, no reason). Waits up to 90 s
 for the agent. Since v0.1.0-rc1 (before: `provider: none`, no service
 actions).
+
+### POST /machine/reboot, /machine/shutdown (`provider: kiln_agent`)
+
+Upstream runs `sudo reboot` / `sudo poweroff` here. On Kiln the same
+provider hands them to the root update agent instead (a `reboot` or
+`shutdown` request, `S68ad5x-update-agent`), which checks first, answers,
+and then reboots or powers off about 2 s later. The JSON-RPC methods
+`machine.reboot` and `machine.shutdown` and the remote methods
+`reboot_machine` and `shutdown_machine` (for other Moonraker components)
+take the same path. No parameters; the reply is upstream's `"ok"`. Waits
+up to 30 s for the agent. Fluidd's and the touch screen's Reboot and
+Shutdown use it.
+
+```sh
+curl -X POST http://PRINTER/machine/reboot
+```
+
+Errors:
+
+| Status | Reason | Message | When |
+|---|---|---|---|
+| 409 | `printing` | `A print is running` | Printing or paused |
+| 409 | `print_state_unknown` | `The print state is unknown, try again`, `No answer from Moonraker` | The agent couldn't tell |
+| 409 | `recovery_updating` | `The recovery OS is being written into slot A, try again in a few minutes` | A new recovery OS is being written (after a Kiln OS update): a reboot or power-off would cut it short |
+| 409 | `starting_up` | `Start-up has not finished yet, try again in a minute` | Start-up hasn't finished and the printer started less than 10 minutes ago. After 10 minutes a start that never finished counts as hung, and the reboot goes ahead (the boot flag still points at the recovery OS, so the printer starts that) |
+| 503 | `agent_timeout`, `agent_unavailable` | As `kernel_retry` | |
+
+There is no `sudo` rule for the klipper user any more. Up to v1.0.0-rc2,
+`/machine/reboot` ran `sudo reboot` with no checks, and
+`/machine/shutdown` failed (sudo allowed only the reboot).
 
 ## Update manager entries
 
@@ -601,15 +667,19 @@ curl -X POST 'http://PRINTER/machine/update/upgrade?name=Kiln%20OS'
 
 Upgrade downloads `kiln-os-<version>-update.zip`, checks it against the
 release's `SHA256SUMS`, and the printer reboots into the recovery OS,
-which installs it (about 3 minutes). Progress comes as upstream's
+which installs it (3-6 minutes). Progress comes as upstream's
 `notify_update_response` (`Downloading ... MiB`, `Downloading: N%`,
 `Checking the download...`, `Staging the update for the recovery OS...`,
 then `Kiln OS vX staged. The printer reboots now ...` with `complete:
 true`). Errors from the upgrade: the agent's as for `kernel_retry` (409
 `printing`, `print_state_unknown`, `starting_up`; 500 `agent_failed`; 503
-`agent_timeout`, `agent_unavailable`) and 502 `download_failed` when the
-download fails, is incomplete or doesn't match `SHA256SUMS`. Moonraker's
-own refusals (another update running) have no reason.
+`agent_timeout`, `agent_unavailable`), 409 `recovery_updating` while the
+recovery OS is being written into slot A (at once; up to v1.0.0-rc2 the
+agent waited up to 3 minutes for the write while Moonraker gave up after
+2 and answered `agent_timeout`, though the update then went ahead), and 502 `download_failed` when the download fails, is
+incomplete or doesn't match `SHA256SUMS`. Moonraker waits up to 180 s for
+the agent. Moonraker's own refusals (another update running) have no
+reason.
 
 Since v0.0.1 (named `Kiln OS` since v0.0.2).
 
@@ -839,7 +909,7 @@ are not API and may change in any release. Commands from plugins
 | `M106`, `M107` | `S` 0-255 | Part fan (`fan_generic fanM106`) | v0.0.1 |
 | `M900` | `K` `[E=extruder]` | Pressure advance, Marlin style | v0.0.1 |
 | `SET_GCODE_OFFSET` | upstream's | Wrapped: `Z`/`Z_ADJUST` are also saved as the print Z offset | v0.0.1 |
-| `BED_MESH_CALIBRATE` | upstream's | Wrapped: tares the strain gauges first | v0.0.1 |
+| `BED_MESH_CALIBRATE` | upstream's; `FORCE=1` | Wrapped: tares the strain gauges first; during a print, skipped after `PRINT_START`'s mesh (or another mesh of that print) unless `FORCE=1`, `PROFILE=` or `ADAPTIVE=0` (issue #73) | v0.0.1 |
 | `SAVE_CONFIG` | upstream's | Wrapped: PID/shaper results go to `ad5x-tuning.cfg` | v0.0.14 |
 | `HEATER_IDLE_TIMEOUT` | `[MINUTES=]` | Show or set when idle heaters go off | v0.0.34 |
 | `TRASH_OFFSET` | `X=` `Y=` or `RESET=1` | Move the purge box spot | v0.0.17 |

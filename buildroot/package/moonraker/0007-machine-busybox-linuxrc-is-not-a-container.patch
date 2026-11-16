@@ -1,0 +1,27 @@
+machine: BusyBox init started as /linuxrc is not a container
+
+Moonraker decides it runs in a container when /proc/1/cgroup names
+docker or lxc, or else when PID 1 (first word of /proc/1/sched) is not
+"init" or "systemd". The AD5X's boot command line starts BusyBox init as
+init=/linuxrc, so PID 1 is "linuxrc" on the 6.6 and 7.3 kernels (which
+have /proc/1/sched), Moonraker reported virtualization lxc, and
+/machine/reboot and /machine/shutdown (Fluidd's Reboot and Shutdown)
+were refused with "Cannot reboot from within a lxc container". "linuxrc"
+is now on the list of real init names.
+
+Upstream: not submitted (AD5X open OS)
+
+--- a/moonraker/components/machine.py
++++ b/moonraker/components/machine.py
+@@ -652,7 +652,10 @@
+                 try:
+                     data = sched_file.read_text().strip()
+                     proc_name = data.split('\n')[0].split()[0]
+-                    if proc_name not in ["init", "systemd"]:
++                    # Kiln OS: BusyBox init started as init=/linuxrc
++                    # (the AD5X's boot command line) is PID 1 on the
++                    # printer itself, not a container
++                    if proc_name not in ["init", "systemd", "linuxrc"]:
+                         self.inside_container = True
+                         virt_type = "container"
+                         virt_id = "lxc"

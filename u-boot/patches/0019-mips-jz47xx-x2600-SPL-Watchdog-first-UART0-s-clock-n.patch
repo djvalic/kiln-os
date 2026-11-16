@@ -1,0 +1,195 @@
+From 9c0b9b8bcd1d3ffc6e5f7a0fc6594973afa946fa Mon Sep 17 00:00:00 2001
+From: valix <djvalic.wc@gmail.com>
+Date: Sun, 15 Nov 2026 12:41:41 -0500
+Subject: [PATCH 19/23] mips: jz47xx: x2600: SPL: Watchdog first, UART0's
+ clock, no endless waits
+
+start.S stops the boot ROM's watchdog, and the SPL armed its own only
+after the pins, the console and the first print. Its console never
+opened UART0's clock (the stock SPL's enable_uart_clk() clears CLKGR0
+bit 12) and waited for THRE without a limit, so a UART that doesn't
+take bytes would have hung the board for good, watchdog off.
+
+Read the scratch pad and arm the watchdog first, then the timer, pins
+and console. Open UART0's clock before its registers are written. Give
+each character 2 ms (one takes 87 us); a UART that times out is left
+alone for the rest of the SPL.
+
+The timer and the delays didn't depend on the boot ROM's state either:
+the SPL only set the OST up when it wasn't running, at whatever
+prescaler it ran (the stock SPL sets /4). Set it up in the SPL always,
+as the stock SPL does, at /1; in U-Boot proper when it isn't running at
+/1 (the stock SPL may start a U-Boot from a slot). __udelay() also ends
+after a loop count that can't be shorter than the delay, should the
+counter not run.
+---
+ arch/mips/mach-jz47xx/x2600/spl.c   | 38 ++++++++++++++++++++++++-----
+ arch/mips/mach-jz47xx/x2600/x2600.c | 31 ++++++++++++++++-------
+ 2 files changed, 54 insertions(+), 15 deletions(-)
+
+diff --git a/arch/mips/mach-jz47xx/x2600/spl.c b/arch/mips/mach-jz47xx/x2600/spl.c
+index 1e26912e..155f2f49 100644
+--- a/arch/mips/mach-jz47xx/x2600/spl.c
++++ b/arch/mips/mach-jz47xx/x2600/spl.c
+@@ -36,6 +36,7 @@
+ #include <asm/io.h>
+ #include <asm/sections.h>
+ #include <linux/bitops.h>
++#include <linux/delay.h>
+ #include <linux/string.h>
+ #include <mach/ad5x_start.h>
+ #include <mach/x2600.h>
+@@ -95,6 +96,8 @@ static void x2600_spl_pins(void)
+ 
+ /* ---- console: UART0, 115200 from the 24 MHz EXCLK ---- */
+ 
++#define X2600_CPM_CLKGR0	((void __iomem *)0xb0000020)
++#define CLKGR0_UART0		BIT(12)
+ #define X2600_UART0		((void __iomem *)0xb0030000)
+ #define UART_THR		0x00
+ #define UART_DLL		0x00
+@@ -109,9 +112,15 @@ static void x2600_spl_pins(void)
+ #define UART_LCR_DLAB		0x80
+ #define UART_LSR_THRE		0x20
+ #define UART_DIV_115200		13	/* 24 MHz / (16 * 13) = 115384 */
++/* a character takes 87 us at 115200; a UART that doesn't take one is off */
++#define UART_TX_TIMEOUT_US	2000
++
++static bool x2600_spl_uart_dead;
+ 
+ static void x2600_spl_uart_init(void)
+ {
++	/* its clock, as the stock SPL's enable_uart_clk() opens it */
++	clrbits_le32(X2600_CPM_CLKGR0, CLKGR0_UART0);
+ 	writel(0, X2600_UART0 + UART_IER);
+ 	writel(UART_LCR_DLAB | UART_LCR_8N1, X2600_UART0 + UART_LCR);
+ 	writel(UART_DIV_115200, X2600_UART0 + UART_DLL);
+@@ -121,12 +130,22 @@ static void x2600_spl_uart_init(void)
+ 	writel(UART_FCR_FIFO | UART_FCR_UME, X2600_UART0 + UART_FCR);
+ }
+ 
++/* never waits for ever: a UART that stops taking bytes is left alone */
+ static void x2600_spl_putc(const char c)
+ {
++	unsigned int us;
++
++	if (x2600_spl_uart_dead)
++		return;
+ 	if (c == '\n')
+ 		x2600_spl_putc('\r');
+-	while (!(readl(X2600_UART0 + UART_LSR) & UART_LSR_THRE))
+-		;
++	for (us = 0; !(readl(X2600_UART0 + UART_LSR) & UART_LSR_THRE); us++) {
++		if (us >= UART_TX_TIMEOUT_US) {
++			x2600_spl_uart_dead = true;
++			return;
++		}
++		udelay(1);
++	}
+ 	writel(c, X2600_UART0 + UART_THR);
+ }
+ 
+@@ -339,16 +358,24 @@ void board_init_f(ulong dummy)
+ 	gd = &gdata;
+ 	memset(__bss_start, 0, (size_t)__bss_end - (size_t)__bss_start);
+ 
++	/*
++	 * start.S stopped the boot ROM's watchdog. Before anything that could
++	 * hang (pins, the console, the first print), see what the last start
++	 * left and arm it for this attempt.
++	 */
++	prev = x2600_cpspr_read();
++	ad5x_start_plan(prev, &plan);
++	if (!plan.stop)
++		spl_phase(AD5X_PH_DDR, plan.slot_b);
++
++	timer_init();
+ 	x2600_spl_pins();
+ 	x2600_spl_uart_init();
+-	timer_init();
+ 	mips_cache_probe();
+ 	gd->flags |= GD_FLG_SPL_INIT;
+ 	preloader_console_init();
+ 	printf("SPL: %s\n", spl_kind);
+ 
+-	prev = x2600_cpspr_read();
+-	ad5x_start_plan(prev, &plan);
+ 	if (plan.stop) {
+ 		x2600_wdt_stop();
+ 		x2600_cpspr_write(0);
+@@ -363,7 +390,6 @@ void board_init_f(ulong dummy)
+ 		       plan.forced ? ", slot " : "",
+ 		       plan.forced ? (plan.slot_b ? 'b' : 'a') : ' ');
+ 
+-	spl_phase(AD5X_PH_DDR, plan.slot_b);
+ #ifndef CONFIG_AD5X_SPL_CHAINLOAD
+ 	x2600_spl_clocks_init();
+ 	if (x2600_sdram_init())
+diff --git a/arch/mips/mach-jz47xx/x2600/x2600.c b/arch/mips/mach-jz47xx/x2600/x2600.c
+index b2eb9667..c1c13223 100644
+--- a/arch/mips/mach-jz47xx/x2600/x2600.c
++++ b/arch/mips/mach-jz47xx/x2600/x2600.c
+@@ -32,10 +32,13 @@ void x2600_uart0_plain_baud(void)
+ }
+ 
+ /*
+- * Timer: the global OST, a 64-bit counter at the 24 MHz EXCLK. The CP0
+- * counter doesn't run here (a "sleep" on it never ends). The clock gate is
+- * CLKGR0 bit 28 (set = off); started unless already running, so a count
+- * left by the SPL or Linux carries on.
++ * Timer: the global OST, a 64-bit counter at the 24 MHz EXCLK (prescaler
++ * /1). The CP0 counter doesn't run here (a "sleep" on it never ends). The
++ * clock gate is CLKGR0 bit 28 (set = off). The SPL sets it up whatever the
++ * boot ROM left (the stock SPL does the same at /4); U-Boot proper keeps a
++ * count left by Kiln's SPL or Linux running when it is at /1, and sets it
++ * up otherwise (the stock SPL, which may start a U-Boot from a slot,
++ * leaves /4).
+  */
+ #define X2600_CPM_CLKGR0	((void __iomem *)0xb0000020)
+ #define CLKGR0_OST		BIT(28)
+@@ -46,10 +49,15 @@ void x2600_uart0_plain_baud(void)
+ #define GOST_CNTH		0x0c
+ #define GOST_CNTL		0x10
+ 
++#define GOST_CCR_DIV_MASK	3
++
+ int timer_init(void)
+ {
+ 	clrbits_le32(X2600_CPM_CLKGR0, CLKGR0_OST);
+-	if (!(readl(X2600_OST + GOST_ER) & BIT(0))) {
++	if (IS_ENABLED(CONFIG_XPL_BUILD) ||
++	    !(readl(X2600_OST + GOST_ER) & BIT(0)) ||
++	    (readl(X2600_OST + GOST_CCR) & GOST_CCR_DIV_MASK)) {
++		writel(0, X2600_OST + GOST_ER);
+ 		writel(0, X2600_OST + GOST_CCR);	/* divide by 1 */
+ 		writel(BIT(0), X2600_OST + GOST_CR);
+ 		writel(BIT(0), X2600_OST + GOST_ER);
+@@ -157,16 +165,21 @@ void x2600_cpspr_write(u32 val)
+ 
+ #ifdef CONFIG_XPL_BUILD
+ /*
+- * Delays from the OST directly: lib/time.c's version would pull in 64-bit
+- * division, which the SPL has no room for.
++ * Delays from the OST directly (timer_init() set it to 24 MHz): lib/time.c's
++ * version would pull in 64-bit division, which the SPL has no room for. The
++ * low word alone; its wrap is harmless (unsigned difference). Should the
++ * counter not run, a loop count ends the wait instead: one pass takes more
++ * than one CPU cycle (at most 1.2 GHz), so it is never shorter than asked.
+  */
+ void __udelay(unsigned long usec)
+ {
+ 	u32 start = readl(X2600_OST + GOST_CNTL);
+ 	u32 ticks = usec * 24;
++	u32 n, max = usec > 0xffffffffU / 1200 ? 0xffffffffU : usec * 1200;
+ 
+-	while (readl(X2600_OST + GOST_CNTL) - start < ticks)
+-		;
++	for (n = 0; readl(X2600_OST + GOST_CNTL) - start < ticks; n++)
++		if (n >= max)
++			break;
+ }
+ #else
+ /* "reset": through the watchdog; the next SPL start is a fresh one */
+-- 
+2.56.0
+

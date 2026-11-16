@@ -1,0 +1,237 @@
+From 03c518d1127cec2044e6027335af83a4b9e16dae Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sat, 14 Nov 2026 15:28:25 -0700
+Subject: [PATCH 05/10] ad5x: Environment on the eMMC, boot flag command and
+ recovery fallback
+
+The environment is kept twice (0x8A400, 0x92400 of the eMMC's user area,
+32 KiB each), where the stock U-Boot would keep its own; nothing else
+uses that area. A stored environment from another build is reset to this
+build's, keeping only boot_pending, so an update never runs old scripts.
+
+ad5x_flag reads or sets the boot flag the stock SPL reads (the first
+sector of 'ota', LBA 0x6c800 in the SPL's built-in table).
+
+U-Boot runs for slot B only. Each start sets boot_pending and boots the
+main OS's kernel from rootfs2; Linux clears it once start-up completes.
+If it's still set at the next start, or the kernel can't be loaded,
+U-Boot points the flag at slot A and boots the recovery OS's kernel the
+way the SPL would, from 'kernel' with the SPL's slot A command line.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ board/flashforge/ad5x/ad5x.c   | 123 +++++++++++++++++++++++++++++++++
+ board/flashforge/ad5x/ad5x.env |  25 +++++++
+ configs/ad5x_defconfig         |  13 +++-
+ 3 files changed, 158 insertions(+), 3 deletions(-)
+ create mode 100644 board/flashforge/ad5x/ad5x.env
+
+diff --git a/board/flashforge/ad5x/ad5x.c b/board/flashforge/ad5x/ad5x.c
+index 26f7bd0e..3c946191 100644
+--- a/board/flashforge/ad5x/ad5x.c
++++ b/board/flashforge/ad5x/ad5x.c
+@@ -3,8 +3,16 @@
+  * Flashforge Adventurer 5X (Ingenic X2600)
+  */
+ 
++#include <blk.h>
++#include <command.h>
++#include <env.h>
+ #include <init.h>
++#include <malloc.h>
++#include <mmc.h>
++#include <asm/cache.h>
+ #include <asm/global_data.h>
++#include <linux/string.h>
++#include <version_string.h>
+ 
+ DECLARE_GLOBAL_DATA_PTR;
+ 
+@@ -28,3 +36,118 @@ int dram_init(void)
+ 	gd->ram_size = 236 << 20;
+ 	return 0;
+ }
++
++/*
++ * The boot flag the stock SPL reads: the first sector of the "ota"
++ * partition, at the LBA built into the SPL (not taken from the GPT). The
++ * SPL boots slot B (kernel2, rootfs2) when its first 11 bytes are
++ * "ota:kernel2", slot A (kernel, rootfs) otherwise.
++ */
++#define AD5X_OTA_LBA	0x6c800
++#define AD5X_FLAG_B	"ota:kernel2"
++#define AD5X_FLAG_A	"ota:kernel"
++
++static struct blk_desc *ad5x_emmc(void)
++{
++	struct mmc *mmc = find_mmc_device(0);
++
++	if (!mmc || mmc_init(mmc))
++		return NULL;
++	return mmc_get_blk_desc(mmc);
++}
++
++/* "a" or "b", as the SPL reads the flag; NULL if it can't be read */
++static const char *ad5x_read_slot(void)
++{
++	struct blk_desc *desc = ad5x_emmc();
++	char *buf;
++	const char *slot = NULL;
++
++	if (!desc)
++		return NULL;
++	buf = memalign(ARCH_DMA_MINALIGN, desc->blksz);
++	if (!buf)
++		return NULL;
++	if (blk_dread(desc, AD5X_OTA_LBA, 1, buf) == 1)
++		slot = strncmp(buf, AD5X_FLAG_B, strlen(AD5X_FLAG_B)) ? "a" : "b";
++	free(buf);
++	return slot;
++}
++
++static int ad5x_write_slot(char slot)
++{
++	struct blk_desc *desc = ad5x_emmc();
++	char *buf;
++	int ret = -EIO;
++
++	if (!desc)
++		return -ENODEV;
++	buf = memalign(ARCH_DMA_MINALIGN, desc->blksz);
++	if (!buf)
++		return -ENOMEM;
++	/* as Linux writes it: the string, a newline, zeros */
++	memset(buf, 0, desc->blksz);
++	strcpy(buf, slot == 'b' ? AD5X_FLAG_B "\n" : AD5X_FLAG_A "\n");
++	if (blk_dwrite(desc, AD5X_OTA_LBA, 1, buf) == 1)
++		ret = 0;
++	free(buf);
++	return ret;
++}
++
++/*
++ * The boot scripts live in the built-in environment. A stored environment
++ * from another build is reset to this build's, keeping only boot_pending,
++ * so that an updated U-Boot never runs an older build's scripts.
++ */
++static void ad5x_env_follow_build(void)
++{
++	const char *built = env_get("ad5x_build");
++	char *pending;
++
++	if (built && !strcmp(built, version_string))
++		return;
++
++	pending = env_get("boot_pending") ? strdup(env_get("boot_pending")) : NULL;
++	printf("ad5x: environment from another build: defaults\n");
++	env_set_default(NULL, 0);
++	env_set("ad5x_build", version_string);
++	env_set("boot_pending", pending);
++	free(pending);
++	env_save();
++}
++
++int board_late_init(void)
++{
++	ad5x_env_follow_build();
++	env_set("ad5x_slot", ad5x_read_slot());
++	return 0;
++}
++
++/* ad5x_flag [a|b]: show the boot flag, or set it for the next start */
++static int do_ad5x_flag(struct cmd_tbl *cmdtp, int flag, int argc,
++			char *const argv[])
++{
++	const char *slot;
++
++	if (argc == 1) {
++		slot = ad5x_read_slot();
++		if (!slot)
++			return CMD_RET_FAILURE;
++		printf("slot %s\n", slot);
++		env_set("ad5x_slot", slot);
++		return CMD_RET_SUCCESS;
++	}
++	if (argc != 2 || (strcmp(argv[1], "a") && strcmp(argv[1], "b")))
++		return CMD_RET_USAGE;
++	if (ad5x_write_slot(argv[1][0])) {
++		printf("ad5x_flag: writing the boot flag failed\n");
++		return CMD_RET_FAILURE;
++	}
++	printf("next start: slot %s\n", argv[1]);
++	return CMD_RET_SUCCESS;
++}
++
++U_BOOT_CMD(ad5x_flag, 2, 0, do_ad5x_flag,
++	   "show or set the SPL's boot flag",
++	   "      - show the slot the SPL boots (a: recovery, b: main)\n"
++	   "ad5x_flag a|b  - set it for the next start");
+diff --git a/board/flashforge/ad5x/ad5x.env b/board/flashforge/ad5x/ad5x.env
+new file mode 100644
+index 00000000..992725f7
+--- /dev/null
++++ b/board/flashforge/ad5x/ad5x.env
+@@ -0,0 +1,25 @@
++/*
++ * U-Boot runs only for slot B (the SPL starts it from kernel2): it boots
++ * the main OS's own kernel from rootfs2. When the last start wasn't
++ * confirmed, or this one can't be loaded, it boots the recovery OS (slot
++ * A) the way the SPL would, and points the boot flag there. Linux confirms
++ * a finished start with "fw_setenv boot_pending" (S99ad5x-booted).
++ */
++loadaddr=0x82000000
++kernel_path=/usr/lib/ad5x/kernel66/xImage
++/* the SPL's own command line, without the root */
++args_spl=console=ttyS0,115200n8 loglevel=8 mem=236M@0x0
++	rmem=16M@0xec00000 rtos_size=4M@0xfc00000 mem=256M@0x30000000
++	init=/linuxrc rootwait rootfstype=squashfs ro lpj=11935744
++boot_main=setenv bootargs ${args_spl} root=/dev/mmcblk0p4
++	ad5x.kernel=own panic=10 loglevel=5;
++	sqfsload mmc 0:4 ${loadaddr} ${kernel_path} && bootm ${loadaddr}
++/* slot A: the stock uImage at the start of "kernel" (LBA 0x800), 5 MiB */
++boot_recovery=setenv bootargs ${args_spl} root=/dev/mmcblk0p2;
++	mmc read ${loadaddr} 0x800 0x2800 && bootm ${loadaddr}
++fallback=echo "ad5x: start not confirmed: recovery OS";
++	ad5x_flag a; run boot_recovery
++bootcmd=if test "${boot_pending}" = 1; then
++		setenv boot_pending; saveenv; run fallback;
++	fi;
++	setenv boot_pending 1; saveenv; run boot_main; run fallback
+diff --git a/configs/ad5x_defconfig b/configs/ad5x_defconfig
+index 8edd0992..594b0ce2 100644
+--- a/configs/ad5x_defconfig
++++ b/configs/ad5x_defconfig
+@@ -13,12 +13,20 @@ CONFIG_DISPLAY_CPUINFO=y
+ CONFIG_BOARD_EARLY_INIT_F=y
+ CONFIG_HUSH_PARSER=y
+ CONFIG_SYS_PROMPT="ad5x# "
+-CONFIG_BOOTDELAY=-1
++CONFIG_BOOTDELAY=3
+ CONFIG_CMD_DM=y
+ CONFIG_CMD_MEMORY=y
+ CONFIG_CMD_TIME=y
+ CONFIG_VERSION_VARIABLE=y
+-CONFIG_ENV_IS_NOWHERE=y
++CONFIG_ENV_IS_IN_MMC=y
++CONFIG_ENV_SIZE=0x8000
++CONFIG_ENV_OFFSET=0x8A400
++CONFIG_ENV_REDUNDANT=y
++CONFIG_ENV_OFFSET_REDUND=0x92400
++CONFIG_ENV_MMC_DEVICE_INDEX=0
++CONFIG_ENV_MMC_EMMC_HW_PARTITION=0
++CONFIG_ENV_SOURCE_FILE="ad5x"
++CONFIG_BOARD_LATE_INIT=y
+ CONFIG_DM_SERIAL=y
+ CONFIG_SYS_NS16550=y
+ CONFIG_CMD_MMC=y
+@@ -29,7 +37,6 @@ CONFIG_MMC_SDHCI=y
+ CONFIG_MMC_SDHCI_X2600=y
+ # CONFIG_MMC_HW_PARTITIONING is not set
+ CONFIG_EFI_PARTITION=y
+-# CONFIG_MMC_WRITE is not set
+ CONFIG_SYS_BOOTM_LEN=0x1000000
+ CONFIG_LEGACY_IMAGE_FORMAT=y
+ CONFIG_CMD_SQUASHFS=y
+-- 
+2.43.0
+

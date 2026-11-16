@@ -145,6 +145,8 @@ class Checker:
             self.warn("no README.md (what it does, how to use it)")
         self.check_python()
         self.check_extras()
+        self.check_module_dirs()
+        self.check_submodules()
         self.check_moonraker()
         self.check_names()
         self.check_root()
@@ -231,6 +233,15 @@ class Checker:
                               "shipped nor in the catalog" % (other,))
         if 'owns_ifs' in data and not isinstance(data['owns_ifs'], bool):
             self.error("plugin.json: owns_ifs must be true or false")
+        if 'module_dirs' in data:
+            dirs, err = ap.parse_module_dirs(data['module_dirs'])
+            if err:
+                self.error("plugin.json: module_dirs: %s" % (err,))
+            for d in dirs:
+                if not os.path.isdir(os.path.join(self.dir, *d.split('/'))):
+                    self.warn("plugin.json: module_dirs: %s is not there "
+                              "(fine if the plugin fetches it itself; its "
+                              "modules load once it is)" % (d,))
 
     # root/: scripts that run as root (docs/plugin-root-hooks.md), packed
     # the way the plugin manager sends them to root
@@ -316,15 +327,25 @@ class Checker:
         if self.klippy:
             cores.append(os.path.join(self.klippy, "extras"))
         prefix = self.name.replace('-', '_')
+        capitals = []
+        lower = {}
         for mod, fn in ap.extras_modules(ext):
             if not ap.MODULE_RE.match(mod):
-                self.warn("extras/%s is not loaded: module names are a-z, "
-                          "0-9 and _, starting with a letter" % (fn,))
+                self.warn("extras/%s is not loaded: module names are "
+                          "letters, digits and _, starting with a letter"
+                          % (fn,))
                 continue
+            if mod != mod.lower():
+                capitals.append(fn)
+            if mod.lower() in lower:
+                self.error("extras/%s and extras/%s: names that differ only "
+                           "in case are one name to the printer: Klipper "
+                           "would stop" % (lower[mod.lower()], fn))
+            lower.setdefault(mod.lower(), fn)
             if any(ap.is_core_module(mod, c) for c in cores):
                 self.error("extras/%s has the name of a Klipper or Kiln OS "
                            "module; rename it (%s_...)" % (fn, prefix))
-            elif mod.startswith(ap.RESERVED_PREFIXES):
+            elif mod.lower().startswith(ap.RESERVED_PREFIXES):
                 pass    # check_names
             elif not mod.startswith(prefix):
                 self.warn("extras/%s: start module names with the plugin "
@@ -335,9 +356,89 @@ class Checker:
                     s.split()[0] == mod for s in self.sections):
                 self.warn("extras/%s: plugin.cfg has no [%s] section, so "
                           "Klipper makes no object of it" % (fn, mod))
+        if capitals:
+            self.need_api((1, 7), "a module name with capitals (%s)" % (
+                ", ".join("extras/" + fn for fn in capitals),))
         if not self.klippy:
             self.note("Klipper's own module names not checked (--klippy "
                       "DIR)")
+
+    def need_api(self, version, what):
+        """Warn when plugin.json's requires_os is older than version."""
+        req = ap.parse_version(
+            ap.read_metadata(self.dir, self.name)['requires_os'])
+        if not req or req < version:
+            want = "%d.%d" % version
+            self.warn("%s needs plugin API %s: set \"requires_os\": \"%s\" "
+                      "(an older Kiln OS loads the plugin without it)"
+                      % (what, want, want))
+
+    # plugin.json module_dirs (plugin API 1.7): more Klipper module
+    # folders, imported when needed; names that would stop Klipper, and
+    # links the printer doesn't follow out of the plugin folder
+    def check_module_dirs(self):
+        dirs = ap.module_dirs(self.dir)
+        if not dirs:
+            return
+        self.need_api((1, 7), "plugin.json module_dirs")
+        cores = [os.path.join(REPO, "klipper", "extras")]
+        if self.klippy:
+            cores.append(os.path.join(self.klippy, "extras"))
+        # lower-case name -> where (the printer takes names that differ
+        # only in case for one)
+        seen = {}
+        ext = os.path.join(self.dir, "extras")
+        if os.path.isdir(ext):
+            seen.update((mod.lower(), "extras/" + fn)
+                        for mod, fn in ap.extras_modules(ext)
+                        if ap.MODULE_RE.match(mod))
+        for d in dirs:
+            if not os.path.isdir(d):
+                continue
+            rel = self.rel(d)
+            if not ap.inside(d, self.dir):
+                self.error("%s leads out of the plugin folder (a link): the "
+                           "printer doesn't load its modules" % (rel,))
+                continue
+            for mod, fn in ap.extras_modules(d):
+                if not ap.MODULE_RE.match(mod):
+                    continue
+                if not ap.inside(os.path.join(d, fn), self.dir):
+                    self.error("%s/%s leads out of the plugin folder (a "
+                               "link): the printer doesn't load it"
+                               % (rel, fn))
+                elif any(ap.is_core_module(mod, c) for c in cores):
+                    self.error("%s/%s has the name of a Klipper or Kiln OS "
+                               "module (in any case): Klipper would stop"
+                               % (rel, fn))
+                elif mod.lower() in seen:
+                    self.error("%s/%s: %s has a module of that name too "
+                               "(in any case): Klipper would stop"
+                               % (rel, fn, seen[mod.lower()]))
+                seen.setdefault(mod.lower(), "%s/%s" % (rel, fn))
+
+    # .gitmodules (plugin API 1.7): INSTALL_PLUGIN and UPDATE_PLUGIN fetch
+    # the submodules, https only; what they would refuse is a warning (a
+    # plugin installed by hand still loads)
+    def check_submodules(self):
+        if not ap.has_submodules(self.dir):
+            return
+        self.need_api((1, 7), ".gitmodules (submodules fetched by "
+                      "INSTALL_PLUGIN and UPDATE_PLUGIN)")
+        for err in ap.submodule_errors(self.dir, self.origin()):
+            self.warn("%s: INSTALL_PLUGIN and UPDATE_PLUGIN refuse it"
+                      % (err,))
+
+    def origin(self):
+        """The plugin's own git URL (relative submodule URLs are resolved
+        against it): its clone's origin, else plugin.json url."""
+        if os.path.exists(os.path.join(self.dir, ".git")):
+            rc, out = ap.run_git(["git", "-C", self.dir, "config", "--get",
+                                  "remote.origin.url"])
+            if rc == 0 and out:
+                return out
+        url = ap.read_metadata(self.dir, self.name)["url"]
+        return url or None
 
     # moonraker.conf and moonraker/components/
     def check_moonraker(self):

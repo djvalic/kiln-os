@@ -20,7 +20,7 @@
 #   src-linux-ingenic-6.6-<commit>.tar.xz  the 6.6 kernel tree (Ingenic SDK)
 #                                        our kernel is built from; our
 #                                        patches/config are kernel-ingenic66/
-#   src-linux-7.3.3.tar.xz               kernel.org tree the opt-in 7.3 kernel
+#   src-linux-7.3.4.tar.xz               kernel.org tree the opt-in 7.3 kernel
 #                                        is built from (+ kernel-mainline/)
 #   src-linux-5.10.186.tar.xz            kernel.org tree chainload.ko builds
 #                                        against (kernel-ingenic66/chainload)

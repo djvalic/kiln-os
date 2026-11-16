@@ -1,0 +1,49 @@
+From 0216cea34d3cd5fb73c1dca876244b9f39924ea7 Mon Sep 17 00:00:00 2001
+From: valix <djvalic.wc@gmail.com>
+Date: Sun, 15 Nov 2026 11:47:47 -0500
+Subject: [PATCH 14/16] ad5x: Keep U-Boot below the kernels' crash log
+
+Kiln's kernels keep a ramoops region in the last MiB of the 236 MiB of
+lowmem (0x0EB00000-0x0EBFFFFF), so that a panic's log survives the
+reset. U-Boot relocated itself to the top of those 236 MiB, with its
+16 MiB heap below, and overwrote it. Put the usable top of RAM at
+0x0EB00000: relocation, heap and stack stay below the region.
+---
+ board/flashforge/ad5x/ad5x.c | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/board/flashforge/ad5x/ad5x.c b/board/flashforge/ad5x/ad5x.c
+index 3e0178ca..42f12c81 100644
+--- a/board/flashforge/ad5x/ad5x.c
++++ b/board/flashforge/ad5x/ad5x.c
+@@ -3,6 +3,7 @@
+  * Flashforge Adventurer 5X (Ingenic X2600)
+  */
+ 
++#include <config.h>
+ #include <blk.h>
+ #include <command.h>
+ #include <env.h>
+@@ -39,6 +40,19 @@ int dram_init(void)
+ 	return 0;
+ }
+ 
++/*
++ * The last MiB of those 236 holds the kernels' crash log (ramoops,
++ * 0x0EB00000-0x0EBFFFFF, kernel-ingenic66/ad5x.dts): U-Boot relocates
++ * itself, its heap and its stack below it, so a crash log survives into
++ * the next start.
++ */
++#define AD5X_RAMOOPS		0x0eb00000
++
++phys_addr_t board_get_usable_ram_top(phys_size_t total_size)
++{
++	return CFG_SYS_SDRAM_BASE + AD5X_RAMOOPS;
++}
++
+ /*
+  * The boot flag the stock SPL reads: the first sector of the "ota"
+  * partition, at the LBA built into the SPL (not taken from the GPT). The
+-- 
+2.56.0
+

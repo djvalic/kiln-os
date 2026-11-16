@@ -33,7 +33,8 @@ printer.cfg                          user, never replaced
     ifs.cfg                          factory: IFS link, stock swap templates, T0-T3
     setup.cfg                        factory: [ad5x_setup] (setup wizard module)
       ad5x-tuning.cfg                user (wizard results; optional)
-    [ad5x_config]                    factory: update notices, CONFIG_BACKUPS
+    [ad5x_config]                    factory: update notices, CONFIG_BACKUPS,
+                                     one mesh / prime line per print (issue #73)
     macros/*.cfg                     user: editable defaults, in name order (optional)
     [ad5x_plugins]
     plugins-active.cfg               generated from plugins.cfg (user: enabled plugins,
@@ -189,3 +190,11 @@ first print, or the setup wizard's Z offset step, which now also meshes
 first). An adaptive mesh isn't saved as a profile (Klipper's rule), so the
 full `default` mesh and its saved centre stay as they were; the saved
 centre is only written by a full mesh into `default`.
+
+One mesh per print: a `BED_MESH_CALIBRATE` from the slicer's start G-code
+after `PRINT_START`'s mesh is skipped while the print runs (issue #73;
+`docs/print-start.md`, "One mesh and one prime line per print"). KAMP's
+`Adaptive_Meshing.cfg` isn't needed for the adaptive mesh; included in
+`local.cfg` it replaces Kiln's `BED_MESH_CALIBRATE` (Klipper merges a
+section read again, and `local.cfg` is read last), and Klipper start
+warns about it.

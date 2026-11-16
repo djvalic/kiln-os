@@ -4,8 +4,12 @@
 # 1. /data/ad5x/update/*.swu and *.zip (oldest first): installed with ad5x-swu-apply;
 #    each file is then renamed to *.swu.done or *.swu.failed; the result
 #    goes to /data/ad5x/update/last.log. Success: reboot into the main OS,
-#    keeping only this update (older *.done and *.failed are deleted: each
-#    is a whole image).
+#    keeping only this update (older *.done, *.failed and *.stale are
+#    deleted: each is a whole image). Only fresh ones: an update the main OS
+#    found still staged at its start was staged before that start (a reset
+#    between staging and the reboot) and is renamed *.stale there
+#    (S99ad5x-booted, docs/updates.md "Staged updates"), so it is never
+#    installed here without being asked again.
 # 2. USB sticks (mounted at /run/ad5x/usb): if a partition of the stick
 #    holds a file "ad5x-autoupdate", the .swu/.zip files in its top directory are
 #    installed the same way (the stick isn't changed; result in last.log and
@@ -15,6 +19,12 @@
 #    (no update loop when the new main OS fails and lands back here).
 # 3. USB rescue markers: "ad5x-rescue-flash" -> ad5x-usb-rescue flash,
 #    "ad5x-rescue-boot" -> ad5x-usb-rescue boot.
+# Return to Flashforge firmware (ad5x-return-stock) comes first: asked for
+# by the main OS (/data/ad5x/return-stock/request, ad5x-boot-recovery
+# --return-stock), by a USB stick with a file "kiln-return-to-stock", or
+# left unfinished (a power cut): the touch screen opens its page
+# ($AD5X_RUN/return-stock.open: request, usb or resume) and nothing else
+# runs (no update, no rescue). It never writes without a tap there.
 # On a failure the recovery OS stays up. Writes /run/ad5x/auto.done.
 . /usr/lib/ad5x-recovery/recovery.sh
 UPD=$AD5X_DATA/ad5x/update
@@ -40,10 +50,35 @@ done_reboot() {
 	exit 0
 }
 
+# Kiln's own boot loader: the first start after its install is recorded
+# (by Kiln's U-Boot or not), and its page opens with the result; an
+# unfinished install opens it too (ad5x-bootloader-install --verify-start).
+# It never writes the boot loader area here.
+command -v ad5x-bootloader-install >/dev/null 2>&1 &&
+	ad5x-bootloader-install --verify-start 2>&1
+
+# Return to Flashforge firmware: only open its page
+RS=$AD5X_DATA/ad5x/return-stock
+rm -f "$AD5X_RUN/return-stock.open"
+why=
+[ "$(sed -n 's/^state=//p' "$RS/state" 2>/dev/null)" = started ] && why=resume
+[ -z "$why" ] && [ -f "$RS/request" ] && why=request
+if [ -z "$why" ]; then
+	list=$(ad5x-usb mount 8)
+	echo "$list" | grep -q ' return_stock=1' && why=usb
+fi
+rm -f "$RS/request"
+if [ -n "$why" ]; then
+	echo "$why" > "$AD5X_RUN/return-stock.open"
+	log "Return to Flashforge firmware: page opened ($why); no updates or rescue now"
+	ad5x-bootlog "auto: return-stock page ($why)"
+	exit 0
+fi
+
 # 1. Update drop folder on userdata
 for f in $(ls -tr "$UPD"/*.swu "$UPD"/*.zip 2>/dev/null); do
 	if apply "$f"; then
-		rm -f "$UPD"/*.done "$UPD"/*.failed
+		rm -f "$UPD"/*.done "$UPD"/*.failed "$UPD"/*.stale
 		mv "$f" "$f.done"; done_reboot
 	else
 		mv "$f" "$f.failed"
@@ -51,7 +86,7 @@ for f in $(ls -tr "$UPD"/*.swu "$UPD"/*.zip 2>/dev/null); do
 done
 
 # 2./3. USB sticks (usb-storage needs a few seconds after power-on)
-list=$(ad5x-usb mount 8)
+[ -n "${list+x}" ] || list=$(ad5x-usb mount 8)
 [ -n "$list" ] && echo "$list"
 echo "$list" | grep ' autoupdate=1' | while read -r line; do
 	m=$(echo "$line" | tr ' ' '\n' | sed -n 's/^mnt=//p')

@@ -13,6 +13,10 @@ BR2_TOOLCHAIN_BUILDROOT_GLIBC=y
 BR2_KERNEL_HEADERS_5_10=y
 
 BR2_DL_DIR="$(BR2_EXTERNAL_AD5X_PATH)/dl"
+# Buildroot packages at a newer version than Buildroot's (mbedTLS 3.6.7):
+# board/ad5x-recovery/package-override.mk, their hashes in patches/
+BR2_PACKAGE_OVERRIDE_FILE="$(BR2_EXTERNAL_AD5X_PATH)/board/ad5x-recovery/package-override.mk"
+BR2_GLOBAL_PATCH_DIR="$(BR2_EXTERNAL_AD5X_PATH)/board/ad5x-recovery/patches"
 
 # System: BusyBox init, eudev, read-only squashfs root, as the main OS
 BR2_TARGET_GENERIC_HOSTNAME="ad5x-recovery"
@@ -39,6 +43,10 @@ BR2_PACKAGE_DROPBEAR=y
 BR2_PACKAGE_WPA_SUPPLICANT=y
 BR2_PACKAGE_WPA_SUPPLICANT_NL80211=y
 BR2_PACKAGE_WPA_SUPPLICANT_CLI=y
+# iw: S42ad5x-wifi turns power saving off with it (issue #37). Only our
+# kernel's rtw88 needs that; on the stock kernel's 8821cu it has nothing
+# to change.
+BR2_PACKAGE_IW=y
 
 # Filesystems on sticks and userdata (fsck, mkfs)
 BR2_PACKAGE_E2FSPROGS=y
@@ -56,6 +64,18 @@ BR2_PACKAGE_MBEDTLS=y
 BR2_PACKAGE_LIBCONFIG=y
 
 BR2_PACKAGE_AD5X_RECOVERY=y
+# Our 6.6 kernel in the image (/usr/lib/ad5x/kernel66: xImage, chainload.ko,
+# release; post-image.sh also puts it next to the image as xImage-6.6).
+# Off: the recovery OS boots the stock kernel in p1, and nothing in it
+# starts another kernel. Its userspace runs on both (docs/recovery-os.md,
+# "Our kernel"). To carry it, set this (needs the SDK and the 5.10 tree,
+# as ad5x_defconfig):
+# BR2_PACKAGE_AD5X_KERNEL66 is not set
+# Kiln's own boot loader (u-boot/: Kiln's SPL and U-Boot proper), built
+# here, for the opt-in "Install Kiln's boot loader (experimental)"
+# (ad5x-bootloader-install, docs/own-boot-loader.md). Only its images go
+# in; nothing writes them unless the user runs the installer.
+BR2_PACKAGE_AD5X_BOOTLOADER=y
 # Touch UI (recovery-ui/, started by S80ad5x-recovery-ui)
 BR2_PACKAGE_AD5X_RECOVERY_UI=y
 

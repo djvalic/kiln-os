@@ -1,19 +1,22 @@
 # AD5X on mainline Linux (Ingenic X2600 port)
 
 A port of the Flashforge AD5X (Ingenic X2600, XBurst2) to mainline Linux,
-on the latest stable release (now 7.3.3), written as a patch series to
+on the latest stable release (now 7.3.4), written as a patch series to
 mainline's standards. It is not submitted upstream; the standards are there
 so the code is sound, not to get it merged. Kiln OS ships it as an opt-in
 second kernel beside the 6.6 SDK kernel (`../kernel-ingenic66/`), which
 stays the default: `ad5x-kernel mainline on` on the printer, and a failed
 7.3 start falls back to 6.6 in the same boot (`S00ad5x-kernel`). The
-buildroot package `ad5x-kernel-mainline` runs `build.sh`. Kiln adds five
+buildroot package `ad5x-kernel-mainline` runs `build.sh`. Kiln adds six
 patches on top of the series: 0075 (a ramoops region for pstore, as 6.6
 has), 0076 (the eMMC at 50 MHz, as 6.6, until a longer soak at 150), 0077
 (write-combine on XBurst II, as the SDK's 6.6), 0078 (the DPU's fbdev at
-RGB565; 6.6 runs its framebuffer at 32 bpp) and 0079 (the CGU starts a
+RGB565; 6.6 runs its framebuffer at 32 bpp), 0079 (the CGU starts a
 divider left stopped when the clock is enabled, as Ingenic's 6.6 clock
-driver does: the speaker's PWM clock, issue #54).
+driver does: the speaker's PWM clock, issue #54) and 0080 (the jz4740
+watchdog driver keeps a watchdog the boot loader left running, fed by the
+kernel until userspace opens `/dev/watchdog`, and stops it on halt and
+poweroff; Kiln's U-Boot starts this kernel with it running).
 
 ## Rules
 
@@ -56,7 +59,7 @@ Each patch must be acceptable to a mainline reviewer:
 ## Status
 
 **On the printer** (2026-11-09): the series' 74 patches (79 files in
-`patches/` with Kiln's five above), checkpatch `--strict` clean,
+`patches/` with Kiln's five above; 0080 came later), checkpatch `--strict` clean,
 every commit builds with `W=1`, `dt_binding_check` and `dtbs_check` clean,
 sparse (v0.6.5-rc1, `C=2` on every C file the series touches) clean apart
 from code it doesn't change (`asm/mips-cm.h`, three 32-bit constants in
@@ -153,6 +156,10 @@ through Klipper, Happy Hare and the IFS, every layer, no kernel warnings.
   since its counter ignores writes) restarts the board; `reboot` used to
   hang. A 10 s timeout fires when its pinger is killed, and not while it
   pings. With it, the chainload's `panic=10` reboots instead of hanging.
+  Patch 0080 (built, not yet on the printer): a watchdog that Kiln's
+  U-Boot left running is kept (`running at boot` in the kernel log) and
+  fed by the kernel until userspace opens it (`watchdog.open_timeout`
+  300 s, `kiln.config`); stopped on halt and poweroff.
 - **Speaker:** a new driver for the X2600's PWM controller
   (`pwm-ingenic-x2600`, 16 channels apart from the TCU, the waveform
   callbacks), the piezo on PC12 = channel 13. Measured on the printer
@@ -268,18 +275,18 @@ Open points:
 - **Sign-off.** Three patches are signed off and ready for submission:
   TLBINV on the whole MMU, icache tagging from Config.VI and the L2
   workaround. The rest carry no `Signed-off-by` yet; only you can certify
-  them (`git rebase --signoff v7.3.3` in the development tree).
+  them (`git rebase --signoff v7.3.4` in the development tree).
 
 ## Build
 
 ```
 kernel-mainline/build.sh                     # tarball + patches/ -> uImage
-KSRC=~/workspace/linux-7.3.3 kernel-mainline/build.sh   # development tree
+KSRC=~/workspace/linux-7.3.4 kernel-mainline/build.sh   # development tree
 ```
 
-Development happens in a git tree on tag `v7.3.3` (`~/workspace/linux-7.3.3`,
+Development happens in a git tree on tag `v7.3.4` (`~/workspace/linux-7.3.4`,
 branch `ad5x`); the series is exported with
-`git format-patch v7.3.3..ad5x -o kernel-mainline/patches/` (empty the
+`git format-patch v7.3.4..ad5x -o kernel-mainline/patches/` (empty the
 directory first).
 
 ## Test on the printer

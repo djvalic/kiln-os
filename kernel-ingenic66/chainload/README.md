@@ -45,7 +45,20 @@ ARGB8888). Touch still needs a calibration for the mainline tsc2007 range
 ```
 kernel-ingenic66/chainload/setup.sh      # linux-5.10.186 with stock's module ABI
 make -C kernel-ingenic66/chainload       # chainload.ko
+make -C kernel-ingenic66/chainload uboot # build-uboot/chainload_uboot.ko (bench)
 ```
+
+**Bench build** (`make uboot`, bench only): the same source with
+`-DCHAINLOAD_UBOOT -DCHAINLOAD_LOAD=0x80100000`, built in its own
+directory as `chainload_uboot.ko`. Its trampoline copies to 0x80100000
+(U-Boot proper's load and entry address) instead of 0x80f00000, it takes
+only an uncompressed uImage made for that address (`u-boot/build.sh`'s
+`u-boot-kernel-slot.img`, header skipped, so `u-boot.bin` lands there), and
+its `.modinfo` says `kiln_load=0x80100000`. Without those flags the source
+compiles to the same code as before. `ad5x-kernel66.mk` builds both; the
+bench one goes to Buildroot's `images/bench/`, never into the rootfs, and
+`tools/bench/ad5x-uboot-chainload` uses it from the recovery OS
+(`tools/bench/README.md`, step 2).
 
 ## Module ABI check (against Flashforge's own modules for this kernel)
 
@@ -68,7 +81,7 @@ kernel reads its argv:
 | | image | bss, heap and stack to | kernel decompressed to |
 |---|---|---|---|
 | 6.6 | to 0x01498000 | about 0x014b2450 | 0x00010000-0x00d31900 |
-| 7.3.3 | to 0x014da3a0 | 0x019dc3b0 (1 MiB `.appended_dtb` gap, 4 MiB heap) | 0x00100000-0x00e3be70 |
+| 7.3.4 | to 0x014dac50 | 0x019dcc60 (1 MiB `.appended_dtb` gap, 4 MiB heap) | 0x00100000-0x00e3be50 |
 
 Staged pages, page list, argv and trampoline are all above physical
 0x02000000 (`SAFE_MIN`) and below 0x0ec00000. That is above an 8 MiB image

@@ -1,0 +1,1510 @@
+From 3ca3af6ee19ce823fd9fc179333e2b4b7827c488 Mon Sep 17 00:00:00 2001
+From: valix <djvalic.wc@gmail.com>
+Date: Sun, 15 Nov 2026 11:47:24 -0500
+Subject: [PATCH 13/16] mips: jz47xx: x2600: SPL in the boot ROM's SRAM window,
+ with a second try
+
+The boot ROM loads the SPL image (2 KiB header, then the code) to
+0x80001000 and starts it at 0x80001800; before the DDR is up only the
+SRAM window up to 0x80007000 exists for it. The SPL had its BSS at
+0x80007000, its heap at 0x80009000 and its stack at 0x8000D000, outside
+the window, and with U-Boot's MMC, SDHCI and block layers its code alone
+was 22 KiB of the 22 KiB there are.
+
+- Link with a script of its own (x2600/u-boot-spl.lds): code, data, BSS
+  and a 2 KiB stack reserve below the top of the window, checked at link
+  time (and SPL_FOOTPRINT_LIMIT); the stack starts at 0x80007000; no heap.
+- Read the eMMC with a small PIO reader (spl_emmc.c), the eMMC sequence
+  of Ingenic's SPL driver for this SoC: about 2 KiB instead of 10. The
+  image is now about 10 KiB, 24 blocks; GCC's call graph puts the
+  deepest stack at 384 bytes.
+- Pins as the stock SPL sets them: MSC0 on PD0-PD5 (and the SDK's SFC
+  group PD6-PD11) function 0 without pulls, UART0 on PE9-PE12 function 1
+  with the pull-up.
+- Every CGU clock's parent as Ingenic's cgu_clks_set() sets them for
+  this board's configuration, not only the DDR's.
+- DDRC_AUTOSR_EN 0, as the stock SPL's parameter table has it.
+- lpj=11935744 on the command line, as the stock SPL passes it.
+- No guess whether the DDR is running: a separate build,
+  CONFIG_AD5X_SPL_CHAINLOAD, leaves the clock and DDR setup out for
+  chainload tests from Linux; it carries a marker that the image tools
+  refuse.
+- A second try instead of hang(): each stage runs with the watchdog
+  armed (10 s) and records how far it got in the CPM scratch pad, which
+  survives a watchdog reset; a failure resets through the watchdog. A
+  load failure tries the other slot next; after three attempts the SPL
+  stops with the watchdog off.
+- U-Boot proper from eMMC 0xA400 when a U-Boot uImage with good header
+  and data CRCs is there and it didn't fail to come up last time (the
+  scratch pad says), with the watchdog armed for 30 s; otherwise the
+  stock SPL's boot of the flagged slot, now with the uImage's header and
+  data CRCs checked, and the watchdog stopped as the stock SPL leaves it.
+- The watchdog code is shared by the SPL and U-Boot proper; no 64-bit
+  division in it, and the SPL's delays come from the OST directly.
+- start.S: no XBurst1 Config7 BTB write on the X2600, which the stock
+  SPL doesn't do either.
+---
+ arch/mips/mach-jz47xx/include/mach/x2600.h |  52 +++
+ arch/mips/mach-jz47xx/start.S              |   9 +-
+ arch/mips/mach-jz47xx/x2600/Makefile       |   3 +
+ arch/mips/mach-jz47xx/x2600/sdram.c        |  60 +++-
+ arch/mips/mach-jz47xx/x2600/spl.c          | 369 +++++++++++++++++++++
+ arch/mips/mach-jz47xx/x2600/spl.h          |  14 +
+ arch/mips/mach-jz47xx/x2600/spl_emmc.c     | 302 +++++++++++++++++
+ arch/mips/mach-jz47xx/x2600/u-boot-spl.lds |  98 ++++++
+ arch/mips/mach-jz47xx/x2600/x2600.c        | 265 +++------------
+ board/flashforge/ad5x/Kconfig              |   9 +
+ configs/ad5x_defconfig                     |  25 +-
+ 11 files changed, 954 insertions(+), 252 deletions(-)
+ create mode 100644 arch/mips/mach-jz47xx/x2600/spl.c
+ create mode 100644 arch/mips/mach-jz47xx/x2600/spl.h
+ create mode 100644 arch/mips/mach-jz47xx/x2600/spl_emmc.c
+ create mode 100644 arch/mips/mach-jz47xx/x2600/u-boot-spl.lds
+
+diff --git a/arch/mips/mach-jz47xx/include/mach/x2600.h b/arch/mips/mach-jz47xx/include/mach/x2600.h
+index 69906d51..2231723d 100644
+--- a/arch/mips/mach-jz47xx/include/mach/x2600.h
++++ b/arch/mips/mach-jz47xx/include/mach/x2600.h
+@@ -1,8 +1,60 @@
+ /* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Ingenic X2600 and the Flashforge Adventurer 5X: what the SPL and U-Boot
++ * proper share.
++ */
+ #ifndef __MACH_X2600_H__
+ #define __MACH_X2600_H__
+ 
++#include <linux/types.h>
++
++void x2600_uart0_plain_baud(void);
++
++/* the watchdog: up to about 1431 s; stop also stops its clock */
++#define X2600_WDT_MAX_MS	1431000U
+ void x2600_wdt_start(unsigned int ms);
+ void x2600_wdt_stop(void);
+ 
++/*
++ * CPM scratch pad (CPSPR, 0x10000034): kept over a watchdog reset, written
++ * only after the unlock word in CPSPPR. Linux writes 0x1a1a, 0x3535 or
++ * 0x4343 there when it reboots (soc-x2600/reset.c), Ingenic's SPLs use
++ * 0x4f5441/0x41544f; bits 18-22 are reserved. Kiln's values:
++ *
++ *   0x4b00 | stage << 4 | n   SPL attempt n (0-15) got to stage (0-3)
++ *   0x4b80                    SPL started U-Boot proper (from 0xA400)
++ *   0x4b81                    U-Boot proper is running
++ *
++ * Anything else: a fresh start (power on, a reboot from Linux).
++ */
++#define AD5X_CPSPR_TRY(stage, n)	(0x4b00 | ((stage) & 3) << 4 | ((n) & 15))
++#define AD5X_CPSPR_IS_TRY(v)		(((v) & ~0x3fU) == 0x4b00)
++#define AD5X_CPSPR_TRY_STAGE(v)		(((v) >> 4) & 3)
++#define AD5X_CPSPR_TRY_N(v)		((v) & 15)
++#define AD5X_CPSPR_HANDOFF		0x4b80
++#define AD5X_CPSPR_UBOOT_UP		0x4b81
++u32 x2600_cpspr_read(void);
++void x2600_cpspr_write(u32 val);
++
++/*
++ * The eMMC as the stock SPL sees it: its built-in partition table (the
++ * GPT agrees on every AD5X examined), 512-byte sectors.
++ */
++#define AD5X_KERNEL_A_LBA	0x800		/* "kernel", p1 */
++#define AD5X_ROOTFS_A_LBA	0x4800		/* "rootfs", p2 */
++#define AD5X_KERNEL_B_LBA	0x36800		/* "kernel2", p3 */
++#define AD5X_ROOTFS_B_LBA	0x3a800		/* "rootfs2", p4 */
++#define AD5X_OTA_LBA		0x6c800		/* "ota", p5 */
++#define AD5X_KERNEL_SECTORS	0x4000		/* 8 MiB per kernel slot */
++#define AD5X_FLAG_B		"ota:kernel2"
++#define AD5X_FLAG_A		"ota:kernel"
++
++/*
++ * U-Boot proper as a legacy uImage (ih_os U-Boot, load = entry =
++ * CONFIG_TEXT_BASE) where the SDK and the stock layout keep U-Boot: eMMC
++ * byte 0xA400, up to the end of the first MiB.
++ */
++#define AD5X_UBOOT_LBA		(0xa400 / 512)
++#define AD5X_UBOOT_MAX		(0x100000 - 0xa400)
++
+ #endif
+diff --git a/arch/mips/mach-jz47xx/start.S b/arch/mips/mach-jz47xx/start.S
+index b187a8e7..2a743e01 100644
+--- a/arch/mips/mach-jz47xx/start.S
++++ b/arch/mips/mach-jz47xx/start.S
+@@ -25,12 +25,14 @@ _start:
+ 	.word 0x4d53504c
+ #endif
+ 
+-	/* Invalidate BTB */
++#ifndef CONFIG_SOC_X2600
++	/* Invalidate BTB (XBurst1's Config7; the X2600's SPL doesn't) */
+ 	mfc0	t0, CP0_CONFIG, 7
+ 	nop
+ 	ori	t0, 2
+ 	mtc0	t0, CP0_CONFIG, 7
+ 	nop
++#endif
+ 
+ 	/*
+ 	 * CU0=UM=EXL=IE=0, BEV=ERL=1, IP2~7=1
+@@ -71,7 +73,10 @@ _start:
+ 	sync
+ #endif
+ 
+-	/* Set up stack */
++	/*
++	 * Set up stack. X2600: the top of the boot ROM's SRAM window
++	 * (x2600/u-boot-spl.lds checks it), not the ROM's own stack.
++	 */
+ 	li	sp, CONFIG_SPL_STACK
+ 
+ 	b		board_init_f
+diff --git a/arch/mips/mach-jz47xx/x2600/Makefile b/arch/mips/mach-jz47xx/x2600/Makefile
+index 3853d0d2..d08538bc 100644
+--- a/arch/mips/mach-jz47xx/x2600/Makefile
++++ b/arch/mips/mach-jz47xx/x2600/Makefile
+@@ -1,4 +1,7 @@
+ # SPDX-License-Identifier: GPL-2.0+
+ 
+ obj-y := x2600.o
++obj-$(CONFIG_XPL_BUILD) += spl.o spl_emmc.o
++ifndef CONFIG_AD5X_SPL_CHAINLOAD
+ obj-$(CONFIG_XPL_BUILD) += sdram.o
++endif
+diff --git a/arch/mips/mach-jz47xx/x2600/sdram.c b/arch/mips/mach-jz47xx/x2600/sdram.c
+index ae0ed18e..6e018fd4 100644
+--- a/arch/mips/mach-jz47xx/x2600/sdram.c
++++ b/arch/mips/mach-jz47xx/x2600/sdram.c
+@@ -11,7 +11,7 @@
+  * Copyright (c) 2017-2025 Ingenic Semiconductor Co., Ltd.
+  */
+ 
+-#include <hang.h>
++#include "spl.h"
+ #include <stdio.h>
+ #include <asm/io.h>
+ #include <linux/bitops.h>
+@@ -30,6 +30,8 @@
+ #define CPM_MACPHYCDR		0x54
+ #define CPM_SSICDR		0x5c
+ #define CPM_LPCDR		0x64
++#define CPM_MSC0CDR		0x68
++#define CPM_MSC1CDR		0xa4
+ #define CPM_PWMCDR		0x6c
+ #define CPM_SFCCDR		0x74
+ #define CPM_CPCSR		0xd4
+@@ -154,7 +156,7 @@ static struct x2600_ddr_params ddr = {
+ 	.ddrc_timing	= { 0x08140e09, 0x0a0a070d, 0x030d040d, 0x202c1f06,
+ 			    0x8006a065 },
+ 	.ddrc_autosr_cnt = 0x76000101,
+-	.ddrc_autosr_en	= 1,
++	.ddrc_autosr_en	= 0,	/* as the stock SPL's table (0x8898 in its build) */
+ 	.ddrc_hregpro	= 1,
+ 	.ddrc_pregpro	= 1,
+ 	.ddrc_cguc0	= 0x11111111,
+@@ -192,14 +194,6 @@ static inline void apb_wr(u32 v, u32 off) { writel(v, DDRC_APB + off); }
+ static inline u32 phy_rd(u32 off) { return readl(DDRP + off); }
+ static inline void phy_wr(u32 v, u32 off) { writel(v, DDRP + off); }
+ 
+-/* Already running (we were chainloaded from Linux): don't touch it */
+-bool x2600_ddr_running(void)
+-{
+-	/* clock on and DFI initialized (DDRC_CTRL's CKE reads 0 once running) */
+-	return !(cpm_rd(CPM_CLKGR1) & CLKGR1_DDR) &&
+-	       (apb_rd(DDRC_DWSTATUS) & DDRC_DWSTATUS_DFI_DONE);
+-}
+-
+ /* ---- clocks (x2600/clk.c, pllsetting.c) ---- */
+ 
+ static const u32 x2600_cdrs[] = {
+@@ -263,10 +257,39 @@ static void x2600_pll_init(void)
+ 		;
+ }
+ 
++/*
++ * The parents of every CGU clock, as Ingenic's cgu_clks_set() sets them
++ * for this board's configuration (x2600_base: DDR and the peripherals from
++ * the MPLL, CGU_CLK_SRC LCD/MSC0/SFC from the MPLL, the PWM from the APLL,
++ * the CPU's PLL): only the parent field (31:30) changes. The DDR's parent
++ * numbering differs (0 none, 1 APLL, 2 MPLL).
++ */
++static const struct {
++	u16 cdr;
++	u8 parent;
++} x2600_cgu_parents[] = {
++	{ CPM_DDRCDR, 2 },	/* MPLL */
++	{ CPM_MACPHYCDR, 1 },	/* MPLL */
++	{ CPM_LPCDR, 1 },	/* MPLL */
++	{ CPM_MSC0CDR, 1 },	/* MPLL */
++	{ CPM_MSC1CDR, 1 },	/* MPLL */
++	{ CPM_SSICDR, 1 },	/* MPLL */
++	{ CPM_PWMCDR, 0 },	/* APLL */
++	{ CPM_SFCCDR, 1 },	/* MPLL */
++};
++
+ static void x2600_clk_init(void)
+ {
++	int i;
++	u32 v;
++
+ 	cpm_wr(cpm_rd(CPM_CLKGR0) & ~CLKGR0_EFUSE, CPM_CLKGR0);
+ 	cpm_wr(cpm_rd(CPM_CLKGR1) & ~CLKGR1_DDR, CPM_CLKGR1);
++	for (i = 0; i < ARRAY_SIZE(x2600_cgu_parents); i++) {
++		v = cpm_rd(x2600_cgu_parents[i].cdr) & ~(3U << 30);
++		cpm_wr(v | x2600_cgu_parents[i].parent << 30,
++		       x2600_cgu_parents[i].cdr);
++	}
+ }
+ 
+ /* DDR clock: MPLL (parent 2) / 2 = 900 MHz */
+@@ -395,8 +418,8 @@ static void ddrp_set_drvodt(void)
+ 	phy_wr(ddr.pd_drv_ck, DDRP_PD_DRV_CK);
+ }
+ 
+-/* the PHY's RX DQS training */
+-static void ddrp_rx_dqs_auto_calibration(void)
++/* the PHY's RX DQS training: 0, or -1 for the SPL's second try */
++static int ddrp_rx_dqs_auto_calibration(void)
+ {
+ 	u32 timeout = 0xffffff;
+ 
+@@ -406,13 +429,14 @@ static void ddrp_rx_dqs_auto_calibration(void)
+ 		udelay(1);
+ 	if (!timeout) {
+ 		puts("SPL: DDR training timed out\n");
+-		hang();
++		return -1;
+ 	}
+ 	if (phy_rd(DDRP_CALIB_ERR) & BIT(6)) {
+ 		puts("SPL: DDR training passed with errors\n");
+-		hang();
++		return -1;
+ 	}
+ 	phy_wr(0, DDRP_TRAINING_CTRL);
++	return 0;
+ }
+ 
+ /* the table's RX DQ deskew, on all 16 DQ lines */
+@@ -445,11 +469,11 @@ void x2600_spl_clocks_init(void)
+ 	       cpm_rd(CPM_CPEPCR));
+ }
+ 
+-void x2600_sdram_init(void)
++int x2600_sdram_init(void)
+ {
+ 	if (ddr.type != X2600_DDR3) {
+ 		puts("SPL: not a DDR3 parameter set\n");
+-		hang();
++		return -1;
+ 	}
+ 	printf("SPL: DDR3 %s, %u MHz\n", ddr.name, ddr.freq / 1000000);
+ 
+@@ -470,7 +494,8 @@ void x2600_sdram_init(void)
+ 	/* training before refresh starts (Ingenic's automatic training path) */
+ 	if (ddr.use_drvodt)
+ 		ddrp_set_drvodt();
+-	ddrp_rx_dqs_auto_calibration();
++	if (ddrp_rx_dqs_auto_calibration())
++		return -1;
+ 	if (ddr.use_deskew)
+ 		ddrp_set_rx_dq_deskew();
+ 	ddrc_post_init();
+@@ -485,4 +510,5 @@ void x2600_sdram_init(void)
+ 	apb_wr(0xff404030, DDRC_CCHC1);
+ 
+ 	printf("SPL: DDR %u MiB up\n", ddr.chip0_size >> 20);
++	return 0;
+ }
+diff --git a/arch/mips/mach-jz47xx/x2600/spl.c b/arch/mips/mach-jz47xx/x2600/spl.c
+new file mode 100644
+index 00000000..17a42ef3
+--- /dev/null
++++ b/arch/mips/mach-jz47xx/x2600/spl.c
+@@ -0,0 +1,369 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Ingenic X2600 SPL for the Flashforge Adventurer 5X, where the boot ROM
++ * starts Flashforge's: loaded with its 2 KiB header to 0x80001000, code at
++ * 0x80001800, everything (code, data, BSS, stack) inside the SRAM window
++ * up to 0x80007000 (u-boot-spl.lds checks it at link time).
++ *
++ * It does what the stock SPL does, plus a second try:
++ *  1. pins (MSC0 on port D, UART0 on port E, as the stock SPL sets them),
++ *     console on UART0 (the DEBUG header), 115200 8N1;
++ *  2. the CPM scratch pad tells a fresh start from a second try after a
++ *     watchdog reset; the watchdog is armed for every stage;
++ *  3. clocks and DDR3 (sdram.c); not in the chainload-test build
++ *     (CONFIG_AD5X_SPL_CHAINLOAD), which runs from DDR under Linux;
++ *  4. the eMMC (spl_emmc.c);
++ *  5. U-Boot proper, when eMMC 0xA400 holds a U-Boot uImage with good
++ *     CRCs (header and data) that didn't fail to come up last time;
++ *  6. otherwise the stock SPL's boot: the slot the "ota" flag names, its
++ *     uImage (header and data CRCs checked) started with the stock SPL's
++ *     command line and the watchdog stopped, as the stock SPL leaves it.
++ *     On a second try after a failed load, the other slot.
++ * A failure resets the board through the watchdog for the next try; after
++ * AD5X_SPL_TRIES attempts the SPL stops, the watchdog off.
++ */
++
++#include <cpu_func.h>
++#include <hang.h>
++#include <image.h>
++#include <init.h>
++#include <serial.h>
++#include <spl.h>
++#include <asm/cache.h>
++#include <asm/global_data.h>
++#include <asm/io.h>
++#include <asm/sections.h>
++#include <linux/bitops.h>
++#include <linux/string.h>
++#include <mach/x2600.h>
++#include "spl.h"
++
++DECLARE_GLOBAL_DATA_PTR;
++gd_t gdata __section(".bss");
++
++#define AD5X_SPL_TRIES		3
++#define AD5X_SPL_WDT_MS		10000	/* each SPL stage */
++#define AD5X_UBOOT_WDT_MS	30000	/* U-Boot proper to come up */
++
++enum { STAGE_DDR, STAGE_EMMC, STAGE_LOAD };
++
++#ifdef CONFIG_AD5X_SPL_CHAINLOAD
++/* the image tools refuse to make a boot ROM image from this build */
++static const char spl_kind[] = "KILN-SPL-CHAINLOAD-TEST-ONLY";
++#else
++static const char spl_kind[] = "boot ROM";
++#endif
++
++/* ---- pins, as the stock SPL sets them (its gpio_set_func calls) ---- */
++
++#define GPIO_PORT(n)		((void __iomem *)(0xb3601000 + (n) * 0x1000))
++#define PX_INTC			0x18
++#define PX_MSKC			0x28
++#define PX_PAT1S		0x34
++#define PX_PAT1C		0x38
++#define PX_PAT0S		0x44
++#define PX_PAT0C		0x48
++#define PX_PUS			0x84	/* port E: pull enable set */
++#define PX_PUC			0x88
++#define PX_PDS			0x94	/* port E: pull select up */
++#define PX_PDC			0x98
++#define PORT_D			3
++#define PORT_E			4
++
++static void x2600_spl_pins(void)
++{
++	void __iomem *pd = GPIO_PORT(PORT_D), *pe = GPIO_PORT(PORT_E);
++	u32 msc = 0xfff;	/* PD0-PD5 MSC0, PD6-PD11 (SFC) */
++	u32 uart = 0xf << 9;	/* PE9-PE12: UART0 */
++
++	/* function 0, no pull: the eMMC and the SDK's SFC group */
++	writel(msc, pd + PX_INTC);
++	writel(msc, pd + PX_MSKC);
++	writel(msc, pd + PX_PAT1C);
++	writel(msc, pd + PX_PAT0C);
++	writel(msc, pd + PX_PUC);
++	writel(msc, pd + PX_PDC);
++
++	/* function 1 with the pull-up */
++	writel(uart, pe + PX_INTC);
++	writel(uart, pe + PX_MSKC);
++	writel(uart, pe + PX_PAT1C);
++	writel(uart, pe + PX_PAT0S);
++	writel(uart, pe + PX_PUS);
++	writel(uart, pe + PX_PDS);
++}
++
++/* ---- console: UART0, 115200 from the 24 MHz EXCLK ---- */
++
++#define X2600_UART0		((void __iomem *)0xb0030000)
++#define UART_THR		0x00
++#define UART_DLL		0x00
++#define UART_IER		0x04
++#define UART_DLM		0x04
++#define UART_FCR		0x08
++#define UART_LCR		0x0c
++#define UART_LSR		0x14
++#define UART_FCR_FIFO		0x07	/* enable, clear RX and TX */
++#define UART_FCR_UME		0x10	/* Ingenic: the UART's enable bit */
++#define UART_LCR_8N1		0x03
++#define UART_LCR_DLAB		0x80
++#define UART_LSR_THRE		0x20
++#define UART_DIV_115200		13	/* 24 MHz / (16 * 13) = 115384 */
++
++static void x2600_spl_uart_init(void)
++{
++	writel(0, X2600_UART0 + UART_IER);
++	writel(UART_LCR_DLAB | UART_LCR_8N1, X2600_UART0 + UART_LCR);
++	writel(UART_DIV_115200, X2600_UART0 + UART_DLL);
++	writel(0, X2600_UART0 + UART_DLM);
++	writel(UART_LCR_8N1, X2600_UART0 + UART_LCR);
++	x2600_uart0_plain_baud();
++	writel(UART_FCR_FIFO | UART_FCR_UME, X2600_UART0 + UART_FCR);
++}
++
++static void x2600_spl_putc(const char c)
++{
++	if (c == '\n')
++		x2600_spl_putc('\r');
++	while (!(readl(X2600_UART0 + UART_LSR) & UART_LSR_THRE))
++		;
++	writel(c, X2600_UART0 + UART_THR);
++}
++
++static void x2600_spl_puts(const char *s)
++{
++	while (*s)
++		x2600_spl_putc(*s++);
++}
++
++static int x2600_spl_serial_start(void) { return 0; }
++static int x2600_spl_serial_stop(void) { return 0; }
++static void x2600_spl_setbrg(void) { }
++static int x2600_spl_getc(void) { return 0; }
++static int x2600_spl_tstc(void) { return 0; }
++
++static struct serial_device x2600_spl_serial = {
++	.name	= "x2600-uart0",
++	.start	= x2600_spl_serial_start,
++	.stop	= x2600_spl_serial_stop,
++	.setbrg	= x2600_spl_setbrg,
++	.putc	= x2600_spl_putc,
++	.puts	= x2600_spl_puts,
++	.getc	= x2600_spl_getc,
++	.tstc	= x2600_spl_tstc,
++};
++
++struct serial_device *default_serial_console(void)
++{
++	return &x2600_spl_serial;
++}
++
++/* ---- the second try ---- */
++
++static unsigned int attempt;
++
++/* record how far this attempt got, so a reset by the watchdog tells */
++static void spl_stage(int stage)
++{
++	x2600_cpspr_write(AD5X_CPSPR_TRY(stage, attempt));
++	x2600_wdt_start(AD5X_SPL_WDT_MS);
++}
++
++static void __noreturn spl_fail(int stage, const char *why)
++{
++	printf("SPL: %s; attempt %u of %u failed\n", why, attempt + 1,
++	       AD5X_SPL_TRIES);
++	x2600_cpspr_write(AD5X_CPSPR_TRY(stage, attempt));
++	x2600_wdt_start(10);
++	while (1)
++		;
++}
++
++/* ---- uImages ---- */
++
++/* CRC-32 (IEEE), a nibble at a time: 64 bytes of table */
++static u32 spl_crc32(u32 crc, const u8 *p, u32 len)
++{
++	static const u32 t[16] = {
++		0x00000000, 0x1db71064, 0x3b6e20c8, 0x26d930ac,
++		0x76dc4190, 0x6b6b51f4, 0x4db26158, 0x5005713c,
++		0xedb88320, 0xf00f9344, 0xd6d6a3e8, 0xcb61b38c,
++		0x9b64c2b0, 0x86d3d2d4, 0xa00ae278, 0xbdbdf21c,
++	};
++
++	crc = ~crc;
++	while (len--) {
++		crc ^= *p++;
++		crc = (crc >> 4) ^ t[crc & 15];
++		crc = (crc >> 4) ^ t[crc & 15];
++	}
++	return ~crc;
++}
++
++static u8 spl_sector[512] __aligned(4);
++
++/*
++ * Load the uImage at @lba (at most @max bytes with its header) to its load
++ * address; return its entry point, 0 if it isn't good. Accepted: MIPS,
++ * ih_os @os (a U-Boot wrapped for a kernel slot is ih_os Linux too),
++ * header and data CRCs right, loaded between the SRAM window and the
++ * ramoops region (0x0EB00000), entry point inside the image.
++ */
++static ulong spl_load_uimage(u32 lba, ulong max, u8 os)
++{
++	struct legacy_img_hdr *hdr = (void *)spl_sector, h;
++	ulong size, load, ep, blocks;
++
++	if (ad5x_emmc_read(lba, 1, spl_sector) ||
++	    image_get_magic(hdr) != IH_MAGIC)
++		return 0;
++	h = *hdr;
++	h.ih_hcrc = 0;
++	size = image_get_size(hdr);
++	load = image_get_load(hdr);
++	ep = image_get_ep(hdr);
++	if (spl_crc32(0, (u8 *)&h, sizeof(h)) != image_get_hcrc(hdr) ||
++	    image_get_arch(hdr) != IH_ARCH_MIPS || image_get_os(hdr) != os ||
++	    size + sizeof(h) > max || (load & 3) ||
++	    load - sizeof(h) < 0x80008000 ||
++	    load + size + 512 > 0x8eb00000 || ep < load || ep >= load + size) {
++		printf("SPL: LBA 0x%x: not a usable uImage\n", lba);
++		return 0;
++	}
++	printf("SPL: %.32s, %lu bytes at 0x%lx\n", (char *)hdr->ih_name, size,
++	       load);
++	blocks = (size + sizeof(h) + 511) / 512;
++	if (ad5x_emmc_read(lba, blocks, (void *)(load - sizeof(h))))
++		return 0;
++	if (spl_crc32(0, (u8 *)load, size) != image_get_dcrc(&h)) {
++		puts("SPL: data CRC wrong\n");
++		return 0;
++	}
++	flush_cache(load - sizeof(h), blocks * 512);
++	return ep;
++}
++
++/* the stock SPL's command line (lpj as the stock SPL passes it) */
++#define AD5X_ARGS	"console=ttyS0,115200n8 loglevel=8 mem=236M@0x0 " \
++			"rmem=16M@0xec00000 rtos_size=4M@0xfc00000 " \
++			"mem=256M@0x30000000 init=/linuxrc root=/dev/mmcblk0pX " \
++			"rootwait rootfstype=squashfs ro lpj=11935744"
++#define AD5X_MAX_ARGS	16
++
++static char spl_args[sizeof(AD5X_ARGS)];
++static char *spl_argv[AD5X_MAX_ARGS + 1];
++
++/* split spl_args in place into spl_argv[1..], argv[0] being "spl" */
++static int ad5x_build_argv(char root)
++{
++	char *p;
++	int argc = 0;
++
++	strcpy(spl_args, AD5X_ARGS);
++	p = strstr(spl_args, "mmcblk0pX");
++	p[8] = root;
++
++	spl_argv[argc++] = "spl";
++	for (p = spl_args; *p && argc < AD5X_MAX_ARGS; ) {
++		spl_argv[argc++] = p;
++		while (*p && *p != ' ')
++			p++;
++		if (*p)
++			*p++ = '\0';
++	}
++	spl_argv[argc] = NULL;
++	return argc;
++}
++
++typedef void __noreturn (*entry_t)(int, char **, char **, int);
++
++static void __noreturn ad5x_boot(int uboot_failed, int other_slot)
++{
++	ulong ep;
++	int slot_b, argc;
++
++	spl_stage(STAGE_EMMC);
++	if (ad5x_emmc_init())
++		spl_fail(STAGE_EMMC, "eMMC init failed");
++
++	spl_stage(STAGE_LOAD);
++	if (uboot_failed) {
++		puts("SPL: U-Boot proper didn't come up last time: slot\n");
++	} else {
++		ep = spl_load_uimage(AD5X_UBOOT_LBA, AD5X_UBOOT_MAX,
++				     IH_OS_U_BOOT);
++		if (ep) {
++			x2600_cpspr_write(AD5X_CPSPR_HANDOFF);
++			x2600_wdt_start(AD5X_UBOOT_WDT_MS);
++			puts("SPL: starting U-Boot proper\n");
++			((entry_t)ep)(0, NULL, NULL, 0);
++		}
++		puts("SPL: no U-Boot at 0xA400: the slot, as the stock SPL\n");
++	}
++
++	if (ad5x_emmc_read(AD5X_OTA_LBA, 1, spl_sector))
++		spl_fail(STAGE_LOAD, "can't read the boot flag");
++	slot_b = !strncmp((char *)spl_sector, AD5X_FLAG_B,
++			  strlen(AD5X_FLAG_B));
++	if (other_slot) {
++		puts("SPL: the slot failed to load last time: the other one\n");
++		slot_b = !slot_b;
++	}
++	printf("SPL: slot %c\n", slot_b ? 'b' : 'a');
++	ep = spl_load_uimage(slot_b ? AD5X_KERNEL_B_LBA : AD5X_KERNEL_A_LBA,
++			     AD5X_KERNEL_SECTORS * 512, IH_OS_LINUX);
++	if (!ep)
++		spl_fail(STAGE_LOAD, "no good uImage in the slot");
++
++	/* as the stock SPL hands over: watchdog stopped */
++	argc = ad5x_build_argv(slot_b ? '4' : '2');
++	x2600_wdt_stop();
++	x2600_cpspr_write(0);
++	puts("SPL: starting the kernel\n");
++	((entry_t)ep)(argc, spl_argv, NULL, 0);
++}
++
++void board_init_f(ulong dummy)
++{
++	u32 prev;
++	int uboot_failed = 0, other_slot = 0;
++
++	gd = &gdata;
++	memset(__bss_start, 0, (size_t)__bss_end - (size_t)__bss_start);
++
++	x2600_spl_pins();
++	x2600_spl_uart_init();
++	timer_init();
++	mips_cache_probe();
++	gd->flags |= GD_FLG_SPL_INIT;
++	preloader_console_init();
++	printf("SPL: %s\n", spl_kind);
++
++	prev = x2600_cpspr_read();
++	if (AD5X_CPSPR_IS_TRY(prev)) {
++		attempt = AD5X_CPSPR_TRY_N(prev) + 1;
++		other_slot = AD5X_CPSPR_TRY_STAGE(prev) == STAGE_LOAD;
++		printf("SPL: attempt %u stopped at stage %u: trying again\n",
++		       attempt, AD5X_CPSPR_TRY_STAGE(prev));
++	} else if (prev == AD5X_CPSPR_HANDOFF || prev == AD5X_CPSPR_UBOOT_UP) {
++		attempt = 1;
++		uboot_failed = 1;
++	}
++	if (attempt >= AD5X_SPL_TRIES) {
++		x2600_wdt_stop();
++		x2600_cpspr_write(0);
++		printf("SPL: %u attempts failed: stopped (power cycle to retry)\n",
++		       attempt);
++		hang();
++	}
++
++	spl_stage(STAGE_DDR);
++#ifndef CONFIG_AD5X_SPL_CHAINLOAD
++	x2600_spl_clocks_init();
++	if (x2600_sdram_init())
++		spl_fail(STAGE_DDR, "DDR training failed");
++#else
++	puts("SPL: chainload test build: clocks and DDR as Linux left them\n");
++#endif
++	ad5x_boot(uboot_failed, other_slot);
++}
+diff --git a/arch/mips/mach-jz47xx/x2600/spl.h b/arch/mips/mach-jz47xx/x2600/spl.h
+new file mode 100644
+index 00000000..ddab059e
+--- /dev/null
++++ b/arch/mips/mach-jz47xx/x2600/spl.h
+@@ -0,0 +1,14 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/* Ingenic X2600 SPL: between its parts */
++#ifndef __X2600_SPL_H__
++#define __X2600_SPL_H__
++
++#include <linux/types.h>
++
++int ad5x_emmc_init(void);
++int ad5x_emmc_read(u32 lba, u32 cnt, void *dst);
++
++void x2600_spl_clocks_init(void);
++int x2600_sdram_init(void);
++
++#endif
+diff --git a/arch/mips/mach-jz47xx/x2600/spl_emmc.c b/arch/mips/mach-jz47xx/x2600/spl_emmc.c
+new file mode 100644
+index 00000000..5b385e4f
+--- /dev/null
++++ b/arch/mips/mach-jz47xx/x2600/spl_emmc.c
+@@ -0,0 +1,302 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Ingenic X2600 SPL: reading the eMMC on MSC0, a Synopsys DWC MSHC
++ * (SDHCI), by PIO. eMMC only: CMD0, CMD1, CMD2, CMD3, CMD7, 4-bit bus
++ * through CMD6, then CMD17/CMD18 with auto CMD12, at 25 MHz without the
++ * high-speed timing switch.
++ *
++ * The sequence follows the eMMC part of Ingenic's SPL driver for this SoC
++ * (U-Boot 2013.07 xburst2, common/spl/spl_jzsdhci.c), which Flashforge's
++ * SPL is built from. U-Boot's MMC and SDHCI drivers do the same in about
++ * five times the code, more than the boot ROM's SRAM window leaves room
++ * for (u-boot/README.md, "SPL memory").
++ *
++ * Copyright (c) 2013 Ingenic Semiconductor Co., Ltd.
++ */
++
++#include <asm/io.h>
++#include <linux/bitops.h>
++#include <linux/delay.h>
++#include <linux/errno.h>
++#include <linux/types.h>
++#include "spl.h"
++
++#define MSC0			((void __iomem *)0xb3450000)
++#define SD_BLOCKSIZE		0x04	/* 16 bit */
++#define SD_BLOCKCOUNT		0x06	/* 16 bit */
++#define SD_ARGUMENT		0x08
++#define SD_XFER_MODE		0x0c	/* 16 bit */
++#define  XFER_BLKCNT_EN		BIT(1)
++#define  XFER_AUTO_CMD12	BIT(2)
++#define  XFER_READ		BIT(4)
++#define  XFER_MULTI		BIT(5)
++#define SD_COMMAND		0x0e	/* 16 bit */
++#define  CMD_RESP_NONE		0x00
++#define  CMD_RESP_LONG		0x01
++#define  CMD_RESP_SHORT		0x02
++#define  CMD_RESP_BUSY		0x03
++#define  CMD_CRC		0x08
++#define  CMD_INDEX		0x10
++#define  CMD_DATA		0x20
++#define SD_RESPONSE		0x10
++#define SD_BUFFER		0x20
++#define SD_PRESENT_STATE	0x24
++#define  PS_CMD_INHIBIT		BIT(0)
++#define  PS_DAT_INHIBIT		BIT(1)
++#define SD_HOST_CONTROL		0x28	/* 8 bit */
++#define  HC_4BIT		BIT(1)
++#define SD_POWER_CONTROL	0x29	/* 8 bit */
++#define  PWR_ON			BIT(0)
++#define  PWR_180		(5 << 1)
++#define  PWR_300		(6 << 1)
++#define  PWR_330		(7 << 1)
++#define SD_CLOCK_CONTROL	0x2c	/* 16 bit */
++#define  CLK_INT_EN		BIT(0)
++#define  CLK_INT_STABLE		BIT(1)
++#define  CLK_CARD_EN		BIT(2)
++#define SD_TIMEOUT_CONTROL	0x2e	/* 8 bit */
++#define SD_SOFTWARE_RESET	0x2f	/* 8 bit */
++#define  RESET_ALL		BIT(0)
++#define  RESET_CMD		BIT(1)
++#define  RESET_DATA		BIT(2)
++#define SD_INT_STATUS		0x30
++#define  INT_CMD_DONE		BIT(0)
++#define  INT_XFER_DONE		BIT(1)
++#define  INT_BUF_RD		BIT(5)
++#define  INT_ERROR		BIT(15)
++#define SD_INT_ENABLE		0x34
++#define SD_SIGNAL_ENABLE	0x38
++#define SD_CAPABILITIES		0x40
++#define  CAP_VS33		BIT(24)
++#define  CAP_VS30		BIT(25)
++
++/* MSC0's card clock: CGU MSC0CDR, rate = parent / ((div + 1) * 4) */
++#define CPM_CLKGR0		((void __iomem *)0xb0000020)
++#define CLKGR0_MSC0		BIT(2)
++#define CPM_MSC0CDR		((void __iomem *)0xb0000068)
++#define CDR_PARENT_SHIFT	30
++#define CDR_PARENT_MPLL		1
++#define CDR_PARENT_EXCLK	2
++#define CDR_CE			BIT(29)
++#define CDR_BUSY		BIT(28)
++#define CDR_STOP		BIT(27)
++#define CDR_DIV_MASK		0xff
++
++#define EMMC_RCA		1
++#define EMMC_OCR		0x40ff8080	/* sector mode, 2.7-3.6 V, 1.7-1.95 V */
++#define OCR_BUSY		BIT(31)
++#define OCR_HCS			BIT(30)
++
++static int emmc_sector_mode;
++
++/*
++ * 0 when (register & mask) == want within usec. 8- and 16-bit registers
++ * are read through their aligned 32-bit word.
++ */
++static int wait_reg(u32 reg, u32 mask, u32 want, u32 usec)
++{
++	u32 t, sh = (reg & 3) * 8;
++
++	for (t = 0; ((readl(MSC0 + (reg & ~3)) >> sh) & mask) != want; t++) {
++		if (t >= usec)
++			return -ETIMEDOUT;
++		udelay(1);
++	}
++	return 0;
++}
++
++/* the status register once one of mask's bits is set; 0 on a timeout */
++static u32 wait_int(u32 mask, u32 usec)
++{
++	u32 st, t;
++
++	for (t = 0; !((st = readl(MSC0 + SD_INT_STATUS)) & mask); t++) {
++		if (t >= usec)
++			return 0;
++		udelay(1);
++	}
++	return st;
++}
++
++static int emmc_reset(u8 mask)
++{
++	writeb(mask, MSC0 + SD_SOFTWARE_RESET);
++	return wait_reg(SD_SOFTWARE_RESET, mask, 0, 100000);
++}
++
++/*
++ * The CGU feeds the card clock. Only the parent and divider fields change;
++ * the parent switches only while the clock is gated, and a new divider
++ * takes effect (busy clears) only while the controller runs the card clock
++ * (as in drivers/mmc/x2600_sdhci.c).
++ */
++static void emmc_set_clock(bool fast)
++{
++	u32 parent = fast ? CDR_PARENT_MPLL : CDR_PARENT_EXCLK;
++	/* 1800 MHz / (18 * 4) = 25 MHz; 24 MHz / (15 * 4) = 400 kHz */
++	u32 div = fast ? 17 : 14;
++	u32 val;
++
++	writew(0, MSC0 + SD_CLOCK_CONTROL);
++	val = readl(CPM_MSC0CDR);
++	if (((val >> CDR_PARENT_SHIFT) & 3) != parent) {
++		setbits_le32(CPM_CLKGR0, CLKGR0_MSC0);
++		val &= ~(3U << CDR_PARENT_SHIFT);
++		val |= parent << CDR_PARENT_SHIFT;
++		writel(val & ~CDR_CE, CPM_MSC0CDR);
++	}
++	clrbits_le32(CPM_CLKGR0, CLKGR0_MSC0);
++	val &= ~(CDR_DIV_MASK | CDR_STOP | CDR_BUSY);
++	writel(val | div | CDR_CE, CPM_MSC0CDR);
++
++	writew(CLK_INT_EN, MSC0 + SD_CLOCK_CONTROL);
++	wait_reg(SD_CLOCK_CONTROL, CLK_INT_STABLE, CLK_INT_STABLE, 20000);
++	writew(CLK_INT_EN | CLK_CARD_EN, MSC0 + SD_CLOCK_CONTROL);
++
++	for (val = 0; (readl(CPM_MSC0CDR) & CDR_BUSY) && val < 10000; val++)
++		udelay(1);
++	writel(readl(CPM_MSC0CDR) & ~CDR_CE, CPM_MSC0CDR);
++}
++
++/* one command; *resp gets the short response */
++static int emmc_cmd(u32 idx, u32 arg, u32 flags, u32 *resp)
++{
++	u32 inhibit = PS_CMD_INHIBIT, st;
++
++	if ((flags & CMD_DATA) || (flags & 3) == CMD_RESP_BUSY)
++		inhibit |= PS_DAT_INHIBIT;
++	if (wait_reg(SD_PRESENT_STATE, inhibit, 0, 100000))
++		return -EBUSY;
++
++	writel(~0U, MSC0 + SD_INT_STATUS);
++	writel(arg, MSC0 + SD_ARGUMENT);
++	writew(idx << 8 | flags, MSC0 + SD_COMMAND);
++
++	st = wait_int(INT_CMD_DONE | INT_ERROR, 100000);
++	if (!(st & INT_CMD_DONE) || (st & INT_ERROR))
++		goto err;
++	writel(INT_CMD_DONE, MSC0 + SD_INT_STATUS);
++	if (resp)
++		*resp = readl(MSC0 + SD_RESPONSE);
++
++	if ((flags & 3) == CMD_RESP_BUSY) {
++		st = wait_int(INT_XFER_DONE | INT_ERROR, 1000000);
++		if (!(st & INT_XFER_DONE) || (st & INT_ERROR))
++			goto err;
++		writel(INT_XFER_DONE, MSC0 + SD_INT_STATUS);
++	}
++	return 0;
++err:
++	emmc_reset(RESET_CMD | RESET_DATA);
++	return -EIO;
++}
++
++#define R1	(CMD_RESP_SHORT | CMD_CRC | CMD_INDEX)
++#define R1B	(CMD_RESP_BUSY | CMD_CRC | CMD_INDEX)
++#define R2	(CMD_RESP_LONG | CMD_CRC)
++#define R3	CMD_RESP_SHORT
++
++/* wait while the card is in its programming state (CMD13) */
++static int emmc_wait_ready(void)
++{
++	u32 st, t;
++
++	for (t = 0; t < 100000; t++) {
++		if (emmc_cmd(13, EMMC_RCA << 16, R1, &st))
++			return -EIO;
++		if (((st >> 9) & 15) != 7)	/* not prg */
++			return 0;
++		udelay(10);
++	}
++	return -ETIMEDOUT;
++}
++
++int ad5x_emmc_init(void)
++{
++	u32 caps, ocr = 0, t;
++
++	if (emmc_reset(RESET_ALL))
++		return -EIO;
++	writel(~0U, MSC0 + SD_INT_ENABLE);	/* latch every status bit */
++	writel(0, MSC0 + SD_SIGNAL_ENABLE);	/* no interrupts */
++	writeb(0xe, MSC0 + SD_TIMEOUT_CONTROL);
++	caps = readl(MSC0 + SD_CAPABILITIES);
++	caps = caps & CAP_VS33 ? PWR_330 : caps & CAP_VS30 ? PWR_300 : PWR_180;
++	writeb(caps, MSC0 + SD_POWER_CONTROL);
++	writeb(caps | PWR_ON, MSC0 + SD_POWER_CONTROL);
++	writeb(0, MSC0 + SD_HOST_CONTROL);	/* 1 bit, normal speed */
++	emmc_set_clock(false);
++	mdelay(1);				/* 74 clocks and more */
++
++	emmc_cmd(0, 0, CMD_RESP_NONE, NULL);
++	/* CMD1 until the card leaves busy: up to 1 s by the standard */
++	for (t = 0; t < 2000; t++) {
++		if (!emmc_cmd(1, EMMC_OCR, R3, &ocr) && (ocr & OCR_BUSY))
++			break;
++		udelay(1000);
++	}
++	if (!(ocr & OCR_BUSY))
++		return -ETIMEDOUT;
++	emmc_sector_mode = !!(ocr & OCR_HCS);
++
++	if (emmc_cmd(2, 0, R2, NULL) ||
++	    emmc_cmd(3, EMMC_RCA << 16, R1, NULL) ||
++	    emmc_cmd(7, EMMC_RCA << 16, R1, NULL))
++		return -EIO;
++
++	/* 4-bit bus: EXT_CSD[183] BUS_WIDTH = 1 */
++	if (emmc_cmd(6, 3 << 24 | 183 << 16 | 1 << 8, R1B, NULL) ||
++	    emmc_wait_ready())
++		return -EIO;
++	writeb(HC_4BIT, MSC0 + SD_HOST_CONTROL);
++	emmc_set_clock(true);
++	return 0;
++}
++
++static int emmc_read_chunk(u32 lba, u32 cnt, u32 *dst)
++{
++	u32 st, i;
++
++	writew(512, MSC0 + SD_BLOCKSIZE);
++	writew(cnt, MSC0 + SD_BLOCKCOUNT);
++	writew(XFER_BLKCNT_EN | XFER_READ |
++	       (cnt > 1 ? XFER_MULTI | XFER_AUTO_CMD12 : 0),
++	       MSC0 + SD_XFER_MODE);
++	if (emmc_cmd(cnt > 1 ? 18 : 17, emmc_sector_mode ? lba : lba * 512,
++		     R1 | CMD_DATA, NULL))
++		return -EIO;
++
++	while (cnt--) {
++		st = wait_int(INT_BUF_RD | INT_ERROR, 500000);
++		if (!(st & INT_BUF_RD) || (st & INT_ERROR))
++			goto err;
++		writel(INT_BUF_RD, MSC0 + SD_INT_STATUS);
++		for (i = 0; i < 128; i++)
++			*dst++ = readl(MSC0 + SD_BUFFER);
++	}
++	st = wait_int(INT_XFER_DONE | INT_ERROR, 500000);
++	if ((st & INT_XFER_DONE) && !(st & INT_ERROR)) {
++		writel(INT_XFER_DONE, MSC0 + SD_INT_STATUS);
++		return 0;
++	}
++err:
++	emmc_reset(RESET_CMD | RESET_DATA);
++	emmc_cmd(12, 0, R1B, NULL);
++	return -EIO;
++}
++
++/* cnt sectors from lba to dst (word aligned) */
++int ad5x_emmc_read(u32 lba, u32 cnt, void *dst)
++{
++	u32 n;
++
++	while (cnt) {
++		n = cnt > 2048 ? 2048 : cnt;
++		if (emmc_read_chunk(lba, n, dst))
++			return -EIO;
++		lba += n;
++		cnt -= n;
++		dst += n * 512;
++	}
++	return 0;
++}
+diff --git a/arch/mips/mach-jz47xx/x2600/u-boot-spl.lds b/arch/mips/mach-jz47xx/x2600/u-boot-spl.lds
+new file mode 100644
+index 00000000..f2c3cad0
+--- /dev/null
++++ b/arch/mips/mach-jz47xx/x2600/u-boot-spl.lds
+@@ -0,0 +1,98 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Ingenic X2600 SPL: the boot ROM loads the image (a 2 KiB header, then
++ * this) to 0x80001000 and runs it at 0x80001800. Before the DDR is up only
++ * the SRAM window up to 0x80007000 exists for it (Ingenic's SPL keeps
++ * everything in the same 24 KiB): code, data, BSS and the stack, whose top
++ * is CONFIG_SPL_STACK. No heap. The checks below fail the link otherwise;
++ * u-boot/tools/ad5x_spl_image.py checks the boot ROM's load size.
++ */
++
++#define AD5X_SRAM_END		0x80007000
++#define AD5X_SPL_STACK_SIZE	0x800
++
++MEMORY { .sram : ORIGIN = IMAGE_TEXT_BASE, \
++		LENGTH = AD5X_SRAM_END - IMAGE_TEXT_BASE }
++
++OUTPUT_ARCH(mips)
++ENTRY(_start)
++SECTIONS
++{
++	. = ALIGN(4);
++	.text : {
++		__text_start = .;
++		*(.text*)
++		__text_end = .;
++	} > .sram
++
++	. = ALIGN(4);
++	.rodata : {
++		*(SORT_BY_ALIGNMENT(SORT_BY_NAME(.rodata*)))
++	} > .sram
++
++	. = ALIGN(4);
++	.data : {
++		*(SORT_BY_ALIGNMENT(.data*))
++		*(SORT_BY_ALIGNMENT(.sdata*))
++		. = ALIGN(8);
++	} > .sram
++
++	. = ALIGN(4);
++	__u_boot_list : {
++		KEEP(*(SORT(__u_boot_list*)));
++		. = ALIGN(8);
++	} > .sram
++
++	__image_copy_end = .;
++	__image_copy_len = __image_copy_end - __text_start;
++	_image_binary_end = .;
++
++	.bss (NOLOAD) : {
++		__bss_start = .;
++		*(.bss*)
++		*(.sbss*)
++		*(COMMON)
++		. = ALIGN(4);
++		__bss_end = .;
++	} > .sram
++
++	__ad5x_stack_bottom = AD5X_SRAM_END - AD5X_SPL_STACK_SIZE;
++
++	.mdebug.abi32 : {
++		KEEP(*(.mdebug.abi32))
++	}
++	.comment 0 : { *(.comment) }
++	.debug_aranges 0 : { *(.debug_aranges) }
++	.debug_pubnames 0 : { *(.debug_pubnames) }
++	.debug_info 0 : { *(.debug_info .gnu.linkonce.wi.*) }
++	.debug_abbrev 0 : { *(.debug_abbrev) }
++	.debug_line 0 : { *(.debug_line .debug_line.* .debug_line_end) }
++	.debug_frame 0 : { *(.debug_frame) }
++	.debug_str 0 : { *(.debug_str) }
++	.debug_loc 0 : { *(.debug_loc) }
++	.debug_macinfo 0 : { *(.debug_macinfo) }
++	.debug_pubtypes 0 : { *(.debug_pubtypes) }
++	.debug_ranges 0 : { *(.debug_ranges) }
++	.debug_addr 0 : { *(.debug_addr) }
++	.debug_line_str 0 : { *(.debug_line_str) }
++	.debug_loclists 0 : { *(.debug_loclists) }
++	.debug_rnglists 0 : { *(.debug_rnglists) }
++	.debug_str_offsets 0 : { *(.debug_str_offsets) }
++	.gnu.attributes 0 : { KEEP(*(.gnu.attributes)) }
++
++	/DISCARD/ : {
++		*(.MIPS.abiflags)
++		*(.MIPS.options)
++		*(.options)
++		*(.pdr)
++		*(.reginfo)
++		*(.eh_frame)
++	}
++}
++
++ASSERT(CONFIG_SPL_STACK == AD5X_SRAM_END,
++	"SPL: the stack must start at the top of the SRAM window")
++ASSERT(__bss_end <= __ad5x_stack_bottom,
++	"SPL: code, data and BSS run into the stack reserve (SRAM window)")
++ASSERT(__text_start == 0x80001800,
++	"SPL: the boot ROM starts the code at 0x80001800")
+diff --git a/arch/mips/mach-jz47xx/x2600/x2600.c b/arch/mips/mach-jz47xx/x2600/x2600.c
+index 364a45ea..b2eb9667 100644
+--- a/arch/mips/mach-jz47xx/x2600/x2600.c
++++ b/arch/mips/mach-jz47xx/x2600/x2600.c
+@@ -1,7 +1,7 @@
+ // SPDX-License-Identifier: GPL-2.0+
+ /*
+- * Ingenic X2600 SoC: U-Boot proper started by the boot ROM's SPL (or by
+- * Linux, for tests), which has already set up the clocks and the DRAM.
++ * Ingenic X2600 SoC: what the SPL and U-Boot proper share (console
++ * registers, the OST timer, the watchdog, the CPM scratch pad).
+  */
+ 
+ #include <init.h>
+@@ -70,7 +70,6 @@ unsigned long long get_ticks(void)
+ 	return ((u64)hi << 32) | lo;
+ }
+ 
+-#ifndef CONFIG_XPL_BUILD
+ /*
+  * Watchdog (0x13630000): the JZ47xx TCU watchdog registers in a block of
+  * their own. It counts the RTC clock, which comes from EXCLK / 512
+@@ -80,7 +79,7 @@ unsigned long long get_ticks(void)
+  * as Linux's drivers do; the counter has been seen running with bit 29
+  * reading set under the vendor 6.6, so that gate may not be all of it.
+  * The counter ignores writes; TCSR's CLRZ clears it. RSR bit 1 records a
+- * watchdog reset.
++ * watchdog reset. Shared by the SPL and U-Boot proper.
+  */
+ #define X2600_CPM_OPCR		((void __iomem *)0xb0000024)
+ #define X2600_CPM_CLKGR1	((void __iomem *)0xb0000028)
+@@ -91,6 +90,7 @@ unsigned long long get_ticks(void)
+ #define WDT_TDR			0x00
+ #define WDT_TCER		0x04
+ #define WDT_TCSR		0x0c
++#define WDT_TSSR		0x2c		/* stop set */
+ #define WDT_TSCR		0x3c		/* stop clear */
+ #define TCSR_RTC_EN		BIT(1)
+ #define TCSR_PRESCALE(n)	((n) << 3)
+@@ -101,9 +101,13 @@ unsigned long long get_ticks(void)
+ /* Start (or restart) the watchdog to reset after ms, up to about 1431 s */
+ void x2600_wdt_start(unsigned int ms)
+ {
+-	u64 ticks = (u64)WDT_HZ * ms / 1000;
++	u32 ticks;
+ 	unsigned int n = 0;
+ 
++	if (ms > X2600_WDT_MAX_MS)
++		ms = X2600_WDT_MAX_MS;
++	/* 32-bit only (no 64-bit division in the SPL) */
++	ticks = (ms / 1000) * WDT_HZ + (ms % 1000) * WDT_HZ / 1000;
+ 	while (n < 5 && (ticks >> (2 * n)) > 0xffff)
+ 		n++;
+ 	ticks >>= 2 * n;
+@@ -125,241 +129,52 @@ void x2600_wdt_start(unsigned int ms)
+ 	writel(BIT(0), X2600_WDT + WDT_TCER);
+ }
+ 
++/* Stop it: counter disabled and its clock stopped, as the stock SPL does */
+ void x2600_wdt_stop(void)
+ {
+ 	clrbits_le32(X2600_CPM_CLKGR1, CLKGR1_TCU0);
+ 	writel(0, X2600_WDT + WDT_TCER);
++	writel(TSCR_WDT, X2600_WDT + WDT_TSSR);
+ }
+ 
+-void _machine_restart(void)
+-{
+-	x2600_wdt_start(10);
+-	while (1)
+-		;
+-}
+-#endif /* !CONFIG_XPL_BUILD */
+-
+-#ifdef CONFIG_XPL_BUILD
+-/*
+- * SPL: started by the boot ROM like Flashforge's (code at 0x80001800), or,
+- * for tests, chainloaded from Linux. Clocks and DDR: not set up here yet.
+- */
+-#include <asm/sections.h>
+-#include <serial.h>
+-#include <blk.h>
+-#include <cpu_func.h>
+-#include <hang.h>
+-#include <image.h>
+-#include <mmc.h>
+-#include <spl.h>
+-#include <asm/cache.h>
+-#include <linux/string.h>
+-#include <asm/global_data.h>
+-
+-DECLARE_GLOBAL_DATA_PTR;
+-gd_t gdata __section(".bss");
+-
+-/* GPIO port E: function 1 on PE9-PE12 (UART0, the DEBUG header) */
+-#define X2600_GPE		((void __iomem *)0xb3605000)
+-#define GPIO_INTC		0x18
+-#define GPIO_MSKC		0x28
+-#define GPIO_PAT1C		0x38
+-#define GPIO_PAT0S		0x44
+-#define UART0_PINS		(0xf << 9)
+-
+-/* UART0 registers, 4 bytes apart */
+-#define UART_THR		0x00
+-#define UART_DLL		0x00
+-#define UART_IER		0x04
+-#define UART_DLM		0x04
+-#define UART_FCR		0x08
+-#define UART_LCR		0x0c
+-#define UART_LSR		0x14
+-#define UART_FCR_FIFO		0x07	/* enable, clear RX and TX */
+-#define UART_FCR_UME		0x10	/* Ingenic: the UART's enable bit */
+-#define UART_LCR_8N1		0x03
+-#define UART_LCR_DLAB		0x80
+-#define UART_LSR_THRE		0x20
+-#define UART_LSR_TEMT		0x40
+-/* 24 MHz / (16 * 13) = 115384 baud */
+-#define UART_DIV_115200		13
+-
+-static void x2600_spl_uart_init(void)
+-{
+-	writel(UART0_PINS, X2600_GPE + GPIO_INTC);
+-	writel(UART0_PINS, X2600_GPE + GPIO_MSKC);
+-	writel(UART0_PINS, X2600_GPE + GPIO_PAT1C);
+-	writel(UART0_PINS, X2600_GPE + GPIO_PAT0S);
+-
+-	writel(0, X2600_UART0 + UART_IER);
+-	writel(UART_LCR_DLAB | UART_LCR_8N1, X2600_UART0 + UART_LCR);
+-	writel(UART_DIV_115200, X2600_UART0 + UART_DLL);
+-	writel(0, X2600_UART0 + UART_DLM);
+-	writel(UART_LCR_8N1, X2600_UART0 + UART_LCR);
+-	x2600_uart0_plain_baud();
+-	writel(UART_FCR_FIFO | UART_FCR_UME, X2600_UART0 + UART_FCR);
+-}
+-
+-static void x2600_spl_putc(const char c)
+-{
+-	if (c == '\n')
+-		x2600_spl_putc('\r');
+-	while (!(readl(X2600_UART0 + UART_LSR) & UART_LSR_THRE))
+-		;
+-	writel(c, X2600_UART0 + UART_THR);
+-}
+-
+-static void x2600_spl_puts(const char *s)
+-{
+-	while (*s)
+-		x2600_spl_putc(*s++);
+-}
+-
+-static int x2600_spl_serial_start(void) { return 0; }
+-static int x2600_spl_serial_stop(void) { return 0; }
+-static void x2600_spl_setbrg(void) { }
+-static int x2600_spl_getc(void) { return 0; }
+-static int x2600_spl_tstc(void) { return 0; }
+-
+-static struct serial_device x2600_spl_serial = {
+-	.name	= "x2600-uart0",
+-	.start	= x2600_spl_serial_start,
+-	.stop	= x2600_spl_serial_stop,
+-	.setbrg	= x2600_spl_setbrg,
+-	.putc	= x2600_spl_putc,
+-	.puts	= x2600_spl_puts,
+-	.getc	= x2600_spl_getc,
+-	.tstc	= x2600_spl_tstc,
+-};
+-
+-struct serial_device *default_serial_console(void)
+-{
+-	return &x2600_spl_serial;
+-}
+-
+-/* the boot flag and kernel slots, at the SPL's built-in LBAs */
+-#define AD5X_OTA_LBA		0x6c800
+-#define AD5X_KERNEL_A_LBA	0x800
+-#define AD5X_KERNEL_B_LBA	0x36800
+-#define AD5X_FLAG_B		"ota:kernel2"
+-
+-/* the stock SPL's command line, root filled in per slot */
+-#define AD5X_ARGS	"console=ttyS0,115200n8 loglevel=8 mem=236M@0x0 " \
+-			"rmem=16M@0xec00000 rtos_size=4M@0xfc00000 " \
+-			"mem=256M@0x30000000 init=/linuxrc root=/dev/mmcblk0pX " \
+-			"rootwait rootfstype=squashfs ro lpj=11476992"
+-#define AD5X_MAX_ARGS	16
+-
+-int x2600_sdhci_init(void __iomem *base, unsigned int id, u32 max_clk);
+-bool x2600_ddr_running(void);
+-void x2600_spl_clocks_init(void);
+-void x2600_sdram_init(void);
++/* CPSPR: kept over a watchdog reset; mach/x2600.h has Kiln's values */
++#define X2600_CPM_CPSPR		((void __iomem *)0xb0000034)
++#define X2600_CPM_CPSPPR	((void __iomem *)0xb0000038)
++#define CPSPPR_UNLOCK		0x5a5a
++#define CPSPPR_LOCK		0xa5a5
+ 
+-int board_mmc_init(struct bd_info *bis)
++u32 x2600_cpspr_read(void)
+ {
+-	return x2600_sdhci_init((void __iomem *)0xb3450000, 0, 25000000);
++	return readl(X2600_CPM_CPSPR);
+ }
+ 
+-static u8 spl_sector[512] __aligned(ARCH_DMA_MINALIGN);
+-static char spl_args[sizeof(AD5X_ARGS)];
+-static char *spl_argv[AD5X_MAX_ARGS + 1];
+-
+-/* split spl_args in place into spl_argv[1..], argv[0] being "spl" */
+-static int ad5x_build_argv(char root)
++void x2600_cpspr_write(u32 val)
+ {
+-	char *p;
+-	int argc = 0;
+-
+-	strcpy(spl_args, AD5X_ARGS);
+-	p = strstr(spl_args, "mmcblk0pX");
+-	p[8] = root;
+-
+-	spl_argv[argc++] = "spl";
+-	for (p = spl_args; *p && argc < AD5X_MAX_ARGS; ) {
+-		spl_argv[argc++] = p;
+-		while (*p && *p != ' ')
+-			p++;
+-		if (*p)
+-			*p++ = '\0';
+-	}
+-	spl_argv[argc] = NULL;
+-	return argc;
++	writel(CPSPPR_UNLOCK, X2600_CPM_CPSPPR);
++	writel(val, X2600_CPM_CPSPR);
++	writel(CPSPPR_LOCK, X2600_CPM_CPSPPR);
+ }
+ 
+-static void __noreturn ad5x_boot(void)
++#ifdef CONFIG_XPL_BUILD
++/*
++ * Delays from the OST directly: lib/time.c's version would pull in 64-bit
++ * division, which the SPL has no room for.
++ */
++void __udelay(unsigned long usec)
+ {
+-	typedef void __noreturn (*kernel_entry_t)(int, char **, char **, int);
+-	struct legacy_img_hdr *hdr = (void *)spl_sector;
+-	struct blk_desc *desc;
+-	struct mmc *mmc;
+-	ulong lba, size, load, ep, blocks;
+-	int slot_b, argc;
+-
+-	if (mmc_initialize(NULL) || !(mmc = find_mmc_device(0)) ||
+-	    mmc_init(mmc)) {
+-		puts("SPL: eMMC init failed\n");
+-		hang();
+-	}
+-	desc = mmc_get_blk_desc(mmc);
+-	if (blk_dread(desc, AD5X_OTA_LBA, 1, spl_sector) != 1) {
+-		puts("SPL: can't read the boot flag\n");
+-		hang();
+-	}
+-	slot_b = !strncmp((char *)spl_sector, AD5X_FLAG_B,
+-			  strlen(AD5X_FLAG_B));
+-	lba = slot_b ? AD5X_KERNEL_B_LBA : AD5X_KERNEL_A_LBA;
+-	printf("SPL: slot %c, kernel at LBA 0x%lx\n", slot_b ? 'b' : 'a', lba);
++	u32 start = readl(X2600_OST + GOST_CNTL);
++	u32 ticks = usec * 24;
+ 
+-	if (blk_dread(desc, lba, 1, spl_sector) != 1 ||
+-	    image_get_magic(hdr) != IH_MAGIC) {
+-		puts("SPL: no uImage in the kernel partition\n");
+-		hang();
+-	}
+-	size = image_get_data_size(hdr);
+-	load = image_get_load(hdr);
+-	ep = image_get_ep(hdr);
+-	printf("SPL: %s, 0x%lx bytes, load 0x%lx, entry 0x%lx\n",
+-	       image_get_name(hdr), size, load, ep);
+-
+-	blocks = (size + sizeof(*hdr) + desc->blksz - 1) / desc->blksz;
+-	if (blk_dread(desc, lba, blocks, (void *)(load - sizeof(*hdr))) !=
+-	    blocks) {
+-		puts("SPL: reading the kernel failed\n");
+-		hang();
+-	}
+-	flush_cache(load - sizeof(*hdr), blocks * desc->blksz);
+-
+-	argc = ad5x_build_argv(slot_b ? '4' : '2');
+-	puts("SPL: starting the kernel\n");
+-	((kernel_entry_t)ep)(argc, spl_argv, NULL, 0);
++	while (readl(X2600_OST + GOST_CNTL) - start < ticks)
++		;
+ }
+-
+-void board_init_f(ulong dummy)
++#else
++/* "reset": through the watchdog; the next SPL start is a fresh one */
++void _machine_restart(void)
+ {
+-	gd = &gdata;
+-	memset(__bss_start, 0, (size_t)__bss_end - (size_t)__bss_start);
+-
+-	x2600_spl_uart_init();
+-	timer_init();
+-	mips_cache_probe();
+-	gd->malloc_base = 0x80009000;
+-	gd->malloc_limit = 0x2000;
+-	gd->malloc_ptr = 0;
+-	gd->flags |= GD_FLG_SPL_INIT;
+-	preloader_console_init();
+-
+-	/*
+-	 * Started by the boot ROM: clocks and DDR to set up. Chainloaded from
+-	 * Linux (tests): both already running, and re-initializing the DDR
+-	 * we run from would crash.
+-	 */
+-	if (x2600_ddr_running()) {
+-		puts("SPL: DDR already running: clocks and DDR left as they are\n");
+-	} else {
+-		x2600_spl_clocks_init();
+-		x2600_sdram_init();
+-	}
+-
+-	ad5x_boot();
++	x2600_cpspr_write(0);
++	x2600_wdt_start(10);
++	while (1)
++		;
+ }
+-#endif /* CONFIG_XPL_BUILD */
++#endif
+diff --git a/board/flashforge/ad5x/Kconfig b/board/flashforge/ad5x/Kconfig
+index ea16d173..2ca64ff8 100644
+--- a/board/flashforge/ad5x/Kconfig
++++ b/board/flashforge/ad5x/Kconfig
+@@ -9,4 +9,13 @@ config SYS_VENDOR
+ config SYS_CONFIG_NAME
+ 	default "ad5x"
+ 
++config AD5X_SPL_CHAINLOAD
++	bool "SPL for chainload tests only (no clocks or DDR set up)"
++	depends on SPL
++	help
++	  Build the SPL to be started from Linux, which has the clocks and
++	  the DDR running and the SPL in DDR: the clock and DDR setup is left
++	  out. Such an SPL can't start from the boot ROM; the image tools in
++	  Kiln's u-boot/ refuse to make a boot ROM image from it.
++
+ endif
+diff --git a/configs/ad5x_defconfig b/configs/ad5x_defconfig
+index 47e6299b..8a55cced 100644
+--- a/configs/ad5x_defconfig
++++ b/configs/ad5x_defconfig
+@@ -46,17 +46,26 @@ CONFIG_SYS_CBSIZE=1024
+ CONFIG_SPL=y
+ CONFIG_SPL_TEXT_BASE=0x80001800
+ CONFIG_SPL_MAX_SIZE=0x5800
+-CONFIG_SPL_HAVE_INIT_STACK=y
+-CONFIG_SPL_STACK=0x8000d000
+-CONFIG_SPL_BSS_START_ADDR=0x80007000
+-CONFIG_SPL_BSS_MAX_SIZE=0x2000
+ # CONFIG_SPL_DM is not set
+ CONFIG_SPL_SERIAL=y
+ CONFIG_SPL_LIBGENERIC_SUPPORT=y
+ CONFIG_SPL_TINY_MEMSET=y
+ CONFIG_SPL_LIBCOMMON_SUPPORT=y
+ # CONFIG_SPL_SHARES_INIT_SP_ADDR is not set
+-CONFIG_SPL_MMC=y
+-CONFIG_SPL_SYS_MALLOC_SIMPLE=y
+-CONFIG_SPL_SYS_MALLOC_F=y
+-CONFIG_SPL_SYS_MALLOC_F_LEN=0x2000
++CONFIG_SPL_LDSCRIPT="arch/mips/mach-jz47xx/x2600/u-boot-spl.lds"
++CONFIG_SPL_HAVE_INIT_STACK=y
++CONFIG_SPL_STACK=0x80007000
++# CONFIG_SPL_SEPARATE_BSS is not set
++# CONFIG_SPL_HAS_BSS_LINKER_SECTION is not set
++CONFIG_SPL_FOOTPRINT_LIMIT=y
++CONFIG_SPL_MAX_FOOTPRINT=0x5000
++# CONFIG_SPL_MMC is not set
++# CONFIG_SPL_SYS_MALLOC_F is not set
++# CONFIG_SPL_LEGACY_IMAGE_FORMAT is not set
++# CONFIG_SPL_RAW_IMAGE_SUPPORT is not set
++# CONFIG_SPL_PARTITIONS is not set
++# CONFIG_SPL_EFI_PARTITION is not set
++# CONFIG_SPL_SPRINTF is not set
++# CONFIG_SPL_CRC32 is not set
++# CONFIG_SPL_SHA1 is not set
++# CONFIG_SPL_LEGACY_HASHING_AND_CRYPTO is not set
+-- 
+2.56.0
+

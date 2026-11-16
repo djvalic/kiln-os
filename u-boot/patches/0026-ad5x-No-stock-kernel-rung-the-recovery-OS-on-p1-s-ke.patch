@@ -1,0 +1,518 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: valix <djvalic.wc@gmail.com>
+Date: Mon, 16 Nov 2026 12:00:00 -0500
+Subject: [PATCH 26/26] ad5x: No stock-kernel rung; the recovery OS on p1's
+ kernel; what was started in CPSPR
+
+The boot rules no longer start the printer's stock 5.10 for the main
+OS: 7.3 (opt-in) -> 6.6 -> the recovery OS. Two unconfirmed 6.6 starts
+(one after an install) record 6.6 as failed; with no kernel of Kiln's
+left (or two unconfirmed starts of a kernel this build doesn't know,
+such as an older build's "stock") U-Boot points the flag at slot A and
+starts the recovery OS. A state sector an older build wrote with
+"kernel stock" reads as a kernel not known.
+
+Slot A is checked as before (p1 a Linux uImage for MIPS with good CRCs
+that isn't a U-Boot, p2 starting with "hsqs"). Kiln's main OS writes its
+own 6.6 into p1 once this U-Boot has started it, so the recovery OS runs
+on Kiln's 6.6; until then p1 holds the stock 5.10, which starts it as
+well. A p1 kernel named "Linux-6.6-ad5x" gets "ad5x.kernel=own panic=10
+loglevel=5" (no cmdline-extra); the watchdog stays stopped into the
+recovery OS (its e2fsck can outlast the kernel's feeding).
+
+When the rules would fall back but slot A isn't startable, the main OS
+starts again with its own kernel whatever the records say (6.6, else
+7.3), instead of the stock kernel; with no kernel at all U-Boot gives
+up as before.
+
+Before the jump U-Boot leaves 0x5500 | start count << 4 | what in CPSPR
+instead of 0 (ad5x_start_uboot_kernel: 1 = 6.6, 2 = 7.3, 3 = recovery
+OS, 0 = a bootm typed at the prompt). The SPL reads it as a fresh start,
+as it read 0; Linux shows how the boot came up.
+---
+ arch/mips/mach-jz47xx/include/mach/ad5x_start.h |  30 +++++++++++++++++++++++++++++-
+ board/flashforge/ad5x/ad5x.c                    |  73 +++++++++++++++++++++++++++++++++++++-------------
+ board/flashforge/ad5x/ad5x.env                  |   4 ++--
+ board/flashforge/ad5x/bootlogic.c               | 104 ++++++++++++++++++++++++++++++++------------------
+ board/flashforge/ad5x/bootlogic.h               |  24 ++++++++++++++++--------
+ 5 files changed, 168 insertions(+), 67 deletions(-)
+
+diff --git a/arch/mips/mach-jz47xx/include/mach/ad5x_start.h b/arch/mips/mach-jz47xx/include/mach/ad5x_start.h
+--- a/arch/mips/mach-jz47xx/include/mach/ad5x_start.h
++++ b/arch/mips/mach-jz47xx/include/mach/ad5x_start.h
+@@ -39,7 +39,9 @@
+  * SPL from a kernel slot); started otherwise (the stock SPL, a chainload
+  * test) it writes SLOT_UBOOT for slot B, where Kiln puts it. Giving up
+  * without a key (no eMMC, nothing to start): UBOOT_UP -> GAVE_UP, and
+- * SLOT_UBOOT stays. Before it jumps to a kernel it writes 0.
++ * SLOT_UBOOT stays. Before it jumps to a kernel it writes a value of its
++ * own that says what it started (ad5x_start_uboot_kernel below), which
++ * the SPL reads as a fresh start.
+  */
+ #ifndef __MACH_AD5X_START_H__
+ #define __MACH_AD5X_START_H__
+@@ -167,4 +169,30 @@
+ 	return v;			/* SLOT_UBOOT: the other slot next */
+ }
+ 
++/*
++ * What U-Boot proper leaves in CPSPR as it jumps to a kernel: 0x5500 | a
++ * low byte. Not 0x4b00-0x4bff, so the SPL's next start is a fresh one (as
++ * after 0); Linux writes its own value only when it reboots, so in Linux
++ * "devmem 0x10000034 32" shows how this boot was started:
++ *   bits 0-3  what (enum ad5x_ub_start)
++ *   bits 4-7  the main OS's start count in U-Boot's state (1-15, 15 for
++ *             15 or more), 0 for the others
++ * Neither Linux's reboot values (0x1a1a, 0x3535, 0x4343) nor Ingenic's
++ * SPLs' (0x4f5441, 0x41544f).
++ */
++#define AD5X_UB_MAGIC		0x5500u
++
++enum ad5x_ub_start {
++	AD5X_UB_BOOTM,		/* a bootm typed at the prompt */
++	AD5X_UB_MAIN_66,	/* the main OS on Kiln's 6.6 */
++	AD5X_UB_MAIN_73,	/* the main OS on mainline 7.3 */
++	AD5X_UB_RECOVERY,	/* the recovery OS (slot A) */
++};
++
++static inline unsigned int ad5x_start_uboot_kernel(unsigned int what,
++						   unsigned int tries)
++{
++	return AD5X_UB_MAGIC | (tries > 15 ? 15 : tries) << 4 | (what & 15);
++}
++
+ #endif
+diff --git a/board/flashforge/ad5x/ad5x.c b/board/flashforge/ad5x/ad5x.c
+--- a/board/flashforge/ad5x/ad5x.c
++++ b/board/flashforge/ad5x/ad5x.c
+@@ -5,7 +5,8 @@
+  * U-Boot proper: started by Kiln's SPL from eMMC 0xA400, or wrapped as a
+  * uImage from a kernel slot by either SPL. It starts the main OS (slot B)
+  * with the kernel /data/ad5x/kernel/mainline and the failure records ask
+- * for, or the recovery OS (slot A), by the rules in bootlogic.c. It reads
++ * for, or the recovery OS (slot A: p1's kernel, Kiln's 6.6 once the main
++ * OS has put it there, and p2), by the rules in bootlogic.c. It reads
+  * /data (ext4) and rootfs2 (SquashFS) and never writes a filesystem; what
+  * it writes is in the "ota" partition: the boot flag (bytes 0-11, only
+  * when it falls back or slot A isn't startable), its state and records
+@@ -258,6 +259,16 @@
+ 	return !ad5x_read_sector(lba, buf) && !memcmp(buf, "hsqs", 4);
+ }
+ 
++/*
++ * The name of the kernel slot A holds (its uImage's, set by
++ * ad5x_gather) and whether it is Kiln's 6.6, which the main OS writes
++ * there once this U-Boot has started it (S99ad5x-update-recovery; the
++ * build names it "Linux-6.6-ad5x"). Until then p1 holds the printer's
++ * stock 5.10, which starts the recovery OS as well.
++ */
++static char ad5x_a_name[IH_NMLEN + 1];
++static int ad5x_a_own;
++
+ /* ---- the environment ---- */
+ 
+ /*
+@@ -295,10 +306,15 @@
+  * /usr/lib/ad5x/watchdog.conf (its kernels take a running watchdog over:
+  * they feed it from the driver's probe until the userspace feeder opens
+  * /dev/watchdog, and stop it on halt and poweroff) and /data has no
+- * ad5x/watchdog.disable. Stopped for the stock kernel and the recovery OS,
+- * and for a bootm typed at the prompt.
++ * ad5x/watchdog.disable. Stopped for the recovery OS and for a bootm
++ * typed at the prompt.
++ *
++ * CPSPR gets what was started (ad5x_start_uboot_kernel(), which the SPL
++ * reads as a fresh start): "devmem 0x10000034 32" in Linux then shows the
++ * way this boot came up, until the kernel's reboot writes its own value.
+  */
+ static unsigned int ad5x_wdt_s;
++static unsigned int ad5x_ub_what = AD5X_UB_BOOTM, ad5x_ub_tries;
+ 
+ void board_preboot_os(void)
+ {
+@@ -306,7 +322,7 @@
+ 		x2600_wdt_start(ad5x_wdt_s * 1000);
+ 	else
+ 		x2600_wdt_stop();
+-	x2600_cpspr_write(0);
++	x2600_cpspr_write(ad5x_start_uboot_kernel(ad5x_ub_what, ad5x_ub_tries));
+ }
+ 
+ /* ---- the start ---- */
+@@ -354,10 +370,15 @@
+ 		  AD5X_REL_LEN);
+ 	in->wdt_capable = ad5x_exists(4, "/usr/lib/ad5x/watchdog.conf");
+ 
+-	/* slot A, and p1's kernel for the main OS too */
+-	in->stock_kernel_ok = ad5x_check_kernel(AD5X_KERNEL_A_LBA, AD5X_LOAD_A);
+-	in->slot_a_ok = in->stock_kernel_ok &&
+-			ad5x_squashfs_at(AD5X_ROOTFS_A_LBA);
++	/* slot A: p1's kernel (loaded to AD5X_LOAD_A) and p2's root */
++	ad5x_a_name[0] = '\0';
++	ad5x_a_own = 0;
++	if (ad5x_check_kernel(AD5X_KERNEL_A_LBA, AD5X_LOAD_A)) {
++		strlcpy(ad5x_a_name, image_get_name(map_sysmem(AD5X_LOAD_A, 0)),
++			sizeof(ad5x_a_name));
++		ad5x_a_own = !strncmp(ad5x_a_name, "Linux-6.6-ad5x", 14);
++		in->slot_a_ok = ad5x_squashfs_at(AD5X_ROOTFS_A_LBA);
++	}
+ }
+ 
+ static void ad5x_print(const struct ad5x_inputs *in)
+@@ -368,7 +389,7 @@
+ 	       in->rec.failed_own[0] ? in->rec.failed_own : "-",
+ 	       in->rec.failed_mainline[0] ? in->rec.failed_mainline : "-");
+ 	printf("ad5x: /data %s (mainline %s, after install %s, S00 failed "
+-	       "%s/%s); rootfs2 6.6 %s %s, 7.3 %s %s; slot A %s, p1 %s\n",
++	       "%s/%s); rootfs2 6.6 %s %s, 7.3 %s %s; slot A %s, p1 %s%s\n",
+ 	       in->data_ok ? "ok" : "unread", in->mainline_wanted ? "on" : "off",
+ 	       in->after_install ? "yes" : "no",
+ 	       in->s00_failed[0] ? in->s00_failed : "-",
+@@ -376,7 +397,8 @@
+ 	       in->have_66 ? "yes" : "no", in->rel_66,
+ 	       in->have_73 ? "yes" : "no", in->rel_73,
+ 	       in->slot_a_ok ? "ok" : "not startable",
+-	       in->stock_kernel_ok ? "ok" : "no kernel");
++	       ad5x_a_name[0] ? ad5x_a_name : "no kernel",
++	       ad5x_a_own ? " (Kiln's)" : "");
+ 	printf("ad5x: watchdog: wdt_os %lu, rootfs2 %s, /data %s\n",
+ 	       env_get_ulong("wdt_os", 10, 0),
+ 	       in->wdt_capable ? "feeds it" : "doesn't feed it",
+@@ -407,13 +429,19 @@
+ 	return ret;
+ }
+ 
+-static void ad5x_bootargs(const char *root, int own, unsigned int wdt)
++/*
++ * @own: Kiln's kernel (ad5x.kernel=own panic=10 loglevel=5); @extra: and
++ * /data/ad5x/kernel/cmdline-extra after it, as S00ad5x-kernel adds it (the
++ * main OS only: the recovery OS starts without the owner's test options)
++ */
++static void ad5x_bootargs(const char *root, int own, int extra_ok,
++			  unsigned int wdt)
+ {
+ 	char extra[256] = "";
+ 	char *args;
+ 	long len;
+ 
+-	if (own) {
++	if (own && extra_ok) {
+ 		/* as S00ad5x-kernel adds: cmdline-extra comes last */
+ 		ad5x_small(7, "/ad5x/kernel/cmdline-extra", extra,
+ 			   sizeof(extra));
+@@ -534,13 +562,15 @@
+ 		ad5x_commit(&d);
+ 
+ 		if (d.target == AD5X_BOOT_RECOVERY) {
+-			ad5x_bootargs("/dev/mmcblk0p2", 0, 0);
+-			ad5x_bootm(AD5X_LOAD_A);
+-			in.slot_a_ok = in.stock_kernel_ok = 0;
+-		} else if (d.kernel == AD5X_K_STOCK) {
+-			ad5x_bootargs("/dev/mmcblk0p4", 0, 0);
++			/* p1's kernel, loaded and checked by ad5x_gather */
++			ad5x_bootargs("/dev/mmcblk0p2", ad5x_a_own, 0, 0);
++			ad5x_ub_what = AD5X_UB_RECOVERY;
++			ad5x_ub_tries = 0;
+ 			ad5x_bootm(AD5X_LOAD_A);
+-			in.stock_kernel_ok = in.slot_a_ok = 0;
++			ad5x_ub_what = AD5X_UB_BOOTM;
++			ad5x_ub_tries = 0;
++			printf("ad5x: slot A's kernel didn't start\n");
++			in.slot_a_ok = 0;
+ 		} else {
+ 			const char *path = d.kernel == AD5X_K_73 ?
+ 				"/usr/lib/ad5x/kernel-mainline/xImage" :
+@@ -549,9 +579,14 @@
+ 			len = ad5x_load(4, path, AD5X_LOAD_MAIN,
+ 					AD5X_KERNEL_MAX);
+ 			if (len > 0) {
+-				ad5x_bootargs("/dev/mmcblk0p4", 1, wdt);
++				ad5x_bootargs("/dev/mmcblk0p4", 1, 1, wdt);
+ 				ad5x_wdt_s = wdt;
++				ad5x_ub_what = d.kernel == AD5X_K_73 ?
++					AD5X_UB_MAIN_73 : AD5X_UB_MAIN_66;
++				ad5x_ub_tries = d.state.tries;
+ 				ad5x_bootm(AD5X_LOAD_MAIN);
++				ad5x_ub_what = AD5X_UB_BOOTM;
++				ad5x_ub_tries = 0;
+ 				ad5x_wdt_s = 0;
+ 			}
+ 			printf("ad5x: %s didn't start\n", path);
+diff --git a/board/flashforge/ad5x/ad5x.env b/board/flashforge/ad5x/ad5x.env
+--- a/board/flashforge/ad5x/ad5x.env
++++ b/board/flashforge/ad5x/ad5x.env
+@@ -9,8 +9,8 @@
+  *               the kernel and the userspace feeder keep it fed), with
+  *               ad5x.wdt=SECONDS on the command line; only for a rootfs2
+  *               with /usr/lib/ad5x/watchdog.conf and without
+- *               /data/ad5x/watchdog.disable. 0: always stopped. The stock
+- *               kernel and the recovery OS start with it stopped.
++ *               /data/ad5x/watchdog.disable. 0: always stopped. The
++ *               recovery OS starts with it stopped.
+  *   args_spl    the stock SPL's command line without root= (lpj as stock)
+  */
+ bootcmd=ad5x_boot
+diff --git a/board/flashforge/ad5x/bootlogic.c b/board/flashforge/ad5x/bootlogic.c
+--- a/board/flashforge/ad5x/bootlogic.c
++++ b/board/flashforge/ad5x/bootlogic.c
+@@ -15,25 +15,28 @@
+  *   and the kernel of the last one. Kernel order as S00ad5x-kernel's:
+  *   mainline 7.3 when /data/ad5x/kernel/mainline exists (not on the first
+  *   start after an install, not when its release failed), else Kiln's 6.6
+- *   (unless its release failed), else the printer's stock kernel from p1.
++ *   (unless its release failed). Never the printer's stock 5.10.
+  *   - one unconfirmed 7.3 start: 7.3's release is recorded as failed and
+  *     this start uses 6.6 (S00: "this boot goes on to 6.6 at once");
+  *   - two unconfirmed 6.6 starts in a row (one on the first start after an
+- *     install): 6.6's release is recorded as failed, the stock kernel next;
+- *   - two unconfirmed stock-kernel starts in a row, or no kernel at all:
+- *     fall back to the recovery OS: flag to slot A ("ota:kernel"), state
+- *     cleared, the reason recorded. If slot A isn't startable either, the
+- *     main OS is started again (never a loop on a broken slot A), or with
+- *     nothing startable at all U-Boot stays at its prompt.
++ *     install): 6.6's release is recorded as failed;
++ *   - no kernel left (both failed, or none in rootfs2), or two unconfirmed
++ *     starts of a kernel not known (an older build's "stock"): fall back
++ *     to the recovery OS: flag to slot A ("ota:kernel"), state cleared,
++ *     the reason recorded. If slot A isn't startable, the main OS is
++ *     started again with its own kernel whatever the records say (never a
++ *     loop on a broken slot A, never a printer left without a system), or
++ *     with no kernel at all U-Boot gives up (the SPL then boots the slot).
+  *   S00ad5x-kernel's own records on /data (failed, failed-mainline) count
+  *   as U-Boot's. A record naming another release than the one installed
+- *   is dropped (an update), as S00 does.
++ *   is dropped (an update), as S00 does. The recovery OS clears both
++ *   (and the state) when it installs the main OS or "Boot main OS" runs.
+  * - Counts saturate at AD5X_MAX_TRIES; a record that doesn't parse or has
+  *   a bad CRC32 counts as empty: never a reason to fall back.
+  * - The watchdog stays running (wdt_os seconds) only into Kiln's own
+  *   kernels, from a rootfs2 that has watchdog.conf, and not with
+- *   watchdog.disable on /data; it is stopped for the stock kernel and the
+- *   recovery OS (ad5x_wdt_seconds).
++ *   watchdog.disable on /data; it is stopped for the recovery OS
++ *   (ad5x_wdt_seconds).
+  */
+ 
+ #include <stdio.h>
+@@ -68,21 +71,18 @@
+ 		return "66";
+ 	case AD5X_K_73:
+ 		return "73";
+-	case AD5X_K_STOCK:
+-		return "stock";
+ 	default:
+ 		return "none";
+ 	}
+ }
+ 
++/* anything else ("stock" from an older build included): not known */
+ static enum ad5x_kernel kernel_from_name(const char *s)
+ {
+ 	if (!strcmp(s, "66"))
+ 		return AD5X_K_66;
+ 	if (!strcmp(s, "73"))
+ 		return AD5X_K_73;
+-	if (!strcmp(s, "stock"))
+-		return AD5X_K_STOCK;
+ 	return AD5X_K_NONE;
+ }
+ 
+@@ -284,8 +284,19 @@
+ 	if (in->have_66 && !same(in->rel_66, rec->failed_own) &&
+ 	    !same(in->rel_66, in->s00_failed))
+ 		return AD5X_K_66;
+-	if (in->stock_kernel_ok)
+-		return AD5X_K_STOCK;
++	return AD5X_K_NONE;
++}
++
++/*
++ * Slot A can't take a fallback: the main OS's own kernel whatever the
++ * records say (6.6, the default, else 7.3); none only without either.
++ */
++static enum ad5x_kernel any_kernel(const struct ad5x_inputs *in)
++{
++	if (in->have_66)
++		return AD5X_K_66;
++	if (in->have_73)
++		return AD5X_K_73;
+ 	return AD5X_K_NONE;
+ }
+ 
+@@ -296,16 +307,29 @@
+ 		return in->rel_73;
+ 	if (k == AD5X_K_66)
+ 		return in->rel_66;
+-	return "stock";
++	return "";
++}
++
++static const char *short_name(enum ad5x_kernel k)
++{
++	return k == AD5X_K_73 ? "7.3" : k == AD5X_K_66 ? "6.6" : "none";
++}
++
++/* append to a reason text, cut at its size */
++static void add(char *why, const char *fmt, const char *a)
++{
++	unsigned int n = strlen(why);
++
++	snprintf(why + n, AD5X_REASON_LEN - n, fmt, a);
+ }
+ 
+ void ad5x_decide(const struct ad5x_inputs *in, struct ad5x_decision *out)
+ {
+ 	const struct ad5x_state *st = &in->state;
+-	char why[AD5X_REASON_LEN];
++	char why[AD5X_REASON_LEN] = "";
+ 	enum ad5x_kernel k;
+ 	unsigned int tries;
+-	int to_recovery = 0;
++	int to_recovery = 0, failed = 0;
+ 
+ 	memset(out, 0, sizeof(*out));
+ 	out->state = *st;
+@@ -351,9 +375,8 @@
+ 			ad5x_release_clean(out->rec.failed_mainline, rel,
+ 					   AD5X_REL_LEN);
+ 			snprintf(why, sizeof(why), "mainline kernel %s did not "
+-				 "finish starting; 6.6 until ad5x-kernel retry",
+-				 rel);
+-			set_reason(out, why);
++				 "finish starting", rel);
++			failed = 1;
+ 			tries = 0;
+ 			break;
+ 		case AD5X_K_66:
+@@ -362,32 +385,34 @@
+ 			ad5x_release_clean(out->rec.failed_own, rel,
+ 					   AD5X_REL_LEN);
+ 			snprintf(why, sizeof(why), "own kernel %s did not finish "
+-				 "starting, %u in a row; stock kernel until "
+-				 "ad5x-kernel retry", rel, tries);
+-			set_reason(out, why);
++				 "starting, %u in a row", rel, tries);
++			failed = 1;
+ 			tries = 0;
+ 			break;
+-		default:	/* stock kernel, or not known */
++		default:	/* not known (an older build's "stock") */
+ 			if (tries < (unsigned int)limit)
+ 				break;
+ 			snprintf(why, sizeof(why), "main OS did not finish "
+-				 "starting with the %s kernel, %u in a row: "
+-				 "recovery OS",
+-				 st->kernel == AD5X_K_STOCK ? "stock" :
+-				 "last", tries);
++				 "starting, %u in a row", tries);
+ 			to_recovery = 1;
+ 			break;
+ 		}
+ 	}
+ 
+-	k = pick_kernel(in, &out->rec);
+-	if (k == AD5X_K_NONE) {
+-		snprintf(why, sizeof(why), "no kernel for the main OS: "
+-			 "recovery OS");
++	k = to_recovery ? AD5X_K_NONE : pick_kernel(in, &out->rec);
++	if (k == AD5X_K_NONE && !to_recovery) {
++		if (!failed)
++			snprintf(why, sizeof(why), "no kernel for the main OS");
+ 		to_recovery = 1;
+ 	}
++	if (!to_recovery && failed) {
++		/* the other kernel of Kiln's: "6.6 until ad5x-kernel retry" */
++		add(why, "; %s until ad5x-kernel retry", short_name(k));
++		set_reason(out, why);
++	}
+ 
+ 	if (to_recovery) {
++		add(why, "%s", ": recovery OS");
+ 		if (in->flag_b && in->slot_a_ok) {
+ 			set_reason(out, why);
+ 			memset(&out->state, 0, sizeof(out->state));
+@@ -397,6 +422,12 @@
+ 			snprintf(out->msg, sizeof(out->msg), "%s", why);
+ 			return;
+ 		}
++		/*
++		 * Slot A isn't startable: the main OS again, never a loop on
++		 * slot A, with its own kernel whatever the records say: a
++		 * kernel recorded as failed may still start, nothing else can
++		 */
++		k = any_kernel(in);
+ 		if (k == AD5X_K_NONE) {
+ 			set_reason(out, "nothing to start: no kernel for the "
+ 				   "main OS, slot A not startable");
+@@ -406,9 +437,8 @@
+ 				 out->rec.reason);
+ 			return;
+ 		}
+-		/* slot A isn't startable: the main OS again, never a loop */
+-		snprintf(why + strlen(why), sizeof(why) - strlen(why),
+-			 "; slot A not startable: main OS again");
++		add(why, "; slot A not startable: main OS again on %s",
++		    short_name(k));
+ 		set_reason(out, why);
+ 	}
+ 
+diff --git a/board/flashforge/ad5x/bootlogic.h b/board/flashforge/ad5x/bootlogic.h
+--- a/board/flashforge/ad5x/bootlogic.h
++++ b/board/flashforge/ad5x/bootlogic.h
+@@ -33,18 +33,21 @@
+ #define AD5X_MAX_TRIES		250	/* saturates: never wraps to 0 */
+ #define AD5X_WDT_MAX_S		1431	/* the watchdog's longest timeout */
+ 
+-/* the kernel a start of the main OS used */
++/*
++ * The kernel a start of the main OS used: only Kiln's own. The printer's
++ * stock 5.10 is never started for the main OS ("stock" in a state sector
++ * an older build wrote reads as AD5X_K_NONE).
++ */
+ enum ad5x_kernel {
+ 	AD5X_K_NONE = 0,
+ 	AD5X_K_66,	/* Kiln's 6.6 (/usr/lib/ad5x/kernel66 in rootfs2) */
+ 	AD5X_K_73,	/* mainline 7.3, opt-in (/usr/lib/ad5x/kernel-mainline) */
+-	AD5X_K_STOCK,	/* the printer's own 5.10 from "kernel" (p1) */
+ };
+ 
+ enum ad5x_target {
+ 	AD5X_BOOT_MAIN,		/* slot B, root=/dev/mmcblk0p4, kernel below */
+ 	AD5X_BOOT_RECOVERY,	/* slot A: p1's uImage, root=/dev/mmcblk0p2 */
+-	AD5X_BOOT_PROMPT,	/* nothing startable: stay at the prompt */
++	AD5X_BOOT_PROMPT,	/* nothing startable: give up (or the prompt) */
+ };
+ 
+ struct ad5x_state {
+@@ -75,9 +78,12 @@
+ 	char rel_66[AD5X_REL_LEN];
+ 	int have_73;
+ 	char rel_73[AD5X_REL_LEN];
+-	/* p1: valid uImage (header + data CRC), not a U-Boot image */
+-	int stock_kernel_ok;
+-	/* slot A startable: p1 as above and p2 starts with "hsqs" */
++	/*
++	 * slot A startable: p1 a Linux uImage for MIPS with good header and
++	 * data CRCs that isn't a U-Boot (Kiln's 6.6, which the main OS puts
++	 * there once this U-Boot has started it, or the stock 5.10 until
++	 * then), and p2 starting with "hsqs"
++	 */
+ 	int slot_a_ok;
+ 	/* the watchdog (ad5x_wdt_seconds) */
+ 	int wdt_off;		/* /data/ad5x/watchdog.disable exists */
+@@ -103,8 +109,10 @@
+  * when that system says it takes the watchdog over (watchdog.conf: its
+  * kernels feed a running watchdog until its userspace feeder does) and the
+  * owner hasn't switched it off (watchdog.disable on /data). Never into the
+- * stock kernel or the recovery OS, which start with it stopped as from the
+- * stock SPL; their kernels don't know it runs.
++ * recovery OS, which starts with it stopped as from the stock SPL: its
++ * S05ad5x-data may run e2fsck on /data for longer than a kernel feeds a
++ * running watchdog, and a 5.10 still in p1 doesn't know it runs. On
++ * Kiln's 6.6 the recovery OS's own feeder starts it after that.
+  */
+ unsigned int ad5x_wdt_seconds(const struct ad5x_inputs *in,
+ 			      const struct ad5x_decision *d,
+-- 
+2.56.0
+

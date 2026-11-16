@@ -8,7 +8,7 @@ every 113th baud rate up to clk / 16 at three crystal rates. Also checks
 that no choice is off by more than 8% of a bit at the end of a 12-bit
 frame, and that the rates the plain divisor hits exactly keep it.
 
-  KSRC=~/workspace/linux-7.3.3 kernel-mainline/tools/test_ingenic_uart_divisor.py
+  KSRC=~/workspace/linux-7.3.4 kernel-mainline/tools/test_ingenic_uart_divisor.py
 """
 import os
 import re
@@ -16,7 +16,7 @@ import subprocess
 import sys
 import tempfile
 
-KSRC = os.environ.get("KSRC", os.path.expanduser("~/workspace/linux-7.3.3"))
+KSRC = os.environ.get("KSRC", os.path.expanduser("~/workspace/linux-7.3.4"))
 DRIVER = os.path.join(KSRC, "drivers/tty/serial/8250/8250_ingenic.c")
 MAX_FRAME_ERROR = 0.08  # bits
 

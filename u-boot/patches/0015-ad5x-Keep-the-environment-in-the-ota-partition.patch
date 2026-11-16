@@ -1,0 +1,39 @@
+From 1132d094d77a24df1df159c2efdf0cff759a6029 Mon Sep 17 00:00:00 2001
+From: valix <djvalic.wc@gmail.com>
+Date: Sun, 15 Nov 2026 11:48:13 -0500
+Subject: [PATCH 15/16] ad5x: Keep the environment in the ota partition
+
+The environment was at 0x8A400 and 0x92400, inside the first MiB, next
+to the boot loader and the GPT, where the stock U-Boot would keep its
+own. Writing it from Linux (fw_setenv) then means writing the first MiB
+on every start, and a bad write there can stop the printer from
+starting at all.
+
+Keep both copies in "ota" (p5, LBA 0x6C800 in the stock SPL's table) at
+512 KiB and 544 KiB into the partition (eMMC 0xD980000 and 0xD988000),
+32 KiB each: clear of the boot flag (bytes 0-11, with the stock
+scripts' 256-byte read) and of Kiln's boot trace (64-72 KiB). Linux
+reaches them as /dev/mmcblk0p5 at 0x80000 and 0x88000.
+---
+ configs/ad5x_defconfig | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/configs/ad5x_defconfig b/configs/ad5x_defconfig
+index 8a55cced..5164cc1a 100644
+--- a/configs/ad5x_defconfig
++++ b/configs/ad5x_defconfig
+@@ -20,9 +20,9 @@ CONFIG_CMD_TIME=y
+ CONFIG_VERSION_VARIABLE=y
+ CONFIG_ENV_IS_IN_MMC=y
+ CONFIG_ENV_SIZE=0x8000
+-CONFIG_ENV_OFFSET=0x8A400
++CONFIG_ENV_OFFSET=0xD980000
+ CONFIG_ENV_REDUNDANT=y
+-CONFIG_ENV_OFFSET_REDUND=0x92400
++CONFIG_ENV_OFFSET_REDUND=0xD988000
+ CONFIG_ENV_MMC_DEVICE_INDEX=0
+ CONFIG_ENV_MMC_EMMC_HW_PARTITION=0
+ CONFIG_ENV_SOURCE_FILE="ad5x"
+-- 
+2.56.0
+

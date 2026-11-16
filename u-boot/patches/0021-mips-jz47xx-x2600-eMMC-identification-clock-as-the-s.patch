@@ -1,0 +1,170 @@
+From 22f6f8d390e62569a80353180ae1e596a40363a8 Mon Sep 17 00:00:00 2001
+From: valix <djvalic.wc@gmail.com>
+Date: Sun, 15 Nov 2026 12:44:07 -0500
+Subject: [PATCH 21/23] mips: jz47xx: x2600: eMMC identification clock as the
+ stock SPL sets it
+
+The SPL's reader and the X2600 SDHCI driver fed the card from MSC0CDR
+parent 2 for identification, without bit 21. The stock SPL's
+clk_set_rate() sets bit 21 (the SDK's MSCCDR_EXCK_E) in MSC0CDR, then
+parent 3 (MSCCDR_MPCS_EXCLK) with a 24 MHz parent, for any rate up to
+EXTAL / 4; the vendor 6.6 kernel sets bit 21 too.
+
+Do the same in both. The SPL now follows the stock sequence exactly:
+controller clocks on, bit 21, parent and divider with change enable,
+wait for busy, no gating around the parent switch. U-Boot proper keeps
+its gating (tested on hardware), adds bit 21 and parent 3, and uses
+EXCLK up to 6 MHz as the SDK does.
+
+The chainload-test SPL first writes the boot ROM's MSC0CDR value
+(0x20108003, from its cpm_desc), so that a chainload test starts the
+reader from the cold-start state rather than from Linux's.
+---
+ arch/mips/mach-jz47xx/x2600/spl_emmc.c | 45 ++++++++++++++------------
+ drivers/mmc/x2600_sdhci.c              | 24 ++++++++------
+ 2 files changed, 39 insertions(+), 30 deletions(-)
+
+diff --git a/arch/mips/mach-jz47xx/x2600/spl_emmc.c b/arch/mips/mach-jz47xx/x2600/spl_emmc.c
+index 5b385e4f..f25204b9 100644
+--- a/arch/mips/mach-jz47xx/x2600/spl_emmc.c
++++ b/arch/mips/mach-jz47xx/x2600/spl_emmc.c
+@@ -76,11 +76,14 @@
+ #define CPM_MSC0CDR		((void __iomem *)0xb0000068)
+ #define CDR_PARENT_SHIFT	30
+ #define CDR_PARENT_MPLL		1
+-#define CDR_PARENT_EXCLK	2
++#define CDR_PARENT_EXCLK	3	/* with CDR_EXCK_E (SDK MSCCDR_MPCS_EXCLK) */
+ #define CDR_CE			BIT(29)
+ #define CDR_BUSY		BIT(28)
+ #define CDR_STOP		BIT(27)
++#define CDR_EXCK_E		BIT(21)	/* SDK MSCCDR_EXCK_E, in MSC0CDR */
+ #define CDR_DIV_MASK		0xff
++/* what the boot ROM's cpm_desc leaves (ad5x_spl_image.py): APLL / 16 */
++#define MSC0CDR_BOOT_ROM	0x20108003
+ 
+ #define EMMC_RCA		1
+ #define EMMC_OCR		0x40ff8080	/* sector mode, 2.7-3.6 V, 1.7-1.95 V */
+@@ -125,10 +128,12 @@ static int emmc_reset(u8 mask)
+ }
+ 
+ /*
+- * The CGU feeds the card clock. Only the parent and divider fields change;
+- * the parent switches only while the clock is gated, and a new divider
+- * takes effect (busy clears) only while the controller runs the card clock
+- * (as in drivers/mmc/x2600_sdhci.c).
++ * The CGU feeds the card clock, set as the stock SPL does it (its
++ * msc_clk_switch() and clk_set_rate(), the SDK's x2600/clk.c): the
++ * controller's clocks on first; for identification EXCK_E in MSC0CDR and
++ * parent 3 (EXCLK), for data the MPLL; stop and busy cleared, the divider
++ * with change enable; then wait for busy, which clears once the controller
++ * runs the clock. No gating around the parent switch, as stock.
+  */
+ static void emmc_set_clock(bool fast)
+ {
+@@ -137,25 +142,17 @@ static void emmc_set_clock(bool fast)
+ 	u32 div = fast ? 17 : 14;
+ 	u32 val;
+ 
+-	writew(0, MSC0 + SD_CLOCK_CONTROL);
+-	val = readl(CPM_MSC0CDR);
+-	if (((val >> CDR_PARENT_SHIFT) & 3) != parent) {
+-		setbits_le32(CPM_CLKGR0, CLKGR0_MSC0);
+-		val &= ~(3U << CDR_PARENT_SHIFT);
+-		val |= parent << CDR_PARENT_SHIFT;
+-		writel(val & ~CDR_CE, CPM_MSC0CDR);
+-	}
+-	clrbits_le32(CPM_CLKGR0, CLKGR0_MSC0);
+-	val &= ~(CDR_DIV_MASK | CDR_STOP | CDR_BUSY);
+-	writel(val | div | CDR_CE, CPM_MSC0CDR);
+-
+-	writew(CLK_INT_EN, MSC0 + SD_CLOCK_CONTROL);
+-	wait_reg(SD_CLOCK_CONTROL, CLK_INT_STABLE, CLK_INT_STABLE, 20000);
++	clrbits_le32(CPM_CLKGR0, CLKGR0_MSC0);	/* as the stock clk_init() */
+ 	writew(CLK_INT_EN | CLK_CARD_EN, MSC0 + SD_CLOCK_CONTROL);
+-
++	if (!fast)
++		setbits_le32(CPM_MSC0CDR, CDR_EXCK_E);
++	val = readl(CPM_MSC0CDR) & ~(3U << CDR_PARENT_SHIFT);
++	val |= parent << CDR_PARENT_SHIFT;
++	val &= ~(CDR_STOP | CDR_BUSY | CDR_DIV_MASK);
++	writel(val | CDR_CE | div, CPM_MSC0CDR);
+ 	for (val = 0; (readl(CPM_MSC0CDR) & CDR_BUSY) && val < 10000; val++)
+ 		udelay(1);
+-	writel(readl(CPM_MSC0CDR) & ~CDR_CE, CPM_MSC0CDR);
++	wait_reg(SD_CLOCK_CONTROL, CLK_INT_STABLE, CLK_INT_STABLE, 20000);
+ }
+ 
+ /* one command; *resp gets the short response */
+@@ -215,6 +212,12 @@ int ad5x_emmc_init(void)
+ {
+ 	u32 caps, ocr = 0, t;
+ 
++#ifdef CONFIG_AD5X_SPL_CHAINLOAD
++	/* from Linux: MSC0's clock as after the boot ROM, as at a cold start */
++	writel(MSC0CDR_BOOT_ROM, CPM_MSC0CDR);
++	for (t = 0; (readl(CPM_MSC0CDR) & CDR_BUSY) && t < 10000; t++)
++		udelay(1);
++#endif
+ 	if (emmc_reset(RESET_ALL))
+ 		return -EIO;
+ 	writel(~0U, MSC0 + SD_INT_ENABLE);	/* latch every status bit */
+diff --git a/drivers/mmc/x2600_sdhci.c b/drivers/mmc/x2600_sdhci.c
+index ee1a1e92..0fcab9d9 100644
+--- a/drivers/mmc/x2600_sdhci.c
++++ b/drivers/mmc/x2600_sdhci.c
+@@ -28,16 +28,19 @@ static const struct {
+ /* MSCnCDR: parent 31:30, change enable 29, busy 28, stop 27, div 7:0 */
+ #define CDR_PARENT_SHIFT	30
+ #define CDR_PARENT_MPLL		1
+-#define CDR_PARENT_EXCLK	2
++#define CDR_PARENT_EXCLK	3	/* with CDR_EXCK_E (SDK MSCCDR_MPCS_EXCLK) */
+ #define CDR_CE			BIT(29)
+ #define CDR_BUSY		BIT(28)
+ #define CDR_STOP		BIT(27)
+ #define CDR_DIV_MASK		0xff
++/* EXCLK for the MSCs: SDK MSCCDR_EXCK_E, in MSC0CDR whichever MSC it is */
++#define CGU_MSC0CDR		((void __iomem *)0xb0000068)
++#define CDR_EXCK_E		BIT(21)
+ 
+ #define EXCLK_RATE		24000000
+ #define MPLL_RATE		1800000000
+-/* below this the CGU feeds the card from EXCLK (identification) */
+-#define EXCLK_MAX_CARD_RATE	1700000
++/* up to this the CGU feeds the card from EXCLK (the SDK's EXTAL / 4) */
++#define EXCLK_MAX_CARD_RATE	(EXCLK_RATE / 4)
+ 
+ struct x2600_sdhci_plat {
+ 	struct mmc_config cfg;
+@@ -68,12 +71,15 @@ static void x2600_msc_set_rate(struct x2600_sdhci_plat *plat, ulong rate)
+ 		div = CDR_DIV_MASK;
+ 
+ 	/*
+-	 * Only the parent and divider fields change: the others (stock sets
+-	 * bits 21 and 15) stay as the SPL or Linux left them. The parent only
+-	 * switches while the clock is gated. A new divider takes effect (busy
+-	 * clears) only once the controller runs its clock again, which the
+-	 * SDHCI core does after this: x2600_sdhci_set_ios_post() waits for it.
++	 * As the stock SPL's clk_set_rate() (SDK x2600/clk.c): for EXCLK,
++	 * EXCK_E in MSC0CDR and parent 3. Otherwise only the parent and
++	 * divider fields change. The parent only switches while the clock is
++	 * gated. A new divider takes effect (busy clears) only once the
++	 * controller runs its clock again, which the SDHCI core does after
++	 * this: x2600_sdhci_set_ios_post() waits for it.
+ 	 */
++	if (parent == CDR_PARENT_EXCLK)
++		setbits_le32(CGU_MSC0CDR, CDR_EXCK_E);
+ 	val = readl(plat->cdr);
+ 	if (((val >> CDR_PARENT_SHIFT) & 3) != parent) {
+ 		setbits_le32(CGU_CLKGR0, plat->gate);
+@@ -83,7 +89,7 @@ static void x2600_msc_set_rate(struct x2600_sdhci_plat *plat, ulong rate)
+ 	}
+ 	clrbits_le32(CGU_CLKGR0, plat->gate);
+ 
+-	val &= ~(CDR_DIV_MASK | CDR_STOP);
++	val &= ~(CDR_DIV_MASK | CDR_STOP | CDR_BUSY);
+ 	writel(val | div | CDR_CE, plat->cdr);
+ }
+ 
+-- 
+2.56.0
+

@@ -49,14 +49,18 @@ if [ -n "$PYLIB" ]; then
 fi
 
 # git: only what cloning and updating a plugin over https needs (all
-# builtins, plus git-remote-http(s)); its servers, mail/svn/p4/cvs tools
-# and Perl/Python scripts (no Perl on the printer) go.
+# builtins, plus git-remote-http(s), and git-submodule, a shell script
+# over the builtin submodule--helper, for plugins with submodules, issue
+# #69); its servers, mail/svn/p4/cvs tools and Perl/Python scripts (no
+# Perl on the printer) go. git-sh-i18n--envsubst (2.5 MB) goes too: git
+# submodule asks for it only for its usage text, and the plugin manager
+# leaves out the "not a git command" lines that gives (git_output).
 GC=$TARGET/usr/libexec/git-core
 if [ -d "$GC" ]; then
 	for f in "$GC"/*; do
 		[ "$f" -ef "$TARGET/usr/bin/git" ] && continue
 		case ${f##*/} in
-		git-remote-http|git-remote-https|git-sh-setup|git-sh-i18n) ;;
+		git-remote-http|git-remote-https|git-sh-setup|git-sh-i18n|git-submodule) ;;
 		*) rm -rf "$f" ;;
 		esac
 	done

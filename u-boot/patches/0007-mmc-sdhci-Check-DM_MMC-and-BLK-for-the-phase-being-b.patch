@@ -1,0 +1,100 @@
+From 30c35862bf0632ff0ab3e1fa50f4561830264f64 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sat, 14 Nov 2026 16:58:40 -0700
+Subject: [PATCH 07/10] mmc: sdhci: Check DM_MMC and BLK for the phase being
+ built
+
+sdhci.c and sdhci.h test CONFIG_DM_MMC and CONFIG_BLK in some places and
+CONFIG_IS_ENABLED() in others, so an SPL without driver model, built
+alongside a U-Boot proper with it, gets the driver model declarations and
+fails to build. Use CONFIG_IS_ENABLED() throughout.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ drivers/mmc/sdhci.c | 12 ++++++------
+ include/sdhci.h     |  4 ++--
+ 2 files changed, 8 insertions(+), 8 deletions(-)
+
+diff --git a/drivers/mmc/sdhci.c b/drivers/mmc/sdhci.c
+index 962a99cd..b27ded87 100644
+--- a/drivers/mmc/sdhci.c
++++ b/drivers/mmc/sdhci.c
+@@ -197,7 +197,7 @@ static int sdhci_transfer_data(struct sdhci_host *host, struct mmc_data *data)
+ #define SDHCI_CMD_DEFAULT_TIMEOUT		100
+ #define SDHCI_READ_STATUS_TIMEOUT		1000
+ 
+-#ifdef CONFIG_DM_MMC
++#if CONFIG_IS_ENABLED(DM_MMC)
+ static int sdhci_send_command(struct udevice *dev, struct mmc_cmd *cmd,
+ 			      struct mmc_data *data)
+ {
+@@ -351,7 +351,7 @@ static int sdhci_send_command(struct mmc *mmc, struct mmc_cmd *cmd,
+ 		return -ECOMM;
+ }
+ 
+-#if defined(CONFIG_DM_MMC) && CONFIG_IS_ENABLED(MMC_SUPPORTS_TUNING)
++#if CONFIG_IS_ENABLED(DM_MMC) && CONFIG_IS_ENABLED(MMC_SUPPORTS_TUNING)
+ static int sdhci_execute_tuning(struct udevice *dev, uint opcode)
+ {
+ 	int err;
+@@ -643,7 +643,7 @@ void sdhci_set_control_reg(struct sdhci_host *host)
+ 	sdhci_set_uhs_timing(host);
+ }
+ 
+-#ifdef CONFIG_DM_MMC
++#if CONFIG_IS_ENABLED(DM_MMC)
+ static int sdhci_set_ios(struct udevice *dev)
+ {
+ 	struct mmc *mmc = mmc_get_mmc_dev(dev);
+@@ -757,7 +757,7 @@ static int sdhci_init(struct mmc *mmc)
+ 	return 0;
+ }
+ 
+-#ifdef CONFIG_DM_MMC
++#if CONFIG_IS_ENABLED(DM_MMC)
+ int sdhci_probe(struct udevice *dev)
+ {
+ 	struct mmc *mmc = mmc_get_mmc_dev(dev);
+@@ -910,7 +910,7 @@ int sdhci_setup_cfg(struct mmc_config *cfg, struct sdhci_host *host,
+ 		host->version = sdhci_readw(host, SDHCI_HOST_VERSION);
+ 
+ 	cfg->name = host->name;
+-#ifndef CONFIG_DM_MMC
++#if !CONFIG_IS_ENABLED(DM_MMC)
+ 	cfg->ops = &sdhci_ops;
+ #endif
+ 
+@@ -1026,7 +1026,7 @@ int sdhci_setup_cfg(struct mmc_config *cfg, struct sdhci_host *host,
+ 	return 0;
+ }
+ 
+-#ifdef CONFIG_BLK
++#if CONFIG_IS_ENABLED(BLK)
+ int sdhci_bind(struct udevice *dev, struct mmc *mmc, struct mmc_config *cfg)
+ {
+ 	return mmc_bind(dev, mmc, cfg);
+diff --git a/include/sdhci.h b/include/sdhci.h
+index fb847821..2581d106 100644
+--- a/include/sdhci.h
++++ b/include/sdhci.h
+@@ -449,7 +449,7 @@ static inline u8 sdhci_readb(struct sdhci_host *host, int reg)
+ }
+ #endif
+ 
+-#ifdef CONFIG_BLK
++#if CONFIG_IS_ENABLED(BLK)
+ /**
+  * sdhci_setup_cfg() - Set up the configuration for DWMMC
+  *
+@@ -517,7 +517,7 @@ int add_sdhci(struct sdhci_host *host, u32 f_max, u32 f_min);
+ #endif /* !CONFIG_BLK */
+ 
+ void sdhci_set_uhs_timing(struct sdhci_host *host);
+-#ifdef CONFIG_DM_MMC
++#if CONFIG_IS_ENABLED(DM_MMC)
+ /* Export the operations to drivers */
+ int sdhci_probe(struct udevice *dev);
+ int sdhci_set_clock(struct mmc *mmc, unsigned int clock);
+-- 
+2.43.0
+

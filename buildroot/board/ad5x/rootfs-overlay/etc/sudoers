@@ -1,6 +1,7 @@
-# Kiln OS. Moonraker's "reboot host" runs "sudo reboot" as the klipper user,
-# and sudo is needed for nothing else. Keep this file the only rule set.
+# Kiln OS. No rules for the klipper user: Moonraker's reboot and shutdown
+# (/machine/reboot, /machine/shutdown) go through Kiln's root update agent
+# (components/kiln_os.py, S68ad5x-update-agent), which checks first. Keep
+# this file the only rule set.
 Defaults secure_path="/sbin:/bin:/usr/sbin:/usr/bin"
 Defaults !requiretty
 root ALL=(ALL:ALL) ALL
-klipper ALL=(root) NOPASSWD: /sbin/reboot ""

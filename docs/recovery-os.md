@@ -15,8 +15,11 @@ printer: it installs every Kiln OS update. Background on the slots and the boot 
   has started therefore lands in recovery at the next power cycle. Recovery
   never changes the flag at boot. Only a successful update, `ad5x-boot-main`
   or `ad5x-restore --set-flag` change it.
-- **Same kernel** as the main OS (the printer's own stock 5.10.186 uImage in
-  p1) and the same driver start-up. `S06ad5x-modules` is installed unchanged
+- **Stock kernel** (the printer's own stock 5.10.186 uImage in p1, what
+  the main OS starts with before it chainloads ours) and the same driver
+  start-up. The userspace also runs on our 6.6 (see "Our kernel" below),
+  which Kiln's own U-Boot starts from p1 once the main OS has put it there.
+  `S06ad5x-modules` is installed unchanged
   from `package/ad5x-system`: `ad5x-vendor ensure` (the printer's own vendor
   files in `/data/ad5x/vendor`, filled from the saved stock system or a stock
   slot when missing; `docs/install.md`, "Vendor files"), then utils and
@@ -37,14 +40,15 @@ printer: it installs every Kiln OS update. Background on the slots and the boot 
 | `rcS` | The main image's rcS (boot trace). Recovery's `ad5x-bootlog` writes its trace into `ota` at **128 KiB**, so the main OS's trace at 64 KiB survives for diagnosis |
 | `S01ad5x-recovery` | Saves the boot flag to `/run/ad5x/flag-at-boot` and creates `/dev/disk/by-partlabel/<GPT name>` links. A link is only made when the GPT entry matches the SPL's built-in table (udev makes none here: the recovery image replaces its `60-persistent-storage.rules`) |
 | `S05ad5x-data` | Mounts `userdata` read-write at `/data`. If the mount fails it runs one `e2fsck -p` and tries again; failing that, `/data` is a tmpfs. Stock's root password: usershare `/etc/shadow` hash bound over `/etc/shadow`. SSH host keys bound from `/data/ad5x/ssh/hostkeys`, the same keys as the main OS |
+| `S05ad5x-watchdog` | The main OS's script (shared): the hardware watchdog feeder, on Kiln's 6.6 only (see "Our kernel"); nothing on the stock kernel. `/data/ad5x/watchdog.disable` turns it off |
 | `S06ad5x-modules` | The main OS's script (shared, see above): vendor files checked or filled (`ad5x-vendor ensure`), then the drivers from `/data/ad5x/vendor/module_driver`. Without vendor files: no display, touch or Ethernet, a message on the console and in the boot trace, start-up goes on |
-| `S07ad5x-board` | PC11 heartbeat (stock `cmd_gpio`, from `/data/ad5x/vendor` through the `/usr/bin` wrapper), framebuffer on, recovery logo (`/usr/share/ad5x/recovery-logo.jpg`, or `/data/ad5x/recovery/logo.jpg`), backlight |
+| `S07ad5x-board` | PC11 heartbeat (stock `cmd_gpio`, from `/data/ad5x/vendor` through the `/usr/bin` wrapper), framebuffer on, recovery logo (`/usr/share/ad5x/recovery-logo.jpg`, or `/data/ad5x/recovery/logo.jpg`), backlight. On our 6.6: see "Our kernel" |
 | `S10udevd` | The main image's eudev (hotplug, so USB sticks appear); network interfaces keep the names `eth0` and `wlan0`; the owner's rules in `/data/ad5x/udev/rules.d` are not used here |
 | `S41ad5x-eth` | The main OS's script: stock MAC from usershare `/MAC`, then DHCP or static from `/data/ad5x/network.conf` (`/usr/lib/ad5x/network.sh`) |
 | `S42ad5x-wifi` | The main OS's script: Wi-Fi with the networks in `/data/ad5x/wpa_supplicant.conf` (made from stock's saved networks on the first start), unless `/data/ad5x/wifi.disable` exists. The main OS's Wi-Fi switch (HelixScreen's `wifi_enabled`) is not applied here: recovery has no HelixScreen, so Wi-Fi stays on |
 | `S50dropbear` | SSH, root login (stock's password, or a key in `/data/ad5x/ssh/authorized_keys`) |
 | `S70swupdate` | SWUpdate daemon: web upload on **port 8080**, control socket `/tmp/sockinstctrl`, progress socket `/tmp/swupdateprog`, log `/run/ad5x/swupdate.log` |
-| `S80ad5x-recovery-ui` | Starts `/usr/bin/ad5x-recovery-ui` (the touch UI, a separate package) if it is installed, and restarts it if it exits, with the main OS's touch calibration from `/data/ad5x/recovery/touch-cal` when it is usable (see Touch UI). Log `/run/ad5x/ui.log` |
+| `S80ad5x-recovery-ui` | Starts `/usr/bin/ad5x-recovery-ui` (the touch UI, a separate package) if it is installed, and restarts it if it exits, with the main OS's touch calibration from `/data/ad5x/recovery/touch-cal` when it is usable and the running kernel's touch units (see Touch UI). Log `/run/ad5x/ui.log` |
 | `S85ad5x-auto` | Starts `ad5x-recovery-auto` in the background (below). A file `/data/ad5x/recovery/noauto` turns it off |
 | `S99ad5x-recovery-ready` | Writes `/run/ad5x/ready` |
 
@@ -104,7 +108,10 @@ rescue-system updater that writes the *other* slot (B):
      one is kept (older `.done`/`.failed` files are deleted, as the main
      OS does when it stages an update). The result goes to
      `/data/ad5x/update/last.log`. After a success the printer reboots into
-     the main OS.
+     the main OS. A file still there when the main OS starts again was
+     staged before that start: the main OS renames it `*.stale`, and the
+     recovery OS doesn't install it ([updates.md](updates.md), "Staged
+     updates"); boot recovery in the same main OS session as the copy.
   3. **USB stick**: `.swu` files or release `.zip` files in the top
      directory of a FAT32 or ext4 partition (not exFAT). With a file named
      `ad5x-autoupdate` on the stick they are installed at boot of the
@@ -173,15 +180,19 @@ line is machine-checkable. They share `/usr/lib/ad5x-recovery/recovery.sh`.
 
 | Command | What | Success line |
 |---|---|---|
-| `ad5x-status [--slots]` | State as `key=value` lines: `release slot root flag flag_at_boot net_mode net_if net_ip ssh swupdate web_port ui update_pending update_last auto stock_saved vendor usb data main_trace`; with `--slots` also `slot_a`/`slot_b` (`ad5x <release>`, `recovery <release>`, `stock`, `empty`, `unknown`) | (always 0) |
+| `ad5x-status [--slots]` | State as `key=value` lines: `release slot root flag flag_at_boot net_mode net_if net_ip ssh swupdate web_port ui update_pending update_last auto stock_saved vendor usb data return_stock return_stock_open bootloader_install bootloader_open main_trace` (`return_stock`: `none`, `unfinished` or `done`, from `/data/ad5x/return-stock/state`; `return_stock_open`: `request`, `usb`, `resume` or empty, the page to open at start); `bootloader_install`: `none`, `started`, `installed`, `verified`, `unverified` or `removed` (Return to Flashforge firmware took Kiln's U-Boot out; `/data/ad5x/bootloader/state`); `bootloader_open`: `result`, `resume` or empty; with `--slots` also `slot_a`/`slot_b` (`ad5x <release>`, `recovery <release>`, `stock`, `empty`, `unknown`) and `bootloader` (`flashforge`, `kiln`, `kiln-spl`, `unknown`) / `bootloader_offer` (`yes`, `no`) | (always 0) |
 | `ad5x-swu-apply [--check] [--reboot] FILE.swu` | Install a .swu. It goes through the daemon when it runs, so progress appears on `/tmp/swupdateprog`; otherwise it runs swupdate itself. `--check` verifies only (signature, description, hashes) | `swu-apply: OK` / `swu-apply: CHECK OK` / `swu-apply: FAILED ...` |
-| `ad5x-boot-main [--no-reboot] [--force]` | Flag → B and reboot, after checking that kernel2 is a uImage and rootfs2 holds a system | `boot-main: boot flag ota:kernel2` |
+| `ad5x-boot-main [--no-reboot] [--force]` | Flag → B and reboot, after checking that kernel2 is a uImage and rootfs2 holds a system. Refused (even with `--force`) while a Return to Flashforge firmware is unfinished | `boot-main: boot flag ota:kernel2` |
 | `ad5x-backup [--all] [--no-boot] [--parts "..."] [--dry-run] [DEST]` | Raw images of `boot` (first MiB: GPT, SPL, U-Boot), `kernel rootfs kernel2 rootfs2 ota usershare`, plus `userdata` with `--all` (with /data remounted read-only meanwhile). DEST defaults to the first USB stick. Output `DEST/ad5x-backup-<date>-<n>/`: `NAME.img`, split into 1 GiB pieces `NAME.img.000…` on FAT when ≥ 4 GiB, plus `SHA256SUMS` and `MANIFEST.txt`. Every image is read back and checked | `backup: OK <dir>` |
-| `ad5x-restore [--dry-run] [--i-know] [--set-flag A\|B] [--reboot] SRC PART[=FILE]...` | Write images back. Checks: SHA256SUMS, size, squashfs/uImage magic, SPL table, mounted state. Read-back after writing. Refuses `kernel`, `rootfs` (this recovery, p1/p2) and `boot` without `--i-know`, and refuses the running slot in any case. `userdata`: `/data` is unmounted first, and the source can't be on it | `restore: OK` |
-| `ad5x-restore-stock [--dry-run] [--no-flag] [--reboot] [DIR]` | Writes the stock system saved by the main OS's `ad5x-update --replace-stock` (`/data/ad5x/stock/{rootfs.squashfs,kernel.img,SHA256SUMS}`) into slot B, then sets flag → B | `restore: OK` |
-| `ad5x-usb mount [WAIT] \| list \| umount` | Mounts sticks at `/run/ad5x/usb/<dev>`. `list` prints one line per partition: `dev= mnt= fs= swu=a.swu,b.swu autoupdate=0/1 rescue_root=0/1 rescue_boot=0/1 rescue_flash=0/1` | (list output) |
+| `ad5x-restore [--dry-run] [--i-know] [--set-flag A\|B] [--reboot] SRC PART[=FILE]...` | Write images back. Checks: SHA256SUMS (or `FILE.sha256` next to the image), size (`boot`: exactly 1 MiB, 1048576 bytes; with `INGE` at 0, a GPT header `EFI PART` at 512 whose entries sit where it says (LBA 2, or 32 on some boards) and end before the SPL at 0x4400, both GPT CRCs right, and the SPL table's partitions in it at their start and size, as this disk has them: refused otherwise, even with `--i-know`), squashfs/uImage magic, SPL table, mounted state. `ad5x-restore --i-know /data/ad5x/stock boot` writes back the first MiB the main OS saved (`boot.img`). Read-back after writing. Refuses `kernel`, `rootfs` (this recovery, p1/p2) and `boot` without `--i-know`, and refuses the running slot in any case. `userdata`: `/data` is unmounted first, and the source can't be on it | `restore: OK` |
+| `ad5x-restore-stock [--dry-run] [--no-flag] [--reboot] [DIR]` | With Flashforge's boot loader: writes the stock system saved by the main OS's `ad5x-update --replace-stock` (`/data/ad5x/stock/{rootfs.squashfs,kernel.img,SHA256SUMS}`) into slot B, then sets flag → B. With Kiln's boot loader it runs `ad5x-return-stock` (`--dry-run` = `--check`, DIR = `--source`; `--no-flag` refused) | `restore: OK` |
+| `ad5x-return-stock [--check\|--yes\|--status\|--forget] [--source SRC] [--flashforge-spl]` | Return to Flashforge firmware (below): checks, finds Flashforge's files, puts stock into slot B and makes it start, resuming from what the eMMC holds. Lines `source:`, `target:`, `spl_option:` and `result:` for the touch UI; exit 0 done, 1 refused, 2 checked (no `--yes`), 3 a write failed (flag still on slot A), 4 the boot loader area not as before | `result: done. ...` |
+| `ad5x-bootloader-install [--check\|--yes\|--fingerprint\|--status\|--offer\|--verify-start] [--unsupported-board]` | Kiln's own boot loader, opt-in (`docs/own-boot-loader.md`): checks (board on the allowlist, stock first MiB saved, main OS ready), saves the stock first MiB if needed, writes Kiln's SPL, Kiln's 6.6 into p3 and p1, clears U-Boot's area in `ota`, writes Kiln's U-Boot, each read back, resuming from what the eMMC holds. Lines `board:` and `result:` for the touch UI; `--offer` prints `bootloader=` and `bootloader_offer=` (`ad5x-status --slots`; `yes` for now only with `/data/ad5x/bootloader-offer.enable`, or for an install that stopped part-way); `--unsupported-board` only on a terminal with a typed confirmation. Exit 0 done, 1 refused, 2 checked, 3 a write failed (every system still starts), 4 the boot loader area not as before | `result: done. ...` |
+| `ad5x-ff-decrypt [-p PASSFILE]` | Decrypts a Flashforge `AD5X-*.tgz` (OpenSSL des3, MD5 key derivation) from stdin to stdout; Flashforge's public update password is built in | (exit 0) |
+| `ad5x-stock-copy usershare\|usb\|DIR` | Copies `/data/ad5x/stock` (and `boot.img`) into `kiln-stock-backup/` on usershare, the first mounted stick, or DIR, checked before and after | `stock-copy: OK <dir>` |
+| `ad5x-usb mount [WAIT] \| list \| umount` | Mounts sticks at `/run/ad5x/usb/<dev>`. `list` prints one line per partition: `dev= mnt= fs= swu=a.swu,b.swu autoupdate=0/1 rescue_root=0/1 rescue_boot=0/1 rescue_flash=0/1 return_stock=0/1` | (list output) |
 | `ad5x-usb-rescue boot [--dry-run] [DEV]` / `flash [--dry-run] [--no-reboot] [DIR]` | USB rescue (below) | `rescue: running` / reboot |
-| `ad5x-recovery-auto` | The boot-time actions (drop folder, USB autoupdate, rescue markers). Normally started by S85 | writes `/run/ad5x/auto.done` |
+| `ad5x-recovery-auto` | The boot-time actions (drop folder, USB autoupdate, rescue markers). Return to Flashforge firmware comes first: asked for by the main OS (`/data/ad5x/return-stock/request`), by a stick's `kiln-return-to-stock`, or left unfinished, it only writes `/run/ad5x/return-stock.open` (the UI opens the page) and runs nothing else. Normally started by S85 | writes `/run/ad5x/auto.done` |
 | `ad5x-bootlog TEXT` | Adds a line to the boot trace (ota at 128 KiB) | |
 
 ### Notes for the touch UI (`ad5x-recovery-ui`)
@@ -213,6 +224,7 @@ of any partition of the stick:
 |---|---|
 | `ad5x-autoupdate` | Install the stick's `.swu` files (once each, see above) |
 | `ad5x-rescue-flash` | `ad5x-usb-rescue flash`: write `rootfs.squashfs` (+ `kernel.img`, `xImage` or `uImage` if present, + `SHA256SUMS` if present) from that partition into slot B through `ad5x-restore` (all checks, read-back), set flag → B, reboot. **Unsigned**: having the stick in the printer is the trust |
+| `kiln-return-to-stock` | Opens Return to Flashforge firmware on the screen (no update, no rescue at that start). Nothing is written until it is tapped there |
 | `ad5x-rescue-boot` | `ad5x-usb-rescue boot`: chroot into the stick's ext4 root that has `/etc/ad5x-release` (`usb-test.img`'s `AD5XROOT` works as is) and run its `rcS` with `AD5X_USB=1`, the same "USB test mode" `flashforge_init.sh` uses on stock. `/dev`, `/proc`, `/sys`, `/data` and usershare (read-only at `/tmp/usershare`) are shared. Recovery's network, SSH and SWUpdate stay up. The recovery UI is stopped. Reboot to leave |
 
 `switch_root` is not possible: the root is not an initramfs and BusyBox
@@ -321,7 +333,11 @@ After a complete start (boot flag back on slot B), `S99ad5x-update-recovery`
 compares slot A's `/etc/ad5x-recovery-id` with the carried one. Another ID,
 or none (recovery OSes before v0.0.5), and it writes the carried image with
 `ad5x-update --install-recovery` in the background: sha256 check, write,
-read-back, at most 3 tries per image. Log: `/data/ad5x/recovery/update.log`.
+read-back, at most 3 tries per image. The same when slot A's kernel is not
+the same as slot B's (which `--install-recovery` copies there; with Kiln's
+boot loader the main OS's own 6.6 instead, also into p3, "Our kernel"
+below): a copy cut
+short or an older kernel. Log: `/data/ad5x/recovery/update.log`.
 `/data/ad5x/recovery-update.disable` turns it off.
 
 The content ID is a sha256 over every path, mode and file in the recovery
@@ -337,15 +353,88 @@ A write cut short must not leave a slot A the printer would boot:
   superblock;
 - staging a main OS update (`ad5x-update FILE`, Fluidd's Update) waits for a
   running recovery write before pointing the boot flag at slot A;
-- `S99ad5x-update-recovery` writes a slot A without a superblock again at
-  the next start.
+- `S99ad5x-update-recovery` writes a slot A without a superblock, or with
+  a kernel other than slot B's, again at the next start;
+- the kernel copy writes the uImage header last as well, and staging an
+  update (and `ad5x-boot-recovery`) refuses while slot A's kernel is not a
+  whole uImage (header and data CRC; exit code 4, Moonraker's `no_recovery`).
 Only stock in slot A is never touched by it (`S99ad5x-install-recovery` is
 the first install's step, `--replace-stock`).
 
 A stock firmware update (an `AD5X-*.tgz` stick) run from slot B writes slot
-A, this recovery system. After "Restore stock" that is the way to a printer
-that is stock in both slots (docs/install.md, "Going back to stock"); Kiln OS
-itself never reads such a stick.
+A, this recovery system. After Return to Flashforge firmware that is the way
+to a printer that is stock in both slots (docs/install.md, "Going back to
+stock"); Kiln OS itself never reads such a stick to install it (Return to
+Flashforge firmware only takes the kernel and root out of it).
+
+## Return to Flashforge firmware (`ad5x-return-stock`)
+
+Puts Flashforge's stock system back into slot B and makes the printer start
+it, with only the touch screen, a USB stick and a power cycle. The ways in:
+the recovery screen's Restore stock tile; HelixScreen's Settings > System >
+Return to Flashforge firmware or `POST /machine/kiln_os/return_stock` (the
+main OS restarts into this recovery OS, which opens the page); the main
+OS's `ad5x-restore-stock`; a stick with `kiln-return-to-stock`. The page
+opens by itself in those cases and waits for a tap.
+
+**Stock files**, the first that checks: `/data/ad5x/stock` (kernel.img,
+rootfs.squashfs, SHA256SUMS; saved at install); its copy on usershare
+(`kiln-stock-backup/`, made by the main OS's `S99ad5x-stock-copy`); on a
+stick a copy saved with Save files to USB (`kiln-stock-backup/`), the
+install stick's backup (`ad5x-backup-install-N/`: the images of the slot
+stock ran from, as its `MANIFEST.txt` says), or Flashforge's own update
+file `AD5X-*.tgz` (decrypted with `ad5x-ff-decrypt`; its kernel part
+unpacked, every file checked against `md5sum.list`, the eMMC images in
+`ota_kernel/ota_vN` put together from their chunks and checked against the
+package's md5 lists; any version will do, stock can update itself after).
+The kernel must be a whole Linux-5.10 uImage (header and data CRCs), the
+root a squashfs with `/etc/ota_bin` and no Kiln OS release file.
+
+**Steps** (each read back; the boot flag stays on slot A, this recovery OS,
+until the last; `ad5x-return-stock --check` lists which are done):
+
+| | What | Only with |
+|---|---|---|
+| 1 | Kiln's U-Boot out of 0xA400: the header sector first, then the rest; this printer's `boot.img` bytes there when it matches the disk, else zeros | Kiln's SPL |
+| 2 | `ota` 0x80000-0x903FF zeroed: U-Boot's settings, state and records; the boot flag and both boot traces stay | |
+| 3 | rootfs2 (p4) <- the stock root | |
+| 4 | kernel2 (p3) <- the stock 5.10 kernel: 4 KiB of zeros, the rest, the header last | |
+| 5 | kernel (p1) <- the stock kernel, the same way | `--flashforge-spl` |
+| 6 | Flashforge's SPL from `boot.img`: the SPL's header sector (0x4400) zeroed, 0x4600-0xA3FF, the boot ROM's length (0x4-0x7), the header sector last (a power cut leaves a whole SPL or none, and with none the boot ROM goes to USB mode); never the GPT. A write that doesn't read back puts Kiln's SPL back | `--flashforge-spl` |
+| 7 | stock's own board update armed (`Update`, `UpdateM` on usershare), Kiln's eboard record dropped, `/data/ad5x/install/state` = `returned` (the install stick works again) | |
+| 8 | the boot flag -> slot B, after steps 1-7 are checked once more | |
+
+U-Boot goes first, so Flashforge's 5.10 is never in a slot while Kiln's
+U-Boot is installed. Without `--flashforge-spl` Kiln's SPL stays and starts
+stock from slot B as Flashforge's SPL would (with the stock command line);
+slot A keeps this recovery OS on Kiln's 6.6, which Kiln's SPL starts when
+slot B's kernel doesn't check. `--flashforge-spl` is offered only when
+`boot.img` (this printer's first MiB, saved before Kiln's boot loader;
+`/data/ad5x/stock`, the usershare or stick copy, or the install backup) is
+Flashforge's, equals the disk outside Kiln's ranges and has the same DDR
+table as Kiln's SPL on the disk. On a printer with Flashforge's boot loader
+steps 1, 5 and 6 don't apply.
+
+**Refused, nothing written**, unless: root, the recovery OS in slot A, no
+other job (update, backup, restore, USB rescue, start-up actions), the eMMC
+writable and its slots not mounted, the partitions where the boot loader's
+table has them (p1-p6, p7's start), Kiln's or Flashforge's boot loader in
+the first MiB, slot A's kernel whole and its root a squashfs, and a source
+that checks.
+
+**A stop or a power cut**: the recovery OS starts again (the flag is still
+on slot A), the page opens (`return_stock=unfinished`), and Continue (or
+`--yes`) finishes from what the eMMC holds. A write of Flashforge's SPL cut
+short is finished from `boot.img` (the first MiB before it is kept as
+`/data/ad5x/return-stock/before-spl.img` until the return is done). While a
+return is unfinished, Boot main OS and installs refuse; `ad5x-return-stock
+--forget` drops the record (slot B may then hold neither system: install a
+Kiln OS update before Boot main OS). Log: `/data/ad5x/return-stock/log`.
+
+After it: switch the printer off and on (Shut down on the job screen, then
+the switch). Stock starts from slot B, writes its own board firmware back,
+and its next update (a stick with `AD5X-*.tgz`, or online) writes slot A.
+A Flashforge `.tgz` left on the stick is installed by stock at that start.
 
 ## Tests (laptop)
 
@@ -358,8 +447,10 @@ mount/umount/reboot are shims. It checks: every tool's `--help`; S01 links;
 `ad5x-status`; `ad5x-backup` (dry run, refusing to back up userdata into
 itself, a real backup with sha256 checks); `ad5x-restore` (refusals of p1/p2
 and boot, sha256 mismatch, non-squashfs, a real restore with read-back and
-`--set-flag`); `ad5x-restore-stock --dry-run`; `ad5x-boot-main`; USB listing
-and rescue dry runs. With a .swu it also checks: `swupdate -c` signature and
+`--set-flag`; `boot` from `/data/ad5x/stock` with `boot.img.sha256`);
+`ad5x-restore-stock --dry-run`; `ad5x-boot-main`; `root=PARTLABEL=` slots;
+USB listing and rescue dry runs. `AD5X_TEST_SOURCES=1` runs the
+repository's recovery scripts over the image's (no rebuild). With a .swu it also checks: `swupdate -c` signature and
 description check; a tampered image and an image checked against another
 key are refused; a full install into the fake slot B with flag → B; a failed
 post-install check leaves the flag on A; and the boot-time drop-folder
@@ -402,17 +493,18 @@ Noto Sans (subset embedded, `recovery-ui/fonts/`, OFL), buttons at least
 | Install update | USB card; `.swu` files in `/data/ad5x/update/` and the top folder of mounted sticks; the upload URL `http://<ip>:8080`. **Check** runs `ad5x-swu-apply --check`; **Install** (two confirmations) runs `ad5x-swu-apply FILE` |
 | Back up | USB card; switch "Also userdata"; **Dry run** / **Start backup**: `ad5x-backup [--dry-run] [--all] <stick>` (the tool makes `ad5x-backup-<date>-<n>/`) |
 | Restore | USB card; the stick's `ad5x-backup-*` folders (newest first); a checkbox per `NAME.img[.NNN]` in it. `kernel`, `rootfs` (recovery's own slot) and `boot` are greyed out: `ad5x-restore` refuses them without `--i-know`, which is left to the command line. **Check**: `ad5x-restore --dry-run SRC PART...`; **Restore** (two confirmations): `ad5x-restore SRC PART...` |
-| Restore stock | Says whether `/data/ad5x/stock` holds a saved system (`stock_saved`). **Check**: `ad5x-restore-stock --dry-run`; **Restore stock firmware** (two confirmations): `ad5x-restore-stock`, then a Reboot button |
+| Restore stock (Return to Flashforge firmware) | Runs `ad5x-return-stock --check` when it opens and shows the files it found (`source:`), what the printer ends with (`target:`) and the result (ready, a stopped return to finish, done, or why not). A box "Also put back Flashforge's own boot loader" shows when this printer's saved first MiB matches (`spl_option: yes`). **Check** shows the whole check; **Save files to USB** runs `ad5x-stock-copy usb`; **Return to Flashforge** (two confirmations; **Continue** without asking again after a stop) runs `ad5x-return-stock --yes`, then a Shut down button. It opens by itself at start when the main OS asked for it, a stick has `kiln-return-to-stock`, or a return was left unfinished (`return_stock_open`, `return_stock`); while one is unfinished Boot main OS and Install lead to it |
 | Network / SSH | Address, name, `ssh root@<ip>`, upload URL with a QR code, recovery `release`, and what `ad5x-usb list` reports (updates on the stick, rescue system/markers) |
 | Logs | Scrollable, monospace: this session (every command and its output), `/data/ad5x/update/last.log`, `/run/ad5x/swupdate.log`, the system log (`logread`) |
-| Reboot / Power | Boot main OS (`ad5x-boot-main`), Reboot, Shut down (one confirmation each) |
+| Reboot / Power | Boot main OS (`ad5x-boot-main`), Reboot, Shut down (one confirmation each); **Install Kiln's boot loader (experimental)** only when `bootloader_offer=yes` (a board on the allowlist without Kiln's U-Boot, and for now `/data/ad5x/bootloader-offer.enable` there) or an install stopped (`bootloader_install=started`) |
+| Kiln's boot loader | Runs `ad5x-bootloader-install --check` when it opens: the board (`board:`), the result (ready, an install to finish, done, or why not). **Check** shows the whole check; **Install** (two confirmations with the risk; **Continue** after a stop) runs `ad5x-bootloader-install --yes`, then a Reboot button. Opens by itself at the first start after an install (the result: started by Kiln's U-Boot or not) and when an install stopped (`bootloader_open`) |
 | Job | Every command runs here: title, spinner, step text, progress bar, live output, Stop (backups and checks only), then a green or red result with the command's last line ("backup: OK ...", "swu-apply: FAILED ..."), and Boot main OS or Reboot where it fits. Back is disabled while it runs |
 
 An update started anywhere else (browser upload, drop folder, USB
 autoupdate) opens the Job screen by itself and follows it on SWUpdate's
 progress socket.
 
-**Destructive actions** (install, restore, restore stock) ask twice. The
+**Destructive actions** (install, restore, Return to Flashforge firmware, Kiln's boot loader) ask twice. The
 second dialog swaps the buttons (the confirm button sits where Cancel was,
 so a double tap can't go through both) and arms its button only after 2 s.
 Boot main OS, Reboot and Shut down ask once. Backups, checks and dry runs
@@ -430,7 +522,10 @@ environment (for example `AD5X_RUI_CMD_BACKUP='ad5x-backup --no-boot
 | `CMD_INSTALL` / `CMD_INSTALL_CHECK` | `ad5x-swu-apply {FILE}` / `ad5x-swu-apply --check {FILE}` |
 | `CMD_BACKUP` | `ad5x-backup {DRY} {ALL} {DEST}` (DEST = the stick's mount point) |
 | `CMD_RESTORE` | `ad5x-restore {DRY} {SRC} {PARTS}` |
-| `CMD_RESTORE_STOCK` | `ad5x-restore-stock {DRY}` |
+| `CMD_RESTORE_STOCK` | `ad5x-restore-stock {DRY}` (no longer used by the screens) |
+| `CMD_RETURN_CHECK` / `CMD_RETURN_STOCK` | `ad5x-return-stock --check {SPL}` / `ad5x-return-stock --yes {SPL}` (`{SPL}`: `--flashforge-spl` or empty) |
+| `CMD_STOCK_COPY_USB` | `ad5x-stock-copy usb` |
+| `CMD_BOOTLOADER_CHECK` / `CMD_BOOTLOADER_INSTALL` | `ad5x-bootloader-install --check` / `ad5x-bootloader-install --yes` (never `--unsupported-board`) |
 | `CMD_BOOT_MAIN` | `ad5x-boot-main` |
 | `CMD_REBOOT` / `CMD_POWEROFF` | `sync; reboot` / `sync; poweroff` |
 | `CMD_USB_MOUNT` / `CMD_USB_UMOUNT` / `CMD_USB_LIST` | `ad5x-usb mount 0` / `ad5x-usb umount` / `ad5x-usb list` |
@@ -473,8 +568,91 @@ environment (for example `AD5X_RUI_CMD_BACKUP='ad5x-backup --no-boot
   out). A missing or odd file gives the seed range `60 72 723 404`
   (`src/touch_cal.h`); `ui.log` names the range used. `S80ad5x-recovery-ui
   touch-cal` prints what the UI gets. `AD5X_RUI_TOUCH_SWAP=1` swaps X and
-  Y. Display: page 0 of the double buffer is panned
-  in at start (yoffset 0); LVGL draws XRGB8888 into it.
+  Y. On our 6.6 kernel the tsc2007 reports raw 0-4095 with Y not flipped:
+  `S80ad5x-recovery-ui` passes `AD5X_RUI_TOUCH_UNITS=raw` (`touch-units`
+  prints it; `stock` on the stock kernel) and the UI converts the range,
+  the file's or the default, edge for edge (`x * 4096 / 800`,
+  `(480 - y) * 4096 / 480`; the inverse of `ad5x-touch-units
+  --recovery-cal`). The file stays in stock units. Display: page 0 of the
+  double buffer is panned in at start (yoffset 0); LVGL draws XRGB8888
+  into it. The console is put in graphics mode first (`KDSETMODE
+  KD_GRAPHICS` on `/dev/tty0`, as HelixScreen does): on our 6.6 the
+  framebuffer console would otherwise draw its cursor and kernel messages
+  into the UI. The stock kernel has no such console.
+
+### Our kernel (6.6)
+
+The recovery OS boots whatever kernel p1 holds. On Flashforge's SPL that
+is the stock kernel, and it stays so. Its userspace also runs on our 6.6
+(`kernel-ingenic66/`): on a printer with Kiln's own boot loader (Kiln's
+SPL in the first MiB), the main OS puts its own 6.6
+(`/usr/lib/ad5x/kernel66/xImage`, the same file U-Boot starts the main OS
+with) into p1 and p3 (`S99ad5x-update-recovery`, `ad5x-update
+--install-recovery` and `--kernel2`; header last, read back), and nothing
+puts a Flashforge kernel back while Kiln's SPL is there. Kiln's U-Boot
+starts the recovery OS only from that 6.6 (patch 0027), with
+`ad5x.uboot=1 ad5x.kernel=own panic=10 loglevel=5` and the watchdog
+stopped (recovery's `S05ad5x-data` may run `e2fsck`; its own feeder starts
+it after that). Kiln's SPL alone (U-Boot proper missing or failing) starts
+it with the stock command line (`root=/dev/mmcblk0p2`, no
+`ad5x.uboot=1`). The slots only ever get a 6.6 that has just started the
+main OS on this printer (or, on 7.3, one not recorded as failed). Going
+back to Flashforge's boot loader puts the saved 5.10 back first
+(`tools/bench/ad5x-spl-flash --restore`). The scripts check
+the kernel with the main OS's `/usr/lib/ad5x/kernel.sh` (`KERNEL=own` for
+anything but `uname -r` 5.10.*), as the main OS does:
+
+| Part | Stock 5.10 | Our 6.6 |
+|---|---|---|
+| Drivers (`S06ad5x-modules`, shared) | Flashforge's modules from `/data/ad5x/vendor`, `8821cu` from `usershare` | All built in: nothing to load |
+| Heartbeat (`S07ad5x-board`) | `cmd_gpio` | sysfs GPIO: PC11 = base of the `GPC` gpiochip + 11 |
+| Logo (`S07ad5x-board`) | `cmd_fb enable`, `cmd_jpeg_display` of `recovery-logo.jpg` or `/data/ad5x/recovery/logo.jpg` | `recovery-logo-32.raw.gz` (the same logo rendered ahead by `tools/make_logo.py --raw`, XRGB8888, stride 3200) written to `/dev/fb0` with busybox, then the pan to frame 0. No Python here, so no custom logo on 6.6 (the UI covers the logo within seconds anyway). fbcon's cursor blink off |
+| Backlight (`S07ad5x-board`) | `brightness` 1 | `bl_power` 0 and `brightness` at its maximum: 6.6's gpio-backlight probes powered off. On even when the logo can't be drawn |
+| Touch (`S80`, UI) | stock units (0-800 x 0-480, Y flipped by the driver) | raw 0-4095, Y not flipped: the stock-unit calibration converted at use (Touch UI above) |
+| Console | none | fbcon on fb0: the UI sets graphics mode |
+| Ethernet (`S41ad5x-eth`, shared) | Flashforge's module | built in (`INGENIC_MAC`); same script, same `eth0` |
+| Watchdog (`S05ad5x-watchdog`, shared) | off, as stock (U-Boot starts this kernel with it stopped) | BusyBox's `watchdog` feeds `/dev/watchdog` every 10 s, reset after 120 s without a feed. It is a daemon of its own, so it keeps feeding through `.swu` installs, `ad5x-restore`, `ad5x-backup` and USB rescues (none of them stop it; `/data` can be unmounted under it); only a hang stops it. Stopped cleanly at shutdown, so "Shut down" stays off |
+| Wi-Fi (`S42ad5x-wifi`, shared) | `8821cu` (`power_on=PB07`) | rtw88 with its firmware and `regulatory.db` built in; same script, same `wlan0`. Power saving is turned off with `iw`, now in the recovery image too (issue #37) |
+
+The framebuffer is 32 bpp on 6.6 (`panel-kx070.c`: `.bpp = 32`; stride
+3200 since `patches/0003`), the depth the UI is built for (`LV_COLOR_DEPTH
+32` in `recovery-ui/lv_conf.h`). Mainline 7.3 (16 bpp, RGB565) is not a
+target for the recovery OS: `S07ad5x-board` draws no logo there (backlight
+on only) and the UI would not match the framebuffer.
+
+**Carrying the kernel.** The main image already has our 6.6 in
+`/usr/lib/ad5x/kernel66/` (`xImage`, a legacy uImage with the DTB built in,
+and `chainload.ko`). For the recovery image to carry its own copy:
+
+1. `ad5x_recovery_defconfig`: `BR2_PACKAGE_AD5X_KERNEL66=y` (the line is
+   there, off). It needs what the main build needs: the Ingenic SDK and the
+   5.10 tree for `chainload.ko` (`BR2_PACKAGE_AD5X_KERNEL66_SDK`,
+   `..._KDIR510`). The package selects `BR2_PACKAGE_WIRELESS_REGDB`
+   (`regulatory.db` is built into the kernel). The kernel is then built a
+   second time, in `output-recovery`.
+2. `board/ad5x-recovery/post-image.sh` puts it next to the image as
+   `xImage-6.6` (and in `IMAGES.txt`) whenever the image has it; nothing
+   else changes. The image grows by the kernel (about 6 MB, well inside the
+   100 MiB slot), and the main image grows by the same, since it carries
+   the recovery image.
+3. Not needed for Kiln's U-Boot: it starts the recovery OS with p1's
+   kernel, and the main OS writes its own 6.6 there (above). A copy in the
+   recovery image would make the recovery image about 6 MB bigger, the
+   kernel would be built twice, and its build isn't reproducible, so the
+   recovery content ID would change with every build and slot A would be
+   rewritten after every update. The recovery image has no
+   `S00ad5x-kernel`: on Flashforge's SPL it stays on the stock kernel.
+
+**Printer test (not done yet).** Start the recovery root on 6.6 from the
+main OS with the chainload tool (`kernel-ingenic66/chainload/README.md`)
+and the command line `root=/dev/mmcblk0p2 ... ad5x.noslot` (recovery's own
+slot check reads `root=` and sees slot A; `root=PARTLABEL=rootfs` works as
+well, `rc_slot` takes both). Put `/data/ad5x/recovery/noauto` in place first, or
+recovery installs a staged update on its own. Check: the heartbeat, the
+logo, the backlight, the UI with no kernel text over it, taps hitting their
+buttons (Back in the top left corner), Ethernet and Wi-Fi addresses, SSH, an
+`.swu` install and a USB rescue; and the same on the stock kernel. The boot
+flag is not changed by any of this: a power cycle starts the main OS again.
 
 ### Laptop builds and screenshots
 

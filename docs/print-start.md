@@ -85,6 +85,52 @@ message when there is no room. The old line (3 mm before, 6 mm over
 60 mm at 20 mm/s) only undid the retract and didn't stick. The factory
 start has no prime line (stock).
 
+## One mesh and one prime line per print (KAMP, issue #73)
+
+A slicer start G-code written for KAMP (or Klipper's own adaptive mesh)
+calls `BED_MESH_CALIBRATE` and `LINE_PURGE` (or `VORON_PURGE`) after
+`PRINT_START`, which has already meshed the print area and drawn the
+prime line. While a print runs, such a second call is skipped, with one
+console line saying why ("BED_MESH_CALIBRATE skipped: PRINT_START already
+meshed the bed for this print ..."). `klipper/extras/ad5x_config.py`
+wraps these commands at Klipper start, whoever defines them (Kiln,
+zmod-compat, KAMP), and reads what the print already did from
+`_KILN_START_DONE` (`klipper/ad5x.cfg`): the print's time when
+`_CHECK_Z_SCRUB` meshed / `_PRIME_LINE` drew, or when one of these
+commands ran during the print (a `LINE_PURGE` from zmod-compat's
+`START_PRINT` that is KAMP's, for example, so the file's own one after it
+is skipped). `_CHECK_Z` (every start), `PRINT_END` and `CANCEL_PRINT`
+forget the marks, and so does loading a file to print (Klipper's
+`virtual_sdcard:reset_file`), so a print that ended with an error leaves
+none for the next one; a mark later than the print's time is ignored as
+a second check.
+
+Not skipped: anything outside a print (console, screen, setup wizard);
+`BED_MESH_CALIBRATE FORCE=1`, `PROFILE=<name>` or `ADAPTIVE=0`;
+`LINE_PURGE FORCE=1`, `VORON_PURGE FORCE=1`; a `BED_MESH_CALIBRATE` /
+`LINE_PURGE` before `PRINT_START` (that mesh is cleared by
+`PRINT_START`'s `BED_MESH_CLEAR`: take it out of the start G-code). To
+let the slicer's mesh run instead of Kiln's, `mesh_every_print: 0` in
+`local.cfg` (or `LEVEL=0`): `PRINT_START` then does the stock centre Z
+check, and the later mesh runs. Not with KAMP's `Adaptive_Meshing.cfg`
+included: with its `BED_MESH_CALIBRATE` no full mesh saves the centre Z
+(`ad5x_center_z`), so that check compares against an old one or stops
+the start with "no saved centre Z" (`_CHECK_Z_APPLY`); remove the include
+instead (the skip message says so too). For the slicer's purge line
+instead of Kiln's, `[gcode_macro _PRIME_LINE]` `variable_prime_line: 0`.
+
+KAMP's own files are not needed: `PRINT_START` already meshes only the
+print area (`adaptive_mesh`) and draws its line in front of the objects.
+Including KAMP's `Adaptive_Meshing.cfg` in `local.cfg` replaces Kiln's
+`BED_MESH_CALIBRATE` (same section, read later: its `gcode:` and
+`rename_existing:` win), so that mesh, the one in `PRINT_START` included,
+runs without the strain gauge tare and a full mesh no longer saves the
+centre Z. Klipper start then shows a warning (Fluidd and Mainsail list it
+with Klipper's warnings; also in the console) naming the file; a
+`LINE_PURGE` from another config gets one too while Kiln's prime line is
+on (it says the later `LINE_PURGE` draws a second line when an edited
+`macros/prime_line.cfg` from before this change doesn't note its line).
+
 Screen status line (`M117`, also in the console) for each step: Homing,
 Heating bed and nozzle, Purging at the box, Heat soak m:ss, Checking Z,
 Cleaning nozzle on the bed edge, Bed mesh: print area / Bed mesh: whole bed /
@@ -200,3 +246,10 @@ sensor reads 0, so the sensor was off for these runs. Also (2026-10-15):
 saved Z offset applied on both paths (seeded 0.025 from `unit.cfg`, then
 the value from `SET_GCODE_OFFSET Z=` / `Z_ADJUST=`), and `TOOL=1` loading
 channel 3 after `IFS_MAP_TOOL TOOL=1 SLOT=3`. Not run on hardware.
+
+Issue #73 (one mesh and one prime line per print): `tools/test_print_start.py`
+runs `PRINT_START`, zmod-compat's `START_PRINT` and the slicer's
+`BED_MESH_CALIBRATE` / `LINE_PURGE` lines through `ad5x_config.py`'s guard
+and the macros (Kiln's, zmod-compat's, KAMP-style ones from a config merged
+as Klipper does), and the start warning; the guard was also run against
+Klipper's own G-code dispatcher. Not run on the printer yet.

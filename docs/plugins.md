@@ -26,6 +26,10 @@ open and edit its files like config files. Moonraker's `kiln_os` component
 makes the link when it starts and nothing has that name; your own
 `plugins` file, folder or link in the config folder is left alone (the
 plugins are then not shown). Moonraker keeps `.git` folders out of reach.
+The plugin files are left out of Moonraker's flat file list of the config
+folder (`server.files.list`, Moonraker patch 0008), which Mainsail and
+Fluidd ask for at each page load: with big plugins it took a minute on
+the AD5X. Browsing the folder, editing and uploading work as before.
 Uploading runs nothing: `root/` scripts need `ENABLE_PLUGIN ... ROOT=1`
 (`docs/plugin-root-hooks.md`).
 
@@ -166,7 +170,11 @@ creates the objects for the config sections named after those modules,
 the way Klipper's own loader does (`load_config` / `load_config_prefix`).
 The plugin's `extras/` joins the path of Klipper's `extras` package, so
 its modules import each other as Klipper's do, and
-`printer.load_object()` finds them too. No Klipper patch: everything
+`printer.load_object()` finds them too. Plugin API 1.7: the folders a
+plugin lists in `plugin.json` `module_dirs` join that path as well, and
+their modules are imported when a section, `printer.load_object()` or
+another module first needs them, as Klipper does with its own
+(`docs/plugin-api.md`, "Module folders"). No Klipper patch: everything
 stays in our extra. Rules:
 
 - Only the code of enabled plugins that aren't skipped is loaded
@@ -174,7 +182,10 @@ stays in our extra. Rules:
   plugins loaded, no conflict).
 - A module named like a Klipper module (`extras/gcode_macro.py`, ...) or
   like another enabled plugin's module stops Klipper with a config error
-  naming the plugin. Rename it.
+  naming the plugin. Rename it. Since plugin API 1.7 names that differ
+  only in case count as the same name (`Gcode_macro.py`).
+- A `module_dirs` folder, or a module in it, that is a link leading out
+  of the plugin's folder is not read; Klipper shows a warning.
 - Two enabled plugins with the same Moonraker component, `python/`
   package or Klipper section don't stop anything: the first plugin's
   component or package is used, the later plugin's section options win.
@@ -317,7 +328,10 @@ its own (older images had an unusable one in `/usr/share/ad5x/plugins/spoolman`,
 which is removed at each build).
 
 `git` runs in the background (`printer.ad5x_plugins.job`, the result also
-in the console); not during a print. When a switch changes what Moonraker
+in the console); not during a print. A plugin whose repository has git
+submodules (plugin API 1.7) gets them in the same job, over https only;
+if they can't be fetched, nothing is installed, or the update goes back
+to the version before (`docs/plugin-api.md`, "Submodules"). When a switch changes what Moonraker
 loads (a plugin's `moonraker.conf`, `python/` or components), Moonraker is
 restarted too (by the root update agent, `S68ad5x-update-agent`), so no
 reboot is needed. A plugin not in the catalog is installed by hand as
@@ -326,7 +340,9 @@ below.
 ### Keeping a git plugin up to date
 
 Moonraker's update manager updates a git repository; it doesn't switch
-the plugin on or off (that stays `ENABLE_PLUGIN`). Ship this in the
+the plugin on or off (that stays `ENABLE_PLUGIN`), and it doesn't update
+git submodules (a plugin with submodules is updated with
+`UPDATE_PLUGIN`). Ship this in the
 plugin's own `moonraker.conf`:
 
 ```

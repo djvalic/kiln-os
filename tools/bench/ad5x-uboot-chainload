@@ -1,0 +1,379 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# ad5x-uboot-chainload: start Kiln's U-Boot proper from RAM on the recovery
+# OS (slot A, Flashforge's 5.10 kernel), the way S00ad5x-kernel starts our
+# kernel: chainload_uboot.ko (kernel-ingenic66/chainload, "make uboot":
+# the same module with U-Boot proper's load address 0x80100000) stages
+# u-boot-kernel-slot.img, the devices are shut down and its trampoline
+# copies U-Boot proper to 0x80100000, flushes the caches and jumps there.
+# U-Boot then runs its boot rules (ad5x_boot, u-boot/README.md) as at
+# power-on. Nothing is written to the eMMC by this script except its log
+# (/data/ad5x/bench/uboot-chainload.log) and, with --main, the boot flag.
+# A power cycle undoes the test: Flashforge's SPL starts the flagged slot
+# as before (U-Boot's own writes are listed in tools/bench/README.md).
+#
+# OUR BENCH ONLY (tools/bench/README.md, step 2). Not in any image, not in
+# HelixScreen, Fluidd or the recovery UI: copy it over SSH when needed.
+#
+#   ad5x-uboot-chainload [DIR]          every check, then what it would do
+#   ad5x-uboot-chainload --yes [DIR]    checks, then stages and jumps (SSH
+#                                       drops; the printer restarts)
+#   --main      point the boot flag at slot B first (ad5x-boot-main
+#               --no-reboot, as "Boot main OS" does), so that U-Boot starts
+#               the main OS (6.6); without it the flag stays on slot A and
+#               U-Boot starts the recovery OS again
+#   --records   read only, on the main or recovery OS: the boot flag and
+#               U-Boot's environment, state and records in "ota"
+#
+# DIR (default: this script's directory) holds chainload_uboot.ko,
+# u-boot-kernel-slot.img and a SHA256SUMS listing both.
+# Refuses: not root; not the recovery OS; not Flashforge's 5.10.186+; not
+# slot A; a file missing or not matching SHA256SUMS; the image not a
+# Kiln U-Boot uImage for 0x80100000 with good header and data CRCs; the
+# module not the bench build for this kernel; a chainload module already
+# loaded; recovery still starting or installing; with --main, slot B not
+# startable or U-Boot's state already counting an unconfirmed start.
+# Exit 0 jumping (or --records), 1 refused or failed, 2 checks passed but
+# no --yes.
+set -u
+
+ME=ad5x-uboot-chainload
+R=${AD5X_BENCH_ROOT:-}			# tests: a stand-in for /
+LIB=${AD5X_LIB:-/usr/lib/ad5x}
+STOCK_REL=5.10.186+
+VERMAGIC='5.10.186+ SMP preempt mod_unload MIPS32_R5 32BIT'
+LOAD=80100000
+MOD=chainload_uboot
+STATE_LBA=1152				# ota 0x90000: U-Boot's state
+RECORDS_LBA=1153			# ota 0x90200: U-Boot's records
+
+yes=0 main=0 records=0 gonow=0 dir=
+for a in "$@"; do
+	case "$a" in
+	--yes) yes=1 ;;
+	--main) main=1 ;;
+	--records) records=1 ;;
+	--go-now) gonow=1 ;;		# internal: the detached jump
+	-h|--help) sed -n '3,40s/^# \{0,1\}//p' "$0"; exit 0 ;;
+	-*) echo "$ME: unknown option $a (--yes, --main, --records)" >&2; exit 1 ;;
+	*) [ -z "$dir" ] || { echo "$ME: one directory only" >&2; exit 1; }
+	   dir=$a ;;
+	esac
+done
+[ -n "$dir" ] || dir=$(cd "$(dirname "$0")" && pwd)
+KO=$dir/$MOD.ko
+IMG=$dir/u-boot-kernel-slot.img
+SUMS=$dir/SHA256SUMS
+LOGD=$R/data/ad5x/bench
+LOG=$LOGD/uboot-chainload.log
+
+# uimage_ok and uimage_data_ok (header and data CRC, BusyBox only)
+if [ -f "$LIB/slot.sh" ]; then
+	set +u				# slot.sh reads AD5X_USB unset
+	# shellcheck source=/dev/null # Kiln OS's lib/slot.sh, on the printer
+	. "$LIB/slot.sh"
+	set -u
+else
+	echo "$ME: no $LIB/slot.sh (Kiln OS's slot helpers)" >&2
+	exit 1
+fi
+
+logging=0
+say() {
+	echo "$*"
+	[ "$logging" = 1 ] && echo "$*" >> "$LOG" 2>/dev/null
+	return 0
+}
+die() {
+	say "$ME: $*" >&2
+	exit 1
+}
+nfail=0
+ok() { say "  ok    $*"; }
+bad() { say "  FAIL  $*"; nfail=$((nfail + 1)); }
+note() { say "  note  $*"; }
+
+# GPT name -> device (sysfs PARTNAME, as slot.sh's part)
+bpart() {
+	for u in "$R"/sys/class/block/*/uevent; do
+		[ -f "$u" ] || continue
+		grep -qx "PARTNAME=$1" "$u" &&
+			{ echo "$R/dev/$(sed -n 's/^DEVNAME=//p' "$u")"; return 0; }
+	done
+	return 1
+}
+flag() { o=$(bpart ota) && head -c 11 "$o" 2>/dev/null | tr -d '\0\n'; }
+# sector N of ota as text (NULs dropped); empty when unreadable
+ota_sector() {
+	o=$(bpart ota) || return 0
+	dd if="$o" bs=512 skip="$1" count=1 2>/dev/null | tr -d '\000'
+}
+# 4 bytes big endian at OFFSET of FILE, as 8 hex digits
+be32() { od -An -v -t x1 -j "$2" -N 4 "$1" 2>/dev/null | tr -d ' \n'; }
+sha() { sha256sum < "$1" | cut -d' ' -f1; }
+fsize() { wc -c < "$1" | tr -d ' '; }
+sum_of() {	# NAME: its sha256 in SHA256SUMS; fails unless exactly one line
+	n=$(grep -c "^[0-9a-f]\{64\}  \*\{0,1\}$1\$" "$SUMS" 2>/dev/null)
+	[ "$n" = 1 ] || return 1
+	grep "^[0-9a-f]\{64\}  \*\{0,1\}$1\$" "$SUMS" | cut -c1-64
+}
+modinfo_has() {	# KEY=VALUE regex in the module's .modinfo strings
+	tr '\000' '\n' < "$KO" | grep -q "^$1\$"
+}
+
+# ------------------------------------------------------------- --records
+if [ "$records" = 1 ]; then
+	echo "boot flag: '$(flag)'"
+	o=$(bpart ota) || die "no ota partition"
+	for off in 1024:environment 1088:"environment (redundant)"; do
+		lba=${off%%:*}
+		h=$(dd if="$o" bs=512 skip="$lba" count=1 2>/dev/null | od -An -v -t x1 -N 5 | tr -d ' \n')
+		case "$h" in
+		0000000000|ffffffffff|'') echo "U-Boot ${off#*:} (ota $(printf '0x%x' $((lba * 512)))): empty" ;;
+		*) echo "U-Boot ${off#*:} (ota $(printf '0x%x' $((lba * 512)))): crc32 ${h%??}, flags ${h#????????}:"
+		   dd if="$o" bs=512 skip="$lba" count=64 2>/dev/null | tail -c +6 |
+			tr '\000' '\n' | sed -n '/^$/q;s/^/    /p' ;;
+		esac
+	done
+	for s in "$STATE_LBA:state (ota 0x90000)" "$RECORDS_LBA:records (ota 0x90200)"; do
+		t=$(ota_sector "${s%%:*}")
+		if [ -n "$t" ]; then echo "U-Boot ${s#*:}:"; echo "$t" | sed 's/^/    /'
+		else echo "U-Boot ${s#*:}: empty"; fi
+	done
+	exit 0
+fi
+
+# ------------------------------------------------------------- the jump
+# Detached from the SSH session (the network goes down on the way), as
+# kernel-ingenic66/chainload/chainload.sh's go; what runs before the jump
+# is S00ad5x-kernel's (dwc2 unbound, other CPUs offline) plus what that
+# script's go adds for a system that is already up (services, network
+# drivers, file systems read-only).
+if [ "$gonow" = 1 ]; then
+	exec >> "${AD5X_CONSOLE:-/dev/console}" 2>&1 </dev/null
+	run_log=$R/run/$ME.log
+	echo "$ME: stopping services" | tee -a "$run_log"
+	for s in S85ad5x-auto S80ad5x-recovery-ui S70swupdate; do
+		[ -x "$R/etc/init.d/$s" ] && "$R/etc/init.d/$s" stop
+	done
+	killall ad5x-recovery-ui 2>/dev/null
+	sleep 2
+	# USB, Wi-Fi and Ethernet do DMA into RAM: stopped before the copy.
+	# The network first: the Wi-Fi driver (8821cu) sits on USB and crashes
+	# the kernel from a stale timer if its USB host goes away under it.
+	for i in wlan0 wlan1 eth0; do ip link set $i down 2>/dev/null; done
+	rmmod 8821cu soc_mac_driver 2>/dev/null
+	for x in 13500000.otg 13540000.usb; do
+		[ -e "$R/sys/bus/platform/drivers/dwc2/$x" ] &&
+			echo $x > "$R/sys/bus/platform/drivers/dwc2/unbind"
+	done
+	for c in "$R"/sys/devices/system/cpu/cpu[1-9]*/online; do
+		[ -f "$c" ] && echo 0 > "$c"
+	done
+	sync
+	# U-Boot reads /data (ext4) without its journal: clean it first
+	# shellcheck disable=SC2013 # mount points: no spaces on this system
+	for m in $(awk '$1 ~ "^/dev/" && $4 ~ /(^|,)rw(,|$)/ { print $2 }' "$R/proc/mounts"); do
+		mount -o remount,ro "$m" 2>/dev/null ||
+			echo "$ME: $m stays read-write" | tee -a "$run_log"
+	done
+	sync
+	echo "$ME: jumping to U-Boot proper" | tee -a "$run_log"
+	if echo 1 > "$R/sys/module/$MOD/parameters/go"; then
+		# the module doesn't return from a jump: never seen
+		echo "$ME: the module returned without jumping; reboot or power-cycle" |
+			tee -a "$run_log"
+	else
+		echo "$ME: jump refused (dmesg | tail); reboot or power-cycle to recover" |
+			tee -a "$run_log"
+	fi
+	exit 1
+fi
+
+# ------------------------------------------------------------- checks
+mkdir -p "$LOGD" 2>/dev/null && : >> "$LOG" 2>/dev/null && logging=1
+say "== $ME $(date '+%Y-%m-%d %H:%M:%S') $*"
+say "checks:"
+if [ "$(id -u)" = 0 ]; then ok "root"; else bad "not root"; fi
+if [ -f "$R/etc/ad5x-recovery" ]; then ok "the recovery OS"
+else bad "not the recovery OS (run it there: Boot into recovery)"; fi
+kr=$(uname -r)
+if [ "$kr" = "$STOCK_REL" ]; then ok "Flashforge's kernel $kr"
+else bad "kernel $kr, not Flashforge's $STOCK_REL (the module is built for that one only)"; fi
+root=$(sed -n 's/.*root=\([^ ]*\).*/\1/p' "$R/proc/cmdline" 2>/dev/null)
+ra=$(bpart rootfs) && ra=${ra#"$R"}
+if [ -n "$root" ] && { [ "$root" = PARTLABEL=rootfs ] || [ "$root" = "$ra" ]; }; then
+	ok "slot A (root=$root)"
+else
+	bad "not slot A (root=${root:-?})"
+fi
+case " $(cat "$R/proc/cmdline" 2>/dev/null) " in
+*" ad5x.uboot=1 "*) note "this recovery OS was itself started by U-Boot (ad5x.uboot=1)" ;;
+esac
+krp=$(sed -n 's/^\([0-9a-f]*\) T kernel_restart_prepare$/\1/p' "$R/proc/kallsyms" 2>/dev/null)
+if [ -n "$krp" ]; then ok "kernel_restart_prepare at 0x$krp"
+else bad "no kernel_restart_prepare in /proc/kallsyms"; fi
+if grep -q -e '^chainload ' -e "^$MOD " "$R/proc/modules" 2>/dev/null; then
+	bad "a chainload module is loaded already (rmmod it, or reboot)"
+else
+	ok "no chainload module loaded"
+fi
+
+# files and their sums
+for f in "$KO" "$IMG"; do
+	n=${f##*/}
+	if [ ! -f "$f" ]; then bad "no $f"; continue; fi
+	want=$(sum_of "$n") || { bad "SHA256SUMS ($SUMS) has no single line for $n"; continue; }
+	got=$(sha "$f")
+	if [ "$got" = "$want" ]; then ok "$n: sha256 $got as SHA256SUMS"
+	else bad "$n: sha256 $got, SHA256SUMS says $want"; fi
+done
+
+if [ -f "$IMG" ]; then
+	# the uImage: header and data CRC, then what it is made for
+	if uimage_data_ok "$IMG"; then ok "u-boot-kernel-slot.img: uImage header and data CRCs good"
+	else bad "u-boot-kernel-slot.img: not a uImage with good header and data CRCs"; fi
+	ld=$(be32 "$IMG" 16) ep=$(be32 "$IMG" 20)
+	osat=$(od -An -v -t x1 -j 28 -N 4 "$IMG" | tr -d ' \n')
+	name=$(tail -c +33 "$IMG" 2>/dev/null | head -c 32 | tr -d '\000')
+	sz=$(be32 "$IMG" 12); sz=$((0x${sz:-0}))
+	if [ "$ld" = $LOAD ] && [ "$ep" = $LOAD ]; then ok "load = entry = 0x$LOAD"
+	else bad "load 0x$ld, entry 0x$ep: not 0x$LOAD (U-Boot proper's address)"; fi
+	# ih_os 5 Linux, ih_arch 5 MIPS, ih_type 2 kernel, ih_comp 0 none
+	if [ "$osat" = 05050200 ]; then ok "Linux kernel uImage for MIPS, not compressed"
+	else bad "os/arch/type/compression $osat, not 05050200 (u-boot/build.sh's kernel-slot image)"; fi
+	case "$name" in
+	"Kiln U-Boot "*) ok "name '$name'" ;;
+	*) bad "name '$name', not Kiln U-Boot" ;;
+	esac
+	if [ $((sz + 64)) = "$(fsize "$IMG")" ] && [ "$sz" -le $((8388608 - 64)) ]; then
+		ok "size $sz bytes + header = the file"
+	else
+		bad "size $sz + 64 differs from the file ($(fsize "$IMG")) or exceeds 8 MiB"
+	fi
+fi
+if [ -f "$KO" ]; then
+	if modinfo_has "vermagic=$VERMAGIC *"; then ok "module vermagic '$VERMAGIC'"
+	else bad "$MOD.ko: vermagic is not '$VERMAGIC'"; fi
+	if modinfo_has "name=$MOD" && modinfo_has "kiln_load=0x$LOAD"; then
+		ok "module $MOD, load address 0x$LOAD (the bench build)"
+	else
+		bad "$MOD.ko is not the bench build (name=$MOD, kiln_load=0x$LOAD)"
+	fi
+fi
+
+# recovery idle: started, its boot-time installs done, no writer running
+if [ -f "$R/run/ad5x/ready" ]; then ok "recovery start-up finished"
+else bad "the recovery OS is still starting (no /run/ad5x/ready)"; fi
+if [ -f "$R/run/ad5x/auto.done" ] || [ -f "$R/data/ad5x/recovery/noauto" ]; then
+	ok "boot-time installs done"
+else
+	bad "ad5x-recovery-auto hasn't finished (no /run/ad5x/auto.done)"
+fi
+busy=
+for p in ad5x-swu-apply ad5x-restore ad5x-restore-stock ad5x-backup ad5x-usb-rescue ad5x-zip-to-swu ad5x-boot-main; do
+	pidof "$p" >/dev/null 2>&1 && busy="$busy $p"
+done
+if [ -z "$busy" ]; then ok "nothing installing or restoring"
+else bad "running:$busy (wait for it to finish)"; fi
+
+# where U-Boot will go, and its state
+fl=$(flag)
+st=$(ota_sector $STATE_LBA)
+tries=
+case "$st" in "kiln-uboot-state 1"*)
+	tries=$(echo "$st" | sed -n 's/^tries \([0-9]*\)$/\1/p') ;;
+esac
+if [ "$main" = 1 ]; then
+	k2=$(bpart kernel2) r2=$(bpart rootfs2)
+	if [ -n "$k2" ] && uimage_ok "$k2"; then ok "kernel2 holds a uImage (header CRC good)"
+	else bad "kernel2 holds no good uImage: slot B can't start"; fi
+	if [ -n "$r2" ] && [ "$(head -c 4 "$r2" 2>/dev/null)" = hsqs ]; then ok "rootfs2 holds a squashfs"
+	else bad "rootfs2 holds no squashfs: slot B can't start"; fi
+	if command -v ad5x-boot-main >/dev/null 2>&1; then ok "ad5x-boot-main present"
+	else bad "no ad5x-boot-main (the recovery OS's tool that sets the flag)"; fi
+	target="the main OS (flag now '$fl', set to ota:kernel2 first)"
+	k=6.6
+	if [ -f "$R/data/ad5x/kernel/mainline" ] && [ ! -f "$R/data/ad5x/kernel/failed-mainline" ] &&
+	   [ ! -f "$R/data/ad5x/install/recovery.squashfs" ]; then
+		k="7.3 (mainline is on)"
+	elif [ -s "$R/data/ad5x/kernel/failed" ]; then
+		k="maybe the stock kernel: S00 recorded $(sed -n 1p "$R/data/ad5x/kernel/failed") as failed (ad5x-kernel retry)"
+	fi
+	note "U-Boot should start the main OS on $k"
+else
+	if [ "$fl" = ota:kernel2 ]; then
+		target="the main OS (the flag is on slot B already)"
+		note "the flag is on slot B: U-Boot will start the main OS, not recovery"
+	else
+		target="the recovery OS again (flag '$fl' stays on slot A)"
+	fi
+fi
+# Nothing confirms a main-OS start U-Boot counted yet (S99ad5x-booted
+# doesn't clear the state): two in a row and it records 6.6 as failed
+if [ "$main" = 1 ] || [ "$fl" = ota:kernel2 ]; then
+	if [ -n "$tries" ] && [ "$tries" -ge 1 ]; then
+		bad "U-Boot's state counts $tries unconfirmed main-OS start(s) (ota 0x90000): clear it first (tools/bench/README.md, 'After the test')"
+	else
+		ok "U-Boot's state counts no unconfirmed start"
+	fi
+fi
+rec=$(ota_sector $RECORDS_LBA)
+case "$rec" in "kiln-uboot-records 1"*)
+	note "U-Boot's records (ota 0x90200): $(echo "$rec" | grep -v -e '^kiln-uboot' -e '^crc32' | tr '\n' ';')" ;;
+esac
+rw=$(awk '$1 ~ "^/dev/" && $4 ~ /(^|,)rw(,|$)/ { printf " %s", $2 }' "$R/proc/mounts" 2>/dev/null)
+note "read-write now, remounted read-only before the jump:${rw:- none}"
+
+say ""
+if [ "$nfail" != 0 ]; then
+	say "$ME: $nfail check(s) failed: refused, nothing done"
+	exit 1
+fi
+cat <<EOF | while IFS= read -r l; do say "$l"; done
+$ME: what --yes does (nothing written to the eMMC but this log$([ "$main" = 1 ] && echo " and the flag")):
+EOF
+say "  1. insmod $KO image=$IMG krp=0x$krp (stages it; rmmod undoes)"
+step=2
+if [ "$main" = 1 ]; then
+	say "  2. ad5x-boot-main --no-reboot: the boot flag to ota:kernel2 (slot B)"
+	step=3
+fi
+cat <<EOF | while IFS= read -r l; do say "$l"; done
+  $step. detached: recovery UI, swupdate stopped; network down, 8821cu and
+     soc_mac_driver unloaded; dwc2 unbound; other CPUs offline; file
+     systems read-only; then the jump. SSH drops.
+Expected: U-Boot proper starts $target.
+U-Boot's watchdog (120 s, armed as U-Boot starts) resets a U-Boot that
+hangs later; a hang before that needs a power cycle. After either,
+Flashforge's SPL starts the flagged slot as before.
+EOF
+if [ "$yes" != 1 ]; then
+	say "$ME: checks passed; nothing done. Run it again with --yes to do it"
+	exit 2
+fi
+
+# ------------------------------------------------------------- --yes
+say "staging:"
+if ! insmod "$KO" image="$IMG" krp=0x"$krp" cmdline=kiln-bench-uboot; then
+	die "insmod failed (dmesg | tail): nothing done"
+fi
+dmesg 2>/dev/null | grep 'chainload:' | tail -n 8 | while IFS= read -r l; do say "  $l"; done
+if [ "$main" = 1 ]; then
+	out=$(ad5x-boot-main --no-reboot 2>&1); rc=$?
+	echo "$out" | while IFS= read -r l; do say "  $l"; done
+	if [ "$rc" != 0 ] || [ "$(flag)" != ota:kernel2 ]; then
+		rmmod $MOD 2>/dev/null
+		die "ad5x-boot-main exit $rc, flag '$(flag)', not ota:kernel2: module unloaded, not jumping"
+	fi
+	say "  boot flag now '$(flag)'"
+fi
+say "$ME: jumping (detached; watch the screen, then SSH to the printer)"
+sync
+if [ -n "${AD5X_BENCH_NODETACH:-}" ]; then	# tests
+	exec sh "$0" --go-now
+else
+	setsid sh "$0" --go-now >/dev/null 2>&1 </dev/null &
+fi
+exit 0

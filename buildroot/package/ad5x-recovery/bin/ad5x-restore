@@ -3,7 +3,9 @@
 #
 # usage: ad5x-restore [--dry-run] [--i-know] [--set-flag A|B] [--reboot] SRC PART...
 #   SRC    a backup directory from ad5x-backup (NAME.img or NAME.img.000...,
-#          SHA256SUMS), or any directory holding the files named below
+#          SHA256SUMS), or any directory holding the files named below, e.g.
+#          /data/ad5x/stock for "boot" (boot.img + boot.img.sha256, the first
+#          MiB the main OS saved before anything else was written there)
 #   PART   a GPT name (kernel rootfs kernel2 rootfs2 ota usershare userdata)
 #          or "boot" (first MiB of the disk): writes SRC/NAME.img;
 #          NAME=FILE writes FILE (relative to SRC) instead
@@ -15,12 +17,21 @@
 #          can only be repaired with Ingenic's USB boot tools.
 #   --dry-run      checks only, nothing is written
 #
-# Checks before writing: the image fits, its sha256 matches SHA256SUMS (if
-# listed there), rootfs* images are squashfs and kernel* images uImages
+# Checks before writing: the image fits ("boot": exactly 1 MiB, INGE at 0,
+# a GPT at 512 with the SPL table's partitions as this disk has them; with
+# --i-know too), its sha256
+# matches SHA256SUMS (if listed there; else FILE.sha256 next to it, if
+# there), rootfs* images are squashfs and kernel* images uImages
 # (unless --i-know), the GPT entry agrees with the SPL table, the partition
 # isn't mounted (userdata: /data is unmounted first). After writing, the
 # partition is read back and compared. Last line on success: restore: OK
-. /usr/lib/ad5x-recovery/recovery.sh
+# Kiln's boot loader in the first MiB (Kiln's SPL), with --i-know too: a
+# kernel image for kernel or kernel2 must be Kiln's 6.6 (no Flashforge
+# kernel goes into a slot under it); and a "boot" image with Flashforge's
+# SPL is written only when both slots hold Flashforge's 5.10 by then (this
+# run's kernel/kernel2 images, or what they hold now), and last.
+# AD5X_RECOVERY_LIB overrides /usr/lib/ad5x-recovery (tests).
+. ${AD5X_RECOVERY_LIB:-/usr/lib/ad5x-recovery}/recovery.sh
 
 dry= iknow= flag= reboot_after=
 while [ $# -gt 0 ]; do
@@ -30,19 +41,20 @@ while [ $# -gt 0 ]; do
 	--set-flag) flag=$2; shift
 		case "$flag" in A|B) ;; *) rc_die "--set-flag A or B" ;; esac ;;
 	--reboot) reboot_after=1 ;;
-	-h|--help) sed -n '2,25p' "$0"; exit 0 ;;
-	-*) sed -n '2,25p' "$0" >&2; exit 2 ;;
+	-h|--help) sed -n '2,32p' "$0"; exit 0 ;;
+	-*) sed -n '2,32p' "$0" >&2; exit 2 ;;
 	*) break ;;
 	esac
 	shift
 done
-[ $# -ge 2 ] || { sed -n '2,25p' "$0" >&2; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,32p' "$0" >&2; exit 2; }
 SRC=$1; shift
 [ -d "$SRC" ] || rc_die "no directory $SRC"
 slot=$(rc_slot)
+LOADER=$(rc_boot_loader)
 
 # Resolve and check everything before writing anything
-plan=
+plan= planboot= bootff= kind_kernel= kind_kernel2=
 for a in "$@"; do
 	n=${a%%=*}
 	if [ "$a" != "$n" ]; then f=${a#*=}; else f=$n.img; fi
@@ -59,11 +71,34 @@ for a in "$@"; do
 	fi
 	size=0; for x in $files; do size=$((size + $(rc_fsize "$x"))); done
 	[ "$size" -le "$psize" ] || rc_die "$n: image $size bytes, partition $psize"
+	[ "$n" != boot ] || [ "$size" = "$psize" ] || rc_die "boot: image $size bytes, not the whole first MiB ($psize)"
+	# The first MiB's content, with --i-know too: written back blindly, a
+	# wrong file leaves a printer that only J28 brings back
+	if [ "$n" = boot ]; then
+		mkdir -p "$AD5X_RUN"
+		cat $files > "$AD5X_RUN/boot.check"
+		why=$(rc_boot_check "$AD5X_RUN/boot.check") ||
+			{ rm -f "$AD5X_RUN/boot.check"; rc_die "boot: ${f##*/} is not a first MiB for this printer: $why"; }
+		rm -f "$AD5X_RUN/boot.check"
+		cat $files | tail -c +17409 | head -c 24576 | tr -c ' -~' '\n' |
+			grep -q '^U-Boot SPL 2013\.07' && bootff=1
+	fi
+	case "$n" in kernel|kernel2)
+		k=$(rc_kernel_kind $files)
+		eval "kind_$n=\$k"
+		;;
+	esac
 	sha=$(cat $files | sha256sum | cut -d' ' -f1)
 	want=$(awk -v f="${f##*/}" '$2 == f || $2 == "*" f { print $1; exit }' "$(dirname "$f")/SHA256SUMS" 2>/dev/null)
+	sums=SHA256SUMS
+	if [ -z "$want" ] && [ -f "$f.sha256" ]; then
+		want=$(cut -d' ' -f1 "$f.sha256" | head -1)
+		[ -n "$want" ] || want=empty
+		sums=${f##*/}.sha256
+	fi
 	if [ -n "$want" ]; then
-		[ "$want" = "$sha" ] || rc_die "$n: ${f##*/} sha256 $sha, SHA256SUMS says $want"
-		ck="sha256 matches SHA256SUMS"
+		[ "$want" = "$sha" ] || rc_die "$n: ${f##*/} sha256 $sha, $sums says $want"
+		ck="sha256 matches $sums"
 	else
 		ck="not in a SHA256SUMS (sha256 $sha)"
 	fi
@@ -93,8 +128,33 @@ for a in "$@"; do
 			rc_die "userdata can't be restored from userdata itself ($f)" ;; esac
 	fi
 	echo "plan: $n <- ${f##*/} ($size bytes, $ck) -> $dev"
-	plan="$plan $n|$dev|$size|$sha|$(echo $files | tr ' ' '|')"
+	if [ "$n" = boot ]; then
+		planboot=" $n|$dev|$size|$sha|$(echo $files | tr ' ' '|')"
+	else
+		plan="$plan $n|$dev|$size|$sha|$(echo $files | tr ' ' '|')"
+	fi
 done
+# Under Kiln's SPL only Kiln's 6.6 goes into a slot, unless this run puts
+# Flashforge's SPL back too (going back to stock, below)
+if [ "$LOADER" = kiln ] && [ -z "$bootff" ]; then
+	for k in kernel kernel2; do
+		eval "kk=\$kind_$k"
+		[ -z "$kk" ] || [ "$kk" = kiln ] ||
+			rc_die "$k: the image is not Kiln's 6.6 (uImage: $kk): Kiln's boot loader is installed and no other kernel goes into a slot; to go back to stock, restore Flashforge's boot loader (boot) in the same run"
+	done
+fi
+# Flashforge's SPL back only over Flashforge's 5.10 in both slots (it
+# would start whatever they hold, untested with Kiln's 6.6), and last
+if [ -n "$bootff" ] && [ "$LOADER" = kiln ]; then
+	for k in kernel kernel2; do
+		eval "kk=\$kind_$k"
+		[ -n "$kk" ] || kk=$(rc_kernel_kind "$(rc_part $k)")
+		[ "$kk" = stock ] ||
+			rc_die "boot: Flashforge's boot loader goes back only over Flashforge's 5.10 in both slots, and $k holds $kk: restore kernel and kernel2 from /data/ad5x/stock/kernel.img first (in the same run: ... kernel=kernel.img kernel2=kernel.img boot)"
+	done
+	echo "plan: boot (Flashforge's SPL) written last, both slots then hold Flashforge's 5.10"
+fi
+plan="$plan$planboot"
 [ -n "$flag" ] && echo "plan: then boot flag -> slot $flag"
 [ -n "$dry" ] && { echo "restore: dry run, nothing written"; exit 0; }
 

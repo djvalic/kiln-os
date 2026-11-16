@@ -3,6 +3,16 @@
 # if SSH is up (without it a broken system couldn't be fixed). Also marks
 # a start of our own kernel as successful (S00ad5x-kernel): "started"
 # becomes last-ok; pending and the count of unfinished starts go.
+# Then makes /run/ad5x-booted, this boot's "start-up finished" marker
+# (lib/slot.sh, start_done): the update agent, ad5x-update and
+# ad5x-boot-recovery go ahead only with it and the flag on this slot.
+# Before that, on the first run of this boot, updates still staged for the
+# recovery OS are marked stale (stale_updates below).
+# On slot B, saves the first MiB of the eMMC once (save_boot below).
+# Started by Kiln's U-Boot (ad5x.uboot=1 on the command line): confirms the
+# start to it, at the same point (uboot_booted below), and notes the first
+# such start in the boot loader's install record when there is one
+# (lib/bootloader.sh, bl_note_main_start; the recovery screen shows it).
 # AD5X_LIB overrides /usr/lib/ad5x (tools/test_kernel_fallback.sh).
 
 # Files this creates are readable by klipper and www-data, whoever started
@@ -10,10 +20,128 @@
 umask 022
 
 . ${AD5X_LIB:-/usr/lib/ad5x}/slot.sh
+# lib/uboot.sh: optional, so that a missing file can't stop this script
+# (the boot flag goes back to this slot here)
+UB=${AD5X_LIB:-/usr/lib/ad5x}/uboot.sh
+[ -f "$UB" ] && . "$UB"
 D=/data/ad5x/kernel
+
+# The first MiB of the eMMC (the boot ROM's block, the GPT, the SPL and its
+# data), as it is now, before a boot loader of our own is ever written
+# there: /data/ad5x/stock/boot.img, boot.img.sha256 and boot.img.info
+# (which SPL), once. Only Flashforge's: INGE at 0, a GPT at 0x200, LPSM at
+# 0x4400 and the banner of its U-Boot SPL 2013.07 in the SPL (both known
+# builds); another one (Kiln's own SPL) is not saved, only logged. Read
+# only; "ad5x-restore boot" in the recovery OS can write it back. Saved
+# means boot.img is exactly 1 MiB and its sha256 file checks; anything
+# else (a power cut while saving) is saved again. Temporary names, synced,
+# boot.img renamed last. Anything odd: nothing saved, start-up goes on.
+save_boot() {
+	S=/data/ad5x/stock
+	[ "$(wc -c 2>/dev/null < $S/boot.img | tr -d ' ')" = 1048576 ] &&
+		( cd $S && sha256sum -c boot.img.sha256 >/dev/null 2>&1 ) && return 0
+	r=$(part rootfs2) || return 0
+	disk=${r%p[0-9]*}
+	[ -e "$disk" ] || return 0
+	mkdir -p $S || return 0
+	n=$S/.boot.img.new
+	rm -f $n $n.sha256 $n.info
+	head -c 1048576 "$disk" > $n 2>/dev/null
+	sync
+	got=$(wc -c 2>/dev/null < $n | tr -d ' ')
+	if [ "$got" != 1048576 ]; then
+		echo "booted: read ${got:-0} of 1048576 bytes of $disk; first MiB not saved"
+		rm -f $n; return 0
+	fi
+	if [ "$(head -c 520 $n | tail -c 8)" != "EFI PART" ]; then
+		echo "booted: the first MiB of $disk has no GPT; not saved"
+		rm -f $n; return 0
+	fi
+	# the SPL: 0x4400 up to U-Boot proper at 0xA400
+	spl=$(tail -c +17409 $n | head -c 24576 | tr -c ' -~' '\n' |
+		grep '^U-Boot SPL 2013\.07' | head -n 1)
+	if [ "$(head -c 4 $n)" != INGE ] ||
+	   [ "$(tail -c +17409 $n | head -c 4)" != LPSM ] || [ -z "$spl" ]; then
+		echo "booted: the first MiB of $disk is not Flashforge's boot loader (INGE at 0, LPSM at 0x4400, U-Boot SPL 2013.07); not saved"
+		rm -f $n; return 0
+	fi
+	sum=$(sha256sum < $n | cut -d' ' -f1)
+	echo "$sum  boot.img" > $n.sha256
+	echo "Flashforge's boot loader: $spl" > $n.info
+	sync
+	if [ "$(cut -d' ' -f1 $n.sha256)" != "$sum" ] ||
+	   [ "$(sha256sum < $n | cut -d' ' -f1)" != "$sum" ]; then
+		echo "booted: the copy of the first MiB of $disk didn't check; not saved"
+		rm -f $n $n.sha256 $n.info; return 0
+	fi
+	mv -f $n.info $S/boot.img.info && mv -f $n.sha256 $S/boot.img.sha256 &&
+		sync || return 0
+	# boot.img last: it being there, 1 MiB and checking means all are complete
+	mv -f $n $S/boot.img && sync || return 0
+	echo "booted: first MiB of $disk saved to $S/boot.img ($spl)"
+}
+
+# Updates staged for the recovery OS in /data/ad5x/update (*.zip, *.swu)
+# that are still there when the main OS starts were staged before this
+# boot (docs/updates.md, "Staged updates"): nothing of this boot can have
+# staged one yet, as ad5x-update and the update agent wait for start-up to
+# finish (start_done). One is left there when a reset came between
+# staging and the reboot (the flag still on this slot), or when the
+# recovery OS was left without installing it. The recovery OS installs
+# whatever it finds at its next start, which may come much later and for
+# another reason (an interrupted start, Boot into recovery): so each gets
+# ".stale" added to its name, which ad5x-recovery-auto and the recovery's
+# Install screen don't take. The next update removes it (ad5x-update).
+# Half-copied ones (.incoming, *.part) are removed.
+stale_updates() {
+	U=/data/ad5x/update
+	[ -d $U ] || return 0
+	rm -f $U/.incoming $U/*.part
+	for f in $U/*.zip $U/*.swu; do
+		[ -f "$f" ] || continue
+		mv -f "$f" "$f.stale" &&
+			echo "booted: ${f##*/} was staged before this boot; renamed ${f##*/}.stale, not installed"
+	done
+	sync
+}
+
+# Kiln's U-Boot counts each start of the main OS in its state sector (ota
+# 0x90000, lib/uboot.sh) before it starts it, and takes the next kernel
+# down (7.3 -> 6.6 -> stock -> recovery OS) when starts stay unconfirmed
+# (u-boot/README.md, "Boot rules"). A start that got here is confirmed:
+# the state is zeroed (what U-Boot reads as "no unconfirmed start"), synced
+# and read back. Its records (ota 0x90200: which kernel failed, why it fell
+# back) are logged and kept: they are why this start may be on another
+# kernel than the one chosen, and they keep U-Boot off a kernel that
+# failed; "ad5x-kernel retry" clears them. Only with ad5x.uboot=1: a start
+# through Flashforge's or Kiln's SPL alone never reads or writes them.
+uboot_booted() {
+	st=$(uboot_text $UBOOT_STATE "$UBOOT_STATE_MAGIC")
+	rec=$(uboot_text $UBOOT_RECORDS "$UBOOT_RECORDS_MAGIC")
+	if [ -n "$st" ]; then
+		w="Kiln's U-Boot started kernel $(uboot_val "$st" kernel) ($(uboot_val "$st" release)), start $(uboot_val "$st" tries)"
+	else
+		w="Kiln's U-Boot started this boot (its state sector held no start)"
+	fi
+	if r=$(uboot_clear $UBOOT_STATE); then
+		echo "booted: $w: confirmed, U-Boot's state $r"
+		ad5x-bootlog "  uboot: start confirmed, state $r"
+	else
+		echo "booted: $w; U-Boot's state NOT cleared: $r. U-Boot counts this start as unconfirmed and falls back after too many (u-boot/README.md)"
+		ad5x-bootlog "  uboot: state NOT cleared: $r"
+	fi
+	if [ -n "$rec" ]; then
+		echo "booted: U-Boot's records (kept until ad5x-kernel retry): $(uboot_records_line "$rec")"
+		ad5x-bootlog "  uboot records: $(uboot_records_line "$rec")"
+	fi
+}
+
 case "$1" in
 start)
 	[ -n "$SLOT" ] || exit 0
+	# Only on this boot's first run: ad5x-mcu runs this early when the
+	# eboard needs a power-cycle, and after that an update may be staged
+	[ -f "$BOOTED_MARK" ] || stale_updates
 	if pidof dropbear >/dev/null; then
 		set_flag $SLOT
 		echo "booted: start-up complete, boot flag on slot $SLOT"
@@ -22,9 +150,20 @@ start)
 			[ -f $D/started ] && echo "$(cat $D/started) ok" > $D/last-ok
 			rm -f $D/started $D/pending $D/unfinished; sync
 		fi
+		# This boot's start-up has finished: only with the flag read back
+		if [ "$(read_flag)" = "$(flag_for $SLOT)" ]; then
+			[ -f "$UB" ] && uboot_started && uboot_booted
+			BL=${AD5X_LIB:-/usr/lib/ad5x}/bootloader.sh
+			[ -f "$UB" ] && [ -f "$BL" ] && uboot_started &&
+				( . "$BL" && bl_note_main_start ) 2>/dev/null
+			: > "$BOOTED_MARK"
+		else
+			echo "booted: the boot flag reads '$(read_flag)', not $(flag_for $SLOT); start-up not marked finished"
+		fi
 	else
 		echo "booted: dropbear not running, boot flag left on slot $OTHER"
 	fi
+	[ "$SLOT" = B ] && save_boot
 	;;
 esac
 exit 0

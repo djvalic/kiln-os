@@ -114,9 +114,19 @@ is kept in the run's log folder (`update-<version>.zip`). It is never published,
   still be updated. It also refuses before start-up has finished ("refused:
   start-up has not finished yet, try again in a minute"; issue #47): until
   `S99ad5x-booted` has run, a reboot would count as an unfinished start of
-  our kernel. It stages it with `ad5x-update` (boot flag on the recovery OS)
-  and reboots. The recovery OS installs it into slot B, checks it and
-  boots it (about 3 minutes). Log: `/data/ad5x/kiln-log/agent.log`.
+  our kernel. Start-up has finished when `S99ad5x-booted` has pointed the
+  boot flag back at slot B and made `/run/ad5x-booted` (a marker for this
+  boot only); the agent, `ad5x-update` and `ad5x-boot-recovery` check
+  both. And it refuses at once while the recovery OS is being written into
+  slot A ("refused: the recovery OS is being written into slot A, try again
+  in a few minutes", reason `recovery_updating`), which the main OS does in
+  the background after the first start of a new release: the reboot would
+  cut that write short. Up to v1.0.0-rc2 the agent waited up to 3 minutes
+  for the write while Moonraker gave up after 2, so Fluidd showed a timeout
+  though the update then went ahead. It stages it with `ad5x-update` (boot
+  flag on the recovery OS) and reboots. The recovery OS installs it into
+  slot B, checks it and boots it (3-6 minutes). Log:
+  `/data/ad5x/kiln-log/agent.log`.
   The update carries the release's recovery OS too: after the first
   complete start the main OS writes it into slot A if slot A holds
   another one (docs/recovery-os.md, "Updates of the recovery OS itself").
@@ -164,7 +174,8 @@ is kept in the run's log folder (`update-<version>.zip`). It is never published,
   `{"state": "rebooting"}` (and the deprecated `"result": "rebooting"`); refused (409) while a print may run (the same
   rule as installs), before start-up has finished, while the recovery OS
   is being written into slot A (`recovery_updating`), or when slot A
-  doesn't hold the recovery OS (`no_recovery`).
+  doesn't hold the recovery OS or its whole kernel (`no_recovery`; a Kiln
+  OS update is refused the same way).
   Example: `curl -X POST http://PRINTER/machine/kiln_os/boot_recovery`.
   Over SSH: `ad5x-boot-recovery`.
 - Service restarts (Fluidd's restart buttons, `managed_services` after an
@@ -175,6 +186,39 @@ is kept in the run's log folder (`update-<version>.zip`). It is never published,
   and nginx restart only) and answers `done: ...`. Refused while a print
   may run (the same rule as installs). For moonraker and nginx the answer
   comes first and the restart 3 s later, so the reply still gets out.
+- Reboot and shutdown (Fluidd's and the touch screen's Reboot and Shutdown,
+  Moonraker's `/machine/reboot` and `/machine/shutdown`): the same provider
+  writes `reboot` or `shutdown` in `/data/ad5x/kiln-update` instead of
+  running `sudo`; the agent answers `rebooting` or `shutting down`, then
+  reboots or powers off. Refused while a print may run (the same rule as
+  installs), while the recovery OS is being written into slot A
+  (`recovery_updating`), and before start-up has finished (`starting_up`)
+  in the first 10 minutes after boot. A start that hasn't finished after
+  10 minutes has hung somewhere: then the reboot goes ahead, and since the
+  boot flag still points at the recovery OS, the printer starts that
+  (docs/api.md).
+
+### Staged updates
+
+`ad5x-update` stages an update in `/data/ad5x/update` (`*.zip`, `*.swu`)
+and points the boot flag at the recovery OS, which installs whatever it
+finds there at its next start (`ad5x-recovery-auto`) and renames it
+`*.done` or `*.failed`. A staged update is meant for the reboot that
+follows at once. When the main OS starts and an update is still staged,
+it was staged before this start and the recovery OS never took it, e.g.
+a reset came between staging and the reboot (the boot flag still on
+slot B), or the recovery OS was left without installing it. The recovery
+OS would install it at its next start, which may come much later and for
+another reason (an interrupted start, Boot into recovery), without anyone
+asking. So `S99ad5x-booted` renames each one `*.stale` on the first run
+of a main OS start (nothing of this start can have staged one yet:
+staging waits for start-up to finish), and removes half-copied ones
+(`.incoming`, `*.part`). The recovery OS never installs a `*.stale`
+file, and neither its Install screen nor `ad5x-recovery-auto` lists it.
+To install it after all, start the update again (Fluidd), or rename it
+back and run `ad5x-update` on it. The next update staged by the main OS,
+or the next automatic install in the recovery OS, deletes `*.stale` files
+(each is a whole image).
 
 ## Test channel: how to join and leave
 
@@ -246,7 +290,7 @@ system, which ignores the stick.
    extension; on Windows check that it isn't saved as
    `ad5x-autoupdate.txt`).
 4. Put the stick in the printer and start the recovery OS (below). It
-   installs the update (about 3 minutes, progress on the touch screen),
+   installs the update (3-6 minutes, progress on the touch screen),
    writes `ad5x-autoupdate.log` on the stick and starts the new system.
    Each zip is installed only once (its sha256 goes to
    `/data/ad5x/update/applied.list`), so a stick left in doesn't install

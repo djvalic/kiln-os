@@ -1,60 +1,121 @@
 #!/bin/sh
 # Main OS updates go through the recovery OS in slot A (docs/recovery-os.md):
 #
-#   ad5x-update [--reboot] FILE.swu|FILE.zip|-
+#   ad5x-update [--reboot] [--no-wait] FILE.swu|FILE.zip|- [SHA256]
 #       Stage an update (.swu or .zip from tools/make_swu.sh) in /data/ad5x/update, point
 #       the boot flag at recovery and (with --reboot) reboot. Recovery checks
-#       the sha256s, installs slot B, verifies it and boots it.
+#       the sha256s, installs slot B, verifies it and boots it. While the
+#       recovery OS is being written into slot A this waits for it (up to
+#       3 minutes); --no-wait refuses at once instead, exit code 3 (the
+#       update agent, which answers Moonraker). Refused with exit code 4
+#       when slot A doesn't hold the recovery OS or a whole kernel (uImage
+#       header and data CRC, as ad5x-boot-recovery checks).
 #
 #   ad5x-update --install-recovery [--replace-stock] [--reboot] IMAGE|- [SHA256]
 #       Write the recovery OS (buildroot/output-recovery/images/
-#       rootfs.squashfs) into slot A, verify it, keep the kernel (first
+#       rootfs.squashfs) into slot A, verify it, copy this slot's kernel
+#       there when it differs, header last (with Kiln's SPL in the first
+#       MiB: this system's own 6.6 from /usr/lib/ad5x/kernel66 instead, or
+#       nothing, never kernel2's kernel; with Flashforge's SPL never a
+#       kernel2 that holds Kiln's U-Boot or Kiln's 6.6; lib/uboot.sh,
+#       slot_a_kernel_src) (first
 #       install: S99ad5x-install-recovery; updates: S99ad5x-update-recovery,
 #       from the image this main OS carries). Only from
 #       slot B, only an image marked /etc/ad5x-recovery. --replace-stock is
 #       needed while slot A still holds stock; its root and kernel are saved
 #       to /data/ad5x/stock first (ad5x-restore-stock puts them back).
 #
+#   ad5x-update --kernel2
+#       With Kiln's SPL in the first MiB: write this system's own 6.6 into
+#       this slot's kernel partition (kernel2, p3) when it isn't there yet,
+#       header last, read back (lib/uboot.sh, kiln_slot_kernel: only the 6.6
+#       running now, or on 7.3 one not recorded as failed). Kiln's SPL boots
+#       it directly when U-Boot proper is missing or fails. Refused with
+#       Flashforge's SPL (its kernel2 keeps the 5.10). Run by
+#       S99ad5x-update-recovery after start-up.
+#
 #   -   read the file from stdin (e.g. piped over ssh)
 #
 # Staging an update, and --install-recovery --reboot, are refused until
 # start-up has finished (S99ad5x-booted points the boot flag back at slot
-# B): a reboot before that leaves our kernel's start marker behind, which
-# counts as an unfinished start of it (issue #47).
+# B and makes /run/ad5x-booted: start_done in lib/slot.sh): a reboot before
+# that leaves our kernel's start marker behind, which counts as an
+# unfinished start of it (issue #47).
 # AD5X_LIB overrides /usr/lib/ad5x (tests).
 set -e
-. ${AD5X_LIB:-/usr/lib/ad5x}/slot.sh
+LIB=${AD5X_LIB:-/usr/lib/ad5x}
+. $LIB/slot.sh
+. $LIB/uboot.sh
 
 die() { echo "ad5x-update: $*" >&2; exit 1; }
-usage() { sed -n '2,24p' "$0"; exit ${1:-2}; }
+usage() { sed -n '2,43p' "$0"; exit ${1:-2}; }
+# slot A can't start the recovery OS: exit code 4 (the update agent answers
+# "refused: ..." with this text, reason no_recovery)
+refuse_a() { echo "ad5x-update: $*" >&2; exit 4; }
 SLOTA_MSG="this printer runs the main OS from slot A (root=/dev/mmcblk0p2). Updates don't support that layout: see docs/recovery-os.md, section 'Main OS in slot A'."
 
-mode=swu reboot_after= replace_stock=
+mode=swu reboot_after= replace_stock= no_wait=
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--install-recovery) mode=recovery ;;
+	--kernel2) mode=kernel2 ;;
 	--replace-stock) replace_stock=1 ;;
 	--reboot) reboot_after=1 ;;
+	--no-wait) no_wait=1 ;;
 	-h|--help) usage 0 ;;
 	-*) [ "$1" = - ] && break; die "unknown option $1" ;;
 	*) break ;;
 	esac
 	shift
 done
-[ $# -ge 1 ] || usage
-FILE=$1 WANT=$2
+[ $# -ge 1 ] || [ $mode = kernel2 ] || usage
+FILE=${1:-} WANT=${2:-}
 
 if [ "$SLOT" = A ]; then die "$SLOTA_MSG"; fi
 [ "$SLOT" = B ] || die "run from the main OS in slot B (this is slot '${SLOT:-?}')"
 if [ $mode = swu ] || [ -n "$reboot_after" ]; then
 	flag=$(read_flag)
-	[ "$flag" = "$(flag_for B)" ] || die "start-up has not finished yet (boot flag '$flag'; \
-S99ad5x-booted sets $(flag_for B) when it has); nothing done. Wait for it and run this again, e.g.:
-  until [ \"\$(head -c 11 $(part ota))\" = $(flag_for B) ]; do sleep 5; done"
+	start_done || die "start-up has not finished yet (boot flag '$flag', \
+$BOOTED_MARK $([ -f $BOOTED_MARK ] && echo there || echo missing); S99ad5x-booted sets \
+$(flag_for B) and makes $BOOTED_MARK when it has); nothing done. Wait for it and run this again, e.g.:
+  until [ -f $BOOTED_MARK ] && [ \"\$(head -c 11 $(part ota))\" = $(flag_for B) ]; do sleep 5; done"
 fi
 AROOT=$(rootfs_of A) AKERN=$(kernel_of A) BKERN=$(kernel_of B)
 MNT=/run/ad5x-target
 mkdir -p $MNT
+
+# write_kernel SRC DEV WHAT: copy a kernel into a slot's kernel partition,
+# uImage header last: a copy cut short leaves no header there (S01ad5x-
+# tryboot keeps the boot flag off it, both SPLs refuse it), never a valid
+# header over a broken body. Read back.
+write_kernel() {
+	echo "copying $3 to $2"
+	dd if=/dev/zero of=$2 bs=4096 count=1 conv=fsync,notrunc 2>/dev/null ||
+		die "kernel copy to $2 failed (clearing the header)"
+	dd if="$1" of=$2 bs=4096 skip=1 seek=1 conv=fsync,notrunc 2>/dev/null ||
+		die "kernel copy to $2 failed (body; no header, the slot won't be booted)"
+	sync
+	dd if="$1" of=$2 bs=4096 count=1 conv=fsync,notrunc 2>/dev/null ||
+		die "kernel copy to $2 failed (header)"
+	sync
+	echo 3 > /proc/sys/vm/drop_caches
+	kernel_same "$1" $2 || die "kernel copy differs"
+}
+
+if [ $mode = kernel2 ]; then
+	bl=$(boot_loader)
+	[ "$bl" = kiln ] ||
+		die "--kernel2 is for Kiln's boot loader; the first MiB holds the SPL of: $bl. kernel2 left as it is"
+	K66=$(kiln_slot_kernel "$LIB") ||
+		die "no 6.6 of this system to put into kernel2 (none whole, not running, or recorded as failed); kernel2 left as it is"
+	if kernel_same "$K66" $BKERN; then
+		echo "kernel2 already holds Kiln's 6.6 ($K66)"
+		exit 0
+	fi
+	write_kernel "$K66" $BKERN "Kiln's 6.6 ($K66; Kiln's SPL boots it when U-Boot proper is missing or fails)"
+	echo "kernel2 holds Kiln's 6.6"
+	exit 0
+fi
 
 slot_a_holds() {
 	holds=unknown
@@ -76,6 +137,10 @@ WLOCK=/run/ad5x-recovery-write.pid
 writing() { [ -f $WLOCK ] && kill -0 "$(cat $WLOCK)" 2>/dev/null; }
 
 if [ $mode = swu ]; then
+	if [ -n "$no_wait" ] && writing; then
+		echo "ad5x-update: the recovery OS is being written into slot A; try again in a few minutes" >&2
+		exit 3
+	fi
 	n=0
 	while writing; do
 		[ $n = 0 ] && echo "waiting for the recovery OS write to finish"
@@ -83,12 +148,18 @@ if [ $mode = swu ]; then
 		sleep 2
 	done
 	[ "$(slot_a_holds)" = recovery ] || \
-		die "slot A doesn't hold the recovery OS; install it first (--install-recovery)"
+		refuse_a "slot A doesn't hold the recovery OS; install it first (--install-recovery)"
+	# Its kernel too, whole: a reboot can cut short the background write of
+	# slot A (S99ad5x-update-recovery copies the kernel, and writes it
+	# again at the next start), and the boot loader would start a broken one
+	uimage_data_ok "$AKERN" ||
+		refuse_a "slot A doesn't hold the recovery OS's kernel: no complete uImage in $AKERN (header or data CRC wrong); the next start writes it again"
 	name=$(basename "$FILE")
 	[ "$FILE" = - ] && name=update-$(date +%Y%m%d%H%M%S)
 	# Earlier updates the recovery OS installed (*.done) or refused
-	# (*.failed) are of no further use: each is a whole image (~80 MB)
-	rm -f $STAGE/*.done $STAGE/*.failed
+	# (*.failed), and ones a later start found still staged (*.stale,
+	# S99ad5x-booted), are of no further use: each is a whole image (~80 MB)
+	rm -f $STAGE/*.done $STAGE/*.failed $STAGE/*.stale
 	tmp=$STAGE/.incoming
 	if [ "$FILE" = - ]; then cat > $tmp; else cp "$FILE" $tmp; fi
 	magic=$(head -c 6 $tmp)
@@ -147,18 +218,28 @@ esac
 echo "writing recovery to $AROOT"
 # Superblock last: a write cut short (power loss) leaves no squashfs magic
 # in slot A, and S01ad5x-tryboot then keeps the boot flag off it.
-dd if=/dev/zero of=$AROOT bs=4096 count=1 conv=fsync,notrunc 2>/dev/null
-dd if="$FILE" of=$AROOT bs=4096 skip=1 seek=1 conv=fsync,notrunc 2>/dev/null
-dd if="$FILE" of=$AROOT bs=4096 count=1 conv=fsync,notrunc 2>/dev/null
+dd if=/dev/zero of=$AROOT bs=4096 count=1 conv=fsync,notrunc 2>/dev/null ||
+	die "recovery write to $AROOT failed (clearing the superblock)"
+dd if="$FILE" of=$AROOT bs=4096 skip=1 seek=1 conv=fsync,notrunc 2>/dev/null ||
+	die "recovery write to $AROOT failed (body; no superblock, slot A won't be booted)"
+dd if="$FILE" of=$AROOT bs=4096 count=1 conv=fsync,notrunc 2>/dev/null ||
+	die "recovery write to $AROOT failed (superblock)"
 sync
 echo 3 > /proc/sys/vm/drop_caches
 RB=$(head -c $SIZE $AROOT | sha256sum | cut -d' ' -f1)
 [ "$RB" = "$HAVE" ] || die "read-back $RB differs from the image"
 [ "$(slot_a_holds)" = recovery ] || die "slot A doesn't mount as the recovery OS after writing"
-if ! cmp -s $BKERN $AKERN; then
-	echo "copying the main kernel to $AKERN"
-	cat $BKERN > $AKERN && sync
-	cmp -s $BKERN $AKERN || die "kernel copy differs"
+# The kernel slot A gets (lib/uboot.sh, slot_a_kernel_src): with Kiln's
+# SPL this system's own 6.6, which U-Boot and Kiln's SPL start the recovery
+# OS with; with Flashforge's SPL slot B's kernel (its 5.10). Never a U-Boot,
+# never Flashforge's 5.10 under Kiln's SPL.
+if slot_a_kernel_src "$LIB"; then
+	if [ "$SLOT_A_SRC" = $BKERN ]; then kwhat="the main kernel"
+	else kwhat="Kiln's 6.6 ($SLOT_A_SRC; Kiln's boot loader starts the recovery OS with it)"
+	fi
+	kernel_same "$SLOT_A_SRC" $AKERN || write_kernel "$SLOT_A_SRC" $AKERN "$kwhat"
+else
+	echo "$SLOT_A_WHY: slot A's kernel left as it is"
 fi
 [ "$FILE" = $STAGE/recovery.squashfs ] && rm -f "$FILE"
 echo "recovery OS installed in slot A; boot flag unchanged ($(read_flag))"

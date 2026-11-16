@@ -6,6 +6,8 @@ config BR2_PACKAGE_AD5X_RECOVERY
 	# unsquashfs: vendor files from the saved stock root (ad5x-vendor)
 	select BR2_PACKAGE_SQUASHFS
 	select BR2_PACKAGE_SQUASHFS_LZO
+	# ad5x-ff-decrypt: MD5 and DES for a Flashforge update package
+	select BR2_PACKAGE_MBEDTLS
 	help
 	  AD5X recovery/update OS (slot A): the printer's own drivers and board
 	  heartbeat, network, SSH, SWUpdate (signed .swu into slot B),

@@ -1,0 +1,807 @@
+#!/bin/sh
+# Return to Flashforge firmware: put Flashforge's stock system back into
+# slot B and make the printer start it, from the recovery OS (slot A). The
+# touch screen's "Return to Flashforge firmware" runs this (recovery UI),
+# and so do the main OS's ad5x-restore-stock and HelixScreen's Settings >
+# System > Return to Flashforge firmware (both restart into this recovery
+# OS first, which then waits for a tap). docs/install.md, "Going back to
+# stock".
+#
+# usage: ad5x-return-stock [--check] [--source SRC] [--flashforge-spl]
+#        ad5x-return-stock --yes [--source SRC] [--flashforge-spl]
+#        ad5x-return-stock --status
+#        ad5x-return-stock --forget
+#   --check      (the default) every check, the stock files found, what
+#                would be written and what is done already; writes nothing
+#   --yes        do it (or finish it: after a stop or a power cut the work
+#                goes on from what the eMMC already holds)
+#   --status     read only, quick: how far the printer is (no file checks)
+#   --source SRC take the stock files only from SRC: "stock" (the copy
+#                saved at install, /data/ad5x/stock), "usershare" (its copy
+#                on the usershare partition), a folder (a stock copy saved
+#                to USB, kiln-stock-backup, or an installer backup
+#                ad5x-backup-install-N), or a Flashforge AD5X-*.tgz
+#   --flashforge-spl  also put Flashforge's own boot loader (its SPL) back,
+#                from this printer's saved first MiB (boot.img); offered
+#                only when that file checks and matches this disk
+#   --forget     drop the record of an unfinished return (the recovery
+#                screen then allows Boot main OS and Install again)
+#   --stop-after N   tests: stop (exit 9) once step N is done
+#
+# Where the stock files come from, the first that checks: 1. /data/ad5x/
+# stock (kernel.img, rootfs.squashfs, SHA256SUMS); 2. its copy on the
+# usershare partition (kiln-stock-backup/); 3. on a USB stick: a stock copy
+# (kiln-stock-backup/), the install stick's backup folder (ad5x-backup-
+# install-N/: the running slot's kernel and rootfs images), or a Flashforge
+# update package AD5X-*.tgz downloaded from Flashforge (decrypted with
+# ad5x-ff-decrypt, checked with the package's own md5 lists). Every source:
+# the kernel a whole Linux-5.10 uImage (header and data CRCs), the root a
+# stock squashfs (/etc/ota_bin in it, no Kiln OS release file).
+#
+# Under Kiln's boot loader (Kiln's SPL in the first MiB) the printer ends
+# with stock started by Kiln's SPL: Kiln's U-Boot is removed, so the SPL
+# starts the flagged slot as Flashforge's did. Flashforge's 5.10 in a slot
+# is allowed then because Kiln's U-Boot is gone. Steps, in this order, each
+# read back, the boot flag on slot A (this recovery OS) until the last:
+#   1. Kiln's U-Boot out of 0xA400: the header sector first (from then on
+#      the SPL finds no U-Boot), then the rest; with a matching boot.img its
+#      bytes (Flashforge's unused U-Boot) go back, else zeros
+#   2. U-Boot's settings, state and records in ota (0x80000-0x903FF)
+#      zeroed; the boot traces stay
+#   3. rootfs2 (p4) <- the stock root
+#   4. kernel2 (p3) <- the stock 5.10 kernel, its header last
+#   5. (--flashforge-spl) kernel (p1) <- the stock kernel, header last
+#   6. (--flashforge-spl) Flashforge's SPL from boot.img: the SPL's header
+#      sector (34) zeroed, sectors 35-81, the boot ROM's length field, then
+#      sector 34 last (lib/bootloader.sh's bl_put_spl: a power cut leaves
+#      a whole SPL or none, never a header in front of half an SPL; the
+#      GPT is never written)
+#   7. stock's own board update armed (Update, UpdateM on usershare) and
+#      the install state set so the Kiln OS install stick works again
+#   8. the boot flag -> slot B, read back
+# Slot A keeps this recovery OS (and Kiln's 6.6 in p1): if slot B's kernel
+# is ever bad, Kiln's SPL starts slot A instead; stock's own updater writes
+# slot A with its next update anyway. With Flashforge's boot loader in the
+# first MiB (no Kiln boot loader) steps 1, 5 and 6 don't apply.
+#
+# Refused, nothing written, unless: root; the recovery OS in slot A; no
+# other job (update, backup, restore, USB rescue, start-up actions); the
+# eMMC writable, not mounted, its partitions where the boot loader's table
+# has them (p1-p6, p7's start); the first MiB holds Kiln's or Flashforge's
+# boot loader; slot A's kernel a whole uImage and its root a squashfs (the
+# safety net while slot B is rewritten); a stock source that checks.
+# Progress lines "@progress N text" for the touch screen; log in
+# /data/ad5x/return-stock/log; record of an unfinished return in
+# /data/ad5x/return-stock/state.
+# Exit: 0 done (or nothing to do), 1 refused (nothing written), 2 checks
+# passed (no --yes), 3 a write failed but the boot flag is still on slot A
+# (this recovery OS starts again; run it again), 4 the boot loader area is
+# not as before (don't switch off; run it again), 9 stopped by --stop-after.
+# AD5X_RECOVERY_LIB, AD5X_LIB, AD5X_FF_DECRYPT (tests).
+. ${AD5X_RECOVERY_LIB:-/usr/lib/ad5x-recovery}/recovery.sh
+LIB=${AD5X_LIB:-/usr/lib/ad5x}
+# uimage_ok, uimage_data_ok, uimage_name, stock_kernel (BusyBox only)
+. "$LIB/slot.sh" || { echo "ad5x-return-stock: no $LIB/slot.sh" >&2; exit 1; }
+# the first MiB's layout, the SPL's banner and DDR table, the SPL's writes
+# in the safe order (shared with ad5x-bootloader-install)
+. "$LIB/bootloader.sh" || { echo "ad5x-return-stock: no $LIB/bootloader.sh" >&2; exit 1; }
+FFDEC=${AD5X_FF_DECRYPT:-ad5x-ff-decrypt}
+
+ME=ad5x-return-stock
+MIB=1048576
+LEN_OFF=4
+SPL_OFF=17408 SPL_LBA=34 SPL_SECTORS=48 SPL_END=41984	# 0x4400-0xA3FF
+UB_OFF=41984 UB_LBA=82					# 0xA400: U-Boot proper
+OTA_LBA=1024 OTA_N=130					# ota 0x80000-0x903FF
+RS=$AD5X_DATA/ad5x/return-stock
+STATE=$RS/state
+LOG=$RS/log
+WORK=$RS/work
+MARK=kiln-stock-backup					# a stock copy's folder name
+
+mode=check src_arg= ffspl= stop_after= dry=
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--check) mode=check ;;
+	--yes) mode=yes ;;
+	--status) mode=status ;;
+	--forget) mode=forget ;;
+	--dry-run) dry=1 ;;
+	--source) src_arg=$2; shift ;;
+	--flashforge-spl) ffspl=1 ;;
+	--stop-after) stop_after=$2; shift ;;
+	-h|--help) sed -n '2,74p' "$0"; exit 0 ;;
+	*) sed -n '2,32p' "$0" >&2; exit 1 ;;
+	esac
+	shift
+done
+[ -n "$dry" ] && [ "$mode" = yes ] && mode=check
+
+mkdir -p "$RS" 2>/dev/null
+logging=0
+: >> "$LOG" 2>/dev/null && logging=1
+say() {
+	echo "$*"
+	[ "$logging" = 1 ] && echo "$*" >> "$LOG" 2>/dev/null
+	return 0
+}
+nfail=0
+ok() { say "  ok    $*"; }
+bad() { say "  FAIL  $*"; nfail=$((nfail + 1)); }
+note() { say "  note  $*"; }
+prog() { echo "@progress $*"; }
+loud() {
+	say "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+	for l in "$@"; do say "!! $l"; done
+	say "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+}
+
+T=$(mktemp -d "${TMPDIR:-/tmp}/$ME.XXXXXX") || { echo "$ME: no temp folder" >&2; exit 1; }
+LOCK=$AD5X_RUN/return-stock.lock
+locked= us_mnt=
+cleanup() {
+	[ -n "$us_mnt" ] && umount "$us_mnt" 2>/dev/null && rmdir "$us_mnt" 2>/dev/null
+	rm -rf "$T"
+	[ -n "$locked" ] && rmdir "$LOCK" 2>/dev/null
+	return 0
+}
+trap cleanup EXIT
+
+sha() { sha256sum < "$1" | cut -d' ' -f1; }
+sha_n() { head -c "$2" "$1" 2>/dev/null | sha256sum | cut -d' ' -f1; }
+fsize() { wc -c < "$1" | tr -d ' '; }
+hexat() { od -An -v -t x1 -j "$2" -N "$3" "$1" 2>/dev/null | tr -d ' \n'; }
+le32() { od -An -t u4 -j "$2" -N 4 "$1" 2>/dev/null | tr -d ' '; }
+is_zero() { [ -z "$(tr -d '\000' < "$1" | head -c 1)" ]; }
+stval() { sed -n "s/^$1=//p" "$STATE" 2>/dev/null | head -n 1; }
+stset() {	# KEY VALUE: in the state file (synced)
+	{ grep -v "^$1=" "$STATE" 2>/dev/null; echo "$1=$2"; } > "$STATE.new" &&
+		mv -f "$STATE.new" "$STATE" && sync
+}
+# A sector range of a device, past the caches (O_DIRECT when dd can)
+read_range() {	# DEV LBA COUNT OUT
+	rc_drop_caches
+	rm -f "$4"
+	dd if="$1" of="$4" bs=512 skip="$2" count="$3" iflag=direct 2>/dev/null &&
+		[ "$(fsize "$4")" = $(($3 * 512)) ] && return 0
+	rm -f "$4"
+	dd if="$1" of="$4" bs=512 skip="$2" count="$3" 2>/dev/null &&
+		[ "$(fsize "$4")" = $(($3 * 512)) ]
+}
+banner() { bl_banner "$1"; }		# FILE (a first MiB): its SPL's banner
+ddr_table() { bl_ddr_table "$1"; }	# FILE: its SPL's DDR3 table (hex), or empty
+# diff_outside A B END: A and B (first MiBs) differ only inside 0x4-0x7,
+# 0x4400-0xA3FF and 0xA400-END
+diff_outside() {
+	cmp -l "$1" "$2" 2>/dev/null | awk -v s=$SPL_OFF -v e="$3" '
+		{ o = $1 - 1
+		  if (o >= 4 && o <= 7) next
+		  if (o >= s && o < e) next
+		  bad = 1; exit }
+		END { exit bad }'
+}
+
+# ------------------------------------------------------------- the disk
+DISK=$(rc_disk 2>/dev/null)
+P1=$(rc_part kernel) P2=$(rc_part rootfs) P3=$(rc_part kernel2) P4=$(rc_part rootfs2)
+P5=$(rc_part ota) P6=$(rc_part usershare)
+LOADER=$(rc_boot_loader)
+cur_mib() { read_range "$DISK" 0 2048 "$T/cur.img"; }
+
+# Kiln's U-Boot at 0xA400: UB_HAVE (a uImage magic there), UB_END (bytes,
+# end of its last sector, from its header; the recorded end after an
+# earlier run zeroed the header)
+uboot_state() {
+	local s e
+	UB_HAVE= UB_END=
+	read_range "$DISK" $UB_LBA 1 "$T/ub.hdr" || return 1
+	if [ "$(hexat "$T/ub.hdr" 0 4)" = 27051956 ]; then
+		UB_HAVE=1
+		s=$((0x$(hexat "$T/ub.hdr" 12 4) + 64))
+		[ "$s" -gt 0 ] && [ $((UB_OFF + s)) -le $MIB ] || s=512
+		UB_END=$((UB_OFF + (s + 511) / 512 * 512))
+		UB_NAME=$(tail -c +33 "$T/ub.hdr" | head -c 32 | tr -d '\000')
+	else
+		e=$(stval uboot_end)
+		case "$e" in ''|*[!0-9]*) ;; *) [ "$e" -gt $UB_OFF ] && [ "$e" -le $MIB ] && UB_END=$e ;; esac
+	fi
+	return 0
+}
+
+# ------------------------------------------------------------- --status
+if [ "$mode" = status ]; then
+	st=$(stval state)
+	k3=$(rc_kernel_kind "$P3") k1=$(rc_kernel_kind "$P1")
+	h4=$(rc_slot_holds rootfs2)
+	uboot_state; fl=$(rc_read_flag)
+	echo "boot loader: $LOADER$([ -n "$UB_HAVE" ] && echo ", Kiln's U-Boot at 0xA400 ($UB_NAME)")"
+	echo "slot B: kernel2 $k3, rootfs2 $h4"
+	echo "slot A: kernel $k1, rootfs $(rc_slot_holds rootfs)"
+	echo "boot flag: $fl"
+	echo "record: ${st:-none}$([ -n "$(stval source)" ] && echo " (source $(stval source))")"
+	if [ "$st" = started ]; then w=unfinished
+	elif [ "$h4" = stock ] && [ "$k3" = stock ] && [ -z "$UB_HAVE" ] && [ "$fl" = ota:kernel2 ]; then
+		w="stock on $LOADER's boot loader"
+	elif [ "$h4" = stock ] && [ "$k3" = stock ]; then w="stock in slot B, not started yet (boot flag $fl)"
+	else w="Kiln OS"; fi
+	echo "state: $w"
+	exit 0
+fi
+
+if [ "$mode" = forget ]; then
+	if [ "$(stval state)" = started ]; then
+		stset state forgotten
+		say "$ME: the record of the unfinished return is dropped; Boot main OS and Install are allowed again. Slot B may hold neither Kiln OS nor stock: install a Kiln OS update before Boot main OS"
+	else
+		say "$ME: no unfinished return recorded"
+	fi
+	exit 0
+fi
+
+# ------------------------------------------------------------- checks
+say "== $ME $(date '+%Y-%m-%d %H:%M:%S') ($mode${src_arg:+, source $src_arg}${ffspl:+, Flashforge's boot loader too})"
+say "checks:"
+prog 2 "Checking"
+if [ "$(id -u)" = 0 ]; then ok "root"; else bad "not root"; fi
+if [ -f "${AD5X_ROOT:-}/etc/ad5x-recovery" ] && [ "$(rc_slot)" = A ]; then
+	ok "the recovery OS, slot A ($(rc_root))"
+else
+	bad "not the recovery OS in slot A (root $(rc_root)): run it there"
+fi
+busy=
+for p in ad5x-swu-apply swupdate-client ad5x-restore ad5x-backup ad5x-usb-rescue ad5x-zip-to-swu; do
+	pidof "$p" >/dev/null 2>&1 && busy="$busy $p"
+done
+# ad5x-recovery-auto writes auto.done when it ends (S85ad5x-auto; noauto: never started)
+if [ ! -f "$AD5X_RUN/auto.done" ] && [ ! -e "$AD5X_DATA/ad5x/recovery/noauto" ]; then
+	busy="$busy start-up-actions"
+fi
+if [ -z "$busy" ]; then ok "no other job running"
+else bad "busy:$busy (wait for it to finish)"; fi
+
+disk_ok=
+if [ -z "$DISK" ] || [ ! -e "$DISK" ]; then
+	bad "no eMMC disk found"
+elif [ -z "${AD5X_TEST:-}" ] && [ ! -b "$DISK" ]; then
+	bad "$DISK is not a block device"
+else
+	dn=${DISK##*/} ro=
+	for s in "$AD5X_SYS/class/block/$dn" $(for n in kernel kernel2 rootfs2 ota; do rc_part_sys $n; done); do
+		[ "$(cat "$s/ro" 2>/dev/null || echo 0)" = 0 ] || ro="$ro ${s##*/}"
+	done
+	mnt=
+	for d in "$DISK" "$P1" "$P3" "$P4" "$P5"; do rc_mounted "$d" && mnt="$mnt ${d##*/}"; done
+	if [ -n "$ro" ]; then bad "read-only:$ro"
+	elif [ -n "$mnt" ]; then bad "mounted:$mnt"
+	else disk_ok=1; ok "$DISK: writable, slots and ota not mounted"; fi
+fi
+gpt=1
+for e in $RC_SPL_TABLE; do
+	n=${e%%:*}
+	s=$(rc_part_sys "$n") || { gpt=; bad "no $n partition"; continue; }
+	if [ "$n" = userdata ]; then
+		[ "$(cat "$s/start")" = "$(echo "$e" | cut -d: -f2)" ] || { gpt=; bad "userdata starts at $(cat "$s/start"), not where the boot loader's table has it"; }
+	else
+		rc_spl_ok "$n" || { gpt=; bad "$n is at $(cat "$s/start"):$(cat "$s/size"), the boot loader's table has $(echo "$e" | cut -d: -f2-)"; }
+	fi
+done
+[ -n "$gpt" ] && ok "partitions where the boot loader's table has them"
+if [ -n "$disk_ok" ] && cur_mib; then
+	if [ "$(head -c 4 "$T/cur.img")" = INGE ] && [ "$(tail -c +513 "$T/cur.img" | head -c 8)" = "EFI PART" ]; then
+		ok "first MiB: boot ROM block and GPT"
+	else
+		bad "the first MiB has no boot ROM block (INGE) or no GPT"
+	fi
+else
+	[ -n "$disk_ok" ] && bad "can't read the first MiB"
+	disk_ok=
+fi
+# REF: the first MiB the checks compare boot.img with: the disk's, or after
+# a write of Flashforge's SPL that was cut short (an unfinished return that
+# chose it, the disk's 0-0xA3FF neither Kiln's SPL as saved before that
+# write nor boot.img's) the one saved before it: the write is finished
+REF=$T/cur.img SPL_PARTIAL=
+if [ -n "$disk_ok" ] && [ "$(stval state)" = started ] && [ "$(stval spl)" = flashforge ] &&
+   [ -f "$RS/before-spl.img" ]; then
+	if [ "$(head -c $UB_OFF "$RS/before-spl.img" | sha256sum)" = "$(head -c $UB_OFF "$T/cur.img" | sha256sum)" ]; then
+		:
+	elif [ -f "$AD5X_DATA/ad5x/stock/boot.img" ] &&
+	     [ "$(head -c $UB_OFF "$AD5X_DATA/ad5x/stock/boot.img" | sha256sum)" = "$(head -c $UB_OFF "$T/cur.img" | sha256sum)" ]; then
+		:
+	else
+		SPL_PARTIAL=1 REF=$RS/before-spl.img LOADER=kiln ffspl=1
+		note "the write of Flashforge's boot loader was cut short: it is finished from boot.img"
+	fi
+fi
+case "$LOADER" in
+kiln) ok "boot loader: Kiln's SPL" ;;
+flashforge) ok "boot loader: Flashforge's SPL ($(banner "$T/cur.img" 2>/dev/null))"
+	[ -n "$ffspl" ] && note "Flashforge's boot loader is there already: --flashforge-spl has nothing to do"
+	ffspl= ;;
+*) bad "the first MiB holds neither Kiln's nor Flashforge's boot loader" ;;
+esac
+# The safety net: slot A starts this recovery OS whatever happens to slot B
+if uimage_data_ok "$P1" 2>/dev/null && [ "$(head -c 4 "$P2" 2>/dev/null)" = hsqs ]; then
+	ok "slot A: a whole kernel ('$(uimage_name "$P1")') and a root: this recovery OS starts if anything stops"
+else
+	bad "slot A's kernel isn't whole or its root isn't a squashfs: fix the recovery OS first (it is the way back if anything stops)"
+fi
+UB_HAVE= UB_END= UB_NAME=
+if [ -n "$disk_ok" ]; then
+	uboot_state
+	if [ -n "$UB_HAVE" ] && [ "$LOADER" != kiln ]; then
+		bad "a uImage at 0xA400 ('$UB_NAME') behind a boot loader that isn't Kiln's: not touched"
+	fi
+fi
+fl=$(rc_read_flag)
+
+# ------------------------------------------------------------- sources
+# check_set KERNEL ROOTFS: both stock; sets KLEN, RLEN, WHY
+check_set() {
+	local u fs l
+	WHY= KLEN= RLEN=
+	if ! uimage_data_ok "$1" 2>/dev/null; then WHY="the kernel isn't a whole uImage (header or data CRC)"; return 1; fi
+	case "$(uimage_name "$1")" in Linux-5.10*) ;; *) WHY="the kernel is '$(uimage_name "$1")', not Flashforge's Linux-5.10"; return 1 ;; esac
+	KLEN=$(rc_uimage_len "$1")
+	[ "$KLEN" -le "$(rc_part_bytes kernel2)" ] || { WHY="the kernel ($KLEN bytes) doesn't fit kernel2"; return 1; }
+	[ "$(head -c 4 "$2" 2>/dev/null)" = hsqs ] || { WHY="the root isn't a squashfs"; return 1; }
+	u=$(rc_squashfs_used "$2"); fs=$(fsize "$2")
+	case "$u" in ''|*[!0-9]*) u=0 ;; esac
+	[ "$u" -gt 0 ] && [ "$u" -le "$fs" ] || { WHY="the root's squashfs says $u bytes, the file has $fs"; return 1; }
+	RLEN=$(((u + 4095) / 4096 * 4096)); [ "$RLEN" -le "$fs" ] || RLEN=$fs
+	[ "$RLEN" -le "$(rc_part_bytes rootfs2)" ] || { WHY="the root ($RLEN bytes) doesn't fit rootfs2"; return 1; }
+	l=$(unsquashfs -l "$2" 2>/dev/null)
+	echo "$l" | grep -q '/etc/ota_bin' || { WHY="the root isn't stock's (no /etc/ota_bin)"; return 1; }
+	echo "$l" | grep -q '/etc/ad5x-release$' && { WHY="the root is a Kiln OS image, not stock"; return 1; }
+	return 0
+}
+# sums_ok DIR SUMS FILE...: each FILE's sha256 as SUMS lists it
+sums_ok() {
+	local d s f w
+	d=$1 s=$2; shift 2
+	for f in "$@"; do
+		w=$(awk -v f="$f" '$2 == f || $2 == "*" f { print $1; exit }' "$d/$s" 2>/dev/null)
+		[ -n "$w" ] || { WHY="$f isn't listed in $s"; return 1; }
+		[ "$(sha "$d/$f")" = "$w" ] || { WHY="$f is damaged (sha256 differs from $s)"; return 1; }
+	done
+}
+# A stock copy (/data/ad5x/stock or kiln-stock-backup): kernel.img,
+# rootfs.squashfs, SHA256SUMS; boot.img (+ .sha256) if there
+try_copy() {	# DIR DESC
+	[ -f "$1/kernel.img" ] && [ -f "$1/rootfs.squashfs" ] && [ -f "$1/SHA256SUMS" ] ||
+		{ WHY="no kernel.img, rootfs.squashfs and SHA256SUMS"; return 1; }
+	sums_ok "$1" SHA256SUMS kernel.img rootfs.squashfs || return 1
+	check_set "$1/kernel.img" "$1/rootfs.squashfs" || return 1
+	SK=$1/kernel.img SR=$1/rootfs.squashfs SDESC=$2
+	[ -f "$1/boot.img" ] && BOOT_CANDS="$BOOT_CANDS $1/boot.img"
+	return 0
+}
+# An installer backup (ad5x-backup-install-N): the running slot's images
+try_backup() {	# DIR
+	local sl k r
+	sl=$(sed -n 's/^running root: .*, slot \([AB]\)$/\1/p' "$1/MANIFEST.txt" 2>/dev/null | head -n 1)
+	case "$sl" in A) k=kernel.img r=rootfs.img ;; B) k=kernel2.img r=rootfs2.img ;;
+	*) WHY="its MANIFEST.txt doesn't say which slot stock ran from"; return 1 ;; esac
+	[ -f "$1/$k" ] && [ -f "$1/$r" ] || { WHY="no $k and $r"; return 1; }
+	sums_ok "$1" SHA256SUMS $k $r || return 1
+	check_set "$1/$k" "$1/$r" || return 1
+	SK=$1/$k SR=$1/$r SDESC="the install stick's backup ${1##*/} (stock from slot $sl)"
+	[ -f "$1/boot.img" ] && sums_ok "$1" SHA256SUMS boot.img && BOOT_CANDS="$BOOT_CANDS $1/boot.img"
+	WHY=
+	return 0
+}
+# A Flashforge update package: decrypted (ad5x-ff-decrypt), its kernel
+# part's tar unpacked, every file checked against its md5sum.list, the
+# eMMC images (ota_kernel/ota_vN) put together from their chunks, each
+# chunk and the whole checked against the package's md5 lists. Cached in
+# $WORK/tgz-<sha256> for --yes and a later run.
+try_tgz() {	# FILE
+	local F h C av names kn O v V t n s m i tot out c w
+	F=$1
+	[ "$(head -c 8 "$F" 2>/dev/null)" = Salted__ ] || { WHY="not an encrypted Flashforge package"; return 1; }
+	h=$(sha "$F"); C=$WORK/tgz-$h
+	if [ -f "$C/ok" ] && [ -f "$C/kernel.img" ] && [ -f "$C/rootfs.squashfs" ] &&
+	   [ "$(cat "$C/ok")" = "$(sha "$C/kernel.img") $(sha "$C/rootfs.squashfs")" ]; then
+		:
+	else
+		rm -rf "$WORK"/tgz-* 2>/dev/null
+		mkdir -p "$C/k" || { WHY="can't make $C"; return 1; }
+		av=$(df -k "$WORK" 2>/dev/null | awk 'NR == 2 { print $4 }')
+		[ -n "$av" ] && [ "$av" -ge 65536 ] || { rm -rf "$C"; WHY="less than 64 MiB free in $WORK"; return 1; }
+		say "  ...   decrypting ${F##*/} (a minute or two)"
+		prog 4 "Unpacking ${F##*/}"
+		names=$("$FFDEC" < "$F" 2>"$T/dec.err" | tar -tf - 2>/dev/null)
+		[ -s "$T/dec.err" ] && { WHY="$(head -n 1 "$T/dec.err" | sed 's/^ad5x-ff-decrypt: //')"; rm -rf "$C"; return 1; }
+		kn=$(echo "$names" | grep -E '^(\./)?kernel-[0-9][0-9.]*\.tar(\.xz)?$' | head -n 1)
+		[ -n "$kn" ] || { rm -rf "$C"; WHY="no kernel part (kernel-N.tar.xz) in the package"; return 1; }
+		"$FFDEC" < "$F" 2>/dev/null | tar -xOf - "$kn" > "$C/kernel.tar" 2>/dev/null
+		if [ "$(hexat "$C/kernel.tar" 0 6)" = fd377a585a00 ]; then
+			xzcat < "$C/kernel.tar" > "$C/kernel.tar.u" && mv -f "$C/kernel.tar.u" "$C/kernel.tar"
+		fi
+		tar -xf "$C/kernel.tar" -C "$C/k" 2>/dev/null || { rm -rf "$C"; WHY="its kernel part doesn't unpack"; return 1; }
+		rm -f "$C/kernel.tar"
+		[ -f "$C/k/md5sum.list" ] && ( cd "$C/k" && md5sum -c md5sum.list >/dev/null 2>&1 ) ||
+			{ rm -rf "$C"; WHY="its kernel part doesn't match its md5sum.list"; return 1; }
+		O=$C/k/ota_kernel
+		v=$(sed -n 's/^current_version=//p' "$O/ota_config.in" 2>/dev/null | tr -d '\r' | head -n 1)
+		case "$v" in ''|*[!0-9]*) rm -rf "$C"; WHY="no current_version in ota_kernel/ota_config.in (an SD-NAND only package?)"; return 1 ;; esac
+		V=$O/ota_v$v
+		[ -f "$V/ota_v$v.ok" ] && [ -f "$V/ota_update.in" ] || { rm -rf "$C"; WHY="no ota_v$v.ok or ota_update.in"; return 1; }
+		for t in kernel rootfs; do
+			# img_type T: its img_name, img_size, img_md5 (the lines after it)
+			set -- $(awk -v t="$t" -F= '{ gsub(/\r/, "") }
+				$1 == "img_type" { on = ($2 == t) } on && $1 == "img_name" { n = $2 }
+				on && $1 == "img_size" { s = $2 } on && $1 == "img_md5" { m = $2 }
+				END { print n, s, m }' "$V/ota_update.in")
+			[ $# = 3 ] || { rm -rf "$C"; WHY="ota_update.in has no $t image"; return 1; }
+			n=$1 s=$2 m=$3 i=0 tot=0 out=$C/$t.part
+			: > "$out"
+			while [ "$tot" -lt "$s" ]; do
+				c=$V/$n.$(printf %04d $i).$m
+				[ -f "$c" ] || { rm -rf "$C"; WHY="$t: no chunk ${c##*/}"; return 1; }
+				w=$(sed -n "$((i + 1))p" "$V/ota_md5_$n.$m" 2>/dev/null | tr -d '\r ')
+				[ "$(md5sum < "$c" | cut -d' ' -f1)" = "$w" ] || { rm -rf "$C"; WHY="$t: chunk ${c##*/} doesn't match ota_md5_$n.$m"; return 1; }
+				cat "$c" >> "$out"
+				tot=$(fsize "$out"); i=$((i + 1))
+			done
+			[ "$(md5sum < "$out" | cut -d' ' -f1)" = "$m" ] || { rm -rf "$C"; WHY="$t: the whole image doesn't match its md5 $m"; return 1; }
+		done
+		mv -f "$C/kernel.part" "$C/kernel.img" && mv -f "$C/rootfs.part" "$C/rootfs.squashfs"
+		rm -rf "$C/k"
+		echo "$(sha "$C/kernel.img") $(sha "$C/rootfs.squashfs")" > "$C/ok"
+		sync
+	fi
+	check_set "$C/kernel.img" "$C/rootfs.squashfs" || return 1
+	SK=$C/kernel.img SR=$C/rootfs.squashfs SDESC="Flashforge's update package ${F##*/}"
+	return 0
+}
+usershare_mount() {	# usershare read-only, once (unmounted at exit)
+	if [ -z "$us_mnt" ]; then
+		us_mnt=$AD5X_RUN/return-stock-usershare
+		mkdir -p "$us_mnt"
+		mount -t ext4 -o ro "$P6" "$us_mnt" 2>/dev/null || { rmdir "$us_mnt"; us_mnt=; return 1; }
+	fi
+}
+usb_tops() {	# the top folders of mounted USB sticks
+	[ -n "$(rc_usb_mounts)" ] || ad5x-usb mount 3 >/dev/null 2>&1
+	rc_usb_mounts
+}
+# try SPEC: one source; prints what was tried
+SK= SR= SDESC= SSPEC= BOOT_CANDS= tried=
+try() {
+	local ts r
+	ts=$1 WHY=
+	case "$ts" in
+	stock) try_copy "$AD5X_DATA/ad5x/stock" "the stock copy saved on this printer (/data/ad5x/stock)" ;;
+	usershare) if usershare_mount; then try_copy "$us_mnt/$MARK" "the stock copy on the usershare partition"
+		   else WHY="usershare doesn't mount"; false; fi ;;
+	*.tgz|*.TGZ) try_tgz "$ts" ;;
+	*) if [ -f "$ts/MANIFEST.txt" ] && grep -q '^running root: ' "$ts/MANIFEST.txt"; then try_backup "$ts"
+	   else try_copy "$ts" "the stock copy in $ts"; fi ;;
+	esac
+	r=$?
+	if [ $r = 0 ]; then SSPEC=$ts; else tried="$tried
+  - $ts: $WHY"; fi
+	return $r
+}
+found=
+if [ -n "$src_arg" ]; then
+	try "$src_arg" && found=1
+else
+	for s in stock usershare; do try $s && { found=1; break; }; done
+	if [ -z "$found" ]; then
+		for m in $(usb_tops); do
+			for d in "$m/$MARK" $(ls -d "$m"/ad5x-backup-install-* 2>/dev/null | sort -r); do
+				[ -d "$d" ] || continue
+				try "$d" && { found=1; break 2; }
+			done
+			for f in $(ls "$m"/AD5X-*.tgz "$m"/AD5X-*.TGZ 2>/dev/null | sort -r); do
+				try "$f" && { found=1; break 2; }
+			done
+		done
+	fi
+fi
+if [ -n "$found" ]; then
+	ok "stock files: $SDESC"
+	ok "  kernel '$(uimage_name "$SK")', $KLEN bytes; root $RLEN bytes (stock squashfs)"
+	say "source: $SDESC"
+else
+	bad "no Flashforge stock files found. Tried:${tried:- nothing}"
+	say "  Put Flashforge's update file (AD5X-*.tgz, from Flashforge's website) on a USB stick and check again"
+fi
+
+# boot.img for Flashforge's SPL (and its unused U-Boot bytes at 0xA400):
+# this printer's own first MiB, Flashforge's SPL, the same GPT and DDR table,
+# equal to the disk outside Kiln's ranges
+BOOT=
+[ -f "$AD5X_DATA/ad5x/stock/boot.img" ] && BOOT_CANDS="$AD5X_DATA/ad5x/stock/boot.img $BOOT_CANDS"
+if [ "$LOADER" = kiln ] && [ -n "$disk_ok" ]; then
+	end=${UB_END:-$UB_OFF}
+	for b in $BOOT_CANDS; do
+		[ "$(fsize "$b")" = $MIB ] || continue
+		if [ -f "$b.sha256" ]; then [ "$(sha "$b")" = "$(cut -d' ' -f1 "$b.sha256")" ] || continue; fi
+		banner "$b" | grep -q '^U-Boot SPL 2013\.07' || continue
+		rc_boot_check "$b" >/dev/null 2>&1 || continue
+		diff_outside "$b" "$REF" "$end" || continue
+		[ -n "$(ddr_table "$b")" ] && [ "$(ddr_table "$b")" = "$(ddr_table "$REF")" ] || continue
+		BOOT=$b; break
+	done
+	if [ -n "$BOOT" ]; then
+		ok "this printer's Flashforge boot loader ($BOOT): matches the disk; offered (--flashforge-spl)"
+		say "spl_option: yes"
+	else
+		note "no saved Flashforge first MiB that matches this disk: Kiln's SPL stays (it starts stock as Flashforge's does)"
+		say "spl_option: no"
+		[ -n "$ffspl" ] && bad "--flashforge-spl: no matching boot.img (this printer's first MiB, saved before Kiln's boot loader)"
+		[ -n "$SPL_PARTIAL" ] && loud "The boot loader area holds a write cut short and no boot.img to finish it." \
+			"Don't switch the printer off. Put this printer's boot.img back in /data/ad5x/stock and run it again."
+	fi
+fi
+[ -n "$ffspl" ] && [ -z "$BOOT" ] && ffspl=
+PLAN_SPL=kiln
+[ -n "$ffspl" ] && PLAN_SPL=flashforge
+if [ "$LOADER" = kiln ]; then
+	if [ -n "$ffspl" ]; then
+		say "target: Flashforge's firmware in the main slot, and Flashforge's own boot loader back; this recovery stays in slot A"
+	else
+		say "target: Flashforge's firmware in the main slot, started by Kiln's boot loader as Flashforge's would (its second stage, U-Boot, removed); this recovery stays in slot A"
+	fi
+else
+	say "target: Flashforge's firmware in the main slot (Flashforge's boot loader stays); this recovery stays in slot A"
+fi
+# An unfinished return with Flashforge's SPL chosen goes on with it
+if [ "$(stval state)" = started ] && [ "$(stval spl)" = flashforge ] && [ -z "$ffspl" ] && [ "$LOADER" = kiln ]; then
+	if [ -n "$BOOT" ]; then
+		ffspl=1 PLAN_SPL=flashforge
+		note "the unfinished return chose Flashforge's boot loader too: going on with it"
+	fi
+fi
+
+# ------------------------------------------------------------- the steps
+# done_N: step N is done on the disk (or doesn't apply)
+done_1() {	# U-Boot out of 0xA400
+	local e
+	[ "$LOADER" = kiln ] || return 0
+	read_range "$DISK" $UB_LBA $((2048 - UB_LBA)) "$T/gap" || return 1
+	if [ -n "$BOOT" ]; then
+		tail -c +$((UB_OFF + 1)) "$BOOT" | cmp -s - "$T/gap"
+		return
+	fi
+	[ "$(hexat "$T/gap" 0 4)" != 27051956 ] || return 1
+	e=$(stval uboot_end)
+	case "$e" in ''|*[!0-9]*) return 0 ;; esac
+	head -c $((e - UB_OFF)) "$T/gap" > "$T/gap.b" && is_zero "$T/gap.b"
+}
+done_2() {	# ota 0x80000-0x903FF zero
+	read_range "$P5" $OTA_LBA $OTA_N "$T/ota" && is_zero "$T/ota"
+}
+done_3() { [ -n "$SR" ] && rc_drop_caches && [ "$(sha_n "$P4" "$RLEN")" = "$(sha_n "$SR" "$RLEN")" ]; }
+done_4() { [ -n "$SK" ] && rc_drop_caches && [ "$(sha_n "$P3" "$KLEN")" = "$(sha_n "$SK" "$KLEN")" ]; }
+done_5() { [ -z "$ffspl" ] && return 0; rc_drop_caches; [ "$(sha_n "$P1" "$KLEN")" = "$(sha_n "$SK" "$KLEN")" ]; }
+done_6() {
+	[ -z "$ffspl" ] && return 0
+	read_range "$DISK" 0 $((UB_OFF / 512)) "$T/spl" && head -c $UB_OFF "$BOOT" | cmp -s - "$T/spl"
+}
+done_7() { [ "$(stval boards)" = armed ]; }
+done_8() { [ "$(rc_read_flag)" = ota:kernel2 ]; }
+NAME_1="Kiln's U-Boot out of 0xA400" NAME_2="U-Boot's settings in ota cleared"
+NAME_3="rootfs2 (p4) <- stock root" NAME_4="kernel2 (p3) <- stock kernel"
+NAME_5="kernel (p1) <- stock kernel" NAME_6="Flashforge's boot loader (SPL)"
+NAME_7="stock's board update armed, install state set" NAME_8="boot flag -> slot B"
+applies() {
+	case "$1" in
+	1) [ "$LOADER" = kiln ] ;;
+	5|6) [ -n "$ffspl" ] ;;
+	*) true ;;
+	esac
+}
+
+ndone=0 todo=
+if [ "$nfail" = 0 ]; then
+	say "plan (in this order; the boot flag stays on slot A until the last):"
+	for n in 1 2 3 4 5 6 7 8; do
+		eval "nm=\$NAME_$n"
+		if ! applies $n; then continue
+		elif done_$n; then say "  $n. $nm: done"; ndone=$((ndone + 1))
+		else say "  $n. $nm"; todo="$todo $n"; fi
+	done
+fi
+say ""
+if [ "$nfail" != 0 ]; then
+	say "result: refused ($nfail check(s) failed), nothing written"
+	exit 1
+fi
+if [ -z "$todo" ]; then
+	# all on the disk: the record says so too (a power cut right after the flag)
+	[ "$(stval state)" = started ] && stset state done
+	say "result: done: Flashforge's stock system is in slot B and the boot flag points at it. Switch the printer off and on"
+	exit 0
+fi
+if [ "$mode" != yes ]; then
+	if [ "$(stval state)" = started ]; then
+		say "result: ready to go on: an earlier return stopped after part of the work (--yes finishes it)"
+	else
+		say "result: ready: nothing written yet (--yes starts it)"
+	fi
+	exit 2
+fi
+
+# ------------------------------------------------------------- --yes
+mkdir "$LOCK" 2>/dev/null || { say "result: refused: another $ME runs ($LOCK)"; exit 1; }
+locked=1
+trap '' HUP INT TERM PIPE
+stset state started
+stset date "$(date '+%Y-%m-%d %H:%M:%S')"
+stset source "$SSPEC"
+stset spl "$PLAN_SPL"
+ad5x-bootlog "return-stock: started ($SSPEC)" 2>/dev/null
+say "writing (don't switch the printer off):"
+
+fail3() {	# WHAT: a write failed, nothing unsafe left
+	loud "$1" "The boot flag is still on slot A: this recovery OS starts again." \
+		"Run it again to finish (Return to Flashforge firmware)."
+	ad5x-bootlog "return-stock: failed: $1" 2>/dev/null
+	say "result: failed: $1; run it again"
+	exit 3
+}
+stop_point() {	# N: --stop-after
+	[ -n "$stop_after" ] && [ "$1" = "$stop_after" ] && { say "result: stopped after step $1 (--stop-after)"; exit 9; }
+	return 0
+}
+# dd FROM's sectors LBA..LBA+COUNT-1 to DEV, synced
+put_sectors() {	# FROM DEV LBA COUNT [FROM_LBA]
+	dd if="$1" of="$2" bs=512 skip="${5:-$3}" seek="$3" count="$4" conv=notrunc,fsync 2>/dev/null
+}
+# A kernel into a slot: 4 KiB of zeros, the rest, the first 4 KiB (the
+# uImage header last: a copy cut short leaves no header, which neither SPL
+# starts), read back
+put_kernel() {	# DEV
+	local nb
+	nb=$(((KLEN + 4095) / 4096))
+	dd if=/dev/zero of="$1" bs=4096 count=1 conv=notrunc,fsync 2>/dev/null &&
+		dd if="$SK" of="$1" bs=4096 skip=1 seek=1 count=$((nb - 1)) conv=notrunc,fsync 2>/dev/null &&
+		sync && dd if="$SK" of="$1" bs=4096 count=1 conv=notrunc,fsync 2>/dev/null || return 1
+	rc_drop_caches
+	[ "$(sha_n "$1" "$KLEN")" = "$(sha_n "$SK" "$KLEN")" ] && stock_kernel "$1" 2>/dev/null
+}
+step_1() {
+	local l e ns
+	if [ -n "$BOOT" ]; then
+		# boot.img's bytes back from 0xA400 up to its last differing
+		# sector, the header sector first. U-Boot's end is recorded first:
+		# after a stop with the header sector written, the rest is still
+		# known to be U-Boot's (and boot.img still matches the disk)
+		[ -n "$UB_HAVE" ] && stset uboot_end "$UB_END"
+		read_range "$DISK" 0 2048 "$T/now" || return 1
+		l=$(cmp -l "$BOOT" "$T/now" 2>/dev/null | tail -n 1 | awk '{ print $1 - 1 }')
+		[ -n "$l" ] && [ "$l" -ge $UB_OFF ] || return 0
+		e=$((l / 512 + 1))
+		say "  0xA400: Flashforge's bytes from boot.img back, sector $UB_LBA first, then $((UB_LBA + 1))-$((e - 1))"
+		put_sectors "$BOOT" "$DISK" $UB_LBA 1 || return 1
+		read_range "$DISK" $UB_LBA 1 "$T/h" && tail -c +$((UB_OFF + 1)) "$BOOT" 2>/dev/null | head -c 512 | cmp -s - "$T/h" || return 1
+		[ $e -gt $((UB_LBA + 1)) ] && { put_sectors "$BOOT" "$DISK" $((UB_LBA + 1)) $((e - UB_LBA - 1)) || return 1; }
+	else
+		if [ -n "$UB_HAVE" ]; then
+			stset uboot_end "$UB_END"
+			say "  0xA400: the header sector of '$UB_NAME' zeroed first (from now on Kiln's SPL starts the flagged slot itself)"
+			dd if=/dev/zero of="$DISK" bs=512 seek=$UB_LBA count=1 conv=notrunc,fsync 2>/dev/null || return 1
+			read_range "$DISK" $UB_LBA 1 "$T/h" && is_zero "$T/h" || return 1
+		fi
+		e=$(stval uboot_end)
+		case "$e" in ''|*[!0-9]*) return 0 ;; esac
+		ns=$(((e - UB_OFF) / 512 - 1))
+		if [ "$ns" -gt 0 ]; then
+			say "  0xA400: the rest of U-Boot zeroed (sectors $((UB_LBA + 1))-$((UB_LBA + ns)))"
+			dd if=/dev/zero of="$DISK" bs=512 seek=$((UB_LBA + 1)) count=$ns conv=notrunc,fsync 2>/dev/null || return 1
+		fi
+	fi
+	done_1
+}
+step_2() {
+	say "  ota: sectors $OTA_LBA-$((OTA_LBA + OTA_N - 1)) (U-Boot's settings, state, records) zeroed"
+	dd if=/dev/zero of="$P5" bs=512 seek=$OTA_LBA count=$OTA_N conv=notrunc,fsync 2>/dev/null && done_2
+}
+step_3() {
+	say "  rootfs2 ($P4) <- stock root, $RLEN bytes"
+	prog 30 "Writing Flashforge's root (slot B)"
+	head -c "$RLEN" "$SR" | dd of="$P4" bs=65536 conv=notrunc,fsync 2>/dev/null && done_3
+}
+step_4() {
+	say "  kernel2 ($P3) <- stock kernel, $KLEN bytes, header last"
+	put_kernel "$P3"
+}
+step_5() {
+	say "  kernel ($P1) <- stock kernel, $KLEN bytes, header last (Flashforge's boot loader goes back only over its own kernel)"
+	put_kernel "$P1"
+}
+step_6() {
+	local b k
+	# the first MiB as it is now (Kiln's SPL), for the way back
+	b=$RS/before-spl.img
+	read_range "$DISK" 0 2048 "$b" || { b=$T/before-spl.img; read_range "$DISK" 0 2048 "$b"; } || return 1
+	sync
+	put_spl "$BOOT" && return 0
+	say "  Flashforge's boot loader didn't read back right: putting Kiln's back"
+	for k in 1 2; do
+		if put_spl "$b"; then
+			loud "writing Flashforge's boot loader failed; Kiln's is back and reads back right." \
+				"The boot flag is still on slot A. Run it again, or without --flashforge-spl."
+			say "result: failed: Flashforge's boot loader didn't take; Kiln's is back"
+			exit 3
+		fi
+	done
+	loud "THE BOOT LOADER AREA IS NOT AS BEFORE. Do not switch the printer off." \
+		"Run $ME --yes again now. If that fails too, the printer needs a J28 restore (docs/boot-slots.md)."
+	ad5x-bootlog "return-stock: SPL write failed" 2>/dev/null
+	say "result: failed: the boot loader area is not as before; don't switch off"
+	exit 4
+}
+# put_spl FROM: FROM's SPL range (0x4400-0xA3FF) and length field on the
+# disk, the SPL's header sector zeroed first and written last, each read
+# back (lib/bootloader.sh)
+put_spl() { BL_TMP=$T bl_put_spl "$1" "$DISK"; }
+arm_boards() {	# stock's own board update at its first start (Update, UpdateM)
+	local m c r
+	if [ -n "$us_mnt" ]; then
+		# mounted read-only: the stock files come from there; rw for a moment
+		m=$us_mnt
+		mount -o remount,rw "$m" 2>/dev/null || return 1
+	else
+		m=$AD5X_RUN/return-stock-us-rw
+		mkdir -p "$m"
+		mount -t ext4 "$P6" "$m" 2>/dev/null || { rmdir "$m"; return 1; }
+	fi
+	c=$(ls -d "$m"/PROGRAM/control/[0-9]* 2>/dev/null | awk -F/ '{ split($NF, v, ".");
+		printf "%06d%06d%06d %s\n", v[1], v[2], v[3], $0 }' | sort | tail -n 1 | cut -d' ' -f2)
+	r=1
+	[ -n "$c" ] && [ -f "$c/AD5X.bin" ] && touch "$c/Update" "$c/UpdateM" && r=0
+	sync
+	if [ "$m" = "$us_mnt" ]; then mount -o remount,ro "$m" 2>/dev/null
+	else umount "$m"; rmdir "$m" 2>/dev/null; fi
+	return $r
+}
+step_7() {
+	if arm_boards; then
+		say "  stock's board update armed: at its first start stock writes its own board firmware back"
+	else
+		note "couldn't arm stock's board update (usershare): if the boards keep Kiln OS's Klipper, docs/mcu-flashing.md"
+	fi
+	# Kiln OS's record of its eboard flash no longer holds
+	rm -f "$AD5X_DATA/ad5x/mcu/eboard"
+	# The Kiln OS install stick installs again without ad5x-install-retry
+	if [ -d "$AD5X_DATA/ad5x/install" ]; then
+		echo "state=returned" > "$AD5X_DATA/ad5x/install/state"
+		echo "$(date '+%Y-%m-%d %H:%M:%S') Kiln OS removed (Return to Flashforge firmware, $SDESC): a new install is accepted" \
+			>> "$AD5X_DATA/ad5x/install/install.log"
+	fi
+	stset boards armed
+}
+step_8() {
+	say "  boot flag -> slot B"
+	rc_set_flag B
+}
+
+si=0 total=$(echo $todo | wc -w)
+for sn in $todo; do
+	eval "nm=\$NAME_$sn"
+	prog $((10 + si * 85 / total)) "Step $sn: $nm"
+	if [ "$sn" = 8 ]; then
+		# every step before it, checked once more on the disk
+		for sm in 1 2 3 4 5 6 7; do
+			applies $sm || continue
+			done_$sm || fail3 "step $sm isn't done on the disk before the boot flag"
+		done
+	fi
+	step_$sn || fail3 "step $sn ($nm) failed or didn't read back"
+	say "  step $sn done: $nm"
+	# Kiln's U-Boot is out: its install record says so (lib/bootloader.sh)
+	[ "$sn" = 1 ] && [ -f "$BL_STATE" ] && bl_stset state removed
+	si=$((si + 1))
+	stop_point $sn
+done
+stset state done
+rm -f "$RS/before-spl.img"
+ad5x-bootlog "return-stock: done" 2>/dev/null
+prog 100 "Done"
+say "result: done. Switch the printer off and on: Flashforge's firmware starts"
+exit 0

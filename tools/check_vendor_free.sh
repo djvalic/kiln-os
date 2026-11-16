@@ -17,7 +17,8 @@
 #     string too), libhardware2.so, libutils2.so,
 #     ELF binaries named cmd_gpio / cmd_fb / cmd_jpeg_display (our /usr/bin
 #     wrappers are links/scripts and pass), kernel images (kernel.uimage,
-#     xImage*, uImage*, or any file starting with the uImage magic)
+#     xImage*, uImage*, or any file starting with the uImage magic; but
+#     Kiln's own kernels and Kiln's own U-Boot, usr/share/ad5x/bootloader)
 #   - any file of 64 bytes or more whose sha256 equals a file of the stock
 #     firmware (when a reference tree is there); for non-ELF files that
 #     stock itself took unchanged from open-source upstreams (UPSTREAM below:
@@ -37,6 +38,9 @@ REPO = os.environ["AD5X_REPO"]
 UNSQ = os.environ.get("AD5X_UNSQUASHFS") or ""
 USAGE = "usage: tools/check_vendor_free.sh [-s STOCKDIR]... [--no-stock] [-q] TARGET..."
 OWN_KERNEL_DIR = ("usr/lib/ad5x/kernel66/", "usr/lib/ad5x/kernel-mainline/")
+# Kiln's own boot loader in the recovery OS (buildroot/package/ad5x-bootloader,
+# built from u-boot/): its U-Boot uImage, named "Kiln U-Boot ...", is ours
+OWN_BOOTLOADER_DIR = "usr/share/ad5x/bootloader/"
 VENDOR_NAMES_ANY = {"libhardware2.so", "libutils2.so", "kernel.uimage"}
 VENDOR_ELF_NAMES = {"cmd_gpio", "cmd_fb", "cmd_jpeg_display"}
 # Parts of the stock firmware that are unmodified upstream open-source
@@ -235,7 +239,8 @@ def scan_tree(root, label):
                 flag(where, "stock board tool binary")
             if fn.startswith(("xImage", "uImage")) and not rel.startswith(OWN_KERNEL_DIR):
                 flag(where, "kernel image name")
-            if is_uimage(p) and not rel.startswith(OWN_KERNEL_DIR):
+            if is_uimage(p) and not rel.startswith(OWN_KERNEL_DIR) and not (
+                    rel.startswith(OWN_BOOTLOADER_DIR) and head(p, 44)[32:44] == b"Kiln U-Boot "):
                 flag(where, "kernel image (uImage header)")
             if stock_hashes and st.st_size >= MIN_HASH_SIZE:
                 s = sha256(p)

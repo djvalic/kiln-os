@@ -37,10 +37,19 @@
 #                                       (boot flag on slot A) and reboots
 #                                       into the recovery OS (refused while
 #                                       printing or still starting up)
+#   POST /machine/kiln_os/return_stock  the same, and the recovery OS opens
+#                                       Return to Flashforge firmware
+#                                       (ad5x-boot-recovery --return-stock);
+#                                       nothing is written before a tap there
 # Service restarts: the kiln_agent provider of Moonraker's machine
 # component (service_provider below, Moonraker patch 0006) starts, stops
 # and restarts klipper, moonraker, nginx, helixscreen and ad5x-camera
 # through the agent (refused while printing).
+# Reboot and shutdown: the same provider answers Moonraker's
+# /machine/reboot and /machine/shutdown (and the reboot_machine and
+# shutdown_machine remote methods) through the agent too, instead of
+# upstream's "sudo reboot": refused while printing, while the recovery OS
+# is being written and while start-up hasn't finished (docs/api.md).
 # The plugin folder (docs/plugins.md): a link "plugins" in the config folder
 # to /data/ad5x/plugins, made at Moonraker's start when missing, so Fluidd's
 # file manager (Configuration) shows the plugins' files and can upload and
@@ -94,6 +103,9 @@ AGENT_REQUEST = WORK_DIR / "install"
 AGENT_STATUS = WORK_DIR / "status"
 AGENT_KERNEL_RETRY = WORK_DIR / "kernel-retry"
 AGENT_BOOT_RECOVERY = WORK_DIR / "boot-recovery"
+AGENT_RETURN_STOCK = WORK_DIR / "return-stock"
+AGENT_REBOOT = WORK_DIR / "reboot"
+AGENT_SHUTDOWN = WORK_DIR / "shutdown"
 PLUGINS_DIR = pathlib.Path("/data/ad5x/plugins")
 PLUGINS_LINK = "plugins"
 APPS_DIR = pathlib.Path("/data/ad5x/apps")
@@ -108,7 +120,7 @@ OS_RELEASE = pathlib.Path("/usr/lib/os-release")
 # What this OS offers clients (docs/api.md, "Feature names"); "updates" and
 # "lane_data" are added while their components run
 FEATURES = ("ifs", "soak", "setup_wizard", "plugins", "kernel_retry",
-            "boot_recovery", "3mf_upload", "print_error")
+            "boot_recovery", "3mf_upload", "print_error", "return_stock")
 # The update channel (docs/updates.md, "Test channel"): in Moonraker's
 # database, so it survives Kiln OS updates; only POST /machine/kiln_os/channel
 # writes it (a protected namespace)
@@ -485,6 +497,26 @@ async def service_action(server, action: str, name: str) -> str:
     return status
 
 
+# Moonraker's /machine/reboot and /machine/shutdown on Kiln OS: the agent
+# gets "reboot" or "shutdown" and answers "rebooting" / "shutting down"
+# before it acts, or refuses (printing, print_state_unknown, starting_up,
+# recovery_updating: S68ad5x-update-agent, power_request). 30 s: the
+# agent's checks take at most ~10 s, its loop 3 s.
+async def machine_power(server, what: str) -> str:
+    """Ask the root agent to reboot or shut down the printer; its answer,
+    or an error (a refusal is 409 with the agent's reason)"""
+    if what == "reboot":
+        request, done = AGENT_REBOOT, "rebooting"
+    elif what == "shutdown":
+        request, done = AGENT_SHUTDOWN, "shutting down"
+    else:
+        raise bad_parameter(f"Machine action '{what}' not available")
+    status = await ask_agent(server, request, f"{what}\n", (done,),
+                             timeout=30)
+    logging.info(f"kiln_os: {what}: {status}")
+    return status
+
+
 def service_provider(base: type) -> type:
     """The kiln_agent provider class on Moonraker's BaseProvider (passed
     in by machine.py, which imports this module only for this provider)"""
@@ -512,6 +544,14 @@ def service_provider(base: type) -> type:
                                     service_name: str) -> None:
             await service_action(self.server, action, service_name)
             self._refresh(notify=True)
+
+        # Upstream runs "sudo reboot" / "sudo poweroff" here; on Kiln OS
+        # the agent checks first (machine_power)
+        async def reboot(self) -> None:
+            await machine_power(self.server, "reboot")
+
+        async def shutdown(self) -> None:
+            await machine_power(self.server, "shutdown")
 
         async def extract_service_info(
             self, service_name: str, pid: int,
@@ -626,8 +666,13 @@ class Source:
         part.rename(dest)
 
     async def hand_over(self, name: str, sha: str, done: Tuple[str, ...],
-                        timeout: int = 120) -> str:
-        """Ask S68ad5x-update-agent (root) to install WORK_DIR/NAME."""
+                        timeout: int = 180) -> str:
+        """Ask S68ad5x-update-agent (root) to install WORK_DIR/NAME.
+        180 s: what the agent does before it answers (Moonraker's print
+        state, up to 10 s; ad5x-update copying and checking the ~80 MB
+        zip, about a minute on the printer; a daily package's unpack is
+        shorter) three times over. It never waits for a recovery OS write
+        (it refuses at once, recovery_updating)."""
         return await ask_agent(self.server, AGENT_REQUEST,
                                f"{name}\n{sha}\n", done, timeout)
 
@@ -751,8 +796,8 @@ class KilnDeploy(BaseDeploy):
         await self.src.hand_over(self.zip_name, sha, ("rebooting",))
         self.notify(
             f"Kiln OS {self.remote_version} staged. The printer reboots "
-            "now, installs it in the recovery OS and starts again (about "
-            "3 minutes).", is_complete=True)
+            "now, installs it in the recovery OS and starts again (3-6 "
+            "minutes).", is_complete=True)
         return True
 
     def notify(self, msg: str, is_complete: bool = False) -> None:
@@ -921,6 +966,9 @@ class KilnOS:
             "/machine/kiln_os/boot_recovery", RequestType.POST,
             self._handle_boot_recovery)
         self.server.register_endpoint(
+            "/machine/kiln_os/return_stock", RequestType.POST,
+            self._handle_return_stock)
+        self.server.register_endpoint(
             "/machine/kiln_os/channel", RequestType.POST,
             self._handle_channel)
         self.deploy: Optional[KilnDeploy] = None
@@ -934,6 +982,17 @@ class KilnOS:
         fm = self.server.lookup_component("file_manager", None)
         cfg_dir = fm.get_directory("config") if fm is not None else ""
         logging.info(f"kiln_os: plugin folder: {link_plugins(cfg_dir)}")
+        # Browsable through the link, but left out of server.files.list
+        # (Moonraker patch 0008): that list runs on the event loop at
+        # ~14 ms per file on the AD5X, and Mainsail and Fluidd ask for the
+        # config root at each page load (PR #70: ~2200 plugin files blocked
+        # Moonraker for a minute). Registered whether or not the link is
+        # ours: it only matters where the plugin folder is reached
+        if fm is not None and hasattr(fm, "add_unlisted_path"):
+            try:
+                fm.add_unlisted_path(PLUGINS_DIR)
+            except Exception:
+                logging.exception("kiln_os: plugin folder unlisted")
         st = safe_kernel_status()
         notice = kernel_notice(st)
         if notice:
@@ -1046,6 +1105,14 @@ class KilnOS:
         # recovery OS in slot A; otherwise points the boot flag at it and
         # reboots
         await ask_agent(self.server, AGENT_BOOT_RECOVERY, "boot-recovery\n",
+                        ("rebooting",), timeout=30)
+        return dict(REBOOTING)
+
+    async def _handle_return_stock(self, web_request: WebRequest
+                                   ) -> Dict[str, Any]:
+        # As boot_recovery, and the recovery OS opens Return to Flashforge
+        # firmware (it writes nothing before a tap there)
+        await ask_agent(self.server, AGENT_RETURN_STOCK, "return-stock\n",
                         ("rebooting",), timeout=30)
         return dict(REBOOTING)
 

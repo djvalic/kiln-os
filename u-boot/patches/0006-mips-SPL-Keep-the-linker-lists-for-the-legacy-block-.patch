@@ -1,0 +1,33 @@
+From a7479349ae1ef414bab2a8491f30d4adcd634ab7 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sat, 14 Nov 2026 16:58:40 -0700
+Subject: [PATCH 06/10] mips: SPL: Keep the linker lists for the legacy block
+ layer
+
+Without SPL_DM or SPL_LOADER_SUPPORT the MIPS SPL linker script drops
+__u_boot_list*, which holds the legacy block drivers that SPL_LEGACY_BLOCK
+looks up: blk_dselect_hwpart() then fails with -ENOSYS and every MMC read
+returns 0 blocks. Keep the lists with SPL_LEGACY_BLOCK too.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ arch/mips/cpu/u-boot-spl.lds | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/arch/mips/cpu/u-boot-spl.lds b/arch/mips/cpu/u-boot-spl.lds
+index ea2deed3..c1d4ea0b 100644
+--- a/arch/mips/cpu/u-boot-spl.lds
++++ b/arch/mips/cpu/u-boot-spl.lds
+@@ -30,7 +30,8 @@ SECTIONS
+ 		. = ALIGN(8);
+ 	} > .spl_mem
+ 
+-#if defined(CONFIG_SPL_DM) || defined(CONFIG_SPL_LOADER_SUPPORT)
++#if defined(CONFIG_SPL_DM) || defined(CONFIG_SPL_LOADER_SUPPORT) || \
++	defined(CONFIG_SPL_LEGACY_BLOCK)
+ 	. = ALIGN(4);
+ 	__u_boot_list : {
+ 		KEEP(*(SORT(__u_boot_list*)));
+-- 
+2.43.0
+

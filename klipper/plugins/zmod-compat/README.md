@@ -5,7 +5,7 @@ macro names and parameters, mapped onto this system's own macros:
 
 | zMod | Here |
 |---|---|
-| `START_PRINT EXTRUDER_TEMP= BED_TEMP=` (`FORCE_LEVELING`, `FORCE_KAMP`, `TOOL=`) | `PRINT_START`, then `LINE_PURGE`; a missing temperature: the one the file already set, else 245 / 80; one that is not a number (an unexpanded placeholder), a nozzle outside 170-350 C or a bed above 130 C stops the start with an error (bed 0 = off is accepted) |
+| `START_PRINT EXTRUDER_TEMP= BED_TEMP=` (`FORCE_LEVELING`, `FORCE_KAMP`, `TOOL=`) | `PRINT_START` (which draws the prime line); `LINE_PURGE` after it only when that line is off (`variable_prime_line: 0`); a missing temperature: the one the file already set, else 245 / 80; one that is not a number (an unexpanded placeholder), a nozzle outside 170-350 C or a bed above 130 C stops the start with an error (bed 0 = off is accepted) |
 | `END_PRINT` | `PRINT_END` (optional IFS unload first) |
 | `SAVE_ZMOD_DATA USE_TRASH_ON_PRINT=0|1|2` | the purge mode (`use_trash_on_print`, read by the `nopoop` plugin); other zMod settings: a line says where they are here, nothing saved |
 | `_GOTO_TRASH`, `_SBROS_TRASH` | into the purge box / wipe on its edge |
@@ -13,7 +13,8 @@ macro names and parameters, mapped onto this system's own macros:
 | `TIMELAPSE_TAKE_FRAME` | nothing (moonraker-timelapse replaces it) |
 | `SET_ACTIVE_SPOOL`, `CLEAR_ACTIVE_SPOOL` | Spoolman, once set up |
 | `SET_PAUSE_NEXT_LAYER`, `SET_PAUSE_AT_LAYER`, `M600` | pause at a layer, filament change |
-| `LINE_PURGE`, `LED_ON`, `LED_OFF`, `LED`, `M300` | prime line, chamber light, beep (none) |
+| `LINE_PURGE` | prime line; during a print skipped once `PRINT_START` has drawn its prime line, `LINE_PURGE FORCE=1` draws anyway |
+| `LED_ON`, `LED_OFF`, `LED`, `M300` | chamber light, beep (none) |
 
 `TOOL=` (Bambufy's start G-code) must be a whole number or -1, as in
 `PRINT_START`. Anything else loads no tool and the console shows an error:

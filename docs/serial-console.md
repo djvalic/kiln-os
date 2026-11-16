@@ -86,10 +86,14 @@ run start1 firmware finished, return to bootrom!
 
 `serila pio:val high` (sic) is the SPL reading the strap. `run start1
 firmware finished, return to bootrom!` is one of the SPL's own messages,
-its normal last line before the kernel. It is not a failure: the stock
-kernel starts right after, then our kernel through chainload (whose log
-is short: chainload passes `loglevel=5`), then the main OS to the
-`ad5x login:` prompt.
+its normal last line before the kernel. It is not a failure, and despite
+its wording nothing returns to the boot ROM: Flashforge's SPL goes on and
+loads the stock 5.10 kernel from the flagged slot itself (its disassembly,
+and alexshev86's test in issue #68: zeroing the start of U-Boot proper at
+0xA400 changed nothing). Flashforge's U-Boot proper at 0xA400 never runs
+with the stock SPL. The stock kernel starts right after, then our kernel
+through chainload (whose log is short: chainload passes `loglevel=5`),
+then the main OS to the `ad5x login:` prompt.
 
 ## A wireless cable: XIAO ESP32-C6
 

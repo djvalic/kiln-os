@@ -6,13 +6,22 @@
 # runs on the stock kernel until "retry" (an update does not clear it: the
 # release string is the same in every build).
 # Mainline 7.3 is opt-in; a failed start of it falls back to 6.6.
+# Kiln's own U-Boot, when it starts the printer, keeps records of its own
+# (ota 0x90200, lib/uboot.sh): shown here too, and cleared by retry.
 #   ad5x-kernel                 the running kernel, ours in this image, failures
 #   ad5x-kernel retry           try ours (and 7.3) again from the next boot
 #   ad5x-kernel mainline on|off 7.3 instead of 6.6 from the next boot
 # AD5X_LIB overrides /usr/lib/ad5x (tools/test_kernel_fallback.sh).
 D=/data/ad5x/kernel
-K=${AD5X_LIB:-/usr/lib/ad5x}/kernel66
-KM=${AD5X_LIB:-/usr/lib/ad5x}/kernel-mainline
+L=${AD5X_LIB:-/usr/lib/ad5x}
+K=$L/kernel66
+KM=$L/kernel-mainline
+ub=
+if [ -f $L/uboot.sh ]; then
+	. $L/slot.sh
+	. $L/uboot.sh
+	ub=1
+fi
 case "$1" in
 status|"")
 	echo "running: $(uname -r)"
@@ -55,10 +64,35 @@ status|"")
 	if [ -f $D/last-ok ] && read -r _ _ slot r _ < $D/last-ok; then
 		echo "last ok: $r on slot $slot"
 	fi
+	# Kiln's U-Boot: its records outlive the start they were made in
+	if [ -n "$ub" ]; then
+		uboot_started && echo "boot loader: Kiln's U-Boot (ad5x.uboot=1)"
+		st=$(uboot_text $UBOOT_STATE "$UBOOT_STATE_MAGIC") &&
+			echo "U-Boot unconfirmed: $(uboot_val "$st" tries) start(s) of kernel $(uboot_val "$st" kernel) ($(uboot_val "$st" release)), not finished yet"
+		if rec=$(uboot_text $UBOOT_RECORDS "$UBOOT_RECORDS_MAGIC"); then
+			v=$(uboot_val "$rec" failed-mainline)
+			[ -n "$v" ] && [ "$v" != - ] &&
+				echo "U-Boot failed: mainline $v (6.6 until ad5x-kernel retry)"
+			v=$(uboot_val "$rec" failed-own)
+			[ -n "$v" ] && [ "$v" != - ] &&
+				echo "U-Boot failed: own $v (stock kernel until ad5x-kernel retry)"
+			echo "U-Boot fallbacks: $(uboot_val "$rec" fallbacks); last: $(uboot_val "$rec" reason)"
+		fi
+	fi
 	;;
 retry)
 	[ -f $K/xImage ] || { echo "ad5x-kernel: this image has no kernel in $K"; exit 1; }
 	rm -f $D/failed $D/failed-mainline $D/pending $D/started $D/unfinished $D/use; sync
+	# Kiln's U-Boot's records (when there are any): zeroed, which U-Boot
+	# reads as none
+	if [ -n "$ub" ] && [ "$(uboot_head $UBOOT_RECORDS)" = "$UBOOT_RECORDS_MAGIC" ]; then
+		if r=$(uboot_clear $UBOOT_RECORDS); then
+			echo "Kiln's U-Boot's records: $r"
+		else
+			echo "ad5x-kernel: Kiln's U-Boot's records (ota 0x90200) NOT cleared: $r"
+			exit 1
+		fi
+	fi
 	echo "our kernel from the next boot (reboot now?)"
 	;;
 mainline)
@@ -74,5 +108,5 @@ mainline)
 	*) echo "usage: ad5x-kernel mainline on|off"; exit 2 ;;
 	esac
 	;;
-*) sed -n '2,12p' "$0"; exit 2 ;;
+*) sed -n '2,14p' "$0"; exit 2 ;;
 esac

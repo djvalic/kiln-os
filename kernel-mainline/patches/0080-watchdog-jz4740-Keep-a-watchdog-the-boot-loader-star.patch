@@ -1,0 +1,72 @@
+From 1376250fd48173195c67dec472499f05630faf57 Mon Sep 17 00:00:00 2001
+From: valix <djvalic.wc@gmail.com>
+Date: Sun, 15 Nov 2026 12:19:00 -0500
+Subject: [PATCH] watchdog: jz4740: Keep a watchdog the boot loader started
+
+A boot loader may start the watchdog and leave it counting when it
+starts Linux, so that a system that hangs before userspace takes the
+watchdog over still resets. The driver didn't look: the counter went on
+with the boot loader's timeout and nothing fed it until userspace opened
+the device, or, on the X2600, its clock was gated as unused.
+
+If the counter is enabled at probe, enable its clock, give it the
+driver's timeout and mark it WDOG_HW_RUNNING, so that the watchdog core
+feeds it until userspace opens the device (and only until
+watchdog.open_timeout, when that is set).
+
+Stop the watchdog on reboot, halt and power-off: a system that is shut
+down must stay down, and a running watchdog would restart it. The
+restart handler still restarts through the watchdog after that.
+---
+ drivers/watchdog/jz4740_wdt.c | 27 ++++++++++++++++++++++++++-
+ 1 file changed, 26 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/watchdog/jz4740_wdt.c b/drivers/watchdog/jz4740_wdt.c
+index c7cd86af0..d359b922b 100644
+--- a/drivers/watchdog/jz4740_wdt.c
++++ b/drivers/watchdog/jz4740_wdt.c
+@@ -210,6 +210,8 @@ static int jz4740_wdt_probe(struct platform_device *pdev)
+ 	struct device *dev = &pdev->dev;
+ 	struct jz4740_wdt_drvdata *drvdata;
+ 	struct watchdog_device *jz4740_wdt;
++	unsigned int tcer;
++	bool running;
+ 	long rate;
+ 	int ret;
+ 
+@@ -260,8 +262,31 @@ static int jz4740_wdt_probe(struct platform_device *pdev)
+ 	jz4740_wdt->parent = dev;
+ 	watchdog_set_nowayout(jz4740_wdt, nowayout);
+ 	watchdog_set_drvdata(jz4740_wdt, drvdata);
++	watchdog_stop_on_reboot(jz4740_wdt);
++
++	/*
++	 * The boot loader may have left the watchdog counting, so that a hang
++	 * before userspace takes it over resets the system. Keep it counting,
++	 * with this driver's timeout and its clock enabled, and let the
++	 * watchdog core feed it until userspace opens the device.
++	 */
++	regmap_read(drvdata->map, TCU_REG_WDT_TCER, &tcer);
++	running = tcer & TCU_WDT_TCER_TCEN;
++	if (running) {
++		ret = clk_prepare_enable(drvdata->clk);
++		if (ret)
++			return ret;
++		jz4740_wdt_set_timeout(jz4740_wdt, jz4740_wdt->timeout);
++		set_bit(WDOG_HW_RUNNING, &jz4740_wdt->status);
++		dev_info(dev, "running at boot, timeout %u s\n",
++			 jz4740_wdt->timeout);
++	}
++
++	ret = devm_watchdog_register_device(dev, &drvdata->wdt);
++	if (ret && running)
++		clk_disable_unprepare(drvdata->clk);
+ 
+-	return devm_watchdog_register_device(dev, &drvdata->wdt);
++	return ret;
+ }
+ 
+ static struct platform_driver jz4740_wdt_driver = {
+-- 
+2.56.0
+

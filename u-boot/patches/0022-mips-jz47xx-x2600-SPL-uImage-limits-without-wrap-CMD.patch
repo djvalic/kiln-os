@@ -1,0 +1,174 @@
+From 03d546b56ac827e8401c02e7687ebf71016fd83f Mon Sep 17 00:00:00 2001
+From: valix <djvalic.wc@gmail.com>
+Date: Sun, 15 Nov 2026 12:45:11 -0500
+Subject: [PATCH 22/23] mips: jz47xx: x2600: SPL: uImage limits without wrap,
+ CMD6 status, no power write
+
+- The uImage checks added sizes and addresses (size + 64 > max, load -
+  64 < low, load + size + 512 > end, ep >= load + size), which a header
+  with huge values wraps. Compare against the limits instead, so that
+  nothing wraps, with the limits named.
+- Tiny printf has no "%.32s" precision: copy ih_name (it needn't end in
+  a NUL) into a buffer of its own.
+- After CMD6 for the 4-bit bus only the card's state was checked. A
+  card that refuses the switch sets SWITCH_ERROR (status bit 7) and
+  stays at 1 bit: then the host stays at 1 bit too.
+- The reader wrote the SDHCI power control register (voltage and bus
+  power from the capabilities), which neither the stock SPL nor the
+  SDK's SPL driver does: removed.
+---
+ arch/mips/mach-jz47xx/x2600/spl.c      | 23 +++++++++++-----
+ arch/mips/mach-jz47xx/x2600/spl_emmc.c | 36 +++++++++++---------------
+ 2 files changed, 31 insertions(+), 28 deletions(-)
+
+diff --git a/arch/mips/mach-jz47xx/x2600/spl.c b/arch/mips/mach-jz47xx/x2600/spl.c
+index 155f2f49..cfb651d8 100644
+--- a/arch/mips/mach-jz47xx/x2600/spl.c
++++ b/arch/mips/mach-jz47xx/x2600/spl.c
+@@ -223,17 +223,23 @@ static u32 spl_crc32(u32 crc, const u8 *p, u32 len)
+ 
+ static u8 spl_sector[512] __aligned(4);
+ 
++/* a uImage's whole blocks, header included, go between these */
++#define SPL_LOAD_LOW		0x80008000	/* above the SRAM window */
++#define SPL_LOAD_END		0x8eb00000	/* ramoops, 0x0EB00000 */
++
+ /*
+  * Load the uImage at @lba (at most @max bytes with its header) to its load
+  * address; return its entry point, 0 if it isn't good. Accepted: MIPS,
+  * ih_os @os (a U-Boot wrapped for a kernel slot is ih_os Linux too),
+- * header and data CRCs right, loaded between the SRAM window and the
+- * ramoops region (0x0EB00000), entry point inside the image.
++ * header and data CRCs right, its blocks (header from load - 64, rounded
++ * up to 512 bytes) between the SRAM window and the ramoops region, entry
++ * point inside the image. The limits are compared so that nothing wraps.
+  */
+ static ulong spl_load_uimage(u32 lba, ulong max, u8 os)
+ {
+ 	struct legacy_img_hdr *hdr = (void *)spl_sector, h;
+ 	ulong size, load, ep, blocks;
++	char name[IH_NMLEN + 1];
+ 
+ 	if (ad5x_emmc_read(lba, 1, spl_sector) ||
+ 	    image_get_magic(hdr) != IH_MAGIC)
+@@ -245,14 +251,17 @@ static ulong spl_load_uimage(u32 lba, ulong max, u8 os)
+ 	ep = image_get_ep(hdr);
+ 	if (spl_crc32(0, (u8 *)&h, sizeof(h)) != image_get_hcrc(hdr) ||
+ 	    image_get_arch(hdr) != IH_ARCH_MIPS || image_get_os(hdr) != os ||
+-	    size + sizeof(h) > max || (load & 3) ||
+-	    load - sizeof(h) < 0x80008000 ||
+-	    load + size + 512 > 0x8eb00000 || ep < load || ep >= load + size) {
++	    size > max - sizeof(h) || (load & 3) ||
++	    load < SPL_LOAD_LOW + sizeof(h) || load > SPL_LOAD_END - 512 ||
++	    size > SPL_LOAD_END - 512 - load ||
++	    ep < load || ep - load >= size) {
+ 		printf("SPL: LBA 0x%x: not a usable uImage\n", lba);
+ 		return 0;
+ 	}
+-	printf("SPL: %.32s, %lu bytes at 0x%lx\n", (char *)hdr->ih_name, size,
+-	       load);
++	/* tiny printf has no "%.32s"; ih_name needn't end in a NUL */
++	memcpy(name, hdr->ih_name, IH_NMLEN);
++	name[IH_NMLEN] = '\0';
++	printf("SPL: %s, %lu bytes at 0x%lx\n", name, size, load);
+ 	blocks = (size + sizeof(h) + 511) / 512;
+ 	if (ad5x_emmc_read(lba, blocks, (void *)(load - sizeof(h))))
+ 		return 0;
+diff --git a/arch/mips/mach-jz47xx/x2600/spl_emmc.c b/arch/mips/mach-jz47xx/x2600/spl_emmc.c
+index f25204b9..fc639906 100644
+--- a/arch/mips/mach-jz47xx/x2600/spl_emmc.c
++++ b/arch/mips/mach-jz47xx/x2600/spl_emmc.c
+@@ -45,11 +45,6 @@
+ #define  PS_DAT_INHIBIT		BIT(1)
+ #define SD_HOST_CONTROL		0x28	/* 8 bit */
+ #define  HC_4BIT		BIT(1)
+-#define SD_POWER_CONTROL	0x29	/* 8 bit */
+-#define  PWR_ON			BIT(0)
+-#define  PWR_180		(5 << 1)
+-#define  PWR_300		(6 << 1)
+-#define  PWR_330		(7 << 1)
+ #define SD_CLOCK_CONTROL	0x2c	/* 16 bit */
+ #define  CLK_INT_EN		BIT(0)
+ #define  CLK_INT_STABLE		BIT(1)
+@@ -66,9 +61,6 @@
+ #define  INT_ERROR		BIT(15)
+ #define SD_INT_ENABLE		0x34
+ #define SD_SIGNAL_ENABLE	0x38
+-#define SD_CAPABILITIES		0x40
+-#define  CAP_VS33		BIT(24)
+-#define  CAP_VS30		BIT(25)
+ 
+ /* MSC0's card clock: CGU MSC0CDR, rate = parent / ((div + 1) * 4) */
+ #define CPM_CLKGR0		((void __iomem *)0xb0000020)
+@@ -89,6 +81,7 @@
+ #define EMMC_OCR		0x40ff8080	/* sector mode, 2.7-3.6 V, 1.7-1.95 V */
+ #define OCR_BUSY		BIT(31)
+ #define OCR_HCS			BIT(30)
++#define R1_SWITCH_ERROR		BIT(7)	/* card status: CMD6 refused */
+ 
+ static int emmc_sector_mode;
+ 
+@@ -193,15 +186,15 @@ err:
+ #define R2	(CMD_RESP_LONG | CMD_CRC)
+ #define R3	CMD_RESP_SHORT
+ 
+-/* wait while the card is in its programming state (CMD13) */
+-static int emmc_wait_ready(void)
++/* wait while the card is in its programming state (CMD13); *st its status */
++static int emmc_wait_ready(u32 *st)
+ {
+-	u32 st, t;
++	u32 t;
+ 
+ 	for (t = 0; t < 100000; t++) {
+-		if (emmc_cmd(13, EMMC_RCA << 16, R1, &st))
++		if (emmc_cmd(13, EMMC_RCA << 16, R1, st))
+ 			return -EIO;
+-		if (((st >> 9) & 15) != 7)	/* not prg */
++		if (((*st >> 9) & 15) != 7)	/* not prg */
+ 			return 0;
+ 		udelay(10);
+ 	}
+@@ -210,7 +203,7 @@ static int emmc_wait_ready(void)
+ 
+ int ad5x_emmc_init(void)
+ {
+-	u32 caps, ocr = 0, t;
++	u32 st, ocr = 0, t;
+ 
+ #ifdef CONFIG_AD5X_SPL_CHAINLOAD
+ 	/* from Linux: MSC0's clock as after the boot ROM, as at a cold start */
+@@ -223,10 +216,7 @@ int ad5x_emmc_init(void)
+ 	writel(~0U, MSC0 + SD_INT_ENABLE);	/* latch every status bit */
+ 	writel(0, MSC0 + SD_SIGNAL_ENABLE);	/* no interrupts */
+ 	writeb(0xe, MSC0 + SD_TIMEOUT_CONTROL);
+-	caps = readl(MSC0 + SD_CAPABILITIES);
+-	caps = caps & CAP_VS33 ? PWR_330 : caps & CAP_VS30 ? PWR_300 : PWR_180;
+-	writeb(caps, MSC0 + SD_POWER_CONTROL);
+-	writeb(caps | PWR_ON, MSC0 + SD_POWER_CONTROL);
++	/* no bus power or voltage write: neither the stock SPL nor the SDK's */
+ 	writeb(0, MSC0 + SD_HOST_CONTROL);	/* 1 bit, normal speed */
+ 	emmc_set_clock(false);
+ 	mdelay(1);				/* 74 clocks and more */
+@@ -247,11 +237,15 @@ int ad5x_emmc_init(void)
+ 	    emmc_cmd(7, EMMC_RCA << 16, R1, NULL))
+ 		return -EIO;
+ 
+-	/* 4-bit bus: EXT_CSD[183] BUS_WIDTH = 1 */
++	/*
++	 * 4-bit bus: EXT_CSD[183] BUS_WIDTH = 1. A card that refuses it
++	 * (SWITCH_ERROR in its status) stays at 1 bit, and so does the host.
++	 */
+ 	if (emmc_cmd(6, 3 << 24 | 183 << 16 | 1 << 8, R1B, NULL) ||
+-	    emmc_wait_ready())
++	    emmc_wait_ready(&st))
+ 		return -EIO;
+-	writeb(HC_4BIT, MSC0 + SD_HOST_CONTROL);
++	if (!(st & R1_SWITCH_ERROR))
++		writeb(HC_4BIT, MSC0 + SD_HOST_CONTROL);
+ 	emmc_set_clock(true);
+ 	return 0;
+ }
+-- 
+2.56.0
+

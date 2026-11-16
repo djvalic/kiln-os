@@ -14,7 +14,12 @@
  */
 #include <asm/regdef.h>
 
+/* chainload.c's CHAINLOAD_LOAD; the bench variant (make uboot) sets 0x80100000 */
+#ifdef CHAINLOAD_LOAD
+#define LOAD_ADDR	CHAINLOAD_LOAD
+#else
 #define LOAD_ADDR	0x80f00000
+#endif
 
 	.text
 	.set	noreorder

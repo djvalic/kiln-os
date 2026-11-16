@@ -64,6 +64,7 @@ records and compares it.
 | `patches/0010-*` | rtw88 USB: receive starts only once mac80211 is registered (Wi-Fi oops at start) |
 | `patches/0011-0016` | rtw88 RTL8821CU fixes from linux-6.6.y stable (6.6.23, 6.6.24, 6.6.44, 6.6.95; the SDK is 6.6.18): firmware upload, connection failure, beacon loss and disconnects, 500 ms USB control timeout, false alarm count (issue #37). Each keeps its upstream header and commit id |
 | `patches/0017-*` | rtw88 USB: a failed or short register read returns 0, not an earlier read's value, and short reads are logged (from PR #46 by Hunter Laux; not upstream) |
+| `patches/0018-*` | Watchdog: a watchdog the boot loader left running is kept and fed by the kernel until userspace opens `/dev/watchdog`; stopped on halt and poweroff; `set_timeout` works more than once, `start` sets the timeout, the real maximum (about 1431 s) |
 | `diag/l2stale/` | Test only, never in an image: counts stale DMA reads through the Wi-Fi adapter's USB register reads (the count behind PR #46's L2 fix), built out of tree against `out-ad5x`; usage in `l2stale.c`. On the printer (2026-11-11): no stale read in 220,000 (11 runs, both modes, two boots), so 6.6 doesn't need PR #46's L2 fix |
 | `ad5x.config` | Fragment on `x2600_halley7_linux_defconfig`: own DT, uinput, zram, UVC, rtw88 8821CU, tsc2007, gpio keys/backlight, watchdog |
 | `build.sh` | Copies the files into the SDK tree, merges the config, builds, wraps the uImage |

@@ -39,8 +39,8 @@ start)
 		cp /usr/share/ad5x/helixscreen-settings.json $D/config/settings.json
 	# touch calibration in the running kernel's units (stock 0-800/0-480
 	# with Y flipped, our 6.6 raw 0-4095): ad5x-touch-units. The same
-	# range in stock units for the recovery OS's touch UI (it always runs
-	# the stock kernel; S80ad5x-recovery-ui reads it, issue #47)
+	# range in stock units for the recovery OS's touch UI (S80ad5x-recovery-ui
+	# reads it and converts it at use on our kernel, issue #47)
 	ad5x-touch-units $D/config/settings.json \
 		--recovery-cal /data/ad5x/recovery/touch-cal
 	i=0

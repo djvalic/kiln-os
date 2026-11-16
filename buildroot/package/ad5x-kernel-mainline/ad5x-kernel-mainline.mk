@@ -1,6 +1,6 @@
 ################################################################################
 #
-# ad5x-kernel-mainline: mainline Linux 7.3.3 with the AD5X series
+# ad5x-kernel-mainline: mainline Linux 7.3.4 with the AD5X series
 # (kernel-mainline/), opt-in beside 6.6 (S00ad5x-kernel, ad5x-kernel)
 #
 ################################################################################

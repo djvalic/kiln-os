@@ -13,7 +13,17 @@
 # (yes|no: /data/ad5x/stock), vendor (ok|missing|damaged: the printer's own
 # drivers in /data/ad5x/vendor), usb (count of mounted USB partitions; details:
 # ad5x-usb list), data (mounted|tmpfs), main_trace (last line of the main
-# OS's boot trace in the ota partition: how far its last start-up got).
+# OS's boot trace in the ota partition: how far its last start-up got),
+# return_stock (none|unfinished|done: Return to Flashforge firmware,
+# /data/ad5x/return-stock/state), return_stock_open (request|usb, empty:
+# the page to open at start, ad5x-recovery-auto), bootloader_install
+# (none|started|installed|verified|unverified|removed: Kiln's own boot loader,
+# /data/ad5x/bootloader/state), bootloader_open (result|resume, empty: its
+# page to open at start, ad5x-bootloader-install --verify-start). With
+# --slots also bootloader (flashforge|kiln|kiln-spl|unknown) and
+# bootloader_offer (yes|no: "Install Kiln's boot loader" offered, the board
+# on the allowlist and, for now, /data/ad5x/bootloader-offer.enable there,
+# or an install stopped part-way; ad5x-bootloader-install --offer).
 . /usr/lib/ad5x-recovery/recovery.sh
 running() { pidof "$1" >/dev/null && echo running || echo stopped; }
 echo "release=$(cat /etc/ad5x-release 2>/dev/null)"
@@ -45,9 +55,19 @@ echo "vendor=$(AD5X_DATA=$AD5X_DATA ad5x-vendor status 2>/dev/null | sed -n 's/^
 echo "usb=$(rc_usb_mounts | wc -l | tr -d ' ')"
 fs=$(awk '$2 == "/data" { print $3; exit }' "$AD5X_MOUNTS")
 [ "$fs" = ext4 ] && echo "data=mounted" || echo "data=tmpfs"
+case "$(sed -n 's/^state=//p' "$AD5X_DATA/ad5x/return-stock/state" 2>/dev/null)" in
+started) echo "return_stock=unfinished" ;;
+done) echo "return_stock=done" ;;
+*) echo "return_stock=none" ;;
+esac
+echo "return_stock_open=$(cat "$AD5X_RUN/return-stock.open" 2>/dev/null)"
+bl=$(sed -n 's/^state=//p' "$AD5X_DATA/ad5x/bootloader/state" 2>/dev/null)
+echo "bootloader_install=${bl:-none}"
+echo "bootloader_open=$(cat "$AD5X_RUN/bootloader.open" 2>/dev/null)"
 o=$(rc_part ota) && echo "main_trace=$(dd if="$o" bs=1024 skip=64 count=8 2>/dev/null | tr -d '\0' | tail -n 1)"
 if [ "$1" = --slots ]; then
 	echo "slot_a=$(rc_slot_holds rootfs)"
 	echo "slot_b=$(rc_slot_holds rootfs2)"
+	command -v ad5x-bootloader-install >/dev/null 2>&1 && ad5x-bootloader-install --offer 2>/dev/null
 fi
 exit 0

@@ -1,0 +1,127 @@
+From bfe610af43951ca4bec2e347de7dbf0029ce8aef Mon Sep 17 00:00:00 2001
+From: valix <djvalic.wc@gmail.com>
+Date: Sun, 15 Nov 2026 12:46:29 -0500
+Subject: [PATCH 23/23] mips: jz47xx: x2600: SPL: The stock DDR table's name, a
+ clock record
+
+The DDR table was called "X2600H-DDR3L", a name the stock SPL doesn't
+have: its table is "W634GU6QG-11" (the board's Winbond DDR3L part), and
+from the name to remap[] Kiln's table is that one byte for byte. Use
+the stock name.
+
+Keep the PLL and CPCCR values the clock setup writes in one record,
+tagged "KILNCLK" and read through a volatile, so that it stays in the
+image and the code uses exactly those values. The first-MiB check
+(u-boot/tools/check_first_mib.py) finds the record and the DDR table in
+the candidate and compares them with the unit's stock SPL (its table,
+and its lui/addiu immediates), so a board build with other values is
+refused until its own dump is looked at.
+---
+ arch/mips/mach-jz47xx/x2600/sdram.c | 53 ++++++++++++++++++++---------
+ 1 file changed, 37 insertions(+), 16 deletions(-)
+
+diff --git a/arch/mips/mach-jz47xx/x2600/sdram.c b/arch/mips/mach-jz47xx/x2600/sdram.c
+index 6e018fd4..4e41c86b 100644
+--- a/arch/mips/mach-jz47xx/x2600/sdram.c
++++ b/arch/mips/mach-jz47xx/x2600/sdram.c
+@@ -6,7 +6,10 @@
+  * x2600/pllsetting.c, x2600/clk.c, ddr_innophy.c, ddr_innophy_x2600.c,
+  * the DDR3 path with the PHY's automatic training), which Flashforge's SPL
+  * for the Adventurer 5X is built from. The register values are that SPL's:
+- * the PLL settings it reports and its "X2600H-DDR3L" parameter set.
++ * its PLL and CPCCR settings and its DDR3 table "W634GU6QG-11" (Winbond's
++ * 4 Gbit DDR3L part on the board). u-boot/tools/check_first_mib.py finds
++ * both in a unit's stock SPL and refuses a first MiB for a unit whose
++ * values differ (another board build) from the ones compiled here.
+  *
+  * Copyright (c) 2017-2025 Ingenic Semiconductor Co., Ltd.
+  */
+@@ -116,7 +119,9 @@
+ 
+ /*
+  * The DDR parameters, struct ddr_reg_value of Ingenic's X2600 boot loader,
+- * as Flashforge's SPL carries them for the X2600H ("X2600H-DDR3L").
++ * as Flashforge's SPL carries them: name to remap[] byte for byte as in the
++ * stock SPL (188 bytes, compared by check_first_mib.py); the PHY drive,
++ * ODT and deskew bytes after it are the SDK's newer fields.
+  */
+ struct x2600_ddr_params {
+ 	char name[32];
+@@ -144,7 +149,7 @@ struct x2600_ddr_params {
+ #define X2600_DDR3		0	/* this table's type for DDR3 */
+ 
+ static struct x2600_ddr_params ddr = {
+-	.name		= "X2600H-DDR3L",
++	.name		= "W634GU6QG-11",
+ 	.id		= 0x84,
+ 	.type		= X2600_DDR3,
+ 	.freq		= 900000000,
+@@ -218,10 +223,30 @@ static void x2600_clk_prepare(void)
+ }
+ 
+ /*
+- * M << 20 | N << 14 | OD1 << 11 | OD0 << 8 | EN, from the 24 MHz EXCLK:
+- * APLL 24 * 48 = 1152 MHz, MPLL 24 * 75 = 1800 MHz, EPLL 24 * 25 / 2 =
+- * 300 MHz (the values Flashforge's SPL reports).
++ * The values the clock setup writes, as the stock SPL's code has them
++ * (immediates): one record, "KILNCLK", that check_first_mib.py reads from
++ * the image and looks for in a unit's stock SPL. Volatile, so that the
++ * code really reads it (nothing folds it away) and it stays in the image.
++ *
++ * PLLs: M << 20 | N << 14 | OD1 << 11 | OD0 << 8 | EN, from the 24 MHz
++ * EXCLK: APLL 24 * 48 = 1152 MHz, MPLL 24 * 75 = 1800 MHz, EPLL 24 * 25 /
++ * 2 = 300 MHz. CPCCR: safe dividers, then CPU 1152 MHz (APLL), L2 /2, AHB0
++ * /5, AHB2 /6, APB /12 (dividers 0x000b5410), then the sources (0x9a).
+  */
++static const volatile struct {
++	char tag[8];
++	u32 cpccr_safe, cpccr_divs, cpccr_sels;
++	u32 apll, mpll, epll;
++} x2600_clk = {
++	.tag		= "KILNCLK",
++	.cpccr_safe	= 0x55700000,
++	.cpccr_divs	= 0x557b5410,
++	.cpccr_sels	= 0x9a0b5410,
++	.apll		= 0x03004901,
++	.mpll		= 0x04b04901,
++	.epll		= 0x01905101,
++};
++
+ static void x2600_pll_set(u32 reg, u32 val)
+ {
+ 	int timeout = 0x10000;
+@@ -234,25 +259,21 @@ static void x2600_pll_set(u32 reg, u32 val)
+ 		printf("SPL: PLL %x doesn't lock\n", reg);
+ }
+ 
+-/* CPU 1152 MHz (APLL), L2 /2, AHB0 /5, AHB2 /6, APB /12 */
+-#define X2600_CPCCR_DIVS	0x000b5410
+-#define X2600_CPCCR_SELS	0x9a000000
+-
+ static void x2600_pll_init(void)
+ {
+ 	/* safe dividers first */
+-	cpm_wr(0x55700000, CPM_CPCCR);
++	cpm_wr(x2600_clk.cpccr_safe, CPM_CPCCR);
+ 	while ((cpm_rd(CPM_CPCSR) & 0xf0000007) != 0xf0000000)
+ 		;
+ 
+-	x2600_pll_set(CPM_CPAPCR, 0x03004900);
+-	x2600_pll_set(CPM_CPMPCR, 0x04b04900);
+-	x2600_pll_set(CPM_CPEPCR, 0x01905100);
++	x2600_pll_set(CPM_CPAPCR, x2600_clk.apll);
++	x2600_pll_set(CPM_CPMPCR, x2600_clk.mpll);
++	x2600_pll_set(CPM_CPEPCR, x2600_clk.epll);
+ 
+-	cpm_wr(0x55700000 | X2600_CPCCR_DIVS, CPM_CPCCR);
++	cpm_wr(x2600_clk.cpccr_divs, CPM_CPCCR);
+ 	while (cpm_rd(CPM_CPCSR) & 7)
+ 		;
+-	cpm_wr(X2600_CPCCR_SELS | X2600_CPCCR_DIVS, CPM_CPCCR);
++	cpm_wr(x2600_clk.cpccr_sels, CPM_CPCCR);
+ 	while ((cpm_rd(CPM_CPCSR) & 0xf0000000) != 0xf0000000)
+ 		;
+ }
+-- 
+2.56.0
+

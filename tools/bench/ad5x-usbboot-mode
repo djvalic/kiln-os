@@ -1,0 +1,118 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# ad5x-usbboot-mode: reboot this AD5X into the X2600 boot ROM's USB boot
+# mode (the soft entry, found by alexshev86, djvalic/kiln-os#68): write
+# "SWB" << 8 | 2 = 0x42575302 to CPM_SLPC (0x100000cc), as Ingenic's
+# softburn command does (SDK u-boot common/cmd_softburn.c), and reboot.
+# The boot ROM then waits on J28 (USB OTG) as a108:eaef instead of booting
+# from the eMMC; u-boot/tools/ad5x_usbboot.py run-spl starts an SPL there.
+# Nothing is written to the eMMC; a power cycle boots normally again.
+#
+# OUR BENCH ONLY (u-boot/USB-BOOT.md). Not in any image, not in the update
+# or install path, not in HelixScreen or Fluidd: copy it over SSH when
+# needed (scp -O tools/bench/ad5x-usbboot-mode root@PRINTER:/tmp/).
+#
+#   ad5x-usbboot-mode                 checks, then says what it would do
+#   ad5x-usbboot-mode --yes           does it: the register, then reboot
+#   --moonraker-down-ok               go on when Moonraker doesn't answer
+#                                     (only if you know nothing prints)
+#
+# Refuses: not root; not Kiln OS's main OS; not an X2600; no devmem or
+# /dev/mem; Klipper printing or paused (Moonraker's print_stats), or
+# Moonraker not answering. Exit 0 done (rebooting), 1 refused or failed,
+# 2 checks passed but no --yes.
+#
+# Getting back: power-cycle the printer (off for a few seconds; on our
+# bench a smart plug). CPM_SLPC doesn't
+# survive power-off. Kiln's SPL started over USB clears it too, so the
+# reboot after that boots from the eMMC.
+set -u
+
+SLPC=0x100000cc
+MAGIC=0x42575302
+ROOT=${AD5X_BENCH_ROOT:-}		# tests: a stand-in for / (files read)
+MOONRAKER=${AD5X_MOONRAKER:-http://127.0.0.1:7125}
+ME=ad5x-usbboot-mode
+
+die() {
+	echo "$ME: $*" >&2
+	exit 1
+}
+
+yes=0
+moonraker_down_ok=0
+for a in "$@"; do
+	case "$a" in
+	--yes) yes=1 ;;
+	--moonraker-down-ok) moonraker_down_ok=1 ;;
+	-h|--help)
+		sed -n '3,33s/^# \{0,1\}//p' "$0"
+		exit 0 ;;
+	*) die "unknown argument: $a (--yes, --moonraker-down-ok)" ;;
+	esac
+done
+
+[ "$(id -u)" = 0 ] || die "run as root"
+[ -f "$ROOT/etc/kiln-version" ] ||
+	die "not Kiln OS (no /etc/kiln-version): refused"
+[ ! -e "$ROOT/etc/ad5x-recovery" ] ||
+	die "this is the recovery OS: run it on the main OS"
+compat=$(tr '\000' ' ' < "$ROOT/proc/device-tree/compatible" 2>/dev/null)
+case "$compat" in
+*ingenic,x2600*) ;;
+*) die "not an Ingenic X2600 (device tree: ${compat:-unreadable})" ;;
+esac
+command -v devmem >/dev/null 2>&1 ||
+	die "no devmem (BusyBox CONFIG_DEVMEM, on in Kiln OS's image)"
+[ -e "$ROOT/dev/mem" ] || die "no /dev/mem (kernel CONFIG_DEVMEM)"
+
+# Klipper's print state, from Moonraker
+fetch() {
+	if command -v curl >/dev/null 2>&1; then
+		curl -fsS -m 5 "$1"
+	elif command -v wget >/dev/null 2>&1; then
+		wget -qO- -T 5 "$1"
+	else
+		return 127
+	fi
+}
+json=$(fetch "$MOONRAKER/printer/objects/query?print_stats" 2>/dev/null)
+state=$(printf '%s\n' "$json" |
+	sed -n 's/.*"state"[[:space:]]*:[[:space:]]*"\([a-z_]*\)".*/\1/p' |
+	head -n 1)
+case "$state" in
+printing|paused)
+	die "Klipper is $state: not while a print runs" ;;
+"")
+	[ "$moonraker_down_ok" = 1 ] ||
+		die "no print state from Moonraker ($MOONRAKER): refused; --moonraker-down-ok if you know nothing is printing"
+	state="unknown (Moonraker didn't answer; --moonraker-down-ok)" ;;
+esac
+
+cur=$(devmem $SLPC 32 2>/dev/null) || die "can't read $SLPC with devmem"
+kernel=$(uname -r)
+
+cat <<EOF
+$ME: what this does (bench only, nothing written to the eMMC):
+  1. devmem $SLPC 32 $MAGIC   (CPM_SLPC, now $cur: "SWB" << 8 | 2)
+  2. reboot: the boot ROM then waits on J28 as a108:eaef, the printer is
+     off the network; Klipper state now: $state
+Back: u-boot/tools/ad5x_usbboot.py run-spl spl-usb.bin on the laptop at
+J28, or a power cycle (a few seconds off; the smart plug) for a normal
+start. Kernel $kernel (the soft entry was seen working on 6.6, #68).
+EOF
+if [ "$yes" != 1 ]; then
+	echo "$ME: nothing done; run it again with --yes to do it"
+	exit 2
+fi
+
+devmem $SLPC 32 $MAGIC || die "devmem write failed"
+rb=$(devmem $SLPC 32) || die "can't read $SLPC back"
+if [ "$(printf '%d' "$rb")" != "$(printf '%d' $MAGIC)" ]; then
+	devmem $SLPC 32 "$cur"
+	die "$SLPC reads $rb after the write, not $MAGIC: put $cur back, not rebooting"
+fi
+echo "$ME: CPM_SLPC = $rb; rebooting into the boot ROM's USB mode"
+sync
+reboot

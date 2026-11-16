@@ -20,7 +20,7 @@ exists and does what is described below.
 
 | zMod / slicer | Count in the files | Here | Plugin |
 |---|---|---|---|
-| `START_PRINT EXTRUDER_TEMP= BED_TEMP=` | 140 | `PRINT_START EXTRUDER= BED=`, then `LINE_PURGE`; without `EXTRUDER_TEMP=`/`BED_TEMP=` the temperatures the file already set (its own `M104`/`M140`), else zMod's 245 / 80. A temperature that is not a number or is out of range stops the start (see the rule below) | zmod-compat |
+| `START_PRINT EXTRUDER_TEMP= BED_TEMP=` | 140 | `PRINT_START EXTRUDER= BED=`, which draws the prime line (zMod's line purge); `LINE_PURGE` after it only when that line is off (`[gcode_macro _PRIME_LINE] variable_prime_line: 0`), so the line is drawn once either way; without `EXTRUDER_TEMP=`/`BED_TEMP=` the temperatures the file already set (its own `M104`/`M140`), else zMod's 245 / 80. A temperature that is not a number or is out of range stops the start (see the rule below) | zmod-compat |
 | `START_PRINT` without `FORCE_*` | | `PRINT_START` decides: the printer's `macros/print_start.cfg` meshes the print area every print (zMod's `print_leveling: 1` + `use_kamp: 1`); the factory one does the stock Z check. The bed heat soak applies too; `SOAK=<s>` is passed on (ours, not zMod's) | zmod-compat |
 | `START_PRINT FORCE_LEVELING=1` / `FORCE_KAMP=1` | | `PRINT_START LEVEL=1 ADAPTIVE=0` / `ADAPTIVE=1` | zmod-compat |
 | `START_PRINT TOOL=n` (Bambufy) | | `PRINT_START TOOL=n` (loads it at the end of the start). TOOL must be a whole number or -1 (see the rule below) | zmod-compat |
@@ -40,7 +40,7 @@ exists and does what is described below.
 | `SET_PRINT_STATS_INFO` | 138 | Klipper's, plus pause at a layer | zmod-compat |
 | `SET_PAUSE_NEXT_LAYER`, `SET_PAUSE_AT_LAYER` | | pause when the layer starts (`MACRO=` default `PAUSE`); Fluidd/Mainsail use these too | zmod-compat |
 | `M600` | | `PAUSE`, then wait at the purge box; `RESUME` returns | zmod-compat |
-| `LINE_PURGE` | | `_PRIME_LINE FORCE=1` (line in front of the labelled objects; the printer's `macros/prime_line.cfg`, a message without it) | zmod-compat |
+| `LINE_PURGE` | | `_PRIME_LINE FORCE=1` (line in front of the labelled objects; the printer's `macros/prime_line.cfg`, a message without it). During a print, skipped with a console line once `PRINT_START` has drawn its prime line; `LINE_PURGE FORCE=1` draws anyway ("KAMP" below) | zmod-compat |
 | `LED_ON`, `LED_OFF`, `LED S=0-100` | | chamber light | zmod-compat |
 | `M300`, `PLAY_MIDI FILE=` | | the speaker (`ad5x_sound`, system): beep, MIDI files from the config folder's `midi/` or the image's sounds | system |
 | `G10`, `G11`, `SET_RETRACTION` | 128,759 / 128,704 / 2 | Klipper `[firmware_retraction]`: 0.7 mm at 35 mm/s (zMod's values; the Home profile says 1.4 mm, which zMod didn't apply) | core (`ad5x.cfg`) |
@@ -142,7 +142,7 @@ Differences from zMod:
 | `clear = 'LINE_PURGE'`, `disable_priming = 0` | `START_PRINT` `variable_line_purge: 1`; the line itself: `macros/prime_line.cfg` (`_PRIME_LINE`) |
 | `remove_filament = 1` | `END_PRINT` `variable_unload_filament` (0 by default; set 1 in `local.cfg` to unload at the end) |
 | `load_zoffset = 1` | always: the saved Z offset (`zoffset`) |
-| `use_kamp = 1`, `print_leveling = 1` | the default: `PRINT_START` meshes the print area every print (`variable_mesh_every_print: 1`, `variable_adaptive_mesh: 1` in `macros/print_start.cfg`; set 0 in `local.cfg` for the stock Z check) |
+| `use_kamp = 1`, `print_leveling = 1` | the default: `PRINT_START` meshes the print area every print (`variable_mesh_every_print: 1`, `variable_adaptive_mesh: 1` in `macros/print_start.cfg`; set 0 in `local.cfg` for the stock Z check); no KAMP include needed ("KAMP" below) |
 | `[extruder] pressure_advance: 0.035` (0.6 nozzle) | the files set it with `SET_PRESSURE_ADVANCE`; for others put it in `local.cfg` |
 | `[quickswap] insert_base_distance: 8.0` | `[ifs] prime_length` (see above) |
 | `[zmod_ifs]` | none needed (`klipper/extras/ifs.py`) |
@@ -159,6 +159,65 @@ prime_length: 14
 [firmware_retraction]
 retract_length: 0.8
 ```
+
+## KAMP
+
+zMod ships its own modified copy of KAMP (the `KAMP/` folder next to its
+macro configs), not upstream KAMP:
+
+- The mesh macro is renamed `_KAMP_BED_MESH_CALIBRATE`. zMod's own
+  `BED_MESH_CALIBRATE` calls it only when `use_kamp` is 1 (otherwise
+  Klipper's full mesh), and zMod's `KAMP` macro calls it for
+  `START_PRINT FORCE_KAMP=1`.
+- Its `LINE_PURGE` is the line behind zMod's `clear` default
+  (`LINE_PURGE`); `_SMART_PARK` parks next to the print area;
+  `_KAMP_Settings` holds the print area zMod reads from the file
+  (`fast_*` variables).
+- It depends on zMod-only macros and settings: `_TEST_MIN_MAX`,
+  `_CLEAR2`, `_CLIENT_VARIABLE`, the `[zmod]` section's language, and
+  `_DISABLE_SENSOR` / `_ENABLE_SENSOR` (zmod-compat has these two). Copying
+  zMod's `KAMP/` folder to this printer therefore fails at print time with
+  unknown commands. Don't copy it.
+
+Here `PRINT_START` does both jobs itself (`macros/print_start.cfg`: a mesh
+of the print area every print; `macros/prime_line.cfg`: the prime line in
+front of the objects), so no KAMP files are needed (neither zMod's copy
+nor upstream KAMP) and slicer profiles don't need `BED_MESH_CALIBRATE` or
+`LINE_PURGE` in their start G-code; zMod-made files call only
+`START_PRINT`.
+
+`use_kamp` differs: on zMod it changes every `BED_MESH_CALIBRATE`, the
+one typed in the console included. Here `variable_adaptive_mesh`
+changes only the mesh `PRINT_START` makes; `BED_MESH_CALIBRATE` from the
+console stays Klipper's mesh (whole bed unless `ADAPTIVE=1`).
+
+Since issue #73, during a print a `BED_MESH_CALIBRATE`, `LINE_PURGE` or
+`VORON_PURGE` (upstream KAMP's `Voron_Purge.cfg`) after `PRINT_START` is
+skipped with a console line, as `PRINT_START` has already meshed and drawn
+its prime line (`FORCE=1` runs it anyway; a `BED_MESH_CALIBRATE` with
+`PROFILE=` or `ADAPTIVE=0` always runs). `SMART_PARK` (upstream
+`Smart_Park.cfg`) is harmless and not skipped. This check is Kiln's own:
+zMod has none, as its profiles put only `START_PRINT` in the start
+G-code.
+
+Klipper start shows a warning (Fluidd and Mainsail list it with Klipper's
+warnings; also in the console) when a config replaces the `gcode:` of
+these commands, not for an include as such:
+
+- `BED_MESH_CALIBRATE`: upstream KAMP's `Adaptive_Meshing.cfg` does this
+  (zMod's copy doesn't: its macro has another name). Kiln's mesh then runs
+  without the strain gauge tare, and no full mesh saves the bed centre
+  (`ad5x_center_z`) any more.
+- `LINE_PURGE` (upstream KAMP's `Line_Purge.cfg`, or another config): only
+  while Kiln's prime line is on.
+
+With upstream KAMP's `BED_MESH_CALIBRATE` in place, don't turn Kiln's mesh
+off (`mesh_every_print: 0`): the stock Z check then needs a saved bed
+centre, which only Kiln's full mesh writes, so without one each print stops
+at the start with "no saved centre Z". Remove the KAMP include instead.
+
+`docs/print-start.md`, "One mesh and one prime line per print", has the
+details and the settings to let the slicer's mesh or line run instead.
 
 ## First tool load of a print
 

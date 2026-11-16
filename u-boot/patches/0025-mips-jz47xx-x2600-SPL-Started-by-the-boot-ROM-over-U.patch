@@ -1,0 +1,221 @@
+From c61067fc7f054092febb7522fe69bb697df1825b Mon Sep 17 00:00:00 2001
+From: valix <djvalic.wc@gmail.com>
+Date: Sun, 15 Nov 2026 13:16:43 -0500
+Subject: [PATCH 25/25] mips: jz47xx: x2600: SPL: Started by the boot ROM over
+ USB
+
+The bench's cold-start test (u-boot/USB-BOOT.md) has the boot ROM load
+this SPL over USB, with nothing written to the eMMC; the SPL then boots
+the slot from the eMMC exactly as from an eMMC start. Three things
+differ when it was started that way:
+
+- It tells: u-boot/tools/ad5x_usbboot.py sends spl-usb.bin, which is
+  spl-mmc.img with "KILNUSB1" at offset 0x7f0 of the header, so the tag
+  lands at 0x800017f0 (an eMMC start finds the image's zeros there).
+  The soft way into USB boot (CPM_SLPC = "SWB" << 8 | 2 and a reboot,
+  djvalic/kiln-os#68) is seen in CPM_SLPC. The SPL logs "started over
+  USB" and clears both, CPM_SLPC so that the next reset (a failed try,
+  a reboot of the kernel it starts) boots from the eMMC again instead of
+  waiting for USB.
+- A fresh start: the scratch pad (CPSPR) is printed but not counted, so
+  each USB start runs the same plan whatever an earlier one left.
+- A short DDR test after the DDR setup, uncached: the data lines, address
+  lines 2-27 (Barr's test around 0x04100000) and 16 MiB from 0x01000000
+  with address and inverted-address patterns, inside physical
+  0x00100000-0x0C100000 (not the SRAM window's first MiB, not ramoops).
+  A failure resets through the watchdog like the other SPL failures.
+
+The code is the same for both starts; spl-usb.bin differs from
+spl-mmc.img only in the tag.
+---
+ arch/mips/mach-jz47xx/x2600/spl.c | 138 +++++++++++++++++++++++++++++-
+ 1 file changed, 137 insertions(+), 1 deletion(-)
+
+diff --git a/arch/mips/mach-jz47xx/x2600/spl.c b/arch/mips/mach-jz47xx/x2600/spl.c
+index cfb651d8..6c9e0d73 100644
+--- a/arch/mips/mach-jz47xx/x2600/spl.c
++++ b/arch/mips/mach-jz47xx/x2600/spl.c
+@@ -23,6 +23,12 @@
+  *     other slot.
+  * A failure resets the board through the watchdog for the next try; after
+  * AD5X_START_TRIES attempts the SPL stops, the watchdog off.
++ *
++ * Started by the boot ROM over USB (u-boot/USB-BOOT.md: the bench's cold
++ * start test, nothing written to the eMMC) it does the same, but as a
++ * fresh start whatever the scratch pad holds, with a short DDR test after
++ * the DDR setup, and it clears the soft USB boot request in CPM_SLPC so
++ * that the next reset boots from the eMMC again.
+  */
+ 
+ #include <cpu_func.h>
+@@ -31,6 +37,7 @@
+ #include <init.h>
+ #include <serial.h>
+ #include <spl.h>
++#include <time.h>
+ #include <asm/cache.h>
+ #include <asm/global_data.h>
+ #include <asm/io.h>
+@@ -177,6 +184,124 @@ struct serial_device *default_serial_console(void)
+ 	return &x2600_spl_serial;
+ }
+ 
++/* ---- started by the boot ROM over USB (u-boot/USB-BOOT.md) ---- */
++
++/*
++ * u-boot/tools/ad5x_usbboot.py sends spl-usb.bin: spl-mmc.img with
++ * "KILNUSB1" at offset 0x7f0 of its 2 KiB header, so the tag lands at
++ * 0x800017f0 with the rest; an eMMC start finds the image's zeros there.
++ * (Ingenic's USB stage 1 learns it the same way, from a "BOOT" record the
++ * host puts at 0x80001000: the SDK's xburst2/param_manage.c.)
++ */
++#define AD5X_USB_TAG		((volatile u32 *)0x800017f0)
++#define AD5X_USB_TAG0		0x4e4c494b	/* "KILN" */
++#define AD5X_USB_TAG1		0x31425355	/* "USB1" */
++/*
++ * The soft way into the boot ROM's USB mode (djvalic/kiln-os#68): Linux
++ * writes "SWB" << 8 | 2 to CPM_SLPC and reboots (the SDK's
++ * cmd_softburn.c; tools/bench/ad5x-usbboot-mode). Nothing says the ROM
++ * clears it, and it survives a watchdog reset; cleared here, the next
++ * reset (a failed try, a reboot of the kernel started) boots from the
++ * eMMC again instead of waiting for USB.
++ */
++#define X2600_CPM_SLPC		((void __iomem *)0xb00000cc)
++#define SLPC_SOFT_USB_BOOT	0x42575302
++
++static bool spl_usb;		/* loaded by the boot ROM over USB */
++static bool spl_usb_soft;	/* after the soft entry: SLPC cleared */
++
++/* nothing here can hang: SRAM and the CPM only */
++static void spl_usb_check(void)
++{
++	volatile u32 *tag = AD5X_USB_TAG;
++
++	if (tag[0] == AD5X_USB_TAG0 && tag[1] == AD5X_USB_TAG1) {
++		spl_usb = true;
++		tag[0] = 0;	/* not again after a reset without a reload */
++		tag[1] = 0;
++	}
++	if (readl(X2600_CPM_SLPC) == SLPC_SOFT_USB_BOOT) {
++		writel(0, X2600_CPM_SLPC);
++		spl_usb = true;
++		spl_usb_soft = true;
++	}
++}
++
++#ifndef CONFIG_AD5X_SPL_CHAINLOAD
++/*
++ * A short DDR test for the USB cold starts, uncached (KSEG1) so that it
++ * reaches the chips: the data lines at one word; address lines 2-27 with
++ * words that differ from 0x04100000 in one bit each (the low 256 MiB,
++ * which KSEG1 maps; the upper 256 MiB at 0x30000000 needs the kernel's
++ * mappings); 16 MiB from 0x01000000 with each word's address, then its
++ * inverse. Physical 0x00100000-0x0C100000 only: not the first MiB (the
++ * SRAM window), not ramoops at 0x0EB00000.
++ */
++#define DDR_T_BASE		0xa4100000	/* physical bits 20 and 26 */
++#define DDR_T_FILL		0xa1000000
++#define DDR_T_FILL_LEN		(16 << 20)
++#define DDR_T_AT(b)		((volatile u32 *)(DDR_T_BASE ^ (1U << (b))))
++
++static int spl_ddr_bad(volatile u32 *p, u32 want)
++{
++	u32 got = *p;
++
++	if (got == want)
++		return 0;
++	printf("SPL: DDR test: 0x%x reads 0x%x, 0x%x written\n",
++	       (u32)p & 0x1fffffff, got, want);
++	return 1;
++}
++
++static int spl_ddr_test(void)
++{
++	volatile u32 *base = (volatile u32 *)DDR_T_BASE, *p;
++	volatile u32 *end = (volatile u32 *)(DDR_T_FILL + DDR_T_FILL_LEN);
++	u32 i, j, x, t0 = (u32)get_ticks();
++
++	/* data lines: walking 1 and walking 0, another word in between */
++	for (i = 0; i < 64; i++) {
++		x = i & 1 ? ~(1U << (i >> 1)) : 1U << (i >> 1);
++		*base = x;
++		base[1] = ~x;
++		if (spl_ddr_bad(base, x))
++			return -1;
++	}
++
++	/* address lines: no word may change another (Barr's test) */
++	for (i = 2; i < 28; i++)
++		*DDR_T_AT(i) = 0xaaaaaaaa;
++	*base = 0x55555555;
++	for (i = 2; i < 28; i++)
++		if (spl_ddr_bad(DDR_T_AT(i), 0xaaaaaaaa))
++			return -1;
++	*base = 0xaaaaaaaa;
++	for (j = 2; j < 28; j++) {
++		*DDR_T_AT(j) = 0x55555555;
++		if (spl_ddr_bad(base, 0xaaaaaaaa))
++			return -1;
++		for (i = 2; i < 28; i++)
++			if (i != j && spl_ddr_bad(DDR_T_AT(i), 0xaaaaaaaa))
++				return -1;
++		*DDR_T_AT(j) = 0xaaaaaaaa;
++	}
++
++	/* 16 MiB: each word its address, then inverted */
++	for (x = 0; x < 2; x++) {
++		x2600_wdt_start(AD5X_SPL_WDT_MS);
++		for (p = (volatile u32 *)DDR_T_FILL; p < end; p++)
++			*p = (u32)p ^ -x;
++		for (p = (volatile u32 *)DDR_T_FILL; p < end; p++)
++			if (spl_ddr_bad(p, (u32)p ^ -x))
++				return -1;
++	}
++	printf("SPL: DDR test: data lines, address lines 2-27, 16 MiB at "
++	       "0x%x: good (%u ms)\n", DDR_T_FILL & 0x1fffffff,
++	       ((u32)get_ticks() - t0) / 24000);
++	return 0;
++}
++#endif
++
+ /* ---- the tries (mach/ad5x_start.h) ---- */
+ 
+ static struct ad5x_plan plan;
+@@ -372,8 +497,10 @@ void board_init_f(ulong dummy)
+ 	 * hang (pins, the console, the first print), see what the last start
+ 	 * left and arm it for this attempt.
+ 	 */
++	spl_usb_check();
+ 	prev = x2600_cpspr_read();
+-	ad5x_start_plan(prev, &plan);
++	/* over USB: started on purpose from the bench, not another try */
++	ad5x_start_plan(spl_usb ? 0 : prev, &plan);
+ 	if (!plan.stop)
+ 		spl_phase(AD5X_PH_DDR, plan.slot_b);
+ 
+@@ -384,6 +511,10 @@ void board_init_f(ulong dummy)
+ 	gd->flags |= GD_FLG_SPL_INIT;
+ 	preloader_console_init();
+ 	printf("SPL: %s\n", spl_kind);
++	if (spl_usb)
++		printf("SPL: started over USB%s; scratch pad 0x%x not counted: "
++		       "a fresh start\n",
++		       spl_usb_soft ? " (soft entry, SLPC cleared)" : "", prev);
+ 
+ 	if (plan.stop) {
+ 		x2600_wdt_stop();
+@@ -403,6 +534,11 @@ void board_init_f(ulong dummy)
+ 	x2600_spl_clocks_init();
+ 	if (x2600_sdram_init())
+ 		spl_fail(AD5X_PH_DDR, plan.slot_b, "DDR training failed");
++	if (spl_usb) {
++		x2600_wdt_start(AD5X_SPL_WDT_MS);
++		if (spl_ddr_test())
++			spl_fail(AD5X_PH_DDR, plan.slot_b, "DDR test failed");
++	}
+ #else
+ 	puts("SPL: chainload test build: clocks and DDR as Linux left them\n");
+ #endif
+-- 
+2.56.0
+

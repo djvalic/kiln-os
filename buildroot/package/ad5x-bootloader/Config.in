@@ -1,0 +1,10 @@
+config BR2_PACKAGE_AD5X_BOOTLOADER
+	bool "ad5x-bootloader"
+	help
+	  Kiln's own boot loader for the AD5X: Kiln's SPL and mainline
+	  U-Boot (v2026.10 with u-boot/patches), built and checked by
+	  u-boot/build.sh with Buildroot's toolchain. Only the images go
+	  into the image (/usr/share/ad5x/bootloader: spl-mmc.img,
+	  u-boot-emmc.img, SHA256SUMS, report.txt), for the recovery
+	  OS's opt-in installer (ad5x-bootloader-install). Nothing writes
+	  them unless the user runs it. docs/own-boot-loader.md.

@@ -27,6 +27,8 @@ define AD5X_KERNEL66_BUILD_CMDS
 		bash ./build.sh
 	$(MAKE) -C $(@D)/chainload KDIR=$(AD5X_KERNEL66_KDIR510) \
 		CROSS_COMPILE=$(HOST_DIR)/bin/mipsel-linux-
+	$(MAKE) -C $(@D)/chainload uboot KDIR=$(AD5X_KERNEL66_KDIR510) \
+		CROSS_COMPILE=$(HOST_DIR)/bin/mipsel-linux-
 	cat $(AD5X_KERNEL66_OUT)/include/config/kernel.release > $(@D)/release
 endef
 
@@ -37,6 +39,16 @@ define AD5X_KERNEL66_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/usr/lib/ad5x/kernel66/chainload.ko
 	$(INSTALL) -D -m 0644 $(@D)/release \
 		$(TARGET_DIR)/usr/lib/ad5x/kernel66/release
+endef
+
+# The bench variant of chainload.ko (U-Boot proper's load address, for
+# tools/bench/ad5x-uboot-chainload): next to the images, never in the
+# rootfs; tools/autobuild.sh copies images/bench into the run's logs.
+AD5X_KERNEL66_INSTALL_IMAGES = YES
+define AD5X_KERNEL66_INSTALL_IMAGES_CMDS
+	$(INSTALL) -D -m 0644 $(@D)/chainload/build-uboot/chainload_uboot.ko \
+		$(BINARIES_DIR)/bench/chainload_uboot.ko
+	cd $(BINARIES_DIR)/bench && sha256sum chainload_uboot.ko > SHA256SUMS
 endef
 
 $(eval $(generic-package))

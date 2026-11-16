@@ -1,0 +1,851 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Sun, 15 Nov 2026 12:30:00 -0500
+Subject: [PATCH] kiln: Reboot and Shutdown through Kiln's update agent, touch
+ units tag
+
+Kiln OS (after v1.0.0-rc2) routes Moonraker's machine.reboot and
+machine.shutdown through its root update agent, which refuses while a
+print may run, while the recovery OS is being written into slot A, and
+for the first 10 minutes after boot while start-up has not finished.
+The screen's own Reboot and Shutdown skipped all of that: on a host
+without systemd it ran /sbin/reboot or /sbin/poweroff itself, as root,
+and after any failed RPC it fell back to them.
+
+- On HELIX_KILN_AD5X builds (helix::kiln_host_power()) the shutdown
+  dialog always goes through Moonraker (ShutdownDialogMode
+  KilnViaMoonraker, plan_power_dialog): no local power-off, whatever the
+  connection or the error. A refusal closes the dialog and a toast says
+  why ("Can't restart the printer: A print is running"); without a
+  connection, "Not connected to the printer".
+- The home Shutdown tile and Advanced's Shutdown and Reboot rows are
+  greyed while a job holds the machine (kiln_power_locked, from
+  job_holds_machine, published after PrinterState's subjects), as Boot
+  into recovery is greyed during a print.
+- Touch calibration: every save of the touch range writes
+  input.ad5x_touch_units, "stock" on the 5.10 kernel and "own" on Kiln's
+  kernels. Kiln's ad5x-touch-units takes a range without the tag for
+  stock units, so a calibration made on Kiln's kernel after a factory
+  reset was converted a second time and touch was off.
+
+Other builds keep upstream's behaviour. Strings in en and ru.
+
+Tests: the Kiln plan for every host and connection, other builds'
+plan unchanged, the refusal texts (with and without the reason in
+front), the lock following job_holds_machine only on Kiln, the units by
+kernel release and the tag written on Kiln saves only.
+
+Upstream: not applicable (AD5X OS specific)
+---
+ include/platform_info.h                     |  11 ++
+ include/touch_calibration_wrapper.h         |  15 ++
+ src/api/touch_calibration_wrapper.cpp       |  35 ++++
+ src/application/subject_initializer.cpp     |  10 ++
+ src/system/platform_info.cpp                |  18 ++
+ src/ui/panel_widgets/shutdown_widget.cpp    | 155 ++++++++++++++++-
+ src/ui/panel_widgets/shutdown_widget.h      |  37 ++++
+ tests/unit/test_kiln_host_power.cpp         | 184 ++++++++++++++++++++
+ tests/unit/test_kiln_touch_units.cpp        |  96 ++++++++++
+ translations/en.yml                         |   3 +
+ translations/ru.yml                         |   3 +
+ ui_xml/advanced_panel.xml                   |   7 +-
+ ui_xml/components/panel_widget_shutdown.xml |   3 +-
+ 13 files changed, 571 insertions(+), 6 deletions(-)
+ create mode 100644 tests/unit/test_kiln_host_power.cpp
+ create mode 100644 tests/unit/test_kiln_touch_units.cpp
+
+diff --git a/include/platform_info.h b/include/platform_info.h
+index d724b0fe..c2693dc2 100644
+--- a/include/platform_info.h
++++ b/include/platform_info.h
+@@ -16,6 +16,17 @@ bool is_android_platform();
+ /// is seeded from it and the shutdown widget/dialog gate on that.
+ bool platform_host_power_supported();
+ 
++/// Kiln OS (HELIX_KILN_AD5X builds): Reboot and Shutdown go through Moonraker
++/// only. Kiln's Moonraker hands them to its root update agent, which refuses
++/// while a print may run, while the recovery OS is being written and before
++/// start-up has finished; the screen shows that answer and never runs
++/// /sbin/reboot or /sbin/poweroff itself, and its power entries grey out while
++/// a job holds the machine (kiln_power_locked, shutdown_widget.h).
++bool kiln_host_power();
++
++/// Test helper: override kiln_host_power(). Pass -1 to reset to the build's.
++void set_kiln_host_power_override(int override_value);
++
+ /// True when this platform's software is owned by something other than HelixScreen
+ /// by DEFAULT, so the in-app updater must stay quiet unless explicitly turned on.
+ ///
+diff --git a/include/touch_calibration_wrapper.h b/include/touch_calibration_wrapper.h
+index 898b63a8..5d622d12 100644
+--- a/include/touch_calibration_wrapper.h
++++ b/include/touch_calibration_wrapper.h
+@@ -6,6 +6,8 @@
+ 
+ #include <functional>
+ #include <lvgl.h>
++#include <optional>
++#include <string>
+ 
+ namespace helix {
+ 
+@@ -144,6 +146,19 @@ TouchRangeSettings load_touch_range();
+ /// full-pipeline affine.
+ void save_touch_range(const TouchRangeSettings& range);
+ 
++/// Kiln OS: the units a touch range saved now is in, for
++/// /input/ad5x_touch_units. The AD5X's stock 5.10 kernel reports the touch in
++/// panel units ("stock"), Kiln's own kernels the raw readings ("own"); Kiln's
++/// ad5x-touch-units converts the stored range when the kernel changes and takes
++/// a range without the tag for stock units. Pure.
++const char* kiln_touch_units(const std::string& kernel_release);
++
++/// Kiln OS: whether save_touch_range() writes /input/ad5x_touch_units (the
++/// running kernel's kiln_touch_units()). True on HELIX_KILN_AD5X builds; tests
++/// override it (nullopt: the build's answer).
++bool kiln_touch_units_tagged();
++void set_kiln_touch_units_tagged_for_test(std::optional<bool> on);
++
+ /// Install the calibration read callback wrapper on an input device.
+ /// Sets up ctx with the calibration data, chains to the existing read callback,
+ /// and records ctx as the process-wide active calibration context (see the .cpp
+diff --git a/src/api/touch_calibration_wrapper.cpp b/src/api/touch_calibration_wrapper.cpp
+index 20aa8f44..18b3540c 100644
+--- a/src/api/touch_calibration_wrapper.cpp
++++ b/src/api/touch_calibration_wrapper.cpp
+@@ -11,7 +11,9 @@
+ #include <spdlog/spdlog.h>
+ 
+ #include <mutex>
++#include <optional>
+ #include <string>
++#include <sys/utsname.h>
+ 
+ namespace helix {
+ 
+@@ -329,9 +331,42 @@ TouchRangeSettings load_touch_range() {
+     return range;
+ }
+ 
++namespace {
++// Kiln OS (HELIX_KILN_AD5X, set by its helixscreen.mk): tag saved ranges
++std::optional<bool> s_kiln_touch_units_override;
++} // namespace
++
++const char* kiln_touch_units(const std::string& kernel_release) {
++    return kernel_release.rfind("5.10.", 0) == 0 ? "stock" : "own";
++}
++
++bool kiln_touch_units_tagged() {
++#if defined(HELIX_KILN_AD5X)
++    return s_kiln_touch_units_override.value_or(true);
++#else
++    return s_kiln_touch_units_override.value_or(false);
++#endif
++}
++
++void set_kiln_touch_units_tagged_for_test(std::optional<bool> on) {
++    s_kiln_touch_units_override = on;
++}
++
+ void save_touch_range(const TouchRangeSettings& range) {
+     helix::Config* cfg = helix::Config::get_instance();
+ 
++    if (kiln_touch_units_tagged()) {
++        // Kiln OS: the units of what is saved now (range and affine), so
++        // ad5x-touch-units doesn't take a range calibrated on Kiln's kernel
++        // for stock units (a missing tag) and convert it a second time, as
++        // after a factory reset
++        struct utsname u {};
++        const std::string release = uname(&u) == 0 ? std::string(u.release) : std::string();
++        const char* units = kiln_touch_units(release);
++        cfg->set<std::string>("/input/ad5x_touch_units", units);
++        spdlog::info("[TouchCal] Touch units tagged {} (kernel {})", units, release);
++    }
++
+     cfg->set<bool>("/input/touch_range/valid", range.valid);
+     if (!range.valid) {
+         // Leave the numbers alone but make sure nothing reads them. A calibration
+diff --git a/src/application/subject_initializer.cpp b/src/application/subject_initializer.cpp
+index 74997365..8ca64ab8 100644
+--- a/src/application/subject_initializer.cpp
++++ b/src/application/subject_initializer.cpp
+@@ -89,6 +89,12 @@
+ #include <chrono>
+ #include <memory>
+ 
++// Kiln OS: defined in src/ui/panel_widgets/shutdown_widget.cpp; that directory
++// is not on this file's include path (as in demo_overlays.cpp)
++namespace helix {
++void init_kiln_power_lock_subject(PrinterState& state, bool register_xml);
++}
++
+ SubjectInitializer::SubjectInitializer() = default;
+ // PanelWidgetManager outlives this object, and the next printer's widget subjects read
+ // their shared resources before that printer's SubjectInitializer registers its own, so a
+@@ -140,6 +146,10 @@ void SubjectInitializer::init_core_and_state() {
+     // after all three, and before any panel XML binds the name.
+     helix::zoffset::init_save_available_subject();
+ 
++    // Kiln OS: kiln_power_locked greys the power entries while a job holds the
++    // machine (from PrinterState's job_holds_machine), before any panel XML
++    helix::init_kiln_power_lock_subject(get_printer_state(), true);
++
+     // The active bed mesh's stats, read by BedMeshPanel's XML and the home tile. They
+     // exist from here, so neither depends on the panel having been opened.
+     helix::BedMeshState::instance().init_subjects();
+diff --git a/src/system/platform_info.cpp b/src/system/platform_info.cpp
+index ef070d63..125d5fb1 100644
+--- a/src/system/platform_info.cpp
++++ b/src/system/platform_info.cpp
+@@ -48,6 +48,24 @@ bool platform_host_power_supported() {
+     return !is_android_platform();
+ }
+ 
++// -1 = the build's answer (HELIX_KILN_AD5X, set by Kiln OS's helixscreen.mk)
++static int s_kiln_host_power_override = -1;
++
++bool kiln_host_power() {
++    if (s_kiln_host_power_override >= 0) {
++        return s_kiln_host_power_override != 0;
++    }
++#if defined(HELIX_KILN_AD5X)
++    return true;
++#else
++    return false;
++#endif
++}
++
++void set_kiln_host_power_override(int override_value) {
++    s_kiln_host_power_override = override_value;
++}
++
+ // -1 = use compile-time default, 0 = force "beside the printer", 1 = force "on it"
+ static int s_printer_embedded_override = -1;
+ 
+diff --git a/src/ui/panel_widgets/shutdown_widget.cpp b/src/ui/panel_widgets/shutdown_widget.cpp
+index 0e3a7b68..64432b50 100644
+--- a/src/ui/panel_widgets/shutdown_widget.cpp
++++ b/src/ui/panel_widgets/shutdown_widget.cpp
+@@ -5,6 +5,7 @@
+ 
+ #include "ui_callback_helpers.h"
+ #include "ui_event_safety.h"
++#include "ui_observer_guard.h"
+ #include "ui_shutdown_modal.h"
+ #include "ui_split_button.h"
+ #include "ui_toast_manager.h"
+@@ -16,17 +17,23 @@
+ #include "display_manager.h"
+ #include "host_identity.h"
+ #include "i_moonraker_api.h"
++#include "moonraker_error.h"
+ #include "panel_widget_manager.h"
+ #include "panel_widget_registry.h"
+ #include "platform_info.h"
+ #include "printer_state.h"
+ #include "runtime_config.h"
++#include "state/subject_macros.h"
++#include "static_subject_registry.h"
++#include "subject_managed_panel.h"
+ #include "system_power.h"
+ 
++#include <spdlog/fmt/fmt.h>
+ #include <spdlog/spdlog.h>
+ 
+ #include <cstring>
+ #include <memory>
++#include <optional>
+ 
+ namespace helix {
+ 
+@@ -214,6 +221,44 @@ void execute_host_power(IMoonrakerAPI* api, bool is_reboot) {
+     }
+ }
+ 
++// Kiln OS: Reboot and Shutdown through Moonraker only (plan_power_dialog).
++// Kiln's update agent answers before it acts, so a refusal (a print is
++// running, start-up has not finished, the recovery OS is being written)
++// arrives as the RPC's error: the dialog closes and the toast says why.
++// Nothing runs locally, whatever the error.
++void execute_kiln_power(IMoonrakerAPI* api, bool is_reboot, ShutdownModal& modal,
++                        AsyncLifetimeGuard& lifetime) {
++    const char* action = is_reboot ? "reboot" : "shutdown";
++    if (!api || !api->is_connected()) {
++        spdlog::warn("[ShutdownDialog] Kiln OS: Moonraker not connected, no {}", action);
++        modal.hide();
++        ToastManager::instance().show(ToastSeverity::ERROR, lv_tr("Not connected to the printer"),
++                                      6000);
++        return;
++    }
++    spdlog::info("[ShutdownDialog] Kiln OS: machine {} through Moonraker", action);
++    auto tok = lifetime.token();
++    auto on_ok = [api, is_reboot, action]() {
++        spdlog::info("[ShutdownDialog] Kiln OS: machine {} accepted", action);
++        schedule_host_down_verification(api, is_reboot);
++    };
++    auto on_err = [tok, &modal, is_reboot, action](const MoonrakerError& err) {
++        spdlog::warn("[ShutdownDialog] Kiln OS: machine {} refused ({}, {}): {}", action, err.code,
++                     err.kiln_reason(), err.message);
++        const std::string message = err.message;
++        tok.defer("ShutdownDialog::kiln_refused", [&modal, message, is_reboot]() {
++            modal.hide();
++            ToastManager::instance().show(
++                ToastSeverity::ERROR, kiln_power_failure_message(message, is_reboot).c_str(), 8000);
++        });
++    };
++    if (is_reboot) {
++        api->machine_reboot(on_ok, on_err);
++    } else {
++        api->machine_shutdown(on_ok, on_err);
++    }
++}
++
+ void execute_screen_shutdown() {
+     execute_screen_power(/*is_reboot=*/false);
+ }
+@@ -458,6 +503,99 @@ HostPowerFollowUp host_power_follow_up(PowerResult local_result, bool api_connec
+     return api_connected ? HostPowerFollowUp::RetryViaMoonraker : HostPowerFollowUp::Toast;
+ }
+ 
++ShutdownDialogPlan plan_power_dialog(bool kiln_host_power, bool api_connected,
++                                     bool live_moonraker_remote, bool configured_host_same,
++                                     bool this_host_runs_systemd) {
++    if (kiln_host_power) {
++        return {ShutdownDialogMode::KilnViaMoonraker, ShutdownScope::Printer};
++    }
++    return plan_shutdown_dialog(api_connected, live_moonraker_remote, configured_host_same,
++                                this_host_runs_systemd);
++}
++
++std::string kiln_power_failure_message(const std::string& err_message, bool is_reboot) {
++    const std::string why = MoonrakerError::strip_kiln_reason(err_message);
++    if (why.empty()) {
++        return is_reboot ? lv_tr("Reboot failed") : lv_tr("Shutdown failed");
++    }
++    return fmt::format(fmt::runtime(is_reboot ? lv_tr("Can't restart the printer: {}")
++                                              : lv_tr("Can't shut down the printer: {}")),
++                       why);
++}
++
++bool kiln_power_locked(bool kiln_host_power, bool job_holds_machine) {
++    return kiln_host_power && job_holds_machine;
++}
++
++namespace {
++
++void republish_kiln_power_locked(lv_observer_t* observer, lv_subject_t* subject);
++
++/// Publishes `kiln_power_locked` and holds the observer that keeps it current.
++/// Held in an optional, as zoffset's save-availability publisher, so the
++/// observer is dropped from a StaticSubjectRegistry deinit while LVGL is up.
++struct KilnPowerLockPublisher {
++    SubjectManager subjects;
++    lv_subject_t kiln_power_locked_{};
++    ObserverGuard job_obs;
++
++    void init(PrinterState& state, bool register_xml) {
++        INIT_SUBJECT_INT(kiln_power_locked, 0, subjects, register_xml);
++        // job_holds_machine, not print_active: print_active reads 0 while a
++        // job prepares on the host side
++        if (lv_subject_t* job = state.print_state().get_job_holds_machine_subject()) {
++            // Attaching notifies once: publishes the state the app is in
++            job_obs = ObserverGuard(job, republish_kiln_power_locked, nullptr);
++            job_obs.set_alive_token(state.get_subjects_lifetime());
++        }
++    }
++};
++
++std::optional<KilnPowerLockPublisher>& kiln_power_lock_storage() {
++    static std::optional<KilnPowerLockPublisher> storage;
++    return storage;
++}
++
++void republish_kiln_power_locked(lv_observer_t* /*observer*/, lv_subject_t* subject) {
++    auto& storage = kiln_power_lock_storage();
++    if (!storage) {
++        return;
++    }
++    const bool holds = subject && lv_subject_get_int(subject) != 0;
++    lv_subject_set_int(&storage->kiln_power_locked_,
++                       kiln_power_locked(helix::kiln_host_power(), holds) ? 1 : 0);
++}
++
++} // namespace
++
++void init_kiln_power_lock_subject(PrinterState& state, bool register_xml) {
++    auto& storage = kiln_power_lock_storage();
++    if (storage) {
++        return;
++    }
++    storage.emplace();
++    storage->init(state, register_xml);
++    StaticSubjectRegistry::instance().register_deinit("kiln_power_locked",
++                                                      deinit_kiln_power_lock_subject);
++}
++
++void deinit_kiln_power_lock_subject() {
++    auto& storage = kiln_power_lock_storage();
++    if (!storage) {
++        return;
++    }
++    // The observer first: a notification after deinit_all() would write to
++    // a freed subject
++    storage->job_obs.reset();
++    storage->subjects.deinit_all();
++    storage.reset();
++}
++
++lv_subject_t* get_kiln_power_lock_subject() {
++    auto& storage = kiln_power_lock_storage();
++    return storage ? &storage->kiln_power_locked_ : nullptr;
++}
++
+ ShutdownDialogPlan plan_shutdown_dialog(bool api_connected, bool live_moonraker_remote,
+                                         bool configured_host_same, bool this_host_runs_systemd) {
+     const bool same_host = api_connected ? !live_moonraker_remote : configured_host_same;
+@@ -487,10 +625,21 @@ void show_shutdown_dialog(IMoonrakerAPI* api, ShutdownModal& modal, AsyncLifetim
+     Config* cfg = Config::get_instance();
+     const std::string host = cfg->get<std::string>(cfg->df() + "moonraker_host", "localhost");
+     const bool connected = api->is_connected();
+-    const ShutdownDialogPlan plan =
+-        plan_shutdown_dialog(connected, get_printer_state().is_moonraker_remote(),
+-                             helix::is_moonraker_on_same_host(host), helix::host_runs_systemd());
++    const ShutdownDialogPlan plan = plan_power_dialog(
++        helix::kiln_host_power(), connected, get_printer_state().is_moonraker_remote(),
++        helix::is_moonraker_on_same_host(host), helix::host_runs_systemd());
+     switch (plan.mode) {
++    case ShutdownDialogMode::KilnViaMoonraker:
++        // Kiln OS: this screen is the printer's own, and its Moonraker checks
++        // (through Kiln's update agent) what a local power-off would skip
++        modal.set_single_callbacks(
++            [api, &modal, &lifetime]() {
++                execute_kiln_power(api, /*is_reboot=*/false, modal, lifetime);
++            },
++            [api, &modal, &lifetime]() {
++                execute_kiln_power(api, /*is_reboot=*/true, modal, lifetime);
++            });
++        break;
+     case ShutdownDialogMode::SingleViaMoonraker:
+         // Moonraker's machine.shutdown brings the whole device down. Moonraker
+         // with `provider: none` answers it by shelling out to sudo, which a
+diff --git a/src/ui/panel_widgets/shutdown_widget.h b/src/ui/panel_widgets/shutdown_widget.h
+index ab8b7db1..84cc4abd 100644
+--- a/src/ui/panel_widgets/shutdown_widget.h
++++ b/src/ui/panel_widgets/shutdown_widget.h
+@@ -14,6 +14,7 @@
+ 
+ namespace helix {
+ class IMoonrakerAPI;
++class PrinterState;
+ 
+ class ShutdownWidget : public TiledPanelWidget {
+   public:
+@@ -63,6 +64,7 @@ enum class ShutdownDialogMode {
+     SingleViaMoonraker,  ///< Same host, Moonraker up: machine.shutdown takes the device down.
+     SingleViaLocalPower, ///< Same host, Moonraker down or unable to: SystemPower on this host.
+     Dual,                ///< Different hosts: Both / Printer / Screen split buttons.
++    KilnViaMoonraker,    ///< Kiln OS: Moonraker only, its refusal shown, never local power.
+ };
+ 
+ struct ShutdownDialogPlan {
+@@ -87,6 +89,41 @@ struct ShutdownDialogPlan {
+ ShutdownDialogPlan plan_shutdown_dialog(bool api_connected, bool live_moonraker_remote,
+                                         bool configured_host_same, bool this_host_runs_systemd);
+ 
++/// The dialog show_shutdown_dialog() opens: KilnViaMoonraker on Kiln OS
++/// (@p kiln_host_power, from helix::kiln_host_power()), whatever the
++/// connection or init system; otherwise plan_shutdown_dialog(). Pure.
++///
++/// Kiln's Moonraker hands machine.reboot and machine.shutdown to its root
++/// update agent, which refuses while a print may run, while the recovery OS
++/// is being written and before start-up has finished. A local /sbin/reboot or
++/// /sbin/poweroff (SingleViaLocalPower, or the fallback after a failed RPC)
++/// would skip exactly those checks, so Kiln never uses one.
++ShutdownDialogPlan plan_power_dialog(bool kiln_host_power, bool api_connected,
++                                     bool live_moonraker_remote, bool configured_host_same,
++                                     bool this_host_runs_systemd);
++
++/// Kiln OS: the toast for a refused or failed machine.reboot (@p is_reboot)
++/// or machine.shutdown: "Can't restart the printer: <why>", with Moonraker's
++/// message as <why> (a "[reason] " in front taken off, as
++/// MoonrakerError::strip_kiln_reason does). The plain "Reboot failed" /
++/// "Shutdown failed" when the message is empty.
++std::string kiln_power_failure_message(const std::string& err_message, bool is_reboot);
++
++/// Kiln OS: whether the power entries are greyed: on a Kiln build
++/// (@p kiln_host_power) while a job holds the machine (@p job_holds_machine:
++/// printing, paused or preparing), when Kiln's update agent refuses anyway. Pure.
++bool kiln_power_locked(bool kiln_host_power, bool job_holds_machine);
++
++/// Kiln OS: publish `kiln_power_locked` (kiln_power_locked() of
++/// helix::kiln_host_power() and @p state's job_holds_machine), which the home
++/// Shutdown tile and Advanced's Shutdown and Reboot rows bind as disabled. Runs
++/// after PrinterState's subjects and before any panel XML (SubjectInitializer);
++/// a second call does nothing. The deinit runs from StaticSubjectRegistry.
++void init_kiln_power_lock_subject(PrinterState& state, bool register_xml = true);
++void deinit_kiln_power_lock_subject();
++/// The subject, nullptr before init (tests).
++lv_subject_t* get_kiln_power_lock_subject();
++
+ /// Run @p power; only when it dispatched, @p stop_drawing and then @p clear.
+ /// LVGL repaints over a clear within a frame unless drawing has stopped, and
+ /// a clear made before a slow or failing request leaves a frozen black screen.
+diff --git a/tests/unit/test_kiln_host_power.cpp b/tests/unit/test_kiln_host_power.cpp
+new file mode 100644
+index 00000000..41a75da9
+--- /dev/null
++++ b/tests/unit/test_kiln_host_power.cpp
+@@ -0,0 +1,184 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++/**
++ * Kiln OS: Reboot and Shutdown through Moonraker only.
++ *
++ * Kiln's Moonraker hands machine.reboot and machine.shutdown to its root
++ * update agent, which refuses while a print may run, while the recovery OS is
++ * being written and before start-up has finished. On Kiln builds the dialog
++ * therefore always goes through Moonraker (never the local /sbin/reboot or
++ * /sbin/poweroff, which would skip those checks), and a refusal is shown with
++ * its reason, and the power entries are greyed while a job holds the machine
++ * (kiln_power_locked). Other builds keep upstream's plan.
++ */
++
++#include "ui_update_queue.h"
++
++#include "../../src/ui/panel_widgets/shutdown_widget.h"
++#include "../lvgl_test_fixture.h"
++#include "../test_helpers/update_queue_test_access.h"
++#include "platform_info.h"
++#include "printer_state.h"
++
++#include <string>
++
++#include "../catch_amalgamated.hpp"
++
++using json = nlohmann::json;
++using namespace helix;
++
++TEST_CASE("Kiln power: the build decides, tests override", "[shutdown][power][kiln]") {
++    set_kiln_host_power_override(-1);
++#if defined(HELIX_KILN_AD5X)
++    CHECK(kiln_host_power());
++#else
++    CHECK_FALSE(kiln_host_power());
++#endif
++    set_kiln_host_power_override(1);
++    CHECK(kiln_host_power());
++    set_kiln_host_power_override(0);
++    CHECK_FALSE(kiln_host_power());
++    set_kiln_host_power_override(-1);
++}
++
++TEST_CASE("Kiln power: always through Moonraker, whatever the host", "[shutdown][power][kiln]") {
++    for (const bool connected : {true, false}) {
++        for (const bool remote : {true, false}) {
++            for (const bool same : {true, false}) {
++                for (const bool systemd : {true, false}) {
++                    const auto plan = plan_power_dialog(/*kiln_host_power=*/true, connected, remote,
++                                                        same, systemd);
++                    CHECK(plan.mode == ShutdownDialogMode::KilnViaMoonraker);
++                }
++            }
++        }
++    }
++}
++
++TEST_CASE("Kiln power: other builds keep upstream's plan", "[shutdown][power][kiln]") {
++    for (const bool connected : {true, false}) {
++        for (const bool remote : {true, false}) {
++            for (const bool same : {true, false}) {
++                for (const bool systemd : {true, false}) {
++                    const auto plan = plan_power_dialog(/*kiln_host_power=*/false, connected,
++                                                        remote, same, systemd);
++                    const auto upstream = plan_shutdown_dialog(connected, remote, same, systemd);
++                    CHECK(plan.mode == upstream.mode);
++                    CHECK(plan.dual_default == upstream.dual_default);
++                    CHECK(plan.mode != ShutdownDialogMode::KilnViaMoonraker);
++                }
++            }
++        }
++    }
++    // The case Kiln replaces: a same-host screen on a host without systemd
++    // powers itself down locally
++    CHECK(plan_power_dialog(false, true, false, true, false).mode ==
++          ShutdownDialogMode::SingleViaLocalPower);
++}
++
++TEST_CASE("Kiln power: the refusal is shown with its reason", "[shutdown][power][kiln]") {
++    // MoonrakerError::from_json_rpc has already taken "[printing] " off when
++    // the error's data carries the reason
++    CHECK(kiln_power_failure_message("A print is running", true) ==
++          "Can't restart the printer: A print is running");
++    CHECK(kiln_power_failure_message("A print is running", false) ==
++          "Can't shut down the printer: A print is running");
++    // Without data the reason is still in front: taken off here
++    CHECK(kiln_power_failure_message("[starting_up] Start-up has not finished yet, try again in "
++                                     "a minute",
++                                     true) ==
++          "Can't restart the printer: Start-up has not finished yet, try again in a minute");
++    CHECK(kiln_power_failure_message("[recovery_updating] The recovery OS is being written into "
++                                     "slot A, try again in a few minutes",
++                                     false) ==
++          "Can't shut down the printer: The recovery OS is being written into slot A, try again "
++          "in a few minutes");
++    // An agent that doesn't answer, or any other error: its text
++    CHECK(kiln_power_failure_message("[agent_timeout] The update agent didn't answer in 30 s "
++                                     "(is S68ad5x-update-agent running?)",
++                                     true) ==
++          "Can't restart the printer: The update agent didn't answer in 30 s (is "
++          "S68ad5x-update-agent running?)");
++    // A look-alike stays as it is
++    CHECK(kiln_power_failure_message("[Not a reason] text", true) ==
++          "Can't restart the printer: [Not a reason] text");
++    // Nothing to say: the plain texts
++    CHECK(kiln_power_failure_message("", true) == "Reboot failed");
++    CHECK(kiln_power_failure_message("", false) == "Shutdown failed");
++}
++
++TEST_CASE("Kiln power: locked only on Kiln while a job holds the machine",
++          "[shutdown][power][kiln]") {
++    CHECK(kiln_power_locked(true, true));
++    CHECK_FALSE(kiln_power_locked(true, false));
++    CHECK_FALSE(kiln_power_locked(false, true));
++    CHECK_FALSE(kiln_power_locked(false, false));
++}
++
++namespace {
++
++struct KilnPowerLockFixture : public LVGLTestFixture {
++    KilnPowerLockFixture() {
++        state_.init_subjects(false);
++        // Another case (or the app's own init) may have made it with its
++        // PrinterState: this one observes ours
++        deinit_kiln_power_lock_subject();
++    }
++    ~KilnPowerLockFixture() override {
++        deinit_kiln_power_lock_subject();
++        set_kiln_host_power_override(-1);
++    }
++
++    static void drain() {
++        helix::ui::UpdateQueueTestAccess::drain_all(helix::ui::UpdateQueue::instance());
++    }
++
++    void report_job_state(const char* moonraker_state) {
++        state_.update_from_status(json{{"print_stats", {{"state", moonraker_state}}}});
++        drain();
++    }
++
++    int locked() {
++        lv_subject_t* s = get_kiln_power_lock_subject();
++        return s ? lv_subject_get_int(s) : -1;
++    }
++
++    PrinterState state_;
++};
++
++} // namespace
++
++TEST_CASE_METHOD(KilnPowerLockFixture, "Kiln power: the lock follows job_holds_machine on Kiln",
++                 "[shutdown][power][kiln]") {
++    set_kiln_host_power_override(1);
++    init_kiln_power_lock_subject(state_, /*register_xml=*/false);
++    REQUIRE(locked() == 0);
++    report_job_state("printing");
++    CHECK(locked() == 1);
++    report_job_state("paused");
++    CHECK(locked() == 1);
++    report_job_state("complete");
++    CHECK(locked() == 0);
++    // A second init keeps the first
++    init_kiln_power_lock_subject(state_, false);
++    report_job_state("printing");
++    CHECK(locked() == 1);
++}
++
++TEST_CASE_METHOD(KilnPowerLockFixture, "Kiln power: never locked on other builds",
++                 "[shutdown][power][kiln]") {
++    set_kiln_host_power_override(0);
++    init_kiln_power_lock_subject(state_, false);
++    report_job_state("printing");
++    CHECK(locked() == 0);
++}
++
++TEST_CASE_METHOD(KilnPowerLockFixture, "Kiln power: a job already running at init counts",
++                 "[shutdown][power][kiln]") {
++    set_kiln_host_power_override(1);
++    report_job_state("printing");
++    init_kiln_power_lock_subject(state_, false);
++    CHECK(locked() == 1);
++    deinit_kiln_power_lock_subject();
++    CHECK(get_kiln_power_lock_subject() == nullptr);
++}
+diff --git a/tests/unit/test_kiln_touch_units.cpp b/tests/unit/test_kiln_touch_units.cpp
+new file mode 100644
+index 00000000..0c3437c8
+--- /dev/null
++++ b/tests/unit/test_kiln_touch_units.cpp
+@@ -0,0 +1,96 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++/**
++ * Kiln OS: a saved touch range carries the units it is in.
++ *
++ * The AD5X's stock 5.10 kernel reports the touch in panel units, Kiln's own
++ * kernels the raw readings. Kiln's ad5x-touch-units converts the stored range
++ * when the kernel changes and takes a range without /input/ad5x_touch_units
++ * for stock units. A range saved on Kiln's kernel without the tag (after a
++ * factory reset, say) was converted a second time and touch was off; so on
++ * Kiln builds every save writes the tag.
++ */
++
++#include "config.h"
++#include "touch_calibration_wrapper.h"
++
++#include <string>
++#include <sys/utsname.h>
++
++#include "../catch_amalgamated.hpp"
++
++using namespace helix;
++
++namespace {
++
++void forget_touch_keys(Config* cfg) {
++    if (cfg->exists("/input/ad5x_touch_units")) {
++        cfg->get_json("/input").erase("ad5x_touch_units");
++    }
++    cfg->set<bool>("/input/touch_range/valid", false);
++}
++
++std::string running_units() {
++    struct utsname u {};
++    return kiln_touch_units(uname(&u) == 0 ? std::string(u.release) : std::string());
++}
++
++} // namespace
++
++TEST_CASE("Kiln touch units: by the kernel release", "[touch][touch-calibration][kiln]") {
++    CHECK(std::string(kiln_touch_units("5.10.186+")) == "stock");
++    CHECK(std::string(kiln_touch_units("5.10.0")) == "stock");
++    CHECK(std::string(kiln_touch_units("6.6.18-rt23-ad5x")) == "own");
++    CHECK(std::string(kiln_touch_units("7.3.0-ad5x")) == "own");
++    CHECK(std::string(kiln_touch_units("5.15.1")) == "own");
++    CHECK(std::string(kiln_touch_units("15.10.1")) == "own");
++}
++
++TEST_CASE("Kiln touch units: tagged on every save on Kiln builds",
++          "[touch][touch-calibration][kiln]") {
++    Config* cfg = Config::get_instance();
++    forget_touch_keys(cfg);
++    TouchRangeSettings range{};
++    range.valid = true;
++    range.min_x = 4000;
++    range.max_x = 90;
++    range.min_y = 3900;
++    range.max_y = 120;
++    range.capture_rotation = 0;
++
++    SECTION("Kiln: the running kernel's units") {
++        set_kiln_touch_units_tagged_for_test(true);
++        save_touch_range(range);
++        CHECK(cfg->get<std::string>("/input/ad5x_touch_units", "") == running_units());
++        CHECK(cfg->get<int>("/input/touch_range/min_x", 0) == 4000);
++    }
++    SECTION("Kiln: a stale tag is replaced") {
++        set_kiln_touch_units_tagged_for_test(true);
++        cfg->set<std::string>("/input/ad5x_touch_units",
++                              running_units() == "own" ? "stock" : "own");
++        save_touch_range(range);
++        CHECK(cfg->get<std::string>("/input/ad5x_touch_units", "") == running_units());
++    }
++    SECTION("Kiln: an affine-only save (no range) is tagged too") {
++        set_kiln_touch_units_tagged_for_test(true);
++        TouchRangeSettings none{};
++        save_touch_range(none);
++        CHECK(cfg->get<std::string>("/input/ad5x_touch_units", "") == running_units());
++    }
++    SECTION("other builds: no tag") {
++        set_kiln_touch_units_tagged_for_test(false);
++        save_touch_range(range);
++        CHECK_FALSE(cfg->exists("/input/ad5x_touch_units"));
++    }
++    SECTION("the build's own answer") {
++        set_kiln_touch_units_tagged_for_test(std::nullopt);
++#if defined(HELIX_KILN_AD5X)
++        CHECK(kiln_touch_units_tagged());
++#else
++        CHECK_FALSE(kiln_touch_units_tagged());
++#endif
++    }
++
++    set_kiln_touch_units_tagged_for_test(std::nullopt);
++    forget_touch_keys(cfg);
++}
+diff --git a/translations/en.yml b/translations/en.yml
+index d792b05b..c5b52ab4 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -5015,6 +5015,9 @@ translations:
+   'Cancel sent. The printer stops its start sequence at the next safe point.': 'Cancel sent. The printer stops its start sequence at the next safe point.'
+   # Moonraker's warnings on the screen (patch 0059)
+   'Printer warning': 'Printer warning'
++  # Reboot and Shutdown through Kiln's update agent (patch 0071)
++  'Can''t restart the printer: {}': 'Can''t restart the printer: {}'
++  'Can''t shut down the printer: {}': 'Can''t shut down the printer: {}'
+   # Kiln's tour (patch 0058, tour_steps_kiln.cpp)
+   'Welcome to Kiln OS': 'Welcome to Kiln OS'
+   'Here''s a quick tour of the screen, so you can find things fast.': 'Here''s a quick tour of the screen, so you can find things fast.'
+diff --git a/translations/ru.yml b/translations/ru.yml
+index 6afa4b4f..aaf4aaaf 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -5171,6 +5171,9 @@ translations:
+   'Macros, G-code console, print history, Spoolman, calibration, and Shutdown or Reboot.': 'Макросы, консоль G-code, история печати, Spoolman, калибровка, выключение и перезагрузка.'
+   'Screen, sound, connection, and the printer''s own settings: Run Setup Wizard, Nozzle Size, Filament Auto-Refill, Plugins. Replay this tour from Help & About.': 'Экран, звук, соединение и настройки принтера: «Запустить мастер настройки», «Размер сопла», «Автозамена филамента», «Плагины». Повторить тур: «Помощь и о программе».'
+   'Printer warning': 'Предупреждение принтера'
++  # Reboot and Shutdown through Kiln's update agent (patch 0071)
++  'Can''t restart the printer: {}': 'Не удалось перезагрузить принтер: {}'
++  'Can''t shut down the printer: {}': 'Не удалось выключить принтер: {}'
+   'Cancel sent. The printer stops its start sequence at the next safe point.': 'Отмена отправлена. Принтер остановит стартовую последовательность в ближайшей безопасной точке.'
+   # The AD5X's filament unit named IFS where the AD5X IFS is in use (patch 0066)
+   'IFS not detected': 'IFS не обнаружен'
+diff --git a/ui_xml/advanced_panel.xml b/ui_xml/advanced_panel.xml
+index 541af2fd..a88d9de2 100644
+--- a/ui_xml/advanced_panel.xml
++++ b/ui_xml/advanced_panel.xml
+@@ -270,11 +270,14 @@
+         <setting_group_header title="POWER" icon="power" hide_icon="false"/>
+         <!-- Shutdown / Reboot — both rows open the same dialog (which presents
+            both actions plus, on dual-host, the printer/screen/both scope). -->
++        <!-- Kiln OS: greyed while a job holds the machine (Kiln's update agent refuses then) -->
+         <setting_action_row name="row_shutdown"
+-                            label="Shutdown" icon="power" description="Power off the printer or screen">
++                            label="Shutdown" icon="power" description="Power off the printer or screen"
++                            disabled="kiln_power_locked">
+           <event_cb trigger="clicked" callback="on_advanced_power_clicked"/>
+         </setting_action_row>
+-        <setting_action_row name="row_reboot" label="Reboot" icon="restart" description="Restart the printer or screen">
++        <setting_action_row name="row_reboot" label="Reboot" icon="restart" description="Restart the printer or screen"
++                            disabled="kiln_power_locked">
+           <event_cb trigger="clicked" callback="on_advanced_power_clicked"/>
+         </setting_action_row>
+       </setting_group>
+diff --git a/ui_xml/components/panel_widget_shutdown.xml b/ui_xml/components/panel_widget_shutdown.xml
+index 8ef545ec..fc4d4ce4 100644
+--- a/ui_xml/components/panel_widget_shutdown.xml
++++ b/ui_xml/components/panel_widget_shutdown.xml
+@@ -12,10 +12,11 @@
+     <prop name="tile_target_subject" type="string" default=""/>
+   </api>
+   <view name="panel_widget_shutdown" extends="lv_obj" height="100%" flex_grow="1" style_pad_all="0" scrollable="false">
++    <!-- Kiln OS: greyed while a job holds the machine (Kiln's update agent refuses then) -->
+     <home_action_tile width="100%"
+                       height="100%" icon="power" icon_variant="secondary" label="Shutdown"
+                       callback="shutdown_clicked_cb" button_name="shutdown_button" icon_name="shutdown_icon"
+                       tile_icon_subject="$tile_icon_subject" tile_label_subject="$tile_label_subject"
+-                      tile_dir_subject="$tile_dir_subject" disabled_cond="0 eq 1"/>
++                      tile_dir_subject="$tile_dir_subject" disabled_cond="kiln_power_locked eq 1"/>
+   </view>
+ </component>

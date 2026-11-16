@@ -1,14 +1,27 @@
 #!/bin/sh
 # Boot trace (see /etc/init.d/rcS): append a line with the
 # uptime to /run/ad5x-boot.log and copy the log into the ota partition at
-# 64 KiB, where it survives a reset. Only on an installed system (slot A
-# or B), not in USB test mode.
-. /usr/lib/ad5x/slot.sh
+# 64 KiB (8 KiB there), where it survives a reset. Only on an installed
+# system (slot A or B), not in USB test mode. A log longer than 8 KiB goes
+# there as its first line, "...", and its newest lines (whole lines up to
+# about 7.7 KiB): the last line is what counts (the recovery OS shows it
+# as main_trace, a reset's cause is near it), so it must not be cut off.
+# AD5X_LIB overrides /usr/lib/ad5x (tests).
+. ${AD5X_LIB:-/usr/lib/ad5x}/slot.sh
 [ -n "$SLOT" ] || exit 0
 trace=$(part ota)
 [ -n "$trace" ] || exit 0
+L=/run/ad5x-boot.log
 mkdir -p /run
-echo "$(cut -d' ' -f1 /proc/uptime) $*" >> /run/ad5x-boot.log
-{ cat /run/ad5x-boot.log; head -c 8192 /dev/zero; } | head -c 8192 | \
-	dd of="$trace" bs=1024 seek=64 conv=notrunc 2>/dev/null
+echo "$(cut -d' ' -f1 /proc/uptime) $*" >> $L
+{
+	if [ "$(wc -c < $L)" -le 8192 ]; then
+		cat $L
+	else
+		head -n 1 $L | cut -c1-200
+		echo "..."
+		tail -c 7900 $L | sed 1d
+	fi
+	head -c 8192 /dev/zero
+} | head -c 8192 | dd of="$trace" bs=1024 seek=64 conv=notrunc 2>/dev/null
 sync

@@ -41,6 +41,19 @@ define AD5X_SYSTEM_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/usr/lib/ad5x/kernel.sh
 	$(INSTALL) -D -m 0644 $(@D)/lib/apps.sh \
 		$(TARGET_DIR)/usr/lib/ad5x/apps.sh
+	# Kiln's U-Boot's state and records in ota (S99ad5x-booted,
+	# ad5x-kernel); main image only, ad5x-recovery.mk doesn't install it
+	$(INSTALL) -D -m 0644 $(@D)/lib/uboot.sh \
+		$(TARGET_DIR)/usr/lib/ad5x/uboot.sh
+	# Kiln's own boot loader in the first MiB: layout, fingerprint, writes,
+	# its install record (S99ad5x-booted notes a start by it); also in
+	# the recovery OS (ad5x-bootloader-install, ad5x-return-stock)
+	$(INSTALL) -D -m 0644 $(@D)/lib/bootloader.sh \
+		$(TARGET_DIR)/usr/lib/ad5x/bootloader.sh
+	# The watchdog feeder's settings (S05ad5x-watchdog); in rootfs2 it also
+	# tells Kiln's U-Boot that this system feeds the watchdog
+	$(INSTALL) -D -m 0644 $(@D)/lib/watchdog.conf \
+		$(TARGET_DIR)/usr/lib/ad5x/watchdog.conf
 	# The plugins' root scripts (S68ad5x-update-agent, S69ad5x-plugin-boot);
 	# main image only, ad5x-recovery.mk doesn't install it
 	$(INSTALL) -D -m 0644 $(@D)/lib/plugin-root.sh \
@@ -61,6 +74,10 @@ define AD5X_SYSTEM_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/usr/bin/ad5x-boot-recovery
 	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-restore-stock \
 		$(TARGET_DIR)/usr/bin/ad5x-restore-stock
+	# the stock files' copy on usershare (S99ad5x-stock-copy); the recovery
+	# image installs it too (Save files to USB)
+	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-stock-copy \
+		$(TARGET_DIR)/usr/bin/ad5x-stock-copy
 	$(INSTALL) -D -m 0755 $(@D)/ad5x-fbstream \
 		$(TARGET_DIR)/usr/bin/ad5x-fbstream
 	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-umask \

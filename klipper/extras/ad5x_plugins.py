@@ -45,6 +45,15 @@
 # hold packages (extras/<name>/__init__.py; the plugin's extras/ joins the
 # extras package path, so its modules import each other as Klipper's do),
 # and printer.load_object() also finds plugin modules.
+# Plugin API 1.7: module names may have capitals (AFC_lane), and
+# plugin.json "module_dirs" lists more folders of Klipper modules inside
+# the plugin (a checkout of another project, e.g. AFC-Klipper-Add-On/extras).
+# They join the extras package path too, but their modules are imported
+# the way Klipper imports its own extras: only when a config section or
+# printer.load_object() names one, or another module imports it. A missing
+# folder, or one that a link leads out of the plugin folder, is a warning
+# and is not read. A module name Klipper has, in any case (Heaters), is
+# refused, and so are two modules whose names differ only in case.
 #
 # Name collisions between running plugins: an extras module two plugins
 # have stops Klipper (above). A Moonraker component or python/ library two
@@ -92,6 +101,13 @@
 # Moonraker loads, the root update agent (S68ad5x-update-agent) restarts
 # Moonraker. HelixScreen's Settings > Plugins uses these. See
 # docs/plugins.md and docs/plugin-api.md.
+# Submodules (plugin API 1.7, issue #69): a plugin with a .gitmodules gets
+# its submodules after the clone or pull (git submodule update --init
+# --recursive, in the same background job), https only: .gitmodules is
+# checked first and git refuses every other transport (submodule_errors,
+# SUBMODULE_PROTOCOLS). A failure leaves nothing installed, or puts the
+# previous version back (UPDATE_PLUGIN). REMOVE_PLUGIN deletes them with
+# the plugin's folder (their git data is in its .git/modules).
 #
 # Root scripts (plugin API 1.6, zMod's model; docs/plugin-root-hooks.md): a
 # plugin may ship root/install.sh, root/update.sh and root/uninstall.sh.
@@ -127,6 +143,7 @@ import logging
 import os
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -135,7 +152,7 @@ import tarfile
 # The plugin API this system offers (docs/plugin-api.md): major.minor.
 # Minor: additions only. Major: something plugins may use changed or went.
 # post-build.sh copies it to /usr/lib/os-release as AD5X_PLUGIN_API.
-PLUGIN_API_VERSION = "1.6"
+PLUGIN_API_VERSION = "1.7"
 
 CONFIG_DIR = "/home/klipper/printer_data/config"
 SHIPPED_DIR = "/usr/share/ad5x/plugins"
@@ -144,6 +161,14 @@ CATALOG_FILE = "/usr/share/ad5x/plugin-catalog.json"
 # Picked up by S68ad5x-update-agent (root), which restarts Moonraker
 MOONRAKER_RESTART_FILE = "/data/ad5x/kiln-update/restart-moonraker"
 GIT_TIMEOUT = 600.
+# Submodules (issue #69): INSTALL_PLUGIN and UPDATE_PLUGIN fetch a
+# plugin's git submodules, over these transports only (GIT_ALLOW_PROTOCOL:
+# git itself refuses file, ssh, git, http and ext:: for the submodules and
+# theirs, whose .gitmodules can't be checked before they are fetched).
+# The tests add "file"; nothing on the printer changes it.
+SUBMODULE_PROTOCOLS = "https"
+# Local git steps (sync, status, going back after a failed update)
+GIT_LOCAL_TIMEOUT = 60.
 # IFS owner: Kiln's IFS pins are linked into IFS_MCU_DIR (ifs.cfg includes
 # it) while the IFS answers as Klipper (IFS_KLIPPER_FLAG, written by
 # S61klipper) and no enabled plugin owns the IFS
@@ -161,11 +186,20 @@ GENERIC_IFS_CFG = "/usr/share/ad5x/config/generic-flashforge-ifs.cfg"
 FACTORY_CFG = "/usr/share/ad5x/config/ad5x.cfg"
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
-MODULE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+# Klipper module names (extras/, module_dirs): capitals allowed since
+# plugin API 1.7 (AFC's AFC_lane, ...)
+MODULE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+# plugin.json module_dirs (plugin API 1.7): at most this many folders;
+# each path part letters, digits, '_', '-' and '.', not starting with '.';
+# not in the folders the plugin layout gives a meaning (the first part)
+MODULE_DIRS_MAX = 8
+MODULE_DIR_PART_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$")
+MODULE_DIRS_KEPT = ('extras', 'python', 'moonraker', 'root')
 # plugin.json keys read_metadata reads; others are ignored here and
 # reported by tools/check_plugin.py
 PLUGIN_JSON_KEYS = ('name', 'description', 'version', 'author', 'url',
-                    'requires_os', 'requires', 'conflicts', 'owns_ifs')
+                    'requires_os', 'requires', 'conflicts', 'owns_ifs',
+                    'module_dirs')
 # Name prefixes kept for Kiln OS and its official plugins (plugin API 1.6,
 # docs/plugin-api.md "Names"): Klipper modules, Moonraker components,
 # plugin.cfg sections and macros of any other plugin starting with them
@@ -267,7 +301,7 @@ def read_metadata(plugin_dir, name):
     the file is unusable (the plugin can't be enabled then)."""
     meta = {'name': name, 'description': "", 'version': "", 'author': "",
             'url': "", 'requires_os': "", 'requires': [], 'conflicts': [],
-            'owns_ifs': False, 'error': None}
+            'owns_ifs': False, 'module_dirs': [], 'error': None}
     path = os.path.join(plugin_dir, 'plugin.json')
     try:
         data = json.loads(read_regular(path))
@@ -288,13 +322,57 @@ def read_metadata(plugin_dir, name):
             val = [v.strip() for v in val.split(",")]
         meta[key] = [str(v).strip().lower() for v in val if str(v).strip()]
     meta['owns_ifs'] = data.get('owns_ifs') is True
+    dirs, dirs_error = parse_module_dirs(data.get('module_dirs'))
+    meta['module_dirs'] = dirs
     if data.get('name') not in (None, name):
         meta['error'] = "plugin.json name '%s' differs from the directory" % (
             data.get('name'),)
     elif meta['requires_os'] and parse_version(meta['requires_os']) is None:
         meta['error'] = "requires_os '%s' is not major.minor" % (
             meta['requires_os'],)
+    elif dirs_error:
+        meta['error'] = "plugin.json: module_dirs: %s" % (dirs_error,)
     return meta
+
+def parse_module_dirs(val):
+    """(folders, error) for plugin.json module_dirs: a list of folders
+    inside the plugin, relative to it, '/' separated ("AFC/extras"). Each
+    part matches MODULE_DIR_PART_RE (so no "..", no hidden folders, no
+    spaces); no absolute paths; not extras/, python/, moonraker/ or root/
+    or a folder in them (MODULE_DIRS_KEPT); at most MODULE_DIRS_MAX.
+    ([], None) when the key is absent."""
+    if val is None:
+        return [], None
+    if not isinstance(val, list) or not all(isinstance(v, str) for v in val):
+        return [], "must be a list of folder names"
+    if len(val) > MODULE_DIRS_MAX:
+        return [], "at most %d folders" % (MODULE_DIRS_MAX,)
+    out = []
+    for v in val:
+        parts = [p for p in v.split('/') if p not in ('', '.')]
+        if v.startswith('/') or not parts or not all(
+                MODULE_DIR_PART_RE.match(p) for p in parts):
+            return [], "'%s' is not a folder inside the plugin" % (v,)
+        if parts[0] in MODULE_DIRS_KEPT:
+            return [], "'%s': %s/ has its own use in a plugin" % (
+                v, parts[0])
+        rel = '/'.join(parts)
+        if rel not in out:
+            out.append(rel)
+    return out, None
+
+def inside(path, base):
+    """Whether path, with links followed, is base or inside it."""
+    real, top = os.path.realpath(path), os.path.realpath(base)
+    return real == top or real.startswith(top.rstrip(os.sep) + os.sep)
+
+def module_dirs(plugin_dir):
+    """The plugin's extra module folders (plugin.json module_dirs) as
+    absolute paths, whether they exist or not; [] when plugin.json has none
+    or can't be read."""
+    meta = read_metadata(plugin_dir, os.path.basename(plugin_dir))
+    return [os.path.join(plugin_dir, *d.split('/'))
+            for d in meta['module_dirs']]
 
 def unknown_keys(data):
     """plugin.json keys this plugin manager doesn't read, sorted."""
@@ -346,13 +424,15 @@ def reserved_names(plugin_dir):
     "extras/kiln_x.py", "moonraker/components/kiln_x.py",
     "plugin.cfg [kiln_x]"; [] when there is none."""
     out = []
-    ext = os.path.join(plugin_dir, 'extras')
-    if os.path.isdir(ext):
-        out += ["extras/%s" % fn for mod, fn in extras_modules(ext)
-                if MODULE_RE.match(mod) and mod.startswith(RESERVED_PREFIXES)]
+    for ext in [os.path.join(plugin_dir, 'extras')] + module_dirs(plugin_dir):
+        if os.path.isdir(ext):
+            rel = os.path.relpath(ext, plugin_dir).replace(os.sep, '/')
+            out += ["%s/%s" % (rel, fn) for mod, fn in extras_modules(ext)
+                    if MODULE_RE.match(mod)
+                    and mod.lower().startswith(RESERVED_PREFIXES)]
     comps = os.path.join(plugin_dir, 'moonraker', 'components')
     for mod in _module_names(comps):
-        if mod.startswith(RESERVED_PREFIXES):
+        if mod.lower().startswith(RESERVED_PREFIXES):
             fn = mod + '.py' if os.path.isfile(
                 os.path.join(comps, mod + '.py')) else mod
             out.append("moonraker/components/%s" % (fn,))
@@ -374,9 +454,19 @@ def reserved_error(names):
                 ", ".join(RESERVED_PREFIXES), ", ".join(names)))
 
 def is_core_module(mod, core_dir):
-    """Whether Klipper's extras (core_dir) already have this module."""
-    return os.path.exists(os.path.join(core_dir, mod + '.py')) or \
-        os.path.isdir(os.path.join(core_dir, mod))
+    """Whether Klipper's extras (core_dir) already have this module, in
+    any case (plugin API 1.7: a plugin's Heaters would be taken for
+    Klipper's heaters)."""
+    try:
+        names = os.listdir(core_dir)
+    except OSError:
+        return False
+    low = mod.lower()
+    for fn in names:
+        if fn.lower() == low + '.py' or (fn.lower() == low and os.path.isdir(
+                os.path.join(core_dir, fn))):
+            return True
+    return False
 
 def scan(shipped_dir=SHIPPED_DIR, user_dir=USER_DIR,
          roots_dir=PLUGINS_ROOT_DIR, catalog_file=CATALOG_FILE):
@@ -407,6 +497,8 @@ def scan(shipped_dir=SHIPPED_DIR, user_dir=USER_DIR,
                 'dir': d, 'source': source, 'official': official,
                 'compatible': api_compatible(info['requires_os']),
                 'extras': os.path.isdir(os.path.join(d, 'extras')),
+                'module_dirs': [os.path.join(d, *m.split('/'))
+                                for m in info['module_dirs']],
                 'moonraker': os.path.isfile(os.path.join(d,
                                                          'moonraker.conf')),
                 'python': os.path.isdir(os.path.join(d, 'python')),
@@ -812,6 +904,172 @@ def root_from_git(plugin_dir):
         return False
     return res.returncode == 0 and not res.stdout.strip()
 
+# Submodules (issue #69): a plugin that carries another project as a git
+# submodule (afc-kiln: AFC-Klipper-Add-On, read through module_dirs) gets
+# it with INSTALL_PLUGIN and UPDATE_PLUGIN, so Klipper's first start needs
+# no network. The plugin's folder is a trust boundary: its .gitmodules is
+# checked first (https URLs only, relative ones resolved against the
+# plugin's own URL and kept on its host, paths inside the plugin), and git
+# runs with SUBMODULE_PROTOCOLS as the only transports allowed.
+def submodule_env(protocols=None):
+    """Environment additions for git commands that may fetch submodules:
+    only SUBMODULE_PROTOCOLS (or protocols) allowed, URLs taken as not
+    typed by a person (git's own rule for submodules), never a prompt."""
+    return {'GIT_ALLOW_PROTOCOL': protocols or SUBMODULE_PROTOCOLS,
+            'GIT_PROTOCOL_FROM_USER': '0', 'GIT_TERMINAL_PROMPT': '0'}
+
+def submodule_git(plugin_dir):
+    """git for submodule commands in plugin_dir. The file and ext::
+    transports are also refused in git's config (GIT_ALLOW_PROTOCOL from
+    submodule_env overrides this, so it holds without it too)."""
+    return ['git', '-c', 'protocol.file.allow=never',
+            '-c', 'protocol.ext.allow=never', '-C', plugin_dir]
+
+def has_submodules(plugin_dir):
+    return os.path.lexists(os.path.join(plugin_dir, '.gitmodules'))
+
+def submodule_update_argv(plugin_dir):
+    """git submodule update --init --recursive for the plugin; shallow
+    (--depth 1) when the plugin's own clone is."""
+    argv = submodule_git(plugin_dir) + ['submodule', '--quiet', 'update',
+                                        '--init', '--recursive']
+    if os.path.exists(os.path.join(plugin_dir, '.git', 'shallow')):
+        argv += ['--depth', '1']
+    return argv
+
+def git_output(text):
+    """git's output without the lines about git-sh-i18n--envsubst: the
+    image leaves that program out (post-build.sh), and git submodule's
+    shell part asks for it only for its usage text, at each start."""
+    return "\n".join(l for l in text.splitlines()
+                     if "sh-i18n--envsubst" not in l).strip()
+
+def run_git(argv, extra_env=None, timeout=GIT_LOCAL_TIMEOUT, data=None):
+    """(rc, output) of a short git command (stdout and stderr together);
+    rc None when git can't run or takes longer than timeout."""
+    env = dict(os.environ, GIT_TERMINAL_PROMPT='0')
+    env.update(extra_env or {})
+    env.setdefault('HOME', '/home/klipper')
+    try:
+        res = subprocess.run(
+            argv, input=data, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, env=env, timeout=timeout,
+            stdin=None if data is not None else subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError) as e:
+        return None, str(e)
+    return res.returncode, git_output(res.stdout.decode('utf-8',
+                                                        'replace'))
+
+def submodule_state(plugin_dir):
+    """git submodule status --recursive (local, no network): which commit
+    each submodule is at, or "" when the plugin has none (or git can't
+    tell). Compared before and after UPDATE_PLUGIN."""
+    if not has_submodules(plugin_dir):
+        return ""
+    rc, out = run_git(submodule_git(plugin_dir)
+                      + ['submodule', 'status', '--recursive'],
+                      submodule_env())
+    return out if rc == 0 else ""
+
+def resolve_submodule_url(url, parent):
+    """A .gitmodules URL as git fetches it: a relative one (./x, ../x)
+    resolved against the plugin's own URL parent the way git does (each
+    ../ drops one folder of it). None when it can't be resolved: no
+    parent, or more ../ than parent has folders (it would leave the
+    host)."""
+    if not url.startswith(('./', '../')):
+        return url
+    m = re.match(r'^([A-Za-z][A-Za-z0-9+.-]*://[^/]*)(/.*)?$', parent or '')
+    if not m:
+        return None
+    base = m.group(1)
+    path = [p for p in (m.group(2) or '').split('/') if p]
+    rest = url
+    while rest.startswith(('./', '../')):
+        if rest.startswith('../'):
+            if not path:
+                return None
+            path.pop()
+            rest = rest[3:]
+        else:
+            rest = rest[2:]
+    parts = [p for p in rest.split('/') if p]
+    if not parts or any(p in ('.', '..') for p in parts):
+        return None
+    return base + '/' + '/'.join(path + parts)
+
+def read_gitmodules(plugin_dir):
+    """{name: {'path', 'url', 'update', ...}} from the plugin's .gitmodules
+    as git reads it (git config: no include directives with -f). {} when
+    there is none. ValueError when it can't be read (a link, not UTF-8,
+    git refuses it)."""
+    path = os.path.join(plugin_dir, '.gitmodules')
+    if not os.path.lexists(path):
+        return {}
+    if os.path.islink(path):
+        raise ValueError("it is a link")
+    try:
+        text = read_regular(path)
+    except OSError as e:
+        raise ValueError(str(e))
+    rc, out = run_git(['git', 'config', '-f', '-', '-z', '--get-regexp',
+                       r'^submodule\.'], data=text.encode('utf-8'))
+    if rc == 1 and not out:
+        return {}
+    if rc != 0:
+        raise ValueError("git can't read it: %s" % (out[-200:],))
+    subs = {}
+    for item in out.split('\0'):
+        if not item:
+            continue
+        key, _, val = item.partition('\n')
+        name, _, var = key[len('submodule.'):].rpartition('.')
+        if name:
+            subs.setdefault(name, {})[var] = val
+    return subs
+
+def submodule_errors(plugin_dir, parent=None):
+    """Why INSTALL_PLUGIN / UPDATE_PLUGIN won't fetch the plugin's
+    submodules: one text per problem in its .gitmodules, [] when it has
+    none or all are fine. parent: the plugin's own git URL (what relative
+    submodule URLs are resolved against). Allowed: URLs of
+    SUBMODULE_PROTOCOLS (https://), and ./ ../ relative ones that resolve
+    to one on the plugin's own host; paths inside the plugin; no
+    "update = !command"."""
+    try:
+        subs = read_gitmodules(plugin_dir)
+    except ValueError as e:
+        return [".gitmodules: %s" % (e,)]
+    schemes = tuple(p + '://' for p in SUBMODULE_PROTOCOLS.split(':') if p)
+    errors = []
+    for name in sorted(subs):
+        sub = subs[name]
+        url, path = sub.get('url', ''), sub.get('path', '')
+        what = "submodule '%s'" % (name,)
+        if not url:
+            errors.append("%s has no url" % (what,))
+        elif any(ord(c) < 32 for c in url):
+            errors.append("%s: its url has control characters" % (what,))
+        else:
+            full = resolve_submodule_url(url, parent)
+            if full is None:
+                errors.append("%s: url '%s' leads out of the plugin's host "
+                              "or has no https URL to be relative to"
+                              % (what, url))
+            elif not full.startswith(schemes):
+                errors.append("%s: url '%s' is not https:// (only https "
+                              "submodules are fetched)" % (what, url))
+        parts = path.replace('\\', '/').split('/')
+        if not path or path.startswith('/') or '\\' in path or any(
+                p in ('', '.', '..') for p in parts) or \
+                parts[0].lower() == '.git' or any(
+                ord(c) < 32 for c in path):
+            errors.append("%s: path '%s' is not a folder inside the plugin"
+                          % (what, path))
+        if sub.get('update', '').startswith('!'):
+            errors.append("%s: update = !command is refused" % (what,))
+    return errors
+
 def write_new(path, data):
     """data (bytes) into path as a new file, renamed into place: a link or
     a FIFO someone put at path is replaced, never written through."""
@@ -882,6 +1140,9 @@ class AD5XPlugins:
                                          self.ifs_klipper_flag)
         self.warnings = []
         self.modules = {}
+        # Modules of the plugins' module_dirs, imported when first needed:
+        # name -> (plugin, folder)
+        self.lazy = {}
         # The plugin driving the IFS at this start ("": Kiln's [ifs])
         self.ifs_owner = (ifs_owners(self.active, self.found) or [""])[0]
         # Also while Klipper isn't ready: a plugin whose config stops
@@ -995,23 +1256,50 @@ class AD5XPlugins:
             if d not in sys.path:
                 sys.path.append(d)
         wanted = {}
+        lazy = {}
+        # lower-case module name -> (plugin, "folder/file")
+        seen = {}
         for name in self.active:
             info = self.found[name]
-            if not info['extras']:
-                continue
-            ext = os.path.join(info['dir'], 'extras')
-            for mod, fn in extras_modules(ext):
-                if not MODULE_RE.match(mod):
-                    continue
-                if is_core_module(mod, core):
-                    raise config.error(
-                        "Plugin %s: extras/%s has the name of a Klipper "
-                        "module; rename it" % (name, fn))
-                if mod in wanted:
-                    raise config.error(
-                        "Plugins %s and %s both have extras/%s"
-                        % (wanted[mod][0], name, fn))
-                wanted[mod] = (name, ext)
+            dirs = []
+            if info['extras']:
+                dirs.append((os.path.join(info['dir'], 'extras'), wanted))
+            for d in info.get('module_dirs', []):
+                rel = os.path.relpath(d, info['dir']).replace(os.sep, '/')
+                if not os.path.isdir(d):
+                    self._warn("Plugin %s: module folder %s is missing, its "
+                               "modules are not loaded" % (name, rel))
+                elif not inside(d, info['dir']):
+                    self._warn("Plugin %s: module folder %s leads out of the "
+                               "plugin folder (a link), its modules are not "
+                               "loaded" % (name, rel))
+                else:
+                    dirs.append((d, lazy))
+            for ext, into in dirs:
+                rel = os.path.relpath(ext, info['dir']).replace(os.sep, '/')
+                for mod, fn in extras_modules(ext):
+                    if not MODULE_RE.match(mod):
+                        continue
+                    if into is lazy and not inside(os.path.join(ext, fn),
+                                                   info['dir']):
+                        self._warn("Plugin %s: %s/%s leads out of the plugin "
+                                   "folder (a link), not loaded" % (
+                                       name, rel, fn))
+                        continue
+                    if is_core_module(mod, core):
+                        raise config.error(
+                            "Plugin %s: %s/%s has the name of a Klipper "
+                            "module; rename it" % (name, rel, fn))
+                    # names that differ only in case are one name here
+                    other = seen.get(mod.lower())
+                    if other is not None:
+                        raise config.error(
+                            "Plugins %s and %s both have a module %s"
+                            % (other[0], name, mod) if other[0] != name else
+                            "Plugin %s has module %s twice (%s/%s, %s)"
+                            % (name, mod, rel, fn, other[1]))
+                    seen[mod.lower()] = (name, "%s/%s" % (rel, fn))
+                    into[mod] = (name, ext)
         # The plugins' extras/ dirs join the extras package path (after
         # Klipper's own), so plugin modules and packages import as
         # extras.<module> and import each other. A RESTART starts over:
@@ -1026,10 +1314,13 @@ class AD5XPlugins:
                 del sys.modules[full]
         del _PLUGIN_EXTRAS_DIRS[:]
         _PLUGIN_MODULES.clear()
-        for name, ext in wanted.values():
+        for name, ext in list(wanted.values()) + list(lazy.values()):
             if ext not in path:
                 path.append(ext)
                 _PLUGIN_EXTRAS_DIRS.append(ext)
+        # imported later (or by another module): dropped at the next start
+        _PLUGIN_MODULES.update(lazy)
+        self.lazy = lazy
         for mod, (name, ext) in sorted(wanted.items()):
             full = 'extras.' + mod
             _PLUGIN_MODULES.add(mod)
@@ -1043,7 +1334,7 @@ class AD5XPlugins:
                                    "%s" % (name, mod, e))
             self.modules[mod] = module
             logging.info("ad5x_plugins: loaded %s from plugin %s", mod, name)
-        if not self.modules:
+        if not self.modules and not self.lazy:
             return
         # printer.load_object() only looks in klippy/extras: also find the
         # plugin modules (a plugin module may load another's section)
@@ -1053,11 +1344,32 @@ class AD5XPlugins:
         # loader makes them for its own
         for section in config.get_prefix_sections(''):
             sname = section.get_name()
-            if sname.split()[0] in self.modules:
+            if sname.split()[0] in self.modules or \
+                    sname.split()[0] in self.lazy:
                 self._load_object(config, sname)
+    def _module(self, config, mod):
+        """The plugin module named mod, importing a module_dirs one the
+        first time it is needed; None for a module no plugin has."""
+        module = self.modules.get(mod)
+        if module is not None or mod not in self.lazy:
+            return module
+        name, ext = self.lazy[mod]
+        full = 'extras.' + mod
+        try:
+            module = importlib.import_module(full)
+        except Exception as e:
+            sys.modules.pop(full, None)
+            logging.exception("ad5x_plugins: loading %s from %s", mod, ext)
+            rel = os.path.relpath(ext, self.found[name]['dir'])
+            raise config.error("Plugin %s: %s/%s failed to load: %s" % (
+                name, rel.replace(os.sep, '/'), mod, e))
+        self.modules[mod] = module
+        logging.info("ad5x_plugins: loaded %s from plugin %s (%s)", mod,
+                     name, ext)
+        return module
     def _load_object(self, config, section, *default):
         parts = section.split()
-        module = self.modules.get(parts[0])
+        module = self._module(config, parts[0]) if parts else None
         if module is None or self.printer.lookup_object(
                 section, None) is not None:
             return self._klipper_load_object(config, section, *default)
@@ -1168,35 +1480,50 @@ class AD5XPlugins:
                              % (name, ", ".join(sorted(self.catalog))
                                 or "none"))
         return name, self.catalog[name]
-    def _start_job(self, gcmd, name, action, argv, done):
+    def _start_job(self, gcmd, name, action, argv, done, extra_env=None):
         if self.job['state'] == 'running':
             raise gcmd.error("Busy: %s %s" % (self.job['action'],
                                               self.job['name']))
-        env = dict(os.environ, GIT_TERMINAL_PROMPT='0')
-        env.setdefault('HOME', '/home/klipper')
         try:
-            self.proc = subprocess.Popen(
-                argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT, env=env)
+            self._spawn(name, action, argv, done, extra_env)
         except OSError as e:
             raise gcmd.error("Can't run git: %s" % (e,))
+        gcmd.respond_info(self.job['message'])
+    def _spawn(self, name, action, argv, done, extra_env=None,
+               message=None):
+        """Run argv in the background as the job (name, action); done(rc,
+        output) gives its result when it ends (or GIT_TIMEOUT passes). A
+        done may start the next step with _spawn (the submodules after a
+        clone): that one reports itself. OSError when argv can't run (the
+        job is left as it was then)."""
+        env = dict(os.environ, GIT_TERMINAL_PROMPT='0')
+        env.update(extra_env or {})
+        env.setdefault('HOME', '/home/klipper')
+        # A session of its own: a timeout kills git and what it started
+        # (git submodule runs clones, which run git-remote-https)
+        self.proc = subprocess.Popen(
+            argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, env=env, start_new_session=True)
         self.job = {'name': name, 'action': action, 'state': 'running',
-                    'message': "%s %s..." % (action, name)}
+                    'message': message or "%s %s..." % (action, name)}
         self.job_done = done
         reactor = self.printer.get_reactor()
         self.job_end = reactor.monotonic() + GIT_TIMEOUT
         reactor.register_timer(self._poll_job, reactor.monotonic() + .5)
-        gcmd.respond_info(self.job['message'])
     def _poll_job(self, eventtime):
         rc = self.proc.poll()
         if rc is None:
             if eventtime < self.job_end:
                 return eventtime + .5
-            self.proc.kill()
+            try:
+                os.killpg(self.proc.pid, signal.SIGKILL)
+            except OSError:
+                self.proc.kill()
             rc = self.proc.wait()
             out = "timed out"
         else:
-            out = self.proc.stdout.read().decode('utf-8', 'replace')
+            out = git_output(self.proc.stdout.read().decode('utf-8',
+                                                            'replace'))
         self.proc.stdout.close()
         self.proc = None
         job = self.job
@@ -1208,7 +1535,7 @@ class AD5XPlugins:
         self.gcode.respond_info("%s %s: %s" % (job['action'], job['name'],
                                                msg))
         # done may have started the next job (ENABLE_PLUGIN ROOT=1 after an
-        # install): that one reports itself
+        # install, the submodules after a clone): that one reports itself
         if self.job is job:
             self.job.update({'state': state, 'message': msg})
             self._save_job()
@@ -1408,6 +1735,30 @@ class AD5XPlugins:
             if meta['error']:
                 shutil.rmtree(tmp, ignore_errors=True)
                 raise Exception("not a valid plugin: %s" % (meta['error'],))
+            if not has_submodules(tmp):
+                return installed()
+            # Its submodules too, before it goes into place: a failure
+            # leaves nothing behind, as a failed clone does
+            errors = submodule_errors(tmp, entry['url'])
+            if errors:
+                shutil.rmtree(tmp, ignore_errors=True)
+                raise Exception("submodules refused: %s" % ("; ".join(
+                    errors),))
+            try:
+                self._spawn(name, "install", submodule_update_argv(tmp),
+                            submodules_done, submodule_env(),
+                            "install %s: submodules..." % (name,))
+            except OSError as e:
+                shutil.rmtree(tmp, ignore_errors=True)
+                raise Exception("Can't run git: %s" % (e,))
+            return "cloned, fetching its submodules"
+        def submodules_done(rc, out):
+            if rc != 0:
+                shutil.rmtree(tmp, ignore_errors=True)
+                raise Exception("git submodule update failed: %s"
+                                % (out[-300:],))
+            return installed()
+        def installed():
             os.rename(tmp, dest)
             self.found = self._scan()
             has_root = name in self.found and self.found[name]['root']
@@ -1443,27 +1794,98 @@ class AD5XPlugins:
         on = name in read_enabled(self.plugins_file)[0]
         if on:
             self._check_idle(gcmd)
-        def head():
+        def rev(what="--short"):
             try:
                 return subprocess.check_output(
-                    ["git", "-C", d, "rev-parse", "--short", "HEAD"],
+                    ["git", "-C", d, "rev-parse", what, "HEAD"],
                     stderr=subprocess.DEVNULL).decode().strip()
             except (OSError, subprocess.CalledProcessError):
                 return "?"
-        before = head()
+        before, before_full = rev(), rev("--verify")
+        subs_before = submodule_state(d)
+        after = []
+        def back():
+            # Nothing pulled: nothing to go back from
+            if after and after[0] != before:
+                return self._go_back(d, before_full)
+            return ""
         def done(rc, out):
             if rc != 0:
                 raise Exception("git pull failed: %s" % (out[-300:],))
-            after = head()
+            after.append(rev())
+            if not has_submodules(d):
+                return updated()
+            # Its submodules at the commits the new version names; a
+            # failure puts the previous version back
+            rc, origin = run_git(["git", "-C", d, "config", "--get",
+                                  "remote.origin.url"])
+            errors = submodule_errors(d, origin if rc == 0 else None)
+            if errors:
+                raise Exception("submodules refused: %s%s" % (
+                    "; ".join(errors), back()))
+            # URLs changed in .gitmodules apply to submodules there already
+            rc, out = run_git(submodule_git(d) + [
+                'submodule', '--quiet', 'sync', '--recursive'],
+                submodule_env())
+            if rc != 0:
+                raise Exception("git submodule sync failed: %s%s" % (
+                    out[-300:], back()))
+            try:
+                self._spawn(name, "update", submodule_update_argv(d),
+                            submodules_done, submodule_env(),
+                            "update %s: submodules..." % (name,))
+            except OSError as e:
+                raise Exception("Can't run git: %s%s" % (e, back()))
+            if after[0] == before:
+                return "up to date (%s), checking its submodules" % (
+                    after[0],)
+            return "pulled %s -> %s, fetching its submodules" % (
+                before, after[0])
+        def submodules_done(rc, out):
+            if rc != 0:
+                raise Exception("git submodule update failed: %s%s" % (
+                    out[-300:], back()))
+            return updated()
+        def updated():
             self.found = self._scan()
-            if after == before:
-                return "up to date (%s)" % (after,)
-            msg = "updated %s -> %s" % (before, after)
+            subs_changed = submodule_state(d) != subs_before
+            if after[0] == before and not subs_changed:
+                return "up to date (%s)" % (after[0],)
+            if after[0] == before:
+                msg = "submodules updated (%s)" % (after[0],)
+            else:
+                msg = "updated %s -> %s" % (before, after[0])
             if on:
                 return self._restart_after(self.found.get(name), msg)
             return msg
+        # Submodules only in the step after, with only https allowed
         self._start_job(gcmd, name, "update",
-                        ["git", "-C", d, "pull", "-q", "--ff-only"], done)
+                        ["git", "-C", d, "pull", "-q", "--ff-only",
+                         "--no-recurse-submodules"], done)
+    def _go_back(self, d, commit):
+        """After a failed submodule step of UPDATE_PLUGIN: the plugin back
+        at commit (the version before the pull; local changes kept, as
+        git reset --keep does) with its submodules where they were, no
+        network used. The text to add to the failure."""
+        if commit in ("", "?"):
+            return "; the new version stays (its previous commit unknown)"
+        rc, out = run_git(["git", "-C", d, "reset", "-q", "--keep", commit])
+        if rc != 0:
+            return ("; couldn't go back to the previous version (%s): %s"
+                    % (commit[:7], out[-200:]))
+        self.found = self._scan()
+        # No transport allowed: only commits already there are checked out
+        local = submodule_env("none")
+        rc1, out1 = run_git(submodule_git(d) + [
+            'submodule', '--quiet', 'sync', '--recursive'], local)
+        rc2, out2 = run_git(submodule_git(d) + [
+            'submodule', '--quiet', 'update', '--no-fetch', '--recursive'],
+            local)
+        if rc1 != 0 or rc2 != 0:
+            return ("; the previous version (%s) is back, but its "
+                    "submodules may not be: %s" % (commit[:7],
+                                                   (out2 or out1)[-200:]))
+        return "; the previous version (%s) is back" % (commit[:7],)
     cmd_REMOVE_PLUGIN_help = "Disable and delete an installed plugin: NAME="
     def cmd_REMOVE_PLUGIN(self, gcmd):
         self.found = self._scan()

@@ -16,6 +16,14 @@
  *
  * The image is a raw self-extracting zImage linked at 0x80f00000, or the
  * same with a 64-byte legacy uImage header (skipped).
+ *
+ * Bench variant (make uboot: chainload_uboot.ko, CHAINLOAD_UBOOT and
+ * CHAINLOAD_LOAD=0x80100000): the same with the load address of U-Boot
+ * proper. It takes only a legacy uImage, not compressed, whose load and
+ * entry address are that address and whose size is the rest of the file
+ * (u-boot/build.sh's u-boot-kernel-slot.img); the header is skipped as
+ * above, so U-Boot proper (u-boot.bin) lands at 0x80100000. For
+ * tools/bench/ad5x-uboot-chainload only, never in an image.
  */
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -28,7 +36,10 @@
 #include <linux/string.h>
 #include <asm/cacheflush.h>
 
-#define LOAD_PHYS	0x00f00000UL
+#ifndef CHAINLOAD_LOAD
+#define CHAINLOAD_LOAD	0x80f00000	/* tramp.S's LOAD_ADDR, the same value */
+#endif
+#define LOAD_PHYS	((unsigned long)(CHAINLOAD_LOAD) - 0x80000000UL)
 /*
  * Above everything a started zboot writes before the new kernel reads its
  * argv: the image copied to LOAD_PHYS (up to MAX_IMAGE), then its bss,
@@ -45,6 +56,13 @@
 #define MAX_ARGS	64
 
 extern char chainload_tramp[], chainload_tramp_end[];
+
+#ifdef CHAINLOAD_UBOOT
+/* what the bench script checks for: this build's load address */
+MODULE_INFO(kiln_load, __stringify(CHAINLOAD_LOAD));
+#define BE32(p)	((u32)(p)[0] << 24 | (u32)(p)[1] << 16 | (u32)(p)[2] << 8 | (p)[3])
+static size_t uimage_size;		/* ih_size: what must follow the header */
+#endif
 
 static char *image;
 module_param(image, charp, 0444);
@@ -155,6 +173,17 @@ static int read_image(void)
 		pr_info("chainload: uImage header skipped\n");
 	else
 		pos = 0;
+#ifdef CHAINLOAD_UBOOT
+	/* only a uImage made for this address: no raw images, no compression */
+	if (!pos || BE32(hdr + 16) != CHAINLOAD_LOAD ||
+	    BE32(hdr + 20) != CHAINLOAD_LOAD || hdr[31] != 0) {
+		pr_err("chainload: %s: not an uncompressed uImage with load = entry = %#x\n",
+		       image, CHAINLOAD_LOAD);
+		ret = -ENOEXEC;
+		goto out;
+	}
+	uimage_size = BE32(hdr + 12);
+#endif
 	for (;;) {
 		unsigned long va;
 
@@ -182,6 +211,13 @@ static int read_image(void)
 	}
 	if (!ret && !size)
 		ret = -ENODATA;
+#ifdef CHAINLOAD_UBOOT
+	if (!ret && size != uimage_size) {
+		pr_err("chainload: %s: %zu bytes after the header, its size says %zu\n",
+		       image, size, uimage_size);
+		ret = -EBADMSG;
+	}
+#endif
 	if (!ret)
 		pr_info("chainload: %s: %zu bytes in %lu pages (%lu low pages skipped)\n",
 			image, size, npages, nrejects);
@@ -324,4 +360,8 @@ static void __exit chainload_exit(void)
 module_init(chainload_init);
 module_exit(chainload_exit);
 MODULE_LICENSE("GPL");
+#ifdef CHAINLOAD_UBOOT
+MODULE_DESCRIPTION("Start U-Boot proper from RAM at 0x80100000 (AD5X bench test)");
+#else
 MODULE_DESCRIPTION("Boot another kernel image from RAM (AD5X test)");
+#endif

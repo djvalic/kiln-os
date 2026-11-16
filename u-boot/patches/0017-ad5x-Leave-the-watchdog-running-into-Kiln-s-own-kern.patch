@@ -1,0 +1,283 @@
+From 3487841ea533f8d845ecf64dd9191206b975a085 Mon Sep 17 00:00:00 2001
+From: valix <djvalic.wc@gmail.com>
+Date: Sun, 15 Nov 2026 12:16:03 -0500
+Subject: [PATCH 17/17] ad5x: Leave the watchdog running into Kiln's own kernels
+
+U-Boot stopped the watchdog before every kernel, because neither of
+Kiln's kernels knew it was running and nothing fed it before userspace:
+a hang after the jump needed a power cycle.
+
+Kiln's 6.6 and 7.3 now take a running watchdog over (their drivers see
+it enabled at probe and the kernel feeds it until the userspace feeder
+opens /dev/watchdog, at most 300 s, and stop it on halt and poweroff),
+and both systems run a feeder. So leave it running into those kernels:
+wdt_os, now 30 s by default, covers the start of the kernel until its
+driver probes, a matter of seconds.
+
+Only when it's safe: the kernel is 6.6 or 7.3 from rootfs2, rootfs2 has
+/usr/lib/ad5x/watchdog.conf (the system says it takes the watchdog over;
+an older system or a restored stock one doesn't, and would be reset
+over and over), and /data has no ad5x/watchdog.disable (the owner's off
+switch, which the feeder honours too). The stock kernel and the recovery
+OS start with it stopped, as from the stock SPL: their kernel doesn't
+know it runs. A bootm typed at the prompt starts with it stopped.
+
+ad5x_wdt_seconds() in bootlogic.c makes the choice, so the host tests
+cover it; ad5x.wdt=SECONDS on the command line says it runs.
+---
+ board/flashforge/ad5x/ad5x.c      | 63 +++++++++++++++++++++----------
+ board/flashforge/ad5x/ad5x.env    | 13 ++++---
+ board/flashforge/ad5x/bootlogic.c | 15 ++++++++
+ board/flashforge/ad5x/bootlogic.h | 18 +++++++++
+ 4 files changed, 85 insertions(+), 24 deletions(-)
+
+diff --git a/board/flashforge/ad5x/ad5x.c b/board/flashforge/ad5x/ad5x.c
+index cae76bc0..71261777 100644
+--- a/board/flashforge/ad5x/ad5x.c
++++ b/board/flashforge/ad5x/ad5x.c
+@@ -283,19 +283,21 @@ int board_late_init(void)
+ /* ---- the watchdog over the jump to a kernel ---- */
+ 
+ /*
+- * By default the kernel starts with the watchdog stopped, as both SPLs
+- * leave it: neither kernel's driver knows U-Boot started it, nothing would
+- * feed it before a userspace feeder, and poweroff wouldn't stop it, so a
+- * printer shut down from the screen would restart. wdt_os=SECONDS (opt-in,
+- * for when the kernels and userspace take it over, README) starts the OS
+- * with it running and passes ad5x.wdt=SECONDS.
++ * Seconds the watchdog runs into the kernel bootm starts next, 0: stopped
++ * (as both SPLs leave it). ad5x_boot sets it from ad5x_wdt_seconds() for
++ * each start: wdt_os seconds into Kiln's 6.6 or 7.3 when rootfs2 has
++ * /usr/lib/ad5x/watchdog.conf (its kernels take a running watchdog over:
++ * they feed it from the driver's probe until the userspace feeder opens
++ * /dev/watchdog, and stop it on halt and poweroff) and /data has no
++ * ad5x/watchdog.disable. Stopped for the stock kernel and the recovery OS,
++ * and for a bootm typed at the prompt.
+  */
++static unsigned int ad5x_wdt_s;
++
+ void board_preboot_os(void)
+ {
+-	ulong s = env_get_ulong("wdt_os", 10, 0);
+-
+-	if (s)
+-		x2600_wdt_start(s * 1000);
++	if (ad5x_wdt_s)
++		x2600_wdt_start(ad5x_wdt_s * 1000);
+ 	else
+ 		x2600_wdt_stop();
+ 	x2600_cpspr_write(0);
+@@ -334,6 +336,7 @@ static void ad5x_gather(struct ad5x_inputs *in)
+ 			  AD5X_REL_LEN);
+ 		ad5x_line(7, "/ad5x/kernel/failed-mainline",
+ 			  in->s00_failed_mainline, AD5X_REL_LEN);
++		in->wdt_off = ad5x_exists(7, "/ad5x/watchdog.disable");
+ 	}
+ 
+ 	/* rootfs2: p4, SquashFS */
+@@ -343,6 +346,7 @@ static void ad5x_gather(struct ad5x_inputs *in)
+ 	in->have_73 = ad5x_exists(4, "/usr/lib/ad5x/kernel-mainline/xImage");
+ 	ad5x_line(4, "/usr/lib/ad5x/kernel-mainline/release", in->rel_73,
+ 		  AD5X_REL_LEN);
++	in->wdt_capable = ad5x_exists(4, "/usr/lib/ad5x/watchdog.conf");
+ 
+ 	/* slot A, and p1's kernel for the main OS too */
+ 	in->stock_kernel_ok = ad5x_check_kernel(AD5X_KERNEL_A_LBA, AD5X_LOAD_A);
+@@ -367,6 +371,10 @@ static void ad5x_print(const struct ad5x_inputs *in)
+ 	       in->have_73 ? "yes" : "no", in->rel_73,
+ 	       in->slot_a_ok ? "ok" : "not startable",
+ 	       in->stock_kernel_ok ? "ok" : "no kernel");
++	printf("ad5x: watchdog: wdt_os %lu, rootfs2 %s, /data %s\n",
++	       env_get_ulong("wdt_os", 10, 0),
++	       in->wdt_capable ? "feeds it" : "doesn't feed it",
++	       in->wdt_off ? "switches it off" : "doesn't switch it off");
+ }
+ 
+ static int ad5x_commit(const struct ad5x_decision *d)
+@@ -393,7 +401,7 @@ static int ad5x_commit(const struct ad5x_decision *d)
+ 	return ret;
+ }
+ 
+-static void ad5x_bootargs(const char *root, int own)
++static void ad5x_bootargs(const char *root, int own, unsigned int wdt)
+ {
+ 	char extra[256] = "";
+ 	char *args;
+@@ -411,12 +419,15 @@ static void ad5x_bootargs(const char *root, int own)
+ 	args = malloc(CONFIG_SYS_CBSIZE);
+ 	if (!args)
+ 		return;
+-	snprintf(args, CONFIG_SYS_CBSIZE, "%s root=%s%s ad5x.uboot=1%s%s %s",
++	snprintf(args, CONFIG_SYS_CBSIZE, "%s root=%s%s ad5x.uboot=1",
+ 		 env_get("args_spl"), root,
+-		 own ? " ad5x.kernel=own panic=10 loglevel=5" : "",
+-		 env_get_ulong("wdt_os", 10, 0) ? " ad5x.wdt=" : "",
+-		 env_get_ulong("wdt_os", 10, 0) ? env_get("wdt_os") : "",
+-		 extra);
++		 own ? " ad5x.kernel=own panic=10 loglevel=5" : "");
++	/* the watchdog runs into this kernel: for how long (information) */
++	if (wdt)
++		snprintf(args + strlen(args), CONFIG_SYS_CBSIZE - strlen(args),
++			 " ad5x.wdt=%u", wdt);
++	snprintf(args + strlen(args), CONFIG_SYS_CBSIZE - strlen(args),
++		 " %s", extra);
+ 	env_set("bootargs", args);
+ 	free(args);
+ }
+@@ -460,6 +471,7 @@ static int do_ad5x_boot(struct cmd_tbl *cmdtp, int flag, int argc,
+ 	struct ad5x_inputs in;
+ 	struct ad5x_decision d;
+ 	int dry = argc > 1 && !strcmp(argv[1], "-n");
++	unsigned int wdt;
+ 	int round;
+ 	long len;
+ 
+@@ -473,7 +485,18 @@ static int do_ad5x_boot(struct cmd_tbl *cmdtp, int flag, int argc,
+ 	/* a kernel that can't even be loaded is left out, and decided again */
+ 	for (round = 0; round < 4; round++) {
+ 		ad5x_decide(&in, &d);
++		wdt = ad5x_wdt_seconds(&in, &d,
++				       env_get_ulong("wdt_os", 10, 0));
+ 		printf("ad5x: %s\n", d.msg);
++		if (d.target != AD5X_BOOT_PROMPT) {
++			if (wdt)
++				printf("ad5x: watchdog runs into the kernel "
++				       "(%u s until its driver feeds it)\n",
++				       wdt);
++			else
++				printf("ad5x: watchdog stopped for this "
++				       "kernel\n");
++		}
+ 		if (dry)
+ 			return CMD_RET_SUCCESS;
+ 		if (d.target == AD5X_BOOT_PROMPT)
+@@ -481,11 +504,11 @@ static int do_ad5x_boot(struct cmd_tbl *cmdtp, int flag, int argc,
+ 		ad5x_commit(&d);
+ 
+ 		if (d.target == AD5X_BOOT_RECOVERY) {
+-			ad5x_bootargs("/dev/mmcblk0p2", 0);
++			ad5x_bootargs("/dev/mmcblk0p2", 0, 0);
+ 			ad5x_bootm(AD5X_LOAD_A);
+ 			in.slot_a_ok = in.stock_kernel_ok = 0;
+ 		} else if (d.kernel == AD5X_K_STOCK) {
+-			ad5x_bootargs("/dev/mmcblk0p4", 0);
++			ad5x_bootargs("/dev/mmcblk0p4", 0, 0);
+ 			ad5x_bootm(AD5X_LOAD_A);
+ 			in.stock_kernel_ok = in.slot_a_ok = 0;
+ 		} else {
+@@ -496,8 +519,10 @@ static int do_ad5x_boot(struct cmd_tbl *cmdtp, int flag, int argc,
+ 			len = ad5x_load(4, path, AD5X_LOAD_MAIN,
+ 					AD5X_KERNEL_MAX);
+ 			if (len > 0) {
+-				ad5x_bootargs("/dev/mmcblk0p4", 1);
++				ad5x_bootargs("/dev/mmcblk0p4", 1, wdt);
++				ad5x_wdt_s = wdt;
+ 				ad5x_bootm(AD5X_LOAD_MAIN);
++				ad5x_wdt_s = 0;
+ 			}
+ 			printf("ad5x: %s didn't start\n", path);
+ 			if (d.kernel == AD5X_K_73)
+diff --git a/board/flashforge/ad5x/ad5x.env b/board/flashforge/ad5x/ad5x.env
+index 2907550a..b0f939d8 100644
+--- a/board/flashforge/ad5x/ad5x.env
++++ b/board/flashforge/ad5x/ad5x.env
+@@ -4,15 +4,18 @@
+  * Kiln's u-boot/README.md "Boot rules"); nothing here holds state.
+  *
+  *   ad5x_delay  seconds to wait for a key (the U-Boot prompt, watchdog off)
+- *   wdt_os      0: kernels start with the watchdog stopped, as from the
+- *               stock SPL; SECONDS: running, ad5x.wdt=SECONDS on the
+- *               command line (only once the kernels and userspace feed it
+- *               and stop it on poweroff)
++ *   wdt_os      seconds the watchdog runs into Kiln's 6.6 or 7.3 until the
++ *               kernel's driver feeds it (it probes within seconds; then
++ *               the kernel and the userspace feeder keep it fed), with
++ *               ad5x.wdt=SECONDS on the command line; only for a rootfs2
++ *               with /usr/lib/ad5x/watchdog.conf and without
++ *               /data/ad5x/watchdog.disable. 0: always stopped. The stock
++ *               kernel and the recovery OS start with it stopped.
+  *   args_spl    the stock SPL's command line without root= (lpj as stock)
+  */
+ bootcmd=ad5x_boot
+ ad5x_delay=2
+-wdt_os=0
++wdt_os=30
+ loadaddr=0x82000000
+ args_spl=console=ttyS0,115200n8 loglevel=8 mem=236M@0x0
+ 	rmem=16M@0xec00000 rtos_size=4M@0xfc00000 mem=256M@0x30000000
+diff --git a/board/flashforge/ad5x/bootlogic.c b/board/flashforge/ad5x/bootlogic.c
+index 44805eda..f12ddf1a 100644
+--- a/board/flashforge/ad5x/bootlogic.c
++++ b/board/flashforge/ad5x/bootlogic.c
+@@ -30,6 +30,10 @@
+  *   is dropped (an update), as S00 does.
+  * - Counts saturate at AD5X_MAX_TRIES; a record that doesn't parse or has
+  *   a bad CRC32 counts as empty: never a reason to fall back.
++ * - The watchdog stays running (wdt_os seconds) only into Kiln's own
++ *   kernels, from a rootfs2 that has watchdog.conf, and not with
++ *   watchdog.disable on /data; it is stopped for the stock kernel and the
++ *   recovery OS (ad5x_wdt_seconds).
+  */
+ 
+ #include <stdio.h>
+@@ -421,3 +425,14 @@ void ad5x_decide(const struct ad5x_inputs *in, struct ad5x_decision *out)
+ 		 "start %u", ad5x_kernel_name(k), out->state.release,
+ 		 out->state.tries);
+ }
++
++unsigned int ad5x_wdt_seconds(const struct ad5x_inputs *in,
++			      const struct ad5x_decision *d,
++			      unsigned long wdt_os)
++{
++	if (!wdt_os || d->target != AD5X_BOOT_MAIN ||
++	    (d->kernel != AD5X_K_66 && d->kernel != AD5X_K_73) ||
++	    !in->wdt_capable || in->wdt_off)
++		return 0;
++	return wdt_os > AD5X_WDT_MAX_S ? AD5X_WDT_MAX_S : wdt_os;
++}
+diff --git a/board/flashforge/ad5x/bootlogic.h b/board/flashforge/ad5x/bootlogic.h
+index 9d38fc3e..8574b6ba 100644
+--- a/board/flashforge/ad5x/bootlogic.h
++++ b/board/flashforge/ad5x/bootlogic.h
+@@ -31,6 +31,7 @@
+ #define AD5X_REL_LEN		64	/* release strings, NUL included */
+ #define AD5X_REASON_LEN		160
+ #define AD5X_MAX_TRIES		250	/* saturates: never wraps to 0 */
++#define AD5X_WDT_MAX_S		1431	/* the watchdog's longest timeout */
+ 
+ /* the kernel a start of the main OS used */
+ enum ad5x_kernel {
+@@ -78,6 +79,9 @@ struct ad5x_inputs {
+ 	int stock_kernel_ok;
+ 	/* slot A startable: p1 as above and p2 starts with "hsqs" */
+ 	int slot_a_ok;
++	/* the watchdog (ad5x_wdt_seconds) */
++	int wdt_off;		/* /data/ad5x/watchdog.disable exists */
++	int wdt_capable;	/* rootfs2 has /usr/lib/ad5x/watchdog.conf */
+ };
+ 
+ struct ad5x_decision {
+@@ -92,6 +96,20 @@ struct ad5x_decision {
+ 
+ void ad5x_decide(const struct ad5x_inputs *in, struct ad5x_decision *out);
+ 
++/*
++ * The watchdog over the jump to the kernel @d starts: the seconds it is
++ * left running for (wdt_os, at most AD5X_WDT_MAX_S), or 0 to stop it first.
++ * Running only into Kiln's own kernels (6.6, 7.3) from rootfs2, and only
++ * when that system says it takes the watchdog over (watchdog.conf: its
++ * kernels feed a running watchdog until its userspace feeder does) and the
++ * owner hasn't switched it off (watchdog.disable on /data). Never into the
++ * stock kernel or the recovery OS, which start with it stopped as from the
++ * stock SPL; their kernels don't know it runs.
++ */
++unsigned int ad5x_wdt_seconds(const struct ad5x_inputs *in,
++			      const struct ad5x_decision *d,
++			      unsigned long wdt_os);
++
+ /* text sectors: buf is AD5X_REC_SIZE bytes */
+ void ad5x_state_format(const struct ad5x_state *st, char *buf);
+ int ad5x_state_parse(const char *buf, struct ad5x_state *st);
+-- 
+2.56.0
+

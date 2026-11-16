@@ -1,12 +1,93 @@
 #!/bin/sh
-# The board, with stock's tools (this printer's own copies in
-# /data/ad5x/vendor, filled by S06ad5x-modules / ad5x-vendor), as the main
-# OS's S07ad5x-board: PC11 heartbeat every second (stock sys_start.sh), then
-# the display: framebuffer on, the recovery logo, backlight on. The UI
-# (S80ad5x-recovery-ui) takes the screen over when it is installed.
-# /data/ad5x/recovery/logo.jpg (800x480 baseline JPEG) replaces the logo.
+# The board, as the main OS's S07ad5x-board: PC11 heartbeat every second
+# (stock sys_start.sh), then the display: framebuffer on, the recovery logo,
+# backlight on. The UI (S80ad5x-recovery-ui) takes the screen over when it
+# is installed.
+# Stock kernel (5.10 from p1, the default): stock's tools (this printer's
+# own copies in /data/ad5x/vendor, filled by S06ad5x-modules /
+# ad5x-vendor). /data/ad5x/recovery/logo.jpg (800x480 baseline JPEG)
+# replaces the logo.
+# Our kernel (6.6, kernel-ingenic66/; KERNEL=own in /usr/lib/ad5x/kernel.sh):
+# sysfs GPIO for the heartbeat, and the logo from a frame rendered ahead,
+# /usr/share/ad5x/recovery-logo-32.raw.gz (recovery-logo.jpg as XRGB8888,
+# stride 3200; tools/make_logo.py --raw, tools/test_boot_logo.sh checks it
+# matches), written to /dev/fb0 with busybox alone: the recovery OS has no
+# Python, so neither ad5x-fb-show nor a custom logo (logo.jpg is drawn only
+# on the stock kernel). Order as the main OS's S02ad5x-logo: fbcon's cursor
+# blink off, the frame, the pan to frame 0, then the backlight: bl_power 0
+# (6.6's gpio-backlight probes powered off) and brightness at its maximum.
+# Only 32 bpp at 800 pixels a line (6.6; 7.3's 16 bpp is no target for
+# the recovery OS, whose UI draws 32 bpp only): any other framebuffer gets
+# no logo, the backlight still comes on. In the foreground (well under a
+# second), so the frame is in before the UI starts.
+# Test overrides (tools/test_boot_logo.sh): AD5X_LIB (/usr/lib/ad5x),
+# AD5X_SYS (/sys), AD5X_DEV (/dev), AD5X_SHARE (/usr/share/ad5x),
+# AD5X_DATA (/data), AD5X_KERNEL (stock|own, kernel.sh).
+LIB=${AD5X_LIB:-/usr/lib/ad5x}
+SYS=${AD5X_SYS:-/sys}
+DEV=${AD5X_DEV:-/dev}
+SHARE=${AD5X_SHARE:-/usr/share/ad5x}
+DATA=${AD5X_DATA:-/data}
+KERNEL=stock
+[ -f $LIB/kernel.sh ] && . $LIB/kernel.sh
+
+# sysfs GPIO number of PC11: base of the chip labelled GPC + 11 (as the
+# main OS's S07ad5x-board)
+pc11_sysfs() {
+	for c in $SYS/class/gpio/gpiochip*; do
+		case "$(cat $c/label 2>/dev/null)" in
+		GPC|GPIOC) echo $(( $(cat $c/base) + 11 )); return 0 ;;
+		esac
+	done
+	return 1
+}
+
+# own_logo: the pre-rendered frame into fb0 and the pan; why not on stdout
+own_logo() {
+	fb=$SYS/class/graphics/fb0
+	raw=$SHARE/recovery-logo-32.raw.gz
+	[ -e $DEV/fb0 ] || { echo "no framebuffer"; return 1; }
+	bpp=$(cat $fb/bits_per_pixel 2>/dev/null)
+	stride=$(cat $fb/stride 2>/dev/null)
+	if [ "$bpp" != 32 ] || [ "$stride" != 3200 ]; then
+		echo "$bpp bpp, stride $stride (only 32 bpp, 800 pixels a line)"
+		return 1
+	fi
+	[ -f $raw ] || { echo "no $raw"; return 1; }
+	zcat $raw > $DEV/fb0 || { echo "writing $raw failed"; return 1; }
+	echo 0,0 > $fb/pan 2>/dev/null
+	return 0
+}
+
 case "$1" in
 start)
+	if [ $KERNEL = own ]; then
+		if n=$(pc11_sysfs); then
+			[ -d $SYS/class/gpio/gpio$n ] || echo $n > $SYS/class/gpio/export
+			echo out > $SYS/class/gpio/gpio$n/direction
+			( while true; do
+				echo 0 > $SYS/class/gpio/gpio$n/value; sleep 1
+				echo 1 > $SYS/class/gpio/gpio$n/value; sleep 1
+			done ) &
+			ad5x-bootlog "  heartbeat started (gpio$n)"
+		else
+			echo "board: no GPC gpiochip: no heartbeat"
+		fi
+		[ -f $DATA/ad5x/recovery/logo.jpg ] &&
+			echo "board: $DATA/ad5x/recovery/logo.jpg is shown on the stock kernel only"
+		echo 0 > $SYS/class/graphics/fbcon/cursor_blink 2>/dev/null
+		if msg=$(own_logo </dev/null); then
+			ad5x-bootlog "  logo $SHARE/recovery-logo-32.raw.gz"
+		else
+			echo "board: logo not shown: $msg"
+			ad5x-bootlog "  logo not shown: $msg"
+		fi
+		for b in $SYS/class/backlight/*; do
+			[ -e $b/bl_power ] && echo 0 > $b/bl_power 2>/dev/null
+			[ -e $b/brightness ] && cat $b/max_brightness > $b/brightness 2>/dev/null
+		done
+		exit 0
+	fi
 	ad5x-vendor dir tools >/dev/null || {
 		echo "board: no stock board tools (ad5x-vendor status): no heartbeat, no logo"
 		ad5x-bootlog "  no board tools"; exit 0; }

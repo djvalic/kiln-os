@@ -1,0 +1,635 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# ad5x-spl-flash: write Kiln's SPL (u-boot/, spl-mmc.img) into this
+# printer's first MiB, and only that: the boot ROM's length field at
+# 0x4-0x7 and the SPL range 0x4400-0xA3FF, from first-mib.img (u-boot/
+# build.sh with FIRST_MIB_DUMP = this printer's /data/ad5x/stock/boot.img).
+# Nothing else of the first MiB changes: not the GPT, not Flashforge's
+# U-Boot at 0xA400 (which nothing starts), so Kiln's SPL boots the flagged
+# slot as Flashforge's did (u-boot/README.md, "SPL behaviour"). --restore
+# writes boot.img's bytes back for the same two ranges; first, a kernel
+# slot (p1, p3) that doesn't hold Flashforge's 5.10 (under Kiln's boot
+# loader they hold Kiln's 6.6) gets the saved stock kernel back
+# (/data/ad5x/stock/kernel.img, checked against SHA256SUMS there, a whole
+# 5.10 uImage; header last, read back): Flashforge's SPL never goes back
+# over a kernel it wasn't made for. No saved kernel: refused.
+#
+# OUR BENCH ONLY (tools/bench/README.md, step 3). Not in any image, not in
+# HelixScreen, Fluidd or the recovery UI: copy it over SSH when needed.
+# A hang of the new SPL leaves the printer down until it is restored over
+# J28 (u-boot/USB-BOOT.md, docs/boot-slots.md "J28").
+#
+#   ad5x-spl-flash [DIR]                 every check, then exactly what it
+#                                        would write (a dry run)
+#   ad5x-spl-flash --yes [DIR]           checks, writes, reads back
+#   ad5x-spl-flash --restore [--yes]     boot.img's bytes back (same checks
+#                                        but the candidate's, same read-back)
+#   ad5x-spl-flash --status [DIR]        read only: what the first MiB holds
+#   --moonraker-down-ok                  go on when Moonraker doesn't answer
+#                                        (only if you know nothing prints)
+#
+# DIR holds first-mib.img, spl-mmc.img and SHA256SUMS from u-boot/
+# build.sh's dist (first-mib-plan.json too, if there: its hashes are
+# checked as well). Default: this script's directory if it has
+# first-mib.img, else /data/ad5x/bench if that has it (where step 3 keeps
+# it), else this script's directory. No Python needed.
+#
+# Refuses unless all of these hold: root; Kiln OS's main OS on slot B with
+# start-up finished (/run/ad5x-booted, flag ota:kernel2); Klipper not
+# printing or paused (Moonraker); no update or restore running;
+# /data/ad5x/stock/boot.img 1 MiB, matching boot.img.sha256, Flashforge's
+# SPL by boot.img.info and its own bytes; the disk a block device, not
+# read-only, not mounted whole, no partition below 0xA400 and the GPT's
+# entries ending before 0x4400; the disk's first MiB = boot.img (flash) or
+# differing from it only in the two ranges (restore); first-mib.img and
+# spl-mmc.img matching SHA256SUMS, first-mib.img differing from boot.img
+# only in the two ranges, its SPL range being spl-mmc.img (with boot.img's
+# params copy, as ad5x_spl_image.py makes it) and 0xFF fill, its length
+# fields agreeing; both kernel slots (p1, p3) with good uImage header
+# and data CRCs (Kiln's SPL refuses a bad one); 1 MiB free on /data.
+#
+# Order, flash and restore alike: the SPL's header sector (34) zeroed,
+# then sectors 35-81, then the length at 0x4-0x7, then sector 34 last. The
+# boot ROM checks only that header (LPSM and the block count), and with
+# none it goes to USB boot mode by itself (djvalic/kiln-os#68): a power
+# cut leaves the old SPL whole, no SPL (USB mode, J28) or the new one
+# whole, never a header in front of a body cut short. README.md says why.
+# Each write is read back (caches dropped, O_DIRECT if BusyBox's dd can),
+# then the whole first MiB. A failed write or read-back
+# writes boot.img's bytes back at once and checks them.
+# Log: /data/ad5x/bench/spl-flash.log (everything, every run).
+# Exit: 0 done (or nothing to do, or --status), 1 refused (nothing
+# written), 2 checks passed but no --yes, 3 failed but boot.img's bytes are
+# back and read back right, 4 failed and the first MiB is NOT as before:
+# don't power off, run --restore --yes again, see README.md.
+set -u
+
+ME=ad5x-spl-flash
+R=${AD5X_BENCH_ROOT:-}			# tests: a stand-in for /
+LIB=${AD5X_LIB:-/usr/lib/ad5x}
+MOONRAKER=${AD5X_MOONRAKER:-http://127.0.0.1:7125}
+MIB=1048576
+LEN_OFF=4 LEN_SIZE=4			# INGE length (boot ROM params, LBA 0)
+SPL_OFF=17408 SPL_SIZE=24576		# 0x4400-0xA3FF
+SPL_LBA=34 SPL_SECTORS=48
+SPL_END=$((SPL_OFF + SPL_SIZE))		# 0xA400, Flashforge's U-Boot proper
+STOCK=$R/data/ad5x/stock
+BOOT=$STOCK/boot.img
+
+mode=flash yes=0 dry=0 mrok=0 dir=
+for a in "$@"; do
+	case "$a" in
+	--yes) yes=1 ;;
+	--restore) mode=restore ;;
+	--status) mode=status ;;
+	--dry-run) dry=1 ;;
+	--moonraker-down-ok) mrok=1 ;;
+	-h|--help) sed -n '3,62s/^# \{0,1\}//p' "$0"; exit 0 ;;
+	-*) echo "$ME: unknown option $a (--yes, --restore, --status, --moonraker-down-ok)" >&2; exit 1 ;;
+	*) [ -z "$dir" ] || { echo "$ME: one directory only" >&2; exit 1; }
+	   dir=$a ;;
+	esac
+done
+[ "$dry" = 1 ] && yes=0		# --dry-run wins, wherever it is
+if [ -z "$dir" ]; then
+	dir=$(cd "$(dirname "$0")" && pwd)
+	[ ! -f "$dir/first-mib.img" ] && [ -f "$R/data/ad5x/bench/first-mib.img" ] && dir=$R/data/ad5x/bench
+fi
+CAND=$dir/first-mib.img
+SPL=$dir/spl-mmc.img
+SUMS=$dir/SHA256SUMS
+PLAN=$dir/first-mib-plan.json
+LOGD=$R/data/ad5x/bench
+LOG=$LOGD/spl-flash.log
+
+if [ -f "$LIB/slot.sh" ]; then
+	# uimage_data_ok (header and data CRC with BusyBox only)
+	set +u				# slot.sh reads AD5X_USB unset
+	# shellcheck source=/dev/null # Kiln OS's lib/slot.sh, on the printer
+	. "$LIB/slot.sh"
+	set -u
+else
+	echo "$ME: no $LIB/slot.sh (Kiln OS's slot helpers)" >&2
+	exit 1
+fi
+
+logging=0
+mkdir -p "$LOGD" 2>/dev/null && : >> "$LOG" 2>/dev/null && logging=1
+say() {
+	echo "$*" 2>/dev/null
+	[ "$logging" = 1 ] && echo "$*" >> "$LOG" 2>/dev/null
+	return 0
+}
+nfail=0
+ok() { say "  ok    $*"; }
+bad() { say "  FAIL  $*"; nfail=$((nfail + 1)); }
+note() { say "  note  $*"; }
+loud() {
+	say "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+	for l in "$@"; do say "!! $l"; done
+	say "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+}
+
+T=$(mktemp -d "${TMPDIR:-/tmp}/$ME.XXXXXX") || { echo "$ME: no temp directory" >&2; exit 1; }
+LOCK=$R/run/$ME.lock
+locked=0
+# shellcheck disable=SC2329 # the EXIT trap
+cleanup() {
+	rm -rf "$T"
+	[ "$locked" = 1 ] && rmdir "$LOCK" 2>/dev/null
+}
+trap cleanup EXIT
+
+bpart() {	# GPT name -> device (sysfs PARTNAME, as slot.sh's part)
+	for u in "$R"/sys/class/block/*/uevent; do
+		[ -f "$u" ] || continue
+		grep -qx "PARTNAME=$1" "$u" &&
+			{ echo "$R/dev/$(sed -n 's/^DEVNAME=//p' "$u")"; return 0; }
+	done
+	return 1
+}
+flag() { o=$(bpart ota) && head -c 11 "$o" 2>/dev/null | tr -d '\0\n'; }
+sha() { sha256sum < "$1" | cut -d' ' -f1; }
+fsize() { wc -c < "$1" | tr -d ' '; }
+# unsigned 32-bit little endian at OFFSET (the printer and the laptop are LE)
+le32() { od -An -t u4 -j "$2" -N 4 "$1" 2>/dev/null | tr -d ' '; }
+range_sha() { tail -c +$(($2 + 1)) "$1" 2>/dev/null | head -c "$3" | sha256sum | cut -d' ' -f1; }
+hex() { od -An -v -t x1 -j "$2" -N "$3" "$1" | tr -d ' \n'; }
+sum_of() {	# NAME: its sha256 in SHA256SUMS; fails unless exactly one line
+	n=$(grep -c "^[0-9a-f]\{64\}  \*\{0,1\}$1\$" "$SUMS" 2>/dev/null)
+	[ "$n" = 1 ] || return 1
+	grep "^[0-9a-f]\{64\}  \*\{0,1\}$1\$" "$SUMS" | cut -c1-64
+}
+banner() {	# the SPL's U-Boot banner in a first MiB
+	tail -c +$((SPL_OFF + 1)) "$1" 2>/dev/null | head -c $SPL_SIZE | tr -c ' -~' '\n' |
+		grep 'U-Boot SPL' | head -n 1
+}
+# How FILE differs from REF: "same", "ranges N" (only inside 0x4-0x7 and
+# the SPL range; N bytes in the SPL range) or "other OFFSET" (the first
+# byte outside them, 0-based)
+diffclass() {
+	cmp -l "$2" "$1" 2>/dev/null | awk -v s=$SPL_OFF -v e=$SPL_END '
+		{ o = $1 - 1
+		  if (o >= 4 && o <= 7) next
+		  if (o >= s && o < e) { n++; next }
+		  if (first == "") first = o }
+		END { if (NR == 0) print "same"
+		      else if (first != "") print "other " first
+		      else print "ranges " n + 0 }'
+}
+
+drop_caches() {
+	sync
+	{ echo 3 > "$R/proc/sys/vm/drop_caches"; } 2>/dev/null
+	return 0
+}
+# read_first_mib OUT: the disk's first MiB as the eMMC has it: caches
+# dropped, then O_DIRECT (BusyBox dd iflag=direct), else a plain read
+READ_HOW=
+read_first_mib() {
+	drop_caches
+	rm -f "$1"
+	if dd if="$DISK" of="$1" bs=65536 count=16 iflag=direct 2>/dev/null &&
+	   [ "$(fsize "$1")" = $MIB ]; then
+		READ_HOW="O_DIRECT"
+		return 0
+	fi
+	rm -f "$1"
+	dd if="$DISK" of="$1" bs=65536 count=16 2>/dev/null &&
+		[ "$(fsize "$1")" = $MIB ] && READ_HOW="caches dropped" && return 0
+	READ_HOW="failed"
+	return 1
+}
+fetch() {
+	if command -v wget >/dev/null 2>&1; then
+		wget -qO- -T 5 "$1"
+	elif command -v curl >/dev/null 2>&1; then
+		curl -fsS -m 5 "$1"
+	else
+		return 127
+	fi
+}
+
+# ------------------------------------------------------------- checks
+say "== $ME $(date '+%Y-%m-%d %H:%M:%S') ($mode$([ "$yes" = 1 ] && echo ", --yes")) $*"
+say "checks:"
+if [ "$(id -u)" = 0 ]; then ok "root"; else bad "not root"; fi
+
+if [ "$mode" != status ]; then
+	if [ -f "$R/etc/kiln-version" ] && [ ! -e "$R/etc/ad5x-recovery" ]; then
+		ok "Kiln OS's main OS ($(sed -n 's/^VERSION=//p' "$R/etc/kiln-version" 2>/dev/null))"
+	else
+		bad "not Kiln OS's main OS (no /etc/kiln-version, or the recovery OS)"
+	fi
+	cmd=" $(cat "$R/proc/cmdline" 2>/dev/null) "
+	root=$(echo "$cmd" | sed -n 's/.* root=\([^ ]*\).*/\1/p')
+	rb=$(bpart rootfs2) && rb=${rb#"$R"}
+	case "$cmd" in *" ad5x.noslot "*) root="$root (ad5x.noslot)" ;; esac
+	if [ -n "$root" ] && { [ "$root" = PARTLABEL=rootfs2 ] || [ "$root" = "$rb" ]; }; then
+		ok "slot B (root=$root)"
+	else
+		bad "not started from slot B (root=${root:-?})"
+	fi
+	fl=$(flag)
+	if [ -f "$R/run/ad5x-booted" ] && [ "$fl" = ota:kernel2 ]; then
+		ok "start-up finished (/run/ad5x-booted, flag $fl)"
+	else
+		bad "start-up not finished (/run/ad5x-booted $([ -f "$R/run/ad5x-booted" ] && echo there || echo missing), flag '$fl')"
+	fi
+	json=$(fetch "$MOONRAKER/printer/objects/query?print_stats" 2>/dev/null)
+	pst=$(printf '%s\n' "$json" |
+		sed -n 's/.*"state"[[:space:]]*:[[:space:]]*"\([a-z_]*\)".*/\1/p' | head -n 1)
+	case "$pst" in
+	printing|paused) bad "Klipper is $pst: not while a print runs" ;;
+	"") if [ "$mrok" = 1 ]; then note "no print state from Moonraker; going on (--moonraker-down-ok)"
+	    else bad "no print state from Moonraker ($MOONRAKER); --moonraker-down-ok if you know nothing prints"; fi ;;
+	*) ok "Klipper $pst, not printing" ;;
+	esac
+	busy=
+	for p in ad5x-update ad5x-restore-stock ad5x-boot-recovery; do
+		pidof "$p" >/dev/null 2>&1 && busy="$busy $p"
+	done
+	if [ -z "$busy" ]; then ok "no update or restore running"
+	else bad "running:$busy (wait for it to finish)"; fi
+fi
+
+# the saved stock first MiB (S99ad5x-booted)
+boot_ok=0
+if [ ! -f "$BOOT" ]; then
+	bad "no $BOOT (S99ad5x-booted saves it on slot B)"
+elif [ "$(fsize "$BOOT")" != $MIB ]; then
+	bad "boot.img is $(fsize "$BOOT") bytes, not $MIB"
+elif [ "$(sha "$BOOT")" != "$(cut -d' ' -f1 "$STOCK/boot.img.sha256" 2>/dev/null)" ]; then
+	bad "boot.img's sha256 $(sha "$BOOT") differs from boot.img.sha256"
+elif ! sed -n 1p "$STOCK/boot.img.info" 2>/dev/null | grep -q "^Flashforge's boot loader: U-Boot SPL 2013\.07"; then
+	bad "boot.img.info doesn't name Flashforge's SPL: '$(sed -n 1p "$STOCK/boot.img.info" 2>/dev/null)'"
+elif [ "$(head -c 4 "$BOOT")" != INGE ] || [ "$(tail -c +513 "$BOOT" 2>/dev/null | head -c 8)" != "EFI PART" ] ||
+     [ "$(tail -c +$((SPL_OFF + 1)) "$BOOT" 2>/dev/null | head -c 4)" != LPSM ] || [ -z "$(banner "$BOOT")" ]; then
+	bad "boot.img lacks INGE at 0, a GPT at 0x200, LPSM at 0x4400 or Flashforge's SPL banner"
+else
+	boot_ok=1
+	ok "boot.img: 1 MiB, sha256 $(cut -c1-16 "$STOCK/boot.img.sha256")..., $(banner "$BOOT")"
+fi
+
+# the disk
+DISK="" disk_ok=0
+r2=$(bpart rootfs2) && DISK=${r2%p[0-9]*}
+dn=${DISK##*/}
+if [ -z "$DISK" ]; then
+	bad "no rootfs2 partition: can't tell the disk"
+elif { [ -z "$R" ] || [ -n "${AD5X_BENCH_NEED_BLOCK:-}" ]; } && [ ! -b "$DISK" ]; then
+	bad "$DISK is not a block device"
+elif [ ! -e "$DISK" ]; then
+	bad "no $DISK"
+elif [ "$(cat "$R/sys/class/block/$dn/ro" 2>/dev/null)" != 0 ]; then
+	bad "$dn is read-only (sysfs ro: $(cat "$R/sys/class/block/$dn/ro" 2>/dev/null))"
+elif awk -v d="${DISK#"$R"}" '$1 == d { f = 1 } END { exit !f }' "$R/proc/mounts"; then
+	bad "${DISK#"$R"} itself is mounted"
+else
+	low="" lown=""
+	for s in "$R/sys/class/block/$dn/$dn"p*/start "$R/sys/class/block/$dn"p*/start; do
+		[ -f "$s" ] || continue
+		v=$(cat "$s")
+		if [ -z "$low" ] || [ "$v" -lt "$low" ]; then low=$v lown=${s%/start}; lown=${lown##*/}; fi
+	done
+	if [ -z "$low" ]; then
+		bad "no partitions of $dn in sysfs"
+	elif [ $((low * 512)) -lt $SPL_END ]; then
+		bad "$lown starts at sector $low, inside the first 0xA400 bytes"
+	else
+		disk_ok=1
+		ok "${DISK#"$R"}: a writable disk, not mounted whole; lowest partition $lown at sector $low (beyond 0xA400)"
+	fi
+fi
+
+state=
+if [ "$disk_ok" = 1 ]; then
+	if read_first_mib "$T/cur.img"; then
+		ok "read the disk's first MiB ($READ_HOW)"
+		# its GPT: the entries end before the SPL, no partition reaches it
+		g_first=$(od -An -t u8 -j 552 -N 8 "$T/cur.img" | tr -d ' ')
+		g_lba=$(od -An -t u8 -j 584 -N 8 "$T/cur.img" | tr -d ' ')
+		g_n=$(od -An -t u4 -j 592 -N 4 "$T/cur.img" | tr -d ' ')
+		g_sz=$(od -An -t u4 -j 596 -N 4 "$T/cur.img" | tr -d ' ')
+		g_first=${g_first:-0} g_lba=${g_lba:-0} g_n=${g_n:-0} g_sz=${g_sz:-0}
+		# the entries at the LBA the header names (2; 32 on a board
+		# restored over USB, djvalic/kiln-os#68); small numbers only
+		for v in g_first g_lba g_n g_sz; do
+			eval "case \$$v in *[!0-9]*|??????????*) $v=99999999 ;; esac"
+		done
+		if [ "$(tail -c +513 "$T/cur.img" 2>/dev/null | head -c 8)" != "EFI PART" ]; then
+			bad "no GPT header on the disk"
+		elif [ "$g_lba" -lt 2 ] || [ "$g_lba" -gt 33 ] || [ "$g_sz" != 128 ] || [ "$g_n" -lt 1 ] || [ "$g_n" -gt 128 ] ||
+		     [ $((g_lba * 512 + g_n * g_sz)) -gt $SPL_OFF ] || [ "$g_first" -lt 34 ]; then
+			bad "GPT: $g_n entries of $g_sz bytes at LBA $g_lba, first usable LBA $g_first: its entries may reach 0x4400"
+		else
+			gl=$(od -An -v -t u8 -j $((g_lba * 512)) -N $((g_n * 128)) "$T/cur.img" |
+				awk '{ for (i = 1; i <= NF; i++) w[n++] = $i }
+				     END { for (e = 0; e * 16 < n; e++) { s = w[e * 16 + 4]
+					   if (s != 0 && (m == "" || s < m)) m = s }
+					   print m }')
+			if [ -n "$gl" ] && [ $((gl * 512)) -ge $SPL_END ]; then
+				ok "GPT: entries at LBA $g_lba end at $(printf '0x%x' $((g_lba * 512 + g_n * g_sz))), first usable LBA $g_first, first partition at LBA $gl: 0x4400-0xA3FF is the gap before it"
+			else
+				bad "GPT: a partition starts at LBA ${gl:-?}, inside 0x4400-0xA3FF"
+			fi
+		fi
+		if [ "$boot_ok" = 1 ]; then
+			dc=$(diffclass "$T/cur.img" "$BOOT")
+			case "$dc" in
+			same) state=stock ;;
+			ranges*) state=nocand
+				if [ -f "$CAND" ]; then
+					state=partial
+					cmp -s "$T/cur.img" "$CAND" && state=flashed
+				fi ;;
+			*) state=other ;;
+			esac
+		fi
+	else
+		bad "can't read the first MiB of ${DISK#"$R"}"
+	fi
+fi
+
+if [ -n "$state" ]; then
+	sn=$state
+	[ "$state" = nocand ] && sn="not stock, no first-mib.img in $dir to compare"
+	say "first MiB now: $sn (length $(le32 "$T/cur.img" $LEN_OFF), SPL blocks $(le32 "$T/cur.img" $((SPL_OFF + 4))), banner '$(banner "$T/cur.img")')"
+fi
+case "$state" in
+stock) ok "the disk's first MiB is boot.img byte for byte" ;;
+flashed) note "the disk's first MiB is first-mib.img already (Kiln's SPL)" ;;
+partial) note "the disk's first MiB differs from boot.img inside 0x4-0x7 and 0x4400-0xA3FF only, and isn't first-mib.img: an interrupted write" ;;
+nocand) note "the disk's first MiB differs from boot.img inside 0x4-0x7 and 0x4400-0xA3FF only: not stock; no first-mib.img in $dir to compare it with (Kiln's SPL, or a write cut short)" ;;
+other) if [ "${dc#other }" -ge $SPL_END ]; then
+		bad "the disk's first MiB differs from boot.img from $(printf '0x%x' "${dc#other }") on, after the SPL: U-Boot proper at 0xA400 (step 4)? ad5x-uboot-flash --status, and its --restore first"
+	else
+		bad "the disk's first MiB differs from boot.img outside the two ranges (first at offset $(printf '0x%x' "${dc#other }")): boot.img is stale or the GPT changed; refused"
+	fi ;;
+esac
+
+if [ "$mode" = status ]; then
+	[ "$state" = flashed ] || [ ! -f "$CAND" ] || note "first-mib.img: $(diffclass "$CAND" "$BOOT")"
+	exit 0
+fi
+
+# kernel slots. Flash: Kiln's SPL refuses a slot whose uImage CRCs are
+# wrong. Restore: Flashforge's SPL goes back only over its own 5.10 in both
+# slots (under Kiln's boot loader they hold Kiln's 6.6, which Flashforge's
+# SPL was never tried with): a slot that holds anything else gets the
+# saved stock kernel (/data/ad5x/stock/kernel.img, as SHA256SUMS there
+# says, a whole 5.10 uImage) first, header last, read back.
+SK=$STOCK/kernel.img KFIX=
+if [ "$mode" = restore ]; then
+	for k in kernel kernel2; do
+		d=$(bpart $k)
+		if [ -z "$d" ]; then bad "no $k partition"
+		elif stock_kernel "$d"; then ok "$k (${d#"$R"}): Flashforge's 5.10 ('$(uimage_name "$d")'), what its SPL starts"
+		else
+			KFIX="$KFIX $k"
+			note "$k (${d#"$R"}) holds '$(uimage_name "$d")', not Flashforge's 5.10: the saved stock kernel goes back there first"
+		fi
+	done
+	if [ -n "$KFIX" ]; then
+		skw=$(grep "^[0-9a-f]\{64\}  \*\{0,1\}kernel.img\$" "$STOCK/SHA256SUMS" 2>/dev/null | cut -c1-64)
+		if [ ! -f "$SK" ]; then bad "no ${SK#"$R"}: Flashforge's SPL would go back over a kernel it can't start; refused"
+		elif [ -z "$skw" ] || [ "$(sha "$SK")" != "$skw" ]; then bad "${SK#"$R"}: sha256 $(sha "$SK") isn't the one in ${STOCK#"$R"}/SHA256SUMS ('${skw:-none}')"
+		elif ! stock_kernel "$SK"; then bad "${SK#"$R"} is not a whole Flashforge 5.10 uImage ('$(uimage_name "$SK")')"
+		else ok "${SK#"$R"}: Flashforge's 5.10 ('$(uimage_name "$SK")', $(fsize "$SK") bytes), sha256 as SHA256SUMS"; fi
+	fi
+else
+	for k in kernel kernel2; do
+		d=$(bpart $k)
+		if [ -z "$d" ]; then bad "no $k partition"
+		elif uimage_data_ok "$d"; then ok "$k (${d#"$R"}): uImage header and data CRCs good"
+		else bad "$k (${d#"$R"}): uImage header or data CRC wrong; Kiln's SPL would refuse it"; fi
+	done
+fi
+av=$(df -k "$R/data" 2>/dev/null | awk 'NR == 2 { print $4 }')
+if [ -n "$av" ] && [ "$av" -ge 1024 ]; then ok "/data: $av KiB free"
+else bad "/data: ${av:-?} KiB free, less than 1 MiB for the log"; fi
+
+# the candidate (flash only)
+if [ "$mode" = flash ]; then
+	for f in "$CAND" "$SPL"; do
+		n=${f##*/}
+		if [ ! -f "$f" ]; then bad "no $f"; continue; fi
+		want=$(sum_of "$n") || { bad "SHA256SUMS ($SUMS) has no single line for $n"; continue; }
+		got=$(sha "$f")
+		if [ "$got" = "$want" ]; then ok "$n: sha256 $got as SHA256SUMS"
+		else bad "$n: sha256 $got, SHA256SUMS says $want"; fi
+	done
+	if [ -f "$CAND" ] && [ -f "$SPL" ] && [ "$boot_ok" = 1 ]; then
+		cs=$(fsize "$CAND") ss=$(fsize "$SPL")
+		cc=$(diffclass "$CAND" "$BOOT")
+		if [ "$cs" != $MIB ]; then
+			bad "first-mib.img is $cs bytes, not $MIB"
+		else case "$cc" in
+		"ranges 0"|same) bad "first-mib.img's SPL range is boot.img's: nothing to write" ;;
+		ranges*) ok "first-mib.img differs from boot.img only in 0x4-0x7 and 0x4400-0xA3FF (${cc#ranges } bytes in the SPL range)" ;;
+		*) bad "first-mib.img differs from boot.img outside the two ranges (offset $(printf '0x%x' "${cc#other }")): not made from this printer's boot.img" ;;
+		esac; fi
+		# The SPL range: spl-mmc.img, but its params copy (0x4500-0x45FF)
+		# is the unit's own with spl-mmc.img's length (ad5x_spl_image.py
+		# first-mib keeps it), then 0xFF up to 0xA400
+		po=$((SPL_OFF + 256))
+		pad=$(tail -c +$((SPL_OFF + ss + 1)) "$CAND" 2>/dev/null | head -c $((SPL_SIZE - ss)) | tr -d '\377' | wc -c | tr -d ' ')
+		if [ "$ss" -gt 512 ] && [ "$ss" -le $SPL_SIZE ] &&
+		   cmp -s -n 256 "$SPL" "$CAND" 0 $SPL_OFF &&
+		   cmp -s -n 4 "$BOOT" "$CAND" $po $po &&
+		   cmp -s -n 4 "$SPL" "$CAND" 260 $((po + 4)) &&
+		   cmp -s -n 248 "$BOOT" "$CAND" $((po + 8)) $((po + 8)) &&
+		   cmp -s -n $((ss - 512)) "$SPL" "$CAND" 512 $((SPL_OFF + 512)) && [ "$pad" = 0 ]; then
+			ok "first-mib.img's SPL range is spl-mmc.img ($ss bytes; the params copy boot.img's with spl-mmc.img's length) and 0xFF fill"
+		else
+			bad "first-mib.img's SPL range is not spl-mmc.img (with boot.img's params copy) followed by 0xFF fill"
+		fi
+		cl=$(le32 "$CAND" $LEN_OFF) cb=$(le32 "$CAND" $((SPL_OFF + 4)))
+		if [ "$(tail -c +$((SPL_OFF + 1)) "$CAND" 2>/dev/null | head -c 4)" = LPSM ] &&
+		   [ "$cl" = "$ss" ] && [ $((cb * 512)) = "$ss" ]; then
+			ok "first-mib.img: length $cl = $cb blocks = spl-mmc.img's size"
+		else
+			bad "first-mib.img: length $cl, LPSM blocks $cb, spl-mmc.img $ss bytes: they don't agree"
+		fi
+		if [ -f "$PLAN" ]; then
+			ph=$(grep -o '"sha256": *"[0-9a-f]\{64\}"' "$PLAN" | grep -o '[0-9a-f]\{64\}' | tr '\n' ' ')
+			want="$(range_sha "$BOOT" 0 256) $(range_sha "$BOOT" $SPL_OFF $SPL_SIZE) $(range_sha "$CAND" $LEN_OFF $LEN_SIZE) $(range_sha "$CAND" $SPL_OFF $SPL_SIZE) "
+			if [ "$ph" = "$want" ]; then ok "first-mib-plan.json: its verify and write hashes match boot.img and first-mib.img"
+			else bad "first-mib-plan.json's hashes don't match boot.img and first-mib.img (another printer's or another build's plan)"; fi
+		fi
+	fi
+fi
+
+say ""
+case "$mode:$state" in
+flash:flashed|restore:stock)
+	if [ "$nfail" = 0 ] && [ -z "$KFIX" ]; then
+		say "$ME: nothing to do: the first MiB is $([ "$state" = stock ] && echo "boot.img" || echo "first-mib.img") already"
+		exit 0
+	fi ;;
+flash:partial)
+	bad "an interrupted write is on the disk: --restore first" ;;
+esac
+if [ "$nfail" != 0 ]; then
+	say "$ME: $nfail check(s) failed: refused, nothing written"
+	exit 1
+fi
+
+# ------------------------------------------------------------- the plan
+if [ "$mode" = flash ]; then SRC=$CAND; else SRC=$BOOT; fi
+lnow=$(le32 "$T/cur.img" $LEN_OFF) lnew=$(le32 "$SRC" $LEN_OFF)
+ORDER="hdr0 body len hdr"
+desc() {
+	case "$1" in
+	hdr0) echo "sector $SPL_LBA (0x4400-0x45FF, the SPL's header) zeroed: from here until 4. the boot ROM finds no SPL" ;;
+	body) echo "bytes 0x4600-0xA3FF (sectors $((SPL_LBA + 1))-$((SPL_LBA + SPL_SECTORS - 1)), the SPL's body) ('$(banner "$T/cur.img")' -> '$(banner "$SRC")')" ;;
+	len) echo "bytes 0x4-0x7 (the boot ROM's length): $(hex "$T/cur.img" $LEN_OFF $LEN_SIZE) -> $(hex "$SRC" $LEN_OFF $LEN_SIZE) ($lnow -> $lnew)" ;;
+	hdr) echo "sector $SPL_LBA (the SPL's header) from ${SRC##*/}, last; the SPL range then sha256 $(range_sha "$T/cur.img" $SPL_OFF $SPL_SIZE | cut -c1-16)... -> $(range_sha "$SRC" $SPL_OFF $SPL_SIZE | cut -c1-16)..." ;;
+	esac
+}
+MIBTODO=1
+[ "$mode:$state" = restore:stock ] && MIBTODO=
+if [ -n "$KFIX" ]; then
+	say "$ME: first, the saved stock kernel (${SK#"$R"}, $(fsize "$SK") bytes) into:"
+	for k in $KFIX; do
+		say "  - $k ($(bpart $k | sed "s#^$R##")): its first 4 KiB zeroed, the rest, then the first 4 KiB (the uImage header last), read back"
+	done
+	[ -n "$MIBTODO" ] || say "  (the first MiB is boot.img already: nothing else)"
+fi
+[ -n "$MIBTODO" ] && say "$ME: what --yes writes to ${DISK#"$R"}, in this order, from ${SRC#"$R"}:"
+i=1
+[ -n "$MIBTODO" ] && for r in $ORDER; do say "  $i. $(desc "$r")"; i=$((i + 1)); done
+if [ -n "$MIBTODO" ]; then
+	say "  then: sync, caches dropped, each write and the whole first MiB read back"
+	say "  (the header last: a power cut leaves a whole SPL or none, which sends the boot ROM to USB mode)"
+fi
+if [ "$yes" != 1 ]; then
+	say "$ME: dry run; nothing written. Run it again with --yes to write"
+	exit 2
+fi
+
+# ------------------------------------------------------------- --yes
+mkdir "$LOCK" 2>/dev/null || { say "$ME: another $ME runs ($LOCK)"; exit 1; }
+locked=1
+# An SSH drop must not stop it half-way
+trap '' HUP INT TERM PIPE
+
+write_range() {	# hdr0|body|len|hdr FROM
+	case "$1" in
+	hdr0) set -- /dev/zero bs=512 seek=$SPL_LBA count=1 ;;
+	body) set -- "$2" bs=512 skip=$((SPL_LBA + 1)) seek=$((SPL_LBA + 1)) count=$((SPL_SECTORS - 1)) ;;
+	len) set -- "$2" bs=4 skip=1 seek=1 count=1 ;;
+	hdr) set -- "$2" bs=512 skip=$SPL_LBA seek=$SPL_LBA count=1 ;;
+	esac
+	f=$1; shift
+	say "  dd if=${f#"$R"} of=${DISK#"$R"} $* conv=notrunc,fsync"
+	out=$(dd if="$f" of="$DISK" "$@" conv=notrunc,fsync 2>&1); rc=$?
+	[ -n "$out" ] && echo "$out" | while IFS= read -r l; do say "    $l"; done
+	[ $rc = 0 ] || say "  dd failed (exit $rc)"
+	return $rc
+}
+check_range() {	# hdr0|body|len|hdr FROM: the disk's bytes read back = FROM's (hdr0: zeros)
+	read_first_mib "$T/rb.img" || { say "  read-back failed"; return 1; }
+	f=$2
+	case "$1" in
+	hdr0) o=$SPL_OFF n=512 f=$T/zero.img; head -c $MIB /dev/zero > "$f" ;;
+	body) o=$((SPL_OFF + 512)) n=$((SPL_SIZE - 512)) ;;
+	len) o=$LEN_OFF n=$LEN_SIZE ;;
+	hdr) o=$SPL_OFF n=512 ;;
+	esac
+	if cmp -s -n "$n" "$T/rb.img" "$f" "$o" "$o"; then
+		say "  read back ($READ_HOW): $1 range right"
+		return 0
+	fi
+	say "  read back ($READ_HOW): $1 range DIFFERS"
+	return 1
+}
+# put FROM's two ranges on the disk in the safe order (the header zeroed,
+# the body, the length, the header); 0 when the whole first MiB then reads
+# back as FROM
+put() {	# FROM
+	for r in $ORDER; do
+		write_range "$r" "$1" || return 1
+		check_range "$r" "$1" || return 1
+	done
+	read_first_mib "$T/rb.img" && cmp -s "$T/rb.img" "$1"
+}
+restore_boot() {
+	say "$ME: writing boot.img's bytes back"
+	try=1
+	while [ $try -le 2 ]; do
+		if put "$BOOT"; then
+			say "$ME: the first MiB reads back as boot.img (attempt $try)"
+			return 0
+		fi
+		say "$ME: boot.img's bytes didn't take (attempt $try)"
+		try=$((try + 1))
+	done
+	return 1
+}
+finish_failed() {	# WHAT
+	if restore_boot; then
+		if [ "$mode" = restore ]; then
+			say "$ME: done on a second try ($1 the first time): Flashforge's SPL is back"
+			exit 0
+		fi
+		loud "$1" "boot.img's bytes are back and read back right: Flashforge's SPL," \
+			"the printer starts as before. Nothing else was written."
+		exit 3
+	fi
+	read_first_mib "$T/rb.img" && say "first MiB now: $(diffclass "$T/rb.img" "$BOOT") against boot.img (length $(le32 "$T/rb.img" $LEN_OFF), banner '$(banner "$T/rb.img")')"
+	loud "$1" "THE FIRST MiB IS NOT AS BEFORE. Do not power off or reboot." \
+		"Run: $0 --restore --yes $dir" \
+		"If that fails too: keep the printer on and see tools/bench/README.md" \
+		"(contingency: J28 + K4 + USBCloner, u-boot/USB-BOOT.md)."
+	exit 4
+}
+
+# The saved stock kernel into the slots that need it, before Flashforge's
+# SPL: header last (a copy cut short leaves no uImage header, which both
+# SPLs refuse), read back. A failure stops here: the first MiB untouched.
+put_kernel() {	# DEV
+	say "  dd if=${SK#"$R"} of=${1#"$R"}: 4 KiB of zeros, the rest, the first 4 KiB"
+	dd if=/dev/zero of="$1" bs=4096 count=1 conv=notrunc,fsync 2>/dev/null &&
+		dd if="$SK" of="$1" bs=4096 skip=1 seek=1 conv=notrunc,fsync 2>/dev/null &&
+		sync &&
+		dd if="$SK" of="$1" bs=4096 count=1 conv=notrunc,fsync 2>/dev/null || return 1
+	drop_caches
+	cmp -s -n "$(fsize "$SK")" "$SK" "$1"
+}
+for k in $KFIX; do
+	d=$(bpart $k)
+	say "$k: the saved stock kernel"
+	if put_kernel "$d" && stock_kernel "$d"; then
+		say "  read back: $k holds Flashforge's 5.10 ('$(uimage_name "$d")')"
+	else
+		loud "writing the saved stock kernel into $k failed or didn't read back." \
+			"The first MiB is untouched (Kiln's boot loader). $k may hold no kernel now:" \
+			"run $0 --restore --yes again before powering off."
+		exit 3
+	fi
+done
+if [ -z "$MIBTODO" ]; then
+	say "$ME: done: both slots hold Flashforge's 5.10; the first MiB was boot.img already"
+	exit 0
+fi
+
+say "writing:"
+for r in $ORDER; do
+	write_range "$r" "$SRC" || finish_failed "writing the $r range failed"
+	check_range "$r" "$SRC" || finish_failed "the $r range read back wrong"
+done
+if ! read_first_mib "$T/rb.img"; then
+	finish_failed "the first MiB can't be read back"
+fi
+if cmp -s "$T/rb.img" "$SRC"; then
+	say "$ME: done: the first MiB reads back ($READ_HOW) as ${SRC##*/} byte for byte (sha256 $(sha "$T/rb.img"))"
+	if [ "$mode" = flash ]; then
+		say "$ME: Kiln's SPL is in place; it starts at the next power-on (tools/bench/README.md, step 3)"
+	else
+		say "$ME: Flashforge's SPL is back; it starts at the next power-on"
+	fi
+	exit 0
+fi
+finish_failed "the first MiB read back differs from ${SRC##*/} ($(diffclass "$T/rb.img" "$SRC"))"

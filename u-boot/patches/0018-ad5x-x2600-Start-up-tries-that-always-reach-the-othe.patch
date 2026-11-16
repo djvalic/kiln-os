@@ -1,0 +1,481 @@
+From 74f860f157a0019180fcde0846dad56cf4bfa9ed Mon Sep 17 00:00:00 2001
+From: valix <djvalic.wc@gmail.com>
+Date: Sun, 15 Nov 2026 12:40:08 -0500
+Subject: [PATCH 18/23] ad5x: x2600: Start-up tries that always reach the other
+ slot
+
+The SPL's second try could loop without ever trying the other slot: a
+U-Boot proper that hung reset the attempt to 1 and set "U-Boot failed",
+the next failed slot load sent the SPL back to U-Boot proper, which hung
+again, and so on. A U-Boot proper started from a kernel slot also wrote
+"U-Boot up", so the SPL loaded the same slot again.
+
+Keep the whole plan in the CPM scratch pad instead (mach/ad5x_start.h):
+the attempt, a persistent "skip U-Boot proper" bit, the slot and whether
+it is forced, and the phase reached. Every value but a fresh one or
+"kernel started" moves the attempt on; a U-Boot proper failure sets the
+skip bit, a slot failure forces the other slot. U-Boot proper keeps the
+fields and only changes the phase: "U-Boot up" when the SPL started it
+from 0xA400, "U-Boot from a slot" when the SPL started it as a slot's
+kernel (the SPL then boots the other slot), and as from slot B when
+something else started it. So within four starts the board has started
+a kernel or stops with the watchdog off.
+
+The rules are plain inline C so that the laptop tests build them and walk
+every failure combination through them.
+---
+ .../mach-jz47xx/include/mach/ad5x_start.h     | 170 ++++++++++++++++++
+ arch/mips/mach-jz47xx/include/mach/x2600.h    |  17 +-
+ arch/mips/mach-jz47xx/x2600/spl.c             | 104 ++++++-----
+ board/flashforge/ad5x/ad5x.c                  |   9 +-
+ 4 files changed, 234 insertions(+), 66 deletions(-)
+ create mode 100644 arch/mips/mach-jz47xx/include/mach/ad5x_start.h
+
+diff --git a/arch/mips/mach-jz47xx/include/mach/ad5x_start.h b/arch/mips/mach-jz47xx/include/mach/ad5x_start.h
+new file mode 100644
+index 00000000..92b96b70
+--- /dev/null
++++ b/arch/mips/mach-jz47xx/include/mach/ad5x_start.h
+@@ -0,0 +1,170 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Flashforge Adventurer 5X: how a start is handed from the SPL to U-Boot
++ * proper or a kernel, and back after a watchdog reset, through the CPM
++ * scratch pad CPSPR (kept over a watchdog reset). Plain C without U-Boot
++ * headers: Kiln's laptop tests (u-boot/tools/test_ad5x_start.py) build it
++ * on the host and walk every failure combination through it.
++ *
++ * Kiln's values are 0x4b00 | a low byte:
++ *
++ *   bits 0-1  the attempt (0-3) the value belongs to
++ *   bit  2    skip U-Boot proper at eMMC 0xA400 (it failed this start)
++ *   bit  3    slot B (else A): the slot this attempt boots (phases SLOT,
++ *             KERNEL, SLOT_UBOOT; in the others only with bit 7)
++ *   bits 4-6  the phase (enum ad5x_phase)
++ *   bit  7    the slot is forced: not the one the boot flag names
++ *
++ * Linux writes 0x1a1a, 0x3535 or 0x4343 when it reboots, Ingenic's SPLs
++ * 0x4f5441/0x41544f; anything not 0x4b00-0x4bff is a fresh start.
++ *
++ * The SPL, from the value it finds (ad5x_start_plan):
++ *   - fresh, or KERNEL (a kernel was started; this is its reboot or a
++ *     power cycle): attempt 0, U-Boot proper if there is one, the flag's
++ *     slot;
++ *   - DDR, EMMC (reset during the clock/DDR or eMMC setup): the same plan
++ *     again, next attempt;
++ *   - UBOOT, UBOOT_UP, GAVE_UP (U-Boot proper loaded, up, or gave up
++ *     without starting a kernel): next attempt without U-Boot proper;
++ *   - SLOT, SLOT_UBOOT (the slot's uImage didn't load, or a U-Boot proper
++ *     started from that slot didn't start a kernel): next attempt with the
++ *     other slot, forced;
++ *   - after AD5X_START_TRIES attempts: stop, watchdog off.
++ * Every value but a fresh one or KERNEL moves the attempt on, so within
++ * AD5X_START_TRIES attempts the board starts a kernel, or the next start
++ * stops.
++ *
++ * U-Boot proper keeps the fields and changes the phase: UBOOT -> UBOOT_UP
++ * (started by the SPL from 0xA400), KERNEL -> SLOT_UBOOT (started by the
++ * SPL from a kernel slot); started otherwise (the stock SPL, a chainload
++ * test) it writes SLOT_UBOOT for slot B, where Kiln puts it. Giving up
++ * without a key (no eMMC, nothing to start): UBOOT_UP -> GAVE_UP, and
++ * SLOT_UBOOT stays. Before it jumps to a kernel it writes 0.
++ */
++#ifndef __MACH_AD5X_START_H__
++#define __MACH_AD5X_START_H__
++
++#define AD5X_START_TRIES	4	/* attempts 0-3, two bits */
++
++enum ad5x_phase {
++	AD5X_PH_DDR,		/* SPL: clocks and DDR */
++	AD5X_PH_EMMC,		/* SPL: eMMC setup, the boot flag */
++	AD5X_PH_UBOOT,		/* SPL: loading or started U-Boot at 0xA400 */
++	AD5X_PH_UBOOT_UP,	/* U-Boot proper (from 0xA400) is running */
++	AD5X_PH_GAVE_UP,	/* U-Boot proper (from 0xA400) gave up */
++	AD5X_PH_SLOT,		/* SPL: loading the slot's uImage */
++	AD5X_PH_KERNEL,		/* SPL: started the slot's uImage */
++	AD5X_PH_SLOT_UBOOT,	/* U-Boot proper started from a slot runs */
++};
++
++#define AD5X_ST_MAGIC		0x4b00u
++#define AD5X_ST_SKIP		0x04u
++#define AD5X_ST_SLOT_B		0x08u
++#define AD5X_ST_FORCED		0x80u
++
++static inline int ad5x_st_ours(unsigned int v)
++{
++	return (v & ~0xffu) == AD5X_ST_MAGIC;
++}
++
++static inline unsigned int ad5x_st_phase(unsigned int v)
++{
++	return (v >> 4) & 7;
++}
++
++static inline unsigned int ad5x_st_attempt(unsigned int v)
++{
++	return v & 3;
++}
++
++static inline unsigned int ad5x_st_with_phase(unsigned int v,
++					      enum ad5x_phase ph)
++{
++	return (v & ~0x70u) | (unsigned int)ph << 4;
++}
++
++/* the SPL's plan for this start */
++struct ad5x_plan {
++	unsigned int attempt;	/* 0 .. AD5X_START_TRIES - 1 */
++	int skip_uboot;		/* boot the slot, not U-Boot at 0xA400 */
++	int forced;		/* slot_b, not the boot flag, names the slot */
++	int slot_b;
++	int stop;		/* attempts used up: stop, watchdog off */
++};
++
++static inline void ad5x_start_plan(unsigned int prev, struct ad5x_plan *p)
++{
++	unsigned int ph = ad5x_st_phase(prev), next;
++
++	p->attempt = 0;
++	p->skip_uboot = p->forced = p->slot_b = p->stop = 0;
++	if (!ad5x_st_ours(prev) || ph == AD5X_PH_KERNEL)
++		return;				/* a fresh start */
++
++	next = ad5x_st_attempt(prev) + 1;
++	p->skip_uboot = !!(prev & AD5X_ST_SKIP);
++	p->forced = !!(prev & AD5X_ST_FORCED);
++	p->slot_b = !!(prev & AD5X_ST_SLOT_B);
++	switch (ph) {
++	case AD5X_PH_UBOOT:
++	case AD5X_PH_UBOOT_UP:
++	case AD5X_PH_GAVE_UP:
++		p->skip_uboot = 1;
++		break;
++	case AD5X_PH_SLOT:
++	case AD5X_PH_SLOT_UBOOT:
++		p->forced = 1;
++		p->slot_b = !p->slot_b;
++		break;
++	default:			/* DDR, EMMC: the same again */
++		break;
++	}
++	if (next >= AD5X_START_TRIES) {
++		p->stop = 1;
++		next = AD5X_START_TRIES - 1;
++	}
++	p->attempt = next;
++}
++
++/*
++ * The value for @ph in an attempt with plan @p; @slot_b is the slot it
++ * boots, once known (SLOT, KERNEL), else the plan's.
++ */
++static inline unsigned int ad5x_start_value(const struct ad5x_plan *p,
++					    enum ad5x_phase ph, int slot_b)
++{
++	return AD5X_ST_MAGIC | (p->attempt & 3) |
++	       (p->skip_uboot ? AD5X_ST_SKIP : 0) |
++	       (slot_b ? AD5X_ST_SLOT_B : 0) | (unsigned int)ph << 4 |
++	       (p->forced ? AD5X_ST_FORCED : 0);
++}
++
++/* U-Boot proper, as it starts: the value to write for the one it found */
++static inline unsigned int ad5x_start_uboot_entry(unsigned int cur)
++{
++	if (ad5x_st_ours(cur)) {
++		switch (ad5x_st_phase(cur)) {
++		case AD5X_PH_UBOOT:
++			return ad5x_st_with_phase(cur, AD5X_PH_UBOOT_UP);
++		case AD5X_PH_KERNEL:
++			return ad5x_st_with_phase(cur, AD5X_PH_SLOT_UBOOT);
++		case AD5X_PH_UBOOT_UP:
++		case AD5X_PH_SLOT_UBOOT:
++			return cur;
++		}
++	}
++	/* not started by Kiln's SPL: as if from slot B, attempt 0 */
++	return AD5X_ST_MAGIC | AD5X_ST_SLOT_B | AD5X_PH_SLOT_UBOOT << 4;
++}
++
++/* U-Boot proper gives up without a key: the value to reset with */
++static inline unsigned int ad5x_start_uboot_gave_up(unsigned int cur)
++{
++	unsigned int v = ad5x_start_uboot_entry(cur);
++
++	if (ad5x_st_phase(v) == AD5X_PH_UBOOT_UP)
++		return ad5x_st_with_phase(v, AD5X_PH_GAVE_UP);
++	return v;			/* SLOT_UBOOT: the other slot next */
++}
++
++#endif
+diff --git a/arch/mips/mach-jz47xx/include/mach/x2600.h b/arch/mips/mach-jz47xx/include/mach/x2600.h
+index 2231723d..8d72d4be 100644
+--- a/arch/mips/mach-jz47xx/include/mach/x2600.h
++++ b/arch/mips/mach-jz47xx/include/mach/x2600.h
+@@ -17,22 +17,9 @@ void x2600_wdt_stop(void);
+ 
+ /*
+  * CPM scratch pad (CPSPR, 0x10000034): kept over a watchdog reset, written
+- * only after the unlock word in CPSPPR. Linux writes 0x1a1a, 0x3535 or
+- * 0x4343 there when it reboots (soc-x2600/reset.c), Ingenic's SPLs use
+- * 0x4f5441/0x41544f; bits 18-22 are reserved. Kiln's values:
+- *
+- *   0x4b00 | stage << 4 | n   SPL attempt n (0-15) got to stage (0-3)
+- *   0x4b80                    SPL started U-Boot proper (from 0xA400)
+- *   0x4b81                    U-Boot proper is running
+- *
+- * Anything else: a fresh start (power on, a reboot from Linux).
++ * only after the unlock word in CPSPPR. Kiln's values and how the SPL and
++ * U-Boot proper use them: mach/ad5x_start.h.
+  */
+-#define AD5X_CPSPR_TRY(stage, n)	(0x4b00 | ((stage) & 3) << 4 | ((n) & 15))
+-#define AD5X_CPSPR_IS_TRY(v)		(((v) & ~0x3fU) == 0x4b00)
+-#define AD5X_CPSPR_TRY_STAGE(v)		(((v) >> 4) & 3)
+-#define AD5X_CPSPR_TRY_N(v)		((v) & 15)
+-#define AD5X_CPSPR_HANDOFF		0x4b80
+-#define AD5X_CPSPR_UBOOT_UP		0x4b81
+ u32 x2600_cpspr_read(void);
+ void x2600_cpspr_write(u32 val);
+ 
+diff --git a/arch/mips/mach-jz47xx/x2600/spl.c b/arch/mips/mach-jz47xx/x2600/spl.c
+index 17a42ef3..1e26912e 100644
+--- a/arch/mips/mach-jz47xx/x2600/spl.c
++++ b/arch/mips/mach-jz47xx/x2600/spl.c
+@@ -5,22 +5,24 @@
+  * 0x80001800, everything (code, data, BSS, stack) inside the SRAM window
+  * up to 0x80007000 (u-boot-spl.lds checks it at link time).
+  *
+- * It does what the stock SPL does, plus a second try:
++ * It does what the stock SPL does, plus more tries:
+  *  1. pins (MSC0 on port D, UART0 on port E, as the stock SPL sets them),
+  *     console on UART0 (the DEBUG header), 115200 8N1;
+- *  2. the CPM scratch pad tells a fresh start from a second try after a
+- *     watchdog reset; the watchdog is armed for every stage;
++ *  2. the CPM scratch pad tells a fresh start from another try after a
++ *     watchdog reset (mach/ad5x_start.h); the watchdog is armed for every
++ *     phase;
+  *  3. clocks and DDR3 (sdram.c); not in the chainload-test build
+  *     (CONFIG_AD5X_SPL_CHAINLOAD), which runs from DDR under Linux;
+  *  4. the eMMC (spl_emmc.c);
+  *  5. U-Boot proper, when eMMC 0xA400 holds a U-Boot uImage with good
+- *     CRCs (header and data) that didn't fail to come up last time;
++ *     CRCs (header and data) and U-Boot proper hasn't failed this start;
+  *  6. otherwise the stock SPL's boot: the slot the "ota" flag names, its
+  *     uImage (header and data CRCs checked) started with the stock SPL's
+  *     command line and the watchdog stopped, as the stock SPL leaves it.
+- *     On a second try after a failed load, the other slot.
++ *     After a slot failed to load (or a U-Boot proper in it failed), the
++ *     other slot.
+  * A failure resets the board through the watchdog for the next try; after
+- * AD5X_SPL_TRIES attempts the SPL stops, the watchdog off.
++ * AD5X_START_TRIES attempts the SPL stops, the watchdog off.
+  */
+ 
+ #include <cpu_func.h>
+@@ -35,18 +37,16 @@
+ #include <asm/sections.h>
+ #include <linux/bitops.h>
+ #include <linux/string.h>
++#include <mach/ad5x_start.h>
+ #include <mach/x2600.h>
+ #include "spl.h"
+ 
+ DECLARE_GLOBAL_DATA_PTR;
+ gd_t gdata __section(".bss");
+ 
+-#define AD5X_SPL_TRIES		3
+-#define AD5X_SPL_WDT_MS		10000	/* each SPL stage */
++#define AD5X_SPL_WDT_MS		10000	/* each SPL phase */
+ #define AD5X_UBOOT_WDT_MS	30000	/* U-Boot proper to come up */
+ 
+-enum { STAGE_DDR, STAGE_EMMC, STAGE_LOAD };
+-
+ #ifdef CONFIG_AD5X_SPL_CHAINLOAD
+ /* the image tools refuse to make a boot ROM image from this build */
+ static const char spl_kind[] = "KILN-SPL-CHAINLOAD-TEST-ONLY";
+@@ -158,22 +158,24 @@ struct serial_device *default_serial_console(void)
+ 	return &x2600_spl_serial;
+ }
+ 
+-/* ---- the second try ---- */
++/* ---- the tries (mach/ad5x_start.h) ---- */
+ 
+-static unsigned int attempt;
++static struct ad5x_plan plan;
+ 
+ /* record how far this attempt got, so a reset by the watchdog tells */
+-static void spl_stage(int stage)
++static void spl_phase(enum ad5x_phase ph, int slot_b)
+ {
+-	x2600_cpspr_write(AD5X_CPSPR_TRY(stage, attempt));
++	x2600_cpspr_write(ad5x_start_value(&plan, ph, slot_b));
+ 	x2600_wdt_start(AD5X_SPL_WDT_MS);
+ }
+ 
+-static void __noreturn spl_fail(int stage, const char *why)
++/* reset at once, the phase recorded */
++static void __noreturn spl_fail(enum ad5x_phase ph, int slot_b,
++				const char *why)
+ {
+-	printf("SPL: %s; attempt %u of %u failed\n", why, attempt + 1,
+-	       AD5X_SPL_TRIES);
+-	x2600_cpspr_write(AD5X_CPSPR_TRY(stage, attempt));
++	printf("SPL: %s; attempt %u of %u failed\n", why, plan.attempt + 1,
++	       AD5X_START_TRIES);
++	x2600_cpspr_write(ad5x_start_value(&plan, ph, slot_b));
+ 	x2600_wdt_start(10);
+ 	while (1)
+ 		;
+@@ -277,23 +279,23 @@ static int ad5x_build_argv(char root)
+ 
+ typedef void __noreturn (*entry_t)(int, char **, char **, int);
+ 
+-static void __noreturn ad5x_boot(int uboot_failed, int other_slot)
++static void __noreturn ad5x_boot(void)
+ {
+ 	ulong ep;
+ 	int slot_b, argc;
+ 
+-	spl_stage(STAGE_EMMC);
++	spl_phase(AD5X_PH_EMMC, plan.slot_b);
+ 	if (ad5x_emmc_init())
+-		spl_fail(STAGE_EMMC, "eMMC init failed");
++		spl_fail(AD5X_PH_EMMC, plan.slot_b, "eMMC init failed");
+ 
+-	spl_stage(STAGE_LOAD);
+-	if (uboot_failed) {
+-		puts("SPL: U-Boot proper didn't come up last time: slot\n");
++	if (plan.skip_uboot) {
++		puts("SPL: U-Boot proper failed this start: the slot\n");
+ 	} else {
++		/* a hang from here on counts against U-Boot proper */
++		spl_phase(AD5X_PH_UBOOT, plan.slot_b);
+ 		ep = spl_load_uimage(AD5X_UBOOT_LBA, AD5X_UBOOT_MAX,
+ 				     IH_OS_U_BOOT);
+ 		if (ep) {
+-			x2600_cpspr_write(AD5X_CPSPR_HANDOFF);
+ 			x2600_wdt_start(AD5X_UBOOT_WDT_MS);
+ 			puts("SPL: starting U-Boot proper\n");
+ 			((entry_t)ep)(0, NULL, NULL, 0);
+@@ -301,24 +303,31 @@ static void __noreturn ad5x_boot(int uboot_failed, int other_slot)
+ 		puts("SPL: no U-Boot at 0xA400: the slot, as the stock SPL\n");
+ 	}
+ 
++	spl_phase(AD5X_PH_EMMC, plan.slot_b);
+ 	if (ad5x_emmc_read(AD5X_OTA_LBA, 1, spl_sector))
+-		spl_fail(STAGE_LOAD, "can't read the boot flag");
++		spl_fail(AD5X_PH_EMMC, plan.slot_b, "can't read the boot flag");
+ 	slot_b = !strncmp((char *)spl_sector, AD5X_FLAG_B,
+ 			  strlen(AD5X_FLAG_B));
+-	if (other_slot) {
+-		puts("SPL: the slot failed to load last time: the other one\n");
+-		slot_b = !slot_b;
++	if (plan.forced) {
++		if (slot_b != plan.slot_b)
++			puts("SPL: the flag's slot failed: the other one\n");
++		slot_b = plan.slot_b;
+ 	}
+ 	printf("SPL: slot %c\n", slot_b ? 'b' : 'a');
++	spl_phase(AD5X_PH_SLOT, slot_b);
+ 	ep = spl_load_uimage(slot_b ? AD5X_KERNEL_B_LBA : AD5X_KERNEL_A_LBA,
+ 			     AD5X_KERNEL_SECTORS * 512, IH_OS_LINUX);
+ 	if (!ep)
+-		spl_fail(STAGE_LOAD, "no good uImage in the slot");
++		spl_fail(AD5X_PH_SLOT, slot_b, "no good uImage in the slot");
+ 
+-	/* as the stock SPL hands over: watchdog stopped */
++	/*
++	 * As the stock SPL hands over: watchdog stopped. KERNEL is a fresh
++	 * start for the next SPL; a U-Boot proper in the slot turns it into
++	 * SLOT_UBOOT, so if that doesn't start a kernel the other slot is next.
++	 */
+ 	argc = ad5x_build_argv(slot_b ? '4' : '2');
+ 	x2600_wdt_stop();
+-	x2600_cpspr_write(0);
++	x2600_cpspr_write(ad5x_start_value(&plan, AD5X_PH_KERNEL, slot_b));
+ 	puts("SPL: starting the kernel\n");
+ 	((entry_t)ep)(argc, spl_argv, NULL, 0);
+ }
+@@ -326,7 +335,6 @@ static void __noreturn ad5x_boot(int uboot_failed, int other_slot)
+ void board_init_f(ulong dummy)
+ {
+ 	u32 prev;
+-	int uboot_failed = 0, other_slot = 0;
+ 
+ 	gd = &gdata;
+ 	memset(__bss_start, 0, (size_t)__bss_end - (size_t)__bss_start);
+@@ -340,30 +348,28 @@ void board_init_f(ulong dummy)
+ 	printf("SPL: %s\n", spl_kind);
+ 
+ 	prev = x2600_cpspr_read();
+-	if (AD5X_CPSPR_IS_TRY(prev)) {
+-		attempt = AD5X_CPSPR_TRY_N(prev) + 1;
+-		other_slot = AD5X_CPSPR_TRY_STAGE(prev) == STAGE_LOAD;
+-		printf("SPL: attempt %u stopped at stage %u: trying again\n",
+-		       attempt, AD5X_CPSPR_TRY_STAGE(prev));
+-	} else if (prev == AD5X_CPSPR_HANDOFF || prev == AD5X_CPSPR_UBOOT_UP) {
+-		attempt = 1;
+-		uboot_failed = 1;
+-	}
+-	if (attempt >= AD5X_SPL_TRIES) {
++	ad5x_start_plan(prev, &plan);
++	if (plan.stop) {
+ 		x2600_wdt_stop();
+ 		x2600_cpspr_write(0);
+-		printf("SPL: %u attempts failed: stopped (power cycle to retry)\n",
+-		       attempt);
++		printf("SPL: %u attempts failed (last 0x%x): stopped, power "
++		       "cycle to retry\n", AD5X_START_TRIES, prev);
+ 		hang();
+ 	}
+-
+-	spl_stage(STAGE_DDR);
++	if (plan.attempt)
++		printf("SPL: 0x%x before the reset: attempt %u%s%s%c\n", prev,
++		       plan.attempt + 1,
++		       plan.skip_uboot ? ", without U-Boot proper" : "",
++		       plan.forced ? ", slot " : "",
++		       plan.forced ? (plan.slot_b ? 'b' : 'a') : ' ');
++
++	spl_phase(AD5X_PH_DDR, plan.slot_b);
+ #ifndef CONFIG_AD5X_SPL_CHAINLOAD
+ 	x2600_spl_clocks_init();
+ 	if (x2600_sdram_init())
+-		spl_fail(STAGE_DDR, "DDR training failed");
++		spl_fail(AD5X_PH_DDR, plan.slot_b, "DDR training failed");
+ #else
+ 	puts("SPL: chainload test build: clocks and DDR as Linux left them\n");
+ #endif
+-	ad5x_boot(uboot_failed, other_slot);
++	ad5x_boot();
+ }
+diff --git a/board/flashforge/ad5x/ad5x.c b/board/flashforge/ad5x/ad5x.c
+index 71261777..eb3b0afe 100644
+--- a/board/flashforge/ad5x/ad5x.c
++++ b/board/flashforge/ad5x/ad5x.c
+@@ -27,6 +27,7 @@
+ #include <part.h>
+ #include <asm/cache.h>
+ #include <asm/global_data.h>
++#include <mach/ad5x_start.h>
+ #include <mach/x2600.h>
+ #include <linux/delay.h>
+ #include <linux/string.h>
+@@ -52,9 +53,13 @@ DECLARE_GLOBAL_DATA_PTR;
+ int board_early_init_f(void)
+ {
+ 	x2600_uart0_plain_baud();
+-	/* a hang in U-Boot resets the board; the SPL sees "U-Boot up" */
++	/*
++	 * A hang in U-Boot resets the board. The SPL then sees U-Boot proper
++	 * up (started from 0xA400: it boots the slot itself next) or a U-Boot
++	 * from a kernel slot (it boots the other slot): mach/ad5x_start.h.
++	 */
+ 	x2600_wdt_start(AD5X_UBOOT_WDT_MS);
+-	x2600_cpspr_write(AD5X_CPSPR_UBOOT_UP);
++	x2600_cpspr_write(ad5x_start_uboot_entry(x2600_cpspr_read()));
+ 	return 0;
+ }
+ 
+-- 
+2.56.0
+

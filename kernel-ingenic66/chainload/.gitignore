@@ -6,3 +6,4 @@
 Module.symvers
 modules.order
 chainload_main.c
+build-uboot/

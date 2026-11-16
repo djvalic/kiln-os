@@ -14,6 +14,11 @@ typedef enum {
 	CMD_BACKUP,		/* {DRY} {ALL} {DEST} */
 	CMD_RESTORE,		/* {DRY} {SRC} {PARTS} */
 	CMD_RESTORE_STOCK,	/* {DRY} */
+	CMD_RETURN_CHECK,	/* {SPL}: Return to Flashforge firmware, checks only */
+	CMD_RETURN_STOCK,	/* {SPL}: the same, writing */
+	CMD_STOCK_COPY_USB,	/* the stock files to a USB stick */
+	CMD_BOOTLOADER_CHECK,	/* Kiln's own boot loader: checks only */
+	CMD_BOOTLOADER_INSTALL,	/* the same, writing (never the override) */
 	CMD_BOOT_MAIN,		/* flag -> main OS (slot B) + reboot */
 	CMD_REBOOT,
 	CMD_POWEROFF,
@@ -48,7 +53,7 @@ const char *rui_name(rui_entry e);
 /* Expand a command's placeholders. vars: NULL-terminated list of
  * "NAME", "value" pairs; values are shell-quoted, except for {PARTS}
  * which takes a space-separated list and quotes each word, and {DRY} /
- * {ALL} which are inserted as given (flags or ""). Returns malloc'd. */
+ * {ALL} / {SPL} which are inserted as given (flags or ""). Returns malloc'd. */
 char *cmd_expand(rui_entry e, const char *const *vars);
 
 /* Single-quote s for /bin/sh (malloc'd) */

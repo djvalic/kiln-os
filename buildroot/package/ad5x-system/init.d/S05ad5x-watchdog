@@ -1,0 +1,229 @@
+#!/bin/sh
+# The hardware watchdog: BusyBox's watchdog daemon feeds /dev/watchdog, so
+# a printer whose kernel or userspace hangs resets itself after TIMEOUT
+# seconds without a feed. At shutdown (rcK) it is stopped cleanly first
+# (the daemon writes the magic 'V' and closes the device), so a printer
+# that is shut down stays off; a reboot stops it the same way, and the
+# kernel's own restart then resets the board.
+#
+# Only on Kiln's kernels (6.6, 7.3; /usr/lib/ad5x/kernel.sh): their drivers
+# take over a watchdog Kiln's U-Boot left running and stop it on halt and
+# poweroff. Flashforge's 5.10 runs without it, as stock (U-Boot stops it
+# before that kernel). Not in USB test mode (AD5X_USB). Runs right after
+# S05ad5x-data, for the off switch:
+#   /data/ad5x/watchdog.disable   no feeder; a watchdog the boot loader left
+#                                 running is stopped here (U-Boot honours
+#                                 the file too and doesn't start it)
+# Until this runs, the kernel feeds a watchdog U-Boot left running, for at
+# most 300 s (watchdog.open_timeout in both kernels' configs).
+#
+# /usr/lib/ad5x/watchdog.conf holds TIMEOUT, PERIOD and START_LIMIT; its
+# presence in rootfs2 also tells U-Boot that this system feeds the
+# watchdog. Shared by the main OS and the recovery OS (ad5x-recovery.mk),
+# where the daemon keeps feeding through installs, restores and USB
+# rescues: only a real hang stops it.
+#
+# The start-up limit (main OS started by Kiln's U-Boot, ad5x.uboot=1):
+# the feeder runs from here on, so a start script that hangs later would
+# never be reset by it, and with U-Boot the boot flag stays on this slot
+# (S01ad5x-tryboot). A guard ("guard" below, in the background) waits for
+# S99ad5x-booted's /run/ad5x-booted; START_LIMIT seconds after boot
+# without it, it stops the feeder with SIGKILL (no magic close), so the
+# watchdog resets the printer TIMEOUT seconds later and U-Boot counts the
+# start as unconfirmed (two of them on 6.6, one on 7.3: it falls back).
+# It says so on the console and in the boot trace (ad5x-bootlog, which
+# survives the reset). Not while Klipper prints, is paused or its print
+# state is unknown (Moonraker answering); Moonraker not answering at all
+# can't watch a print, so the limit goes ahead then. Not in the recovery
+# OS (U-Boot doesn't count its starts), not on the chain without U-Boot
+# (there the boot flag on slot A catches an unfinished start), not with
+# START_LIMIT=0.
+#
+# Test overrides (tools/test_watchdog.sh): AD5X_LIB (/usr/lib/ad5x),
+# AD5X_DATA (/data), AD5X_KERNEL (kernel.sh), AD5X_WATCHDOG_DEV,
+# AD5X_WATCHDOG_PID, AD5X_WATCHDOG_PROC (/proc), AD5X_WATCHDOG_CMDLINE
+# (/proc/cmdline), AD5X_WATCHDOG_BOOTED (/run/ad5x-booted),
+# AD5X_WATCHDOG_GUARD_PID, AD5X_WATCHDOG_EVERY (30 s between the guard's
+# looks), AD5X_WATCHDOG_OUT (/dev/console), AD5X_RECOVERY_MARK
+# (/etc/ad5x-recovery).
+
+umask 022
+
+LIB=${AD5X_LIB:-/usr/lib/ad5x}
+DATA=${AD5X_DATA:-/data}
+DEV=${AD5X_WATCHDOG_DEV:-/dev/watchdog}
+PID=${AD5X_WATCHDOG_PID:-/run/ad5x-watchdog.pid}
+PROC=${AD5X_WATCHDOG_PROC:-/proc}
+OFF=$DATA/ad5x/watchdog.disable
+CMDLINE=${AD5X_WATCHDOG_CMDLINE:-/proc/cmdline}
+BOOTED=${AD5X_WATCHDOG_BOOTED:-/run/ad5x-booted}
+GPID=${AD5X_WATCHDOG_GUARD_PID:-/run/ad5x-watchdog-guard.pid}
+EVERY=${AD5X_WATCHDOG_EVERY:-30}
+OUT=${AD5X_WATCHDOG_OUT:-/dev/console}
+RECOVERY=${AD5X_RECOVERY_MARK:-/etc/ad5x-recovery}
+TIMEOUT=120
+PERIOD=10
+START_LIMIT=900
+# shellcheck source=/dev/null
+[ -r "$LIB/watchdog.conf" ] && . "$LIB/watchdog.conf"
+# shellcheck source=/dev/null
+. "$LIB/kernel.sh"
+
+running() {
+	[ -s "$PID" ] && kill -0 "$(cat "$PID")" 2>/dev/null
+}
+
+guard_running() {
+	[ -s "$GPID" ] && kill -0 "$(cat "$GPID")" 2>/dev/null
+}
+
+# A print may run: Moonraker answers, Klipper is ready and its print state
+# isn't standby, complete, cancelled or error (S68ad5x-update-agent's rule,
+# except that no answer at all means no print can be watched: go ahead)
+print_may_run() {
+	ks=$(wget -q -T 5 -O- 'http://127.0.0.1:7125/server/info' 2>/dev/null |
+		sed -n 's/.*"klippy_state": *"\([a-z_]*\)".*/\1/p' | head -n 1)
+	[ "$ks" = ready ] || return 1
+	ps=$(wget -q -T 5 -O- 'http://127.0.0.1:7125/printer/objects/query?print_stats=state' \
+		2>/dev/null | sed -n 's/.*"state": *"\([a-z_]*\)".*/\1/p' | head -n 1)
+	case "$ps" in standby|complete|cancelled|error) return 1 ;; esac
+	return 0
+}
+
+# The start-up limit (header): in the background, until start-up has
+# finished or the feeder is stopped for it
+guard() {
+	said=
+	while :; do
+		[ -f "$BOOTED" ] && break
+		running || break
+		up=$(cut -d. -f1 "$PROC/uptime" 2>/dev/null)
+		case "$up" in ''|*[!0-9]*) up=0 ;; esac
+		if [ "$up" -ge "$START_LIMIT" ]; then
+			if print_may_run; then
+				[ -n "$said" ] || echo "watchdog: start-up not finished after $START_LIMIT s, but a print may run: waiting for it"
+				said=1
+			else
+				echo "watchdog: start-up not finished $up s after boot (no $BOOTED): feeder stopped, the watchdog resets the printer within $TIMEOUT s; Kiln's U-Boot counts this start as unconfirmed"
+				ad5x-bootlog "  watchdog: start-up unfinished after ${up} s, feeder stopped" 2>/dev/null
+				kill -KILL "$(cat "$PID")" 2>/dev/null
+				rm -f "$PID"
+				break
+			fi
+		fi
+		sleep "$EVERY"
+	done
+	rm -f "$GPID"
+}
+
+guard_start() {
+	case " $(cat "$CMDLINE" 2>/dev/null) " in *" ad5x.uboot=1 "*) ;; *) return 0 ;; esac
+	[ -e "$RECOVERY" ] && return 0
+	case "$START_LIMIT" in ''|0|*[!0-9]*) return 0 ;; esac
+	guard_running && return 0
+	[ -w "$OUT" ] || OUT=/dev/null
+	sh "$0" guard </dev/null >>"$OUT" 2>&1 &
+	echo $! > "$GPID"
+	echo "watchdog: start-up limit $START_LIMIT s after boot (Kiln's U-Boot counts an unfinished start)"
+}
+
+start() {
+	if [ "$KERNEL" != own ]; then
+		echo "watchdog: not on the stock kernel"
+		return 0
+	fi
+	if [ -n "${AD5X_USB:-}" ]; then
+		# USB test mode, or a rescue stick's system in recovery's chroot:
+		# the system that started it feeds the watchdog
+		echo "watchdog: USB test mode, left to the host system"
+		return 0
+	fi
+	if [ ! -e "$DEV" ]; then
+		echo "watchdog: no $DEV"
+		return 0
+	fi
+	if [ -e "$OFF" ]; then
+		# Opening starts it (or keeps one the boot loader left running),
+		# 'V' then lets the close stop it: off either way.
+		{ printf V > "$DEV"; } 2>/dev/null
+		echo "watchdog: off ($OFF)"
+		return 0
+	fi
+	if running; then
+		echo "watchdog: already fed (pid $(cat "$PID"))"
+		return 0
+	fi
+	# -F: in the foreground of start-stop-daemon's background child, so
+	# the pid file is the daemon's. Nice -20: a busy printer still feeds it.
+	start-stop-daemon -S -b -m -p "$PID" -N -20 -x /sbin/watchdog -- \
+		-F -T "$TIMEOUT" -t "$PERIOD" "$DEV"
+	n=0
+	while ! running && [ $n -lt 10 ]; do
+		sleep 0.1
+		n=$((n + 1))
+	done
+	if running; then
+		# never the OOM killer's choice: a killed feeder resets the board
+		echo -1000 > "$PROC/$(cat "$PID")/oom_score_adj" 2>/dev/null
+		echo "watchdog: fed every $PERIOD s, reset after $TIMEOUT s without"
+		guard_start
+	else
+		echo "watchdog: the feeder didn't start"
+	fi
+}
+
+stop() {
+	# the guard first: it must not stop the feeder while it is stopped
+	if guard_running; then
+		kill -TERM "$(cat "$GPID")" 2>/dev/null
+	fi
+	rm -f "$GPID"
+	running || { rm -f "$PID"; return 0; }
+	pid=$(cat "$PID")
+	# SIGTERM: BusyBox's watchdog writes 'V' and closes, which stops it.
+	# Never SIGKILL: a feeder killed without 'V' leaves it counting.
+	kill -TERM "$pid" 2>/dev/null
+	n=0
+	while kill -0 "$pid" 2>/dev/null && [ $n -lt 50 ]; do
+		sleep 0.1
+		n=$((n + 1))
+	done
+	if kill -0 "$pid" 2>/dev/null; then
+		echo "watchdog: the feeder didn't stop (pid $pid)"
+		return 1
+	fi
+	rm -f "$PID"
+	echo "watchdog: stopped"
+}
+
+case "$1" in
+start)
+	start
+	;;
+stop)
+	stop
+	;;
+restart)
+	stop
+	start
+	;;
+guard)
+	guard
+	;;
+status)
+	if [ "$KERNEL" != own ]; then
+		echo "watchdog: not on the stock kernel"
+	elif [ -e "$OFF" ]; then
+		echo "watchdog: off ($OFF)"
+	elif running; then
+		echo "watchdog: fed (pid $(cat "$PID")), reset after $TIMEOUT s without"
+	else
+		echo "watchdog: not fed"
+	fi
+	;;
+*)
+	echo "usage: $0 start|stop|restart|status"
+	exit 2
+	;;
+esac
+exit 0

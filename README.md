@@ -4,6 +4,8 @@
 
 *An open operating system for the Flashforge Adventurer 5X: mainline Klipper, Fluidd and a touch screen, with a recovery system.*
 
+[![Sponsor](https://img.shields.io/badge/Sponsor-djvalic-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/djvalic) (optional, a thank-you: [what sponsoring means](docs/sponsoring.md))
+
 An open operating system for the **Flashforge Adventurer 5X (AD5X)**. It
 replaces the stock firmware with a Buildroot Linux system running mainline
 Klipper on the host and on both printer boards, Moonraker, Fluidd, the
@@ -45,7 +47,7 @@ for if it goes wrong, and how to go back.
   [docs/recovery-os.md](docs/recovery-os.md),
   [docs/emmc-backup.md](docs/emmc-backup.md)).
 - **Updates from Fluidd.** A **Kiln OS** entry in Fluidd's update manager
-  installs new releases through the recovery OS (about 3 minutes). Between
+  installs new releases through the recovery OS (3-6 minutes). Between
   releases, Klipper and Moonraker can be updated on their own entries as
   tested packages. Every release is built and tested against the boards'
   flashed firmware first ([docs/updates.md](docs/updates.md)).

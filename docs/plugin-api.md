@@ -8,11 +8,11 @@ with any system update ("Public and internal names" below).
 
 ## Version
 
-Current: **1.6**.
+Current: **1.7**.
 
 - In Klipper: `printer.ad5x_plugins.api_version` (also printed by
   `LIST_PLUGINS`).
-- On the system: `AD5X_PLUGIN_API="1.6"` in `/usr/lib/os-release`
+- On the system: `AD5X_PLUGIN_API="1.7"` in `/usr/lib/os-release`
   (`/etc/os-release`), for scripts.
 - In the code: `PLUGIN_API_VERSION` in `klipper/extras/ad5x_plugins.py`
   (the build copies it to os-release). `tools/test_plugin_api_doc.py`
@@ -59,6 +59,7 @@ they are loaded".
 | 1.4 | 2026-10-20 | v0.0.7 | The plugin catalog (`INSTALL_PLUGIN`, `UPDATE_PLUGIN`, `REMOVE_PLUGIN`), Moonraker restarted by a switch, the bed heat soak, the speaker, the nozzle size, auto-refill colour matching |
 | 1.5 | 2026-11-07 | v0.0.49 | A plugin that drives the IFS (`owns_ifs`), packages in `extras/`, `printer.load_object()` finding plugin modules; and everything the 1.4 releases added after v0.0.7 that this page now lists (tool map mode, Z offset estimate, IFS operation status, swap abort template, ...) |
 | 1.6 | 2026-11-13 | v0.1.0-rc1 | Root scripts like zMod's plugins have (`root/install.sh`, `update.sh`, `uninstall.sh`, `docs/plugin-root-hooks.md`), `ENABLE_PLUGIN ROOT=1`, `INSTALL_PLUGIN ROOT=1`, `printer.ad5x_plugins` `available.<name>.root` and `root_installed`, the job actions `root install`/`root update`/`root uninstall`; warnings when two plugins bring the same Moonraker component, `python/` package or Klipper section ("Names"); `kiln_` and `ad5x_` module, component, section and macro names refused for plugins that are not Kiln's own ("Names"); Moonraker's `[machine] provider: kiln_agent` (service restarts, "Moonraker"). The named root actions are removed ("Changes") |
+| 1.7 | (next) | (next) | Klipper module names with capitals (`extras/AFC_lane.py`; names that differ only in case count as one, also for the `kiln_`/`ad5x_` rule); `plugin.json` `module_dirs`: more Klipper module folders inside the plugin (a checkout of another project), imported when needed as Klipper imports its own ("Plugin layout", "Module folders"); `INSTALL_PLUGIN` and `UPDATE_PLUGIN` fetch the plugin's git submodules, https only ("Submodules"); `BED_MESH_CALIBRATE`, `LINE_PURGE` and `VORON_PURGE` skipped after `PRINT_START`'s mesh / prime line (or the same step already run) in the same print, `FORCE=1` (issue #73) |
 
 **1.5\*** marks the few items that came with a later 1.5 release:
 `LOG_MODE` and `printer.ad5x_log` (v0.0.53), `printer.ad5x_soak.cancel`
@@ -99,10 +100,83 @@ myplugin/                 the git repository; cloned as /data/ad5x/plugins/myplu
     install.sh              on ENABLE_PLUGIN ROOT=1, before the plugin is on
     update.sh               after an update that changed root/
     uninstall.sh            on DISABLE_PLUGIN / REMOVE_PLUGIN
+  vendor/extras/          optional (1.7): more Klipper modules, listed in plugin.json module_dirs
 ```
 
 The clone's directory name must match `name` in `plugin.json`
 (`git clone <url> myplugin`).
+
+Klipper module names are letters, digits and `_`, starting with a letter;
+since 1.7 they may have capitals, as other projects' modules do
+(`AFC_lane.py`, section `[AFC_lane lane1]`). Two names that differ only
+in case count as one name: `Heaters.py` has the name of Klipper's
+`heaters`, and `AFC_Lane.py` next to `AFC_lane.py` is the same module
+twice. Plugins that use capitals need `"requires_os": "1.7"`.
+
+**Module folders (`module_dirs`, 1.7).** A plugin that runs another
+project's Klipper modules (AFC-Klipper-Add-On, cloned into the plugin
+folder at a pinned commit) lists their folder in `plugin.json`:
+
+```json
+  "module_dirs": ["AFC-Klipper-Add-On/extras"]
+```
+
+Each folder joins the `extras` package path like the plugin's own
+`extras/`, so its modules import each other (`from extras.AFC_utils import
+...`) and `printer.load_object()` finds them. Unlike `extras/`, their
+modules are imported the way Klipper imports its own: only when a config
+section names one (`[AFC]`, `[AFC_stepper lane1]`, in `plugin.cfg` or
+the user's config), `printer.load_object()` asks for one, or another
+module imports it. Modules for hardware the printer doesn't have are
+never imported. The same name rules apply: a module named like a Klipper
+module or another module of an enabled plugin (in any case) stops
+Klipper, and `kiln_`/`ad5x_` names are refused ("Names").
+
+The folders are paths inside the plugin, `/` between folders: each part
+letters, digits, `_`, `-` and `.`, not starting with `.` (so no `..` and
+no hidden folders); not `extras`, `python`, `moonraker` or `root` or a
+folder in them, which have their own use; at most 8. Anything else makes
+`plugin.json` invalid, and the plugin can't be enabled. A folder that
+isn't there (yet) gives a warning and the rest of the plugin loads; a
+`RESTART` picks its modules up once it is. A folder, or a module in it,
+that is a link leading out of the plugin's folder is not read (a
+warning). Plugins that use `module_dirs` need `"requires_os": "1.7"`: an
+older Kiln OS ignores the field and loads the plugin without these
+modules.
+
+**Submodules (1.7).** The other project can be a git submodule of the
+plugin's repository (`git submodule add
+https://github.com/ArmoredTurtle/AFC-Klipper-Add-On.git`, then
+`"module_dirs": ["AFC-Klipper-Add-On/extras"]`). `INSTALL_PLUGIN` and
+`UPDATE_PLUGIN` then run `git submodule update --init --recursive` after
+the clone or pull, in the same background job, so the modules are there
+before Klipper's first start and no network is needed then (a plugin
+clone made shallow by hand gets shallow submodules). Rules, checked before anything is
+fetched:
+
+- URLs in `.gitmodules` are `https://`, or relative (`../other.git`),
+  resolved against the plugin's own URL and staying on its host.
+  `ssh://`, `git@host:`, `git://`, `http://`, `file://`, local paths and
+  `ext::` are refused, and git itself is allowed no transport but https
+  for the submodules and theirs (nested ones are fetched under the same
+  rule).
+- Submodule paths are folders inside the plugin (no `..`, nothing in
+  `.git`); `update = !command` is refused.
+- A failure (a refused URL, no network, a commit the submodule's
+  repository doesn't have) fails the job: `INSTALL_PLUGIN` leaves
+  nothing installed, `UPDATE_PLUGIN` puts the version from before the
+  pull back (`git reset --keep`, its submodules as they were). Klipper
+  restarts after an update only when the plugin is on and the plugin or
+  its submodules changed.
+- `UPDATE_PLUGIN` on a plugin with nothing new still fetches submodules
+  that are missing (a plugin installed before it had them).
+- `REMOVE_PLUGIN` deletes them with the plugin's folder (their git data
+  is in its `.git/modules`).
+
+Moonraker's update manager (`type: git_repo`) doesn't update submodules:
+for a plugin with submodules, update with `UPDATE_PLUGIN` (Settings >
+Plugins on the touch screen). Plugins with submodules need
+`"requires_os": "1.7"`: an older Kiln OS clones the plugin without them.
 
 `plugin.json`:
 
@@ -129,6 +203,7 @@ The clone's directory name must match `name` in `plugin.json`
 | `requires` | no | Plugins that must be enabled first | 1.0 |
 | `conflicts` | no | Plugins that can't be enabled together with this one | 1.0 |
 | `owns_ifs` | no | `true`: the plugin drives the IFS instead of Kiln's `[ifs]` module ("A plugin that drives the IFS") | 1.5 |
+| `module_dirs` | no | More folders of Klipper modules inside the plugin, relative to it (`["AFC-Klipper-Add-On/extras"]`, at most 8; no `..`, not in `extras`, `python`, `moonraker` or `root`). For code from another project that the plugin carries or fetches; see "Module folders" above | 1.7 |
 
 `plugin.cfg` example:
 
@@ -196,8 +271,8 @@ name as an error:
 
 | Name | Refused | Since |
 |---|---|---|
-| Klipper modules | `extras/kiln_*.py`, `extras/ad5x_*.py` and packages of these names | 1.6 |
-| Moonraker components | `moonraker/components/kiln_*.py`, `ad5x_*.py` and packages | 1.6 |
+| Klipper modules | `extras/kiln_*.py`, `extras/ad5x_*.py` and packages of these names; 1.7: any case (`Kiln_x.py`), and in `module_dirs` too | 1.6 |
+| Moonraker components | `moonraker/components/kiln_*.py`, `ad5x_*.py` and packages; 1.7: any case | 1.6 |
 | Config sections in `plugin.cfg` | `[kiln_...]`, `[ad5x_...]`, also with a name after it (`[ad5x_log]`, `[kiln_x two]`) | 1.6 |
 | Macros in `plugin.cfg` | `[gcode_macro KILN_...]`, `[gcode_macro AD5X_...]`, any case, also with leading `_` (`_AD5X_UNIT`) | 1.6 |
 
@@ -223,7 +298,7 @@ When two names meet anyway:
 | Collision | What happens |
 |---|---|
 | A plugin in `/data/ad5x/plugins` named like a shipped one | Yours replaces the shipped one (`LIST_PLUGINS` shows `user`) |
-| An `extras/` module named like a Klipper module, one of Kiln's, or another enabled plugin's | Klipper stops with a config error naming the plugin |
+| An `extras/` or `module_dirs` module named like a Klipper module, one of Kiln's, or another enabled plugin's (1.7: in any case) | Klipper stops with a config error naming the plugin |
 | A G-code command a module registers twice (two plugins, or a plugin and Kiln) | Klipper stops (`gcode command ... already registered`) |
 | A section two plugins define (`[gcode_macro X]`, `[ifs]`, ...) | Klipper merges them: the plugin later in `plugins.cfg` replaces the earlier one's options (a `gcode:` entirely). Klipper warns, unless the later plugin `requires` the earlier one (then it is meant) |
 | A section a plugin shares with Kiln's config (`ad5x.cfg`, `ifs.cfg`, `macros/`) | Merged, the plugin's options win: that is how a plugin changes a default ("Config order"). No warning |
@@ -356,7 +431,8 @@ printer` before calling one.
 | `M106` / `M107` | `S` 0-255, `P`/`T` index (2, 101, 102 ignored) | Part fan (`fan_generic fanM106`) | 1.0 |
 | `M900` | `K=` `[E=]` | Pressure advance, Marlin style | 1.0 |
 | `SET_GCODE_OFFSET` | Klipper's; `Z=`/`Z_ADJUST=` also saved as `zoffset` | Print Z offset | 1.0 |
-| `BED_MESH_CALIBRATE` | Klipper's | Tares the strain gauges first, saves the centre Z after | 1.0 |
+| `BED_MESH_CALIBRATE` | Klipper's; 1.7: `FORCE=1` | Tares the strain gauges first, saves the centre Z after; 1.7: while a print runs, skipped after `PRINT_START`'s mesh (or another mesh) of that print (a console line says so) unless `FORCE=1`, `PROFILE=` or `ADAPTIVE=0` (issue #73) | 1.0 |
+| `LINE_PURGE`, `VORON_PURGE` | `FORCE=1` | The zmod-compat plugin's (or another config's) purge line; Kiln adds: while a print runs, skipped after `PRINT_START`'s prime line or another of these that ran in that print, unless `FORCE=1` (issue #73). Only there when a plugin or config defines it | 1.7 |
 | `SAVE_CONFIG` | Klipper's | PID and input shaper results go to `ad5x-tuning.cfg`, a probe `z_offset` becomes the saved print Z offset; the rest as Klipper | 1.5 |
 | `WEIGHT_TARE`, `LOAD_CELL_TARE` | | Zero the bed strain gauges | 1.0 |
 | `Z_OFFSET_ESTIMATE` | `[X=]` `[Y=]` `[MAX_FORCE=]` `[STEP=]` `[CLEAN=0]` `[SAVE=1]` | Estimate the print Z offset from the bed load cells (homed first); result in `printer.ad5x_zestimate`; `SAVE=1` sets it when the fit is good | 1.5 |
@@ -445,8 +521,8 @@ bounding box; else at the box.
 | `SETUP_WIZARD` | | Run the wizard again on the screen (macros/ `quick_actions.cfg`; `SETUP_WIZARD_STEP ACTION=wizard` does the same) | 1.0 |
 | `ENABLE_PLUGIN`, `DISABLE_PLUGIN` | `NAME=` `[RESTART=0]`; 1.6: `ENABLE_PLUGIN ROOT=1`, needed for a plugin with root scripts (`docs/plugin-root-hooks.md`) | Switch a plugin | 1.0 |
 | `LIST_PLUGINS` | | The plugins and the API version | 1.0 |
-| `INSTALL_PLUGIN` | `NAME=` (a catalog plugin) `[ENABLE=1]`; 1.6: `[ROOT=1]` | Clone it into `/data/ad5x/plugins` | 1.4 |
-| `UPDATE_PLUGIN`, `REMOVE_PLUGIN` | `NAME=` (a plugin in `/data/ad5x/plugins`) | `git pull` / switch off and delete | 1.4 |
+| `INSTALL_PLUGIN` | `NAME=` (a catalog plugin) `[ENABLE=1]`; 1.6: `[ROOT=1]` | Clone it into `/data/ad5x/plugins`; 1.7: with its git submodules ("Submodules") | 1.4 |
+| `UPDATE_PLUGIN`, `REMOVE_PLUGIN` | `NAME=` (a plugin in `/data/ad5x/plugins`) | `git pull` / switch off and delete; 1.7: `UPDATE_PLUGIN` updates its git submodules too | 1.4 |
 
 ### Buttons (macros/ `system.cfg`)
 

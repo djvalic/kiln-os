@@ -1,0 +1,136 @@
+From 87dcd29e3be15fff03d1bd1ad392660d512f5ac6 Mon Sep 17 00:00:00 2001
+From: valix <djvalic.wc@gmail.com>
+Date: Sun, 15 Nov 2026 12:42:47 -0500
+Subject: [PATCH 20/23] ad5x: Give up instead of parking at the prompt; a stop
+ key for it
+
+When U-Boot proper couldn't start anything (mmc_init failing makes every
+input empty, so the rules end in "nothing could be started"), it stopped
+the watchdog, cleared the scratch pad and sat at the prompt: a printer
+that needed a power cycle, while the SPL could still have booted the
+slot by itself. And any byte on the debug UART within ad5x_delay
+dropped it to that prompt, watchdog off: a noisy or floating header
+would do it.
+
+Stop at the prompt only when the stop key came, Ctrl-C or "kiln"
+(stopkey.h, built by the laptop tests too), reading a bounded number of
+bytes per tick. Without it, U-Boot proper gives up: it records that in
+the scratch pad (mach/ad5x_start.h) and resets through the watchdog, so
+the SPL boots the flagged slot itself, or the other slot when this
+U-Boot proper was started from one.
+---
+ board/flashforge/ad5x/ad5x.c    | 35 ++++++++++++++++++++++++++++-----
+ board/flashforge/ad5x/stopkey.h | 34 ++++++++++++++++++++++++++++++++
+ 2 files changed, 64 insertions(+), 5 deletions(-)
+ create mode 100644 board/flashforge/ad5x/stopkey.h
+
+diff --git a/board/flashforge/ad5x/ad5x.c b/board/flashforge/ad5x/ad5x.c
+index eb3b0afe..7d9a345a 100644
+--- a/board/flashforge/ad5x/ad5x.c
++++ b/board/flashforge/ad5x/ad5x.c
+@@ -34,6 +34,7 @@
+ #include <vsprintf.h>
+ #include <version_string.h>
+ #include "bootlogic.h"
++#include "stopkey.h"
+ 
+ DECLARE_GLOBAL_DATA_PTR;
+ 
+@@ -445,25 +446,49 @@ static void ad5x_bootm(ulong addr)
+ 	run_command(cmd, 0);	/* returns only when it failed */
+ }
+ 
++/* the stop key came (stopkey.h): someone is at the console */
++static int ad5x_key;
++
++/*
++ * The prompt with the watchdog off only for someone who asked for it with
++ * the stop key. Otherwise (no eMMC, nothing to start) U-Boot proper gives
++ * up and resets: the SPL then boots the slot itself, or the other slot
++ * when this U-Boot came from one (mach/ad5x_start.h), instead of the
++ * printer waiting at a prompt nobody sees.
++ */
+ static void ad5x_to_prompt(const char *why)
+ {
++	if (!ad5x_key) {
++		printf("ad5x: %s, no stop key: U-Boot gives up, the SPL boots "
++		       "the slot itself\n", why);
++		mdelay(10);	/* the UART's FIFO */
++		x2600_cpspr_write(ad5x_start_uboot_gave_up(x2600_cpspr_read()));
++		x2600_wdt_start(10);
++		while (1)
++			;
++	}
+ 	x2600_wdt_stop();
+ 	x2600_cpspr_write(0);
+ 	printf("ad5x: %s: U-Boot prompt, watchdog off\n", why);
+ }
+ 
+-/* the U-Boot prompt when a key comes within ad5x_delay seconds */
++/* the U-Boot prompt when the stop key comes within ad5x_delay seconds */
+ static int ad5x_wait_key(void)
+ {
+ 	ulong s = env_get_ulong("ad5x_delay", 10, 2), ms;
++	unsigned int st = 0, n;
+ 
+ 	if (!s)
+ 		return 0;
+-	printf("ad5x: any key within %lu s for the U-Boot prompt\n", s);
++	printf("ad5x: Ctrl-C or \"%s\" within %lu s for the U-Boot prompt\n",
++	       AD5X_STOP_STRING, s);
+ 	for (ms = 0; ms < s * 1000; ms += 10) {
+-		if (tstc()) {
+-			getchar();
+-			return 1;
++		/* a bounded number per tick: a noisy line can't stall this */
++		for (n = 0; n < 64 && tstc(); n++) {
++			if (ad5x_stop_key(&st, getchar())) {
++				ad5x_key = 1;
++				return 1;
++			}
+ 		}
+ 		mdelay(10);
+ 	}
+diff --git a/board/flashforge/ad5x/stopkey.h b/board/flashforge/ad5x/stopkey.h
+new file mode 100644
+index 00000000..d9f575cb
+--- /dev/null
++++ b/board/flashforge/ad5x/stopkey.h
+@@ -0,0 +1,34 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Flashforge Adventurer 5X: the key that stops U-Boot proper at its prompt
++ * (watchdog off) within ad5x_delay seconds: Ctrl-C, or "kiln" typed or
++ * pasted. Not any byte: a stray one from a noisy or floating debug header
++ * would park the printer at the prompt for good. Plain C: Kiln's laptop
++ * tests (u-boot/tools/test_ad5x_start.py) build it on the host.
++ */
++#ifndef __AD5X_STOPKEY_H__
++#define __AD5X_STOPKEY_H__
++
++#define AD5X_STOP_CTRL_C	0x03
++#define AD5X_STOP_STRING	"kiln"
++
++/* feed each byte read, *state 0 at first; 1 once the stop key is complete */
++static inline int ad5x_stop_key(unsigned int *state, int c)
++{
++	static const char s[] = AD5X_STOP_STRING;
++
++	if (c == AD5X_STOP_CTRL_C)
++		return 1;
++	if (*state >= sizeof(s) - 1)
++		*state = 0;
++	if (c == s[*state]) {
++		if (++*state == sizeof(s) - 1)
++			return 1;
++	} else {
++		/* "kkiln": a mismatch may be the start of the string */
++		*state = c == s[0];
++	}
++	return 0;
++}
++
++#endif
+-- 
+2.56.0
+

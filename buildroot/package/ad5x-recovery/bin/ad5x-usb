@@ -10,10 +10,11 @@
 # list prints space-separated key=value fields (no spaces inside values):
 #   dev=/dev/sda1 mnt=/run/ad5x/usb/sda1 fs=vfat swu=a.swu,b.swu
 #   autoupdate=0|1 rescue_root=0|1 rescue_boot=0|1 rescue_flash=0|1
+#   return_stock=0|1
 # swu: .swu and .zip update files in the partition's top directory. autoupdate,
-# rescue_boot, rescue_flash: marker files "ad5x-autoupdate",
-# "ad5x-rescue-boot", "ad5x-rescue-flash" in the top directory of any
-# partition of the same stick. rescue_root: this partition is an ext4 root
+# rescue_boot, rescue_flash, return_stock: marker files "ad5x-autoupdate",
+# "ad5x-rescue-boot", "ad5x-rescue-flash", "kiln-return-to-stock" in the top
+# directory of any partition of the same stick. rescue_root: this partition is an ext4 root
 # with /etc/ad5x-release (e.g. usb-test.img's AD5XROOT).
 . /usr/lib/ad5x-recovery/recovery.sh
 
@@ -52,14 +53,15 @@ do_list() {
 		disk=${m##*/}; disk=${disk%%[0-9]*}
 		swu=$(cd "$m" && ls -1 2>/dev/null | grep -iE '\.(swu|zip)$' | tr '\n' ',' | sed 's/,$//')
 		root=0; [ "$fs" = ext4 ] && [ -f "$m/etc/ad5x-release" ] && root=1
-		au=0 rb=0 rf=0
+		au=0 rb=0 rf=0 rs=0
 		for o in $mounts; do
 			od=${o##*/}; [ "${od%%[0-9]*}" = "$disk" ] || continue
 			[ -e "$o/ad5x-autoupdate" ] && au=1
 			[ -e "$o/ad5x-rescue-boot" ] && rb=1
 			[ -e "$o/ad5x-rescue-flash" ] && rf=1
+			[ -e "$o/kiln-return-to-stock" ] && rs=1
 		done
-		echo "dev=$dev mnt=$m fs=$fs swu=$swu autoupdate=$au rescue_root=$root rescue_boot=$rb rescue_flash=$rf"
+		echo "dev=$dev mnt=$m fs=$fs swu=$swu autoupdate=$au rescue_root=$root rescue_boot=$rb rescue_flash=$rf return_stock=$rs"
 	done
 }
 

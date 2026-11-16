@@ -1,0 +1,178 @@
+From: AD5X Open OS
+Subject: [PATCH] watchdog: ingenic: keep a watchdog the boot loader started
+
+Kiln's U-Boot leaves the watchdog counting when it starts this kernel, so
+that a hang before userspace takes it over resets the board. The driver
+didn't look: nothing fed it until userspace opened /dev/watchdog. If the
+counter is enabled at probe, give it the driver's timeout and mark it
+WDOG_HW_RUNNING, so the watchdog core feeds it until then (at most
+watchdog.open_timeout). A stopped one is put on EXCLK/512 (the board has
+no 32.768 kHz crystal), as the boot loader runs it.
+
+Stop it on halt and poweroff (watchdog_stop_on_reboot): a board that is
+shut down must stay down. Restarts still go through the SoC code's
+watchdog reset (arch/mips/xburst2/soc-x2600/reset.c).
+
+Fix two SDK bugs on the way: set_timeout() did nothing once the timeout
+had been set (it compared the old timeout with wdt_dev->timeout, not
+with the new one), so BusyBox's watchdog -T was ignored after the first
+use; and start() enabled the counter without setting a timeout, with
+whatever TDR held. max_timeout is the counter's real limit (0xffff counts
+of the RTC clock / 1024, about 1431 s), not 2047000 s.
+
+--- a/module_drivers/drivers/watchdog/ingenic_wdt.c
++++ b/module_drivers/drivers/watchdog/ingenic_wdt.c
+@@ -29,6 +29,7 @@
+ #include <linux/err.h>
+ #include <linux/interrupt.h>
+ #include <linux/of.h>
++#include <linux/math64.h>
+ #include "ingenic_wdt.h"
+ 
+ #define IRQ_SWITCH  0
+@@ -126,51 +127,66 @@
+ 	writel(tmp, drvdata->base + INGENIC_REG_WDT_TIMER_DATA);
+ }
+ 
+-static int ingenic_wdt_set_timeout(struct watchdog_device *wdt_dev,
+-                                   unsigned int new_timeout)
+-{
+-	struct ingenic_wdt_drvdata *drvdata = watchdog_get_drvdata(wdt_dev);
+-	unsigned int rtc_clk_rate;
+-	unsigned int timeout_value;
+-	short clock_div = INGENIC_WDT_CLOCK_DIV_1;
+-
+-	if (drvdata->timeout != wdt_dev->timeout) {
+-
+-		writeb(0x0, drvdata->base + INGENIC_REG_WDT_COUNTER_ENABLE);
+-		rtc_clk_rate = clk_get_rate(drvdata->wdt_clk);
++/*
++ * Set the counter up for @timeout seconds (the RTC clock / 1024, at most
++ * 0xffff counts: about 1431 s at EXCLK/512) and clear it. It counts on
++ * afterwards only if it counted before: TCER is kept.
++ */
++static void ingenic_wdt_setup(struct ingenic_wdt_drvdata *drvdata,
++                              unsigned int timeout)
++{
++	unsigned long rtc_clk_rate = clk_get_rate(drvdata->wdt_clk);
++	u8 tcer = readb(drvdata->base + INGENIC_REG_WDT_COUNTER_ENABLE) & 0x1;
++	u64 timeout_value;
++
++	timeout_value = div_u64((u64)rtc_clk_rate * timeout, 1024);
++	if (timeout_value > INGENIC_WDT_FULL_MAX) {
++		timeout_value = INGENIC_WDT_FULL_MAX;
++	}
++	if (!timeout_value) {
++		timeout_value = 1;
++	}
+ 
+-		/*new_timeout max = 2047s */
+-		clock_div = INGENIC_WDT_CLOCK_DIV_1024;
+-		timeout_value = rtc_clk_rate * new_timeout / 1024;
++	writeb(0x0, drvdata->base + INGENIC_REG_WDT_COUNTER_ENABLE);
++	writel(INGENIC_WDT_TIMER_FLAG, drvdata->base + INGENIC_REG_WDT_TIMER_FLAG_CLR);
++	writel(INGENIC_WDT_TIMER_STOP, drvdata->base + INGENIC_REG_WDT_TIMER_STOP_CLR);
+ 
+-		if (timeout_value > INGENIC_WDT_FULL_MAX) {
+-			timeout_value = INGENIC_WDT_FULL_MAX;
+-		}
++	/*Reach this value set to reboot*/
++	wdt_set_half_and_full(drvdata, timeout_value, 'F');
+ 
+-		writel(INGENIC_WDT_TIMER_FLAG, drvdata->base + INGENIC_REG_WDT_TIMER_FLAG_CLR);
+-		writel(INGENIC_WDT_TIMER_STOP, drvdata->base + INGENIC_REG_WDT_TIMER_STOP_CLR);
++	/*When the set value is reached, the flag bit will be set to 1 and an interrupt will be triggered.*/
++	wdt_set_half_and_full(drvdata, timeout_value * 2 / 3, 'H');
+ 
+-		/*Reach this value set to reboot*/
+-		wdt_set_half_and_full(drvdata, timeout_value, 'F');
++	/*set prescal clzr rtc_en*/
++	writew(INGENIC_WDT_CLOCK_DIV_1024 | INGENIC_WDT_CLOCK_RTC | INGENIC_WDT_CLOCK_CLRZ, drvdata->base + INGENIC_REG_WDT_TIMER_CONTROL);
++	writeb(tcer, drvdata->base + INGENIC_REG_WDT_COUNTER_ENABLE);
+ 
+-		/*When the set value is reached, the flag bit will be set to 1 and an interrupt will be triggered.*/
+-		wdt_set_half_and_full(drvdata, timeout_value * 2 / 3, 'H');
++	drvdata->timeout = timeout;
++}
+ 
+-		/*set prescal clzr rtc_en*/
+-		writew(clock_div | INGENIC_WDT_CLOCK_RTC | INGENIC_WDT_CLOCK_CLRZ, drvdata->base + INGENIC_REG_WDT_TIMER_CONTROL);
+-		writeb(0x1, drvdata->base + INGENIC_REG_WDT_COUNTER_ENABLE);
++/*
++ * The SDK's version only set the timeout when the old one differed from
++ * wdt_dev->timeout, so after the first change every later one (BusyBox's
++ * watchdog sets its timeout once it has opened the device) was ignored.
++ */
++static int ingenic_wdt_set_timeout(struct watchdog_device *wdt_dev,
++                                   unsigned int new_timeout)
++{
++	struct ingenic_wdt_drvdata *drvdata = watchdog_get_drvdata(wdt_dev);
+ 
+-		drvdata->timeout = wdt_dev->timeout = new_timeout;
+-	}
++	ingenic_wdt_setup(drvdata, new_timeout);
++	wdt_dev->timeout = new_timeout;
+ 	return 0;
+ }
+ 
++/* Start with the device's timeout, not whatever TDR held before */
+ static int ingenic_wdt_start(struct watchdog_device *wdt_dev)
+ {
+ 	struct ingenic_wdt_drvdata *drvdata = watchdog_get_drvdata(wdt_dev);
++
++	ingenic_wdt_setup(drvdata, wdt_dev->timeout);
+ 	writel(INGENIC_WDT_TIMER_FLAG, drvdata->base + INGENIC_REG_WDT_TIMER_FLAG_CLR);
+ 	writeb(0x1, drvdata->base + INGENIC_REG_WDT_COUNTER_ENABLE);
+-	//ingenic_wdt_set_timeout(wdt_dev, wdt_dev->timeout);
+ 
+ 	return 0;
+ }
+@@ -228,6 +244,7 @@
+ 	struct ingenic_wdt_drvdata *drvdata;
+ 	struct watchdog_device *ingenic_wdt;
+ 	struct resource *res;
++	bool running;
+ 	int ret;
+ 
+ 	drvdata = devm_kzalloc(&pdev->dev, sizeof(struct ingenic_wdt_drvdata),
+@@ -286,6 +303,40 @@
+ 	clk_prepare_enable(drvdata->wdt_clk);
+ 	clk_prepare_enable(drvdata->tcu_clk);
+ 
++	/*
++	 * Kiln OS: the boot loader may have left the watchdog counting, so
++	 * that a hang before userspace takes it over resets the board. Keep it
++	 * counting, with this driver's timeout, and let the watchdog core feed
++	 * it until userspace opens the device. A stopped one counts EXCLK/512
++	 * once started, as the boot loader's does: the board has no 32.768 kHz
++	 * crystal.
++	 */
++	running = readb(drvdata->base + INGENIC_REG_WDT_COUNTER_ENABLE) & 0x1;
++	if (!running) {
++		struct clk *exclk_512 = clk_get(NULL, "ext_div_512");
++
++		if (!IS_ERR(exclk_512)) {
++			clk_set_parent(drvdata->wdt_clk, exclk_512);
++			clk_put(exclk_512);
++		}
++	}
++	/* the counter's real limit, not MAX_HEARTBEAT */
++	if (clk_get_rate(drvdata->wdt_clk)) {
++		ingenic_wdt->max_timeout = div_u64((u64)INGENIC_WDT_FULL_MAX * 1024,
++		                                   clk_get_rate(drvdata->wdt_clk));
++		if (ingenic_wdt->timeout > ingenic_wdt->max_timeout) {
++			ingenic_wdt->timeout = ingenic_wdt->max_timeout;
++		}
++	}
++	if (running) {
++		ingenic_wdt_setup(drvdata, ingenic_wdt->timeout);
++		set_bit(WDOG_HW_RUNNING, &ingenic_wdt->status);
++		dev_info(&pdev->dev, "running at boot, timeout %u s\n",
++		         ingenic_wdt->timeout);
++	}
++	/* a board that is shut down stays down: stopped on halt and poweroff */
++	watchdog_stop_on_reboot(ingenic_wdt);
++
+ 	ret = watchdog_register_device(&drvdata->wdt);
+ 	if (ret < 0) {
+ 		goto err_disable_clk;

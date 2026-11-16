@@ -13,7 +13,7 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
-KVER=7.3.3
+KVER=7.3.4
 KSRC=${KSRC:?set KSRC to the development tree}
 TOOLBIN=${TOOLBIN:-$REPO/buildroot/output/host/bin}
 O=${O:-$HOME/workspace/kernel-mainline-ad5x/check}

@@ -106,6 +106,46 @@ restore_stock_firmware	Restore stock firmware
 stock_back_title	Back to Flashforge's firmware
 stock_text	Writes the stock system saved on the printer when Kiln OS was installed back into the main slot (B), checks it, and points the boot flag at it. This recovery stays as it is.
 stock_backup_first	Back up first to keep this system. You'll be asked twice before anything is written.
+rs_title	Return to Flashforge firmware
+rs_text	Puts Flashforge's own firmware back into the main slot and starts it. Kiln OS in the main slot is removed. This recovery stays as a safety net.
+rs_files	Flashforge files: %s
+rs_after	After it: %s
+rs_checking	Looking for Flashforge's files…
+rs_ready	Ready. Nothing is written before you tap Return to Flashforge.
+rs_resume	A return was stopped before it finished (for example by a power cut). Tap Continue to finish it.
+rs_refused	Not possible now: %s
+rs_done_already	Done. Switch the printer off and on: Flashforge's firmware starts.
+rs_no_files	No Flashforge files found. Put Flashforge's update file (AD5X-….tgz, from Flashforge's website) on a USB stick, then tap Check.
+rs_spl_box	Also put back Flashforge's own boot loader
+rs_go	Return to Flashforge
+rs_continue	Continue
+rs_save_usb	Save files to USB
+rs_q	Return to Flashforge firmware?
+rs_q_text	Writes Flashforge's system into the main slot and makes it the one that starts. Kiln OS in the main slot is removed. It takes a few minutes.
+rs_q_text2	Kiln OS in the main slot will be gone. Don't switch the printer off until the screen says it is done.
+rs_running	Returning to Flashforge firmware
+rs_checking_title	Checking for Flashforge's files
+rs_saving	Saving Flashforge files to USB
+rs_locked_q	Return to Flashforge not finished
+rs_locked_text	A Return to Flashforge firmware was started and not finished, so the main slot may hold only part of a system. Finish it first.
+rs_open	Open
+bl_entry	Install Kiln's boot loader (experimental)…
+bl_title	Kiln's boot loader (experimental)
+bl_text	Replaces Flashforge's boot loader with Kiln's own (SPL and U-Boot): no Flashforge code starts the printer any more, and a Kiln OS kernel that fails to start falls back by itself (7.3, then 6.6, then this recovery). Experimental and at your own risk: proven on one printer so far (one more board is known to match). If the printer doesn't start after it, the only proven way back needs the printer opened (its J28 USB connector). Return to Flashforge firmware puts Flashforge's boot loader back.
+bl_board_known	This printer's board: on the list of known boards.
+bl_board_unknown	This printer's board is not on the list of known boards, so it isn't offered here.
+bl_checking	Checking…
+bl_ready	Ready. Nothing is written before you tap Install and confirm twice.
+bl_resume	An install was stopped before it finished (for example by a power cut). Tap Continue to finish it.
+bl_installed	Installed. Restart the printer: Kiln's boot loader then starts this recovery screen, which shows the result.
+bl_verified	Done: Kiln's boot loader is installed and started this recovery. Boot main OS starts Kiln OS through it.
+bl_unverified	Installed, but this start didn't come through Kiln's U-Boot (Kiln's SPL started the system itself). The printer works; tap Check for the details.
+bl_go	Install
+bl_q	Install Kiln's boot loader?
+bl_q_text	Writes Kiln's SPL and U-Boot into the boot area of the printer's memory, and Kiln's 6.6 kernel into both kernel slots. It takes under a minute. Experimental: proven on one printer so far.
+bl_q_text2	If the printer doesn't start afterwards, bringing it back needs the printer opened and a USB cable (J28). Don't switch the printer off until the screen says it is done.
+bl_running	Installing Kiln's boot loader
+bl_checking_title	Checking Kiln's boot loader
 address	Address
 name	Name
 upload	Upload

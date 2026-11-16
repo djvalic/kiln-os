@@ -2,6 +2,8 @@
 # SWUpdate post-update command (swupdate -p): "Restart" on the web page or
 # swupdate-client -r after a successful install. The .swu's own script has
 # already pointed the boot flag at slot B; reboot into it.
+# BOOT-LOADER HOOK: with a boot loader of our own, this is where its boot
+# counter for slot B would be reset before the reboot. Not used yet.
 echo "$(date) postupdate: rebooting" >> /run/ad5x/swupdate.log
 ( sleep 2; sync; reboot ) >/dev/null 2>&1 &
 exit 0

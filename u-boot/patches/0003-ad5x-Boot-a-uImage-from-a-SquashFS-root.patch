@@ -1,0 +1,48 @@
+From 7be8e4a476e3ceadfe4b4e172be152186477a21d Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sat, 14 Nov 2026 15:05:32 -0700
+Subject: [PATCH 03/10] ad5x: Boot a uImage from a SquashFS root
+
+Kiln's root filesystems are LZO SquashFS; with SquashFS, LZO and legacy
+uImage support, U-Boot loads the kernel straight from the slot's root
+(sqfsload) and starts it with bootm. A 1 KiB command line for the long
+bootargs. The MSC clock is no longer set before the SDHCI core is set
+up: the core sets it during card init.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ configs/ad5x_defconfig    | 6 ++++++
+ drivers/mmc/x2600_sdhci.c | 3 ---
+ 2 files changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/configs/ad5x_defconfig b/configs/ad5x_defconfig
+index 7ba34210..8edd0992 100644
+--- a/configs/ad5x_defconfig
++++ b/configs/ad5x_defconfig
+@@ -30,3 +30,9 @@ CONFIG_MMC_SDHCI_X2600=y
+ # CONFIG_MMC_HW_PARTITIONING is not set
+ CONFIG_EFI_PARTITION=y
+ # CONFIG_MMC_WRITE is not set
++CONFIG_SYS_BOOTM_LEN=0x1000000
++CONFIG_LEGACY_IMAGE_FORMAT=y
++CONFIG_CMD_SQUASHFS=y
++CONFIG_FS_SQUASHFS=y
++CONFIG_LZO=y
++CONFIG_SYS_CBSIZE=1024
+diff --git a/drivers/mmc/x2600_sdhci.c b/drivers/mmc/x2600_sdhci.c
+index e77ad2fa..45ec79d7 100644
+--- a/drivers/mmc/x2600_sdhci.c
++++ b/drivers/mmc/x2600_sdhci.c
+@@ -123,9 +123,6 @@ static int x2600_sdhci_probe(struct udevice *dev)
+ 	upriv->mmc = host->mmc;
+ 	host->ops = &x2600_sdhci_ops;
+ 
+-	/* identification clock first, with the gate open */
+-	x2600_msc_set_rate(plat, EMMC_MIN_FREQ);
+-
+ 	ret = sdhci_setup_cfg(&plat->cfg, host, host->max_clk, EMMC_MIN_FREQ);
+ 	if (ret)
+ 		return ret;
+-- 
+2.43.0
+

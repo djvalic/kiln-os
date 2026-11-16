@@ -11,9 +11,21 @@
 # is left out: the UI then uses its own default. "S80ad5x-recovery-ui
 # touch-cal" prints what the UI would get (AD5X_RUI_TOUCH_CAL_FILE
 # overrides the file, for tests).
+# The file stays in stock units on every kernel (docs/data-layout.md). On
+# our kernel (6.6, KERNEL=own in /usr/lib/ad5x/kernel.sh) the tsc2007
+# reports raw 0-4095 with Y not flipped: the UI gets
+# AD5X_RUI_TOUCH_UNITS=raw and converts the range (the file's or its
+# default) at use, as the main OS's ad5x-touch-units does for HelixScreen;
+# on the stock kernel AD5X_RUI_TOUCH_UNITS=stock. "S80ad5x-recovery-ui
+# touch-units" prints which (AD5X_LIB and AD5X_KERNEL override, for tests).
 UI=/usr/bin/ad5x-recovery-ui
 PIDFILE=/var/run/ad5x-recovery-ui.pid
 CALFILE=${AD5X_RUI_TOUCH_CAL_FILE:-/data/ad5x/recovery/touch-cal}
+LIB=${AD5X_LIB:-/usr/lib/ad5x}
+KERNEL=stock
+[ -f $LIB/kernel.sh ] && . $LIB/kernel.sh
+UNITS=stock
+[ $KERNEL = own ] && UNITS=raw
 
 # touch_cal: the file's "min_x min_y max_x max_y" on stdout when usable,
 # else why not on stderr and false
@@ -52,6 +64,8 @@ start)
 	else
 		echo "S80: touch calibration from $CALFILE not used" >> /run/ad5x/ui.log
 	fi
+	export AD5X_RUI_TOUCH_UNITS=$UNITS
+	echo "S80: touch in $UNITS units (kernel $(uname -r))" >> /run/ad5x/ui.log
 	start-stop-daemon -S -b -m -p $PIDFILE -x /bin/sh -- -c \
 		"while true; do $UI >> /run/ad5x/ui.log 2>&1; echo \"ui exited: \$?\" >> /run/ad5x/ui.log; sleep 2; done"
 	echo "ui: started"
@@ -67,6 +81,9 @@ restart)
 touch-cal)
 	touch_cal
 	exit
+	;;
+touch-units)
+	echo $UNITS
 	;;
 esac
 exit 0

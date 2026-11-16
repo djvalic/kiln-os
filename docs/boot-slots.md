@@ -32,7 +32,7 @@ printer.
 | 0x0 | 0x80 used | Ingenic boot ROM parameter block, magic `INGE`, inside the protective-MBR sector (MBR signature at 0x1FE) |
 | 0x200 | | GPT header (`EFI PART`) |
 | 0x400 | 7 × 128 B | GPT entries (p1–p7) |
-| 0x4400 | 0x4600 | SPL image: header `LPSM` (`MSPL` reversed), then at 0x4500 a second copy of the `INGE` block, then code from 0x4C00. Loaded at 0x80001000 (code at 0x80001800). Ends at 0x8A00 in the Sep 2024 build; in the Nov 2025 build its code and data run to about 0x8F40, then `0xFF` fill up to 0xA400 |
+| 0x4400 | 0x4600 | SPL image: header `LPSM` (`MSPL` reversed) with the number of 512-byte blocks the boot ROM loads at 0x4404, then at 0x4500 a second copy of the `INGE` block, then code from 0x4C00. Loaded at 0x80001000 (code at 0x80001800). In the Sep 2024 build its code and data end at 0x88F7, the boot ROM loads up to 0x8A00 (0x23 blocks), then `0xFF` fill up to 0xA400; in the Nov 2025 build its code and data run to about 0x8F40, then `0xFF` fill. The header fields are decoded in `u-boot/README.md` |
 | 0xA400 | 0x2AE40 | U-Boot 2013.07 proper, the same build as the SPL, linked at 0x80100000. In the Nov 2025 build its relocation table runs from 0x34A00 to 0x35240. Not started by the SPL in normal boot |
 | 0x35240 to 0x100000 | | zero; U-Boot's `env_mmc` would keep its environment at 0x8A400 (0x8000 bytes, CRC32 + data), never written so far |
 
@@ -160,8 +160,11 @@ Path: a USB stick with `AD5X-*.tgz`, then `flashforge_init.sh`
 (`ota_kernel_sd/`) is used only when `/sys/block/mmcblk0/device/type` is
 `SD` and the cmdline has `dev_type=SDNAND`. Helpers are in
 `/etc/ota_bin/` (stock rootfs; identical copy in
-`/usr/prog/etc/ota_bin/`). No stock binary calls these scripts; only the
-USB package path does.
+`/usr/prog/etc/ota_bin/`). The online update runs them too: the stock
+UI's `UpdateManager` (`common/UpdateManager.cpp` in `firmwareExe`'s
+strings) downloads the same parts (`kernel-`, `control-`, `library-`,
+`software-*.tar.xz`), unpacks each with `tar -xvf` and runs its `run.sh`
+(seen in the strings, not traced).
 
 Sequence (`local_ota_update.sh`):
 
@@ -211,7 +214,7 @@ Consequences for us:
 | Boot loader console on ttyS0 | SPL output only, no input handling. U-Boot proper (`bootdelay=1`) is never started. Silent as shipped: the SPL sets PE9-PE12 (the DEBUG header) to UART0, then reads GPIO 70 (PC6) with its pull-up off and prints nothing when it's low. Production boards hold PC6 low with a divider (R233 to 3.3 V, R232 to GND, about 0.63 V). Held at 1.8 V at power-on, the SPL and the stock kernel print on the header ([serial-console.md](serial-console.md)). |
 | SD/USB boot from the loader | None in the SPL (eMMC only). |
 | Raw U-Boot in a kernel slot | Possible in principle: a kernel partition without uImage magic is loaded as U-Boot at 0x80100000 (512 KiB), the address the shipped U-Boot proper is linked at. Writing bytes 0xA400–0x35240 of the first MiB into `kernel2` might give a U-Boot prompt (bootdelay 1) on ttyS0 when slot B is selected. Not tried from a slot; the chainload test above stops after relocation. `saveenv` writes at 0x8A400. Needs a serial line. |
-| Ingenic USB boot ROM ("cloner"/usbboot) | **Works, through J28.** Every Ingenic SoC has one in mask ROM; the ROM falls back to it when it finds no valid boot loader. On the AD5X it is on the OTG controller (`13500000`), whose port is **J28**, a 5-pin connector on the mainboard (`GND GND P N 5V`, labelled `USB`). Through it, alexshev86 reprogrammed a printer's eMMC with Ingenic's USBCloner after its boot path was gone (2026-11-14, PR #66). The outside USB-C port is a different controller (downstream port 2 of the internal hub on `13540000`, a host port) and can't be used. How to force USB boot while a valid SPL is on the eMMC (boot-select pins, button) is still unknown. |
+| Ingenic USB boot ROM ("cloner"/usbboot) | **Works, through J28.** Every Ingenic SoC has one in mask ROM; the ROM falls back to it when it finds no valid boot loader. On the AD5X it is on the OTG controller (`13500000`), whose port is **J28**, a 5-pin connector on the mainboard (`GND GND P N 5V`, labelled `USB`). Through it, alexshev86 reprogrammed a printer's eMMC with Ingenic's USBCloner after its boot path was gone (2026-11-14, PR #66). The outside USB-C port is a different controller (downstream port 2 of the internal hub on `13540000`, a host port) and can't be used. A zeroed SPL header (sector 34) is enough for that: the ROM then goes to USB mode by itself, no K4 (alexshev86's test, 2026-11-16, #68; restore steps in `docs/own-boot-loader.md`, "If nothing starts"). With a valid SPL on the eMMC, USB boot is forced by closing **K4** at power-on, or from a running Linux by writing `0x42575302` to CPM_SLPC (`0x100000cc`) and rebooting (both alexshev86, #68; `u-boot/USB-BOOT.md`). |
 | Stock (slot A) selected again without our OS running | Only by writing `ota` from outside: USB boot ROM, or a U-Boot prompt as above. Nothing on the printer does it by itself. |
 
 Because of this, the safety has to come from our own install procedure
@@ -327,9 +330,15 @@ Notes:
   Stock 5.10 tolerated it; mainline's `efi.c` didn't. Fix the GPT after
   such a clone.
 - **No jumper was needed:** with the SPL gone, USBCloner found the X2600
-  as soon as the cable was on J28. The board has a pad pair **K4** that
-  looks meant to force USB boot, but closing it made no visible
-  difference on that unit; what it does is untested.
+  as soon as the cable was on J28. Closing the pad pair **K4** made no
+  visible difference on that unit, most likely because its ROM went to
+  USB anyway.
+  K4 does force USB boot with a valid SPL on the eMMC (alexshev86, #68):
+  it changes the boot-select straps `boot_sel[2:0]` (R370-R374 next to
+  K4) from `101` (eMMC) to `111` (USB). Without opening anything but J28,
+  a running Linux gets there with `devmem 0x100000cc 32 0x42575302` and a
+  reboot (CPM_SLPC, Ingenic's `softburn` request; a power cycle boots
+  normally again). `u-boot/USB-BOOT.md` has both and the bench procedure.
 
 To check which port a connector is: plug any USB device into it and see
 whether it appears on the `13500000` controller's bus. Before connecting a
@@ -346,20 +355,17 @@ supply.
   strings aren't readable as plain text). Does anything enable a hardware
   watchdog before init? If neither, a slot-B root mount failure hangs
   with no reboot.
-- X2600 boot ROM: boot-select pins, the order of boot media, and how to
-  force USB boot on the AD5X mainboard (button, test pads, eMMC CLK/CMD).
-  Which cloner/usbboot build supports the X2600?
+- X2600 boot ROM: which SoC pins carry the three `boot_sel` straps, and
+  the order of boot media for each value (#68 measured `101` normal, `111`
+  with K4 closed = USB). An open X2600 USB loader exists now
+  (`u-boot/tools/ad5x_usbboot.py`, stage 1 only; untested on hardware).
 - Why does U-Boot proper stop after relocating under chainload (see
   "Chainload test")? The co-processor's memory, or a device Linux left
   running? Would it also stop when the SPL starts it from a kernel slot?
-- How to force the boot ROM's USB mode on J28 while a valid SPL is on
-  the eMMC. With the SPL gone, the ROM falls back to USB by itself. K4
-  looks like the board's "force USB boot" pad, but closing it made no
-  visible difference on one unit; it may need a different state or timing,
-  or serve another purpose. Otherwise: boot-select pins, or holding eMMC
-  CLK or CMD at power-on.
-- What does the `INGE` block at 0x0 hold (SPL offset/size, checksum)?
-  This only matters if the first MiB is ever rewritten, which we avoid.
+- The `INGE` block at 0x0 holds the SPL length and the clock settings the
+  boot ROM applies before loading it (Ingenic's `spl_params_fixer`); no
+  checksum. Decoded in `u-boot/README.md` ("The boot ROM header"). Which of
+  the length fields the ROM uses is still to be seen on hardware.
 - The 2026-11-14 unit's eMMC (SanDisk `DA2016`, 30,777,344 sectors,
   14.7 GiB) is about 7.8 GiB bigger than its last partition: both layouts
   look sized for an 8 GB part. `userdata` is last, so it could grow
@@ -375,6 +381,19 @@ command line has `root=/dev/mmcblk0p4`; `S99ad5x-booted` (last) writes
 `ota:kernel2` again if dropbear is running. A system that fails after its
 init has started comes back up on stock at the next power cycle. Both do
 nothing in USB test mode or when booted from slot A.
+
+The slot is also read from `root=PARTLABEL=rootfs` /
+`root=PARTLABEL=rootfs2` (as a boot loader of our own would pass it; main
+OS `slot.sh` and recovery `rc_slot` alike), and `S01ad5x-tryboot` leaves
+the flag alone unless the other slot holds both a squashfs root and a
+kernel partition starting with a uImage whose header CRC is right. The
+flag rule itself is unchanged: after `S99ad5x-booted` it is on this slot,
+which the "start-up finished" check of `S99ad5x-update-recovery` relies
+on. The update agent, `ad5x-update` and `ad5x-boot-recovery` also need
+`/run/ad5x-booted`, which `S99ad5x-booted` makes after the flag
+(`start_done` in `lib/slot.sh`): when `S01ad5x-tryboot` left the flag on
+this slot because the other can't start, the flag alone would say
+start-up had finished from the first second.
 
 ## Install log (developer's printer)
 
@@ -464,3 +483,105 @@ printer's own stock kernel:
 
 On the developer's printer both kernel partitions already hold the stock kernel
 (install log above), so nothing changes there.
+
+Writing a kernel partition (`ad5x-update`'s copy into p1, `ad5x-slot-b.sh`'s
+copy into an empty `kernel2`): the first 4 KiB are zeroed first, then the
+rest is written and synced, then the first 4 KiB (the uImage header), then
+it is read back and compared. A copy cut short leaves no uImage header,
+never a valid header over a broken body, and `S01ad5x-tryboot` keeps the
+flag off that slot. `ad5x-boot-recovery` checks slot A's kernel whole
+(header and data CRC) before it points the flag there. A kernel inside a
+private `.swu` (`make_swu.sh -k`) is written by SWUpdate's raw handler,
+which this order does not cover.
+
+## Saved first MiB
+
+The main OS saves the first MiB of the eMMC once, read only, to
+`/data/ad5x/stock/boot.img` with `boot.img.sha256` and `boot.img.info`
+(which SPL: its `U-Boot SPL 2013.07 ...` banner) (`S99ad5x-booted`, slot B).
+Only Flashforge's: `INGE` at 0, a GPT at 0x200, `LPSM` at 0x4400 and the
+SPL 2013.07 banner in the SPL; anything else (Kiln's own SPL) is logged and
+not saved. A short read is reported apart from a missing GPT. It counts as
+saved only when `boot.img` is exactly 1048576 bytes and `sha256sum -c
+boot.img.sha256` passes; otherwise (a power cut while saving) it is saved
+again. Each file goes under a temporary name first, synced, `boot.img`
+renamed last. It is this printer's own boot block, GPT and
+SPL as they were before any boot loader of ours is written. The recovery OS
+writes it back with `ad5x-restore --i-know /data/ad5x/stock boot` (checks
+the size, exactly 1 MiB, the sha256 file, and the content even with
+`--i-know`: `INGE` at 0, `EFI PART` at 512, the SPL table's partitions in
+its GPT as on this disk; reads it back). Copy it off the printer
+too: a boot loader that no longer starts can only be repaired through J28.
+
+## Kiln's U-Boot: confirmed starts
+
+Kiln's own U-Boot (`u-boot/`, v1.0 work; not installed by anything yet)
+counts each start of the main OS in the `ota` partition before it starts
+it (state, `ota` 0x90000) and takes the next kernel down when starts stay
+unconfirmed: 7.3 after one, 6.6 after two, then the recovery OS; it never
+starts Flashforge's 5.10 for the main OS (`u-boot/README.md`, "Boot
+rules"). It adds `ad5x.uboot=1` to
+the command line. With that, `S99ad5x-booted` confirms the start at the
+point it marks start-up finished (SSH up, the flag read back on this
+slot): it zeroes the state sector, synced, reads it back, and logs which
+start it confirmed in its output and the boot trace. U-Boot's records
+(`ota` 0x90200: which kernel failed, how many fallbacks, why the last one)
+are logged too and kept until `ad5x-kernel retry`, which zeroes them along
+with S00's `failed` files; `ad5x-kernel` shows them. A start without
+`ad5x.uboot=1` (Flashforge's SPL, or Kiln's SPL alone) never reads or
+writes those sectors.
+
+With `ad5x.uboot=1` the rest of the start follows U-Boot too:
+
+- `S01ad5x-tryboot` leaves the flag on slot B: U-Boot's count covers the
+  whole start, kernel and userspace. A start-up that hangs is reset by the
+  watchdog: the kernel feeds it for 300 s at most until `S05ad5x-watchdog`
+  starts the feeder, and that script stops the feeder (no magic close)
+  when start-up hasn't finished 900 s after boot (`START_LIMIT` in
+  `/usr/lib/ad5x/watchdog.conf`; not while Klipper prints). The reset
+  comes 120 s later and U-Boot counts the start as unconfirmed.
+- `S00ad5x-kernel` never chainloads (U-Boot chose the kernel).
+- No Flashforge kernel is left in a slot once Kiln's SPL is in the first
+  MiB (whoever started the boot): `S99ad5x-update-recovery` puts the main
+  OS's own 6.6 (`/usr/lib/ad5x/kernel66/xImage`, the one running, or on
+  7.3 one not recorded as failed) into p1 (`ad5x-update
+  --install-recovery`) and p3 (`ad5x-update --kernel2`), header last, read
+  back; nothing ever puts kernel2's 5.10 back while Kiln's SPL is there.
+  U-Boot starts the recovery OS only from Kiln's 6.6 in p1 (patch 0027),
+  and Kiln's SPL alone (U-Boot proper missing or failing) starts 6.6
+  directly from the flagged slot with the stock command line: no
+  `ad5x.uboot=1`, so `S01ad5x-tryboot`'s try-once guards that start, as on
+  the chain. With Flashforge's SPL p1 gets kernel2's kernel as before,
+  never Kiln's 6.6 or Kiln's U-Boot. In the recovery OS an update that
+  brings a kernel, and `ad5x-restore` of any kernel but Kiln's 6.6 into a
+  slot, are refused under Kiln's SPL; Flashforge's first MiB goes back
+  only over Flashforge's 5.10 in both slots (`ad5x-restore ... kernel=
+  kernel2= boot`, or `tools/bench/ad5x-spl-flash --restore`, which puts
+  the saved `/data/ad5x/stock/kernel.img` back first).
+- The recovery OS's "Boot main OS" and a finished install zero U-Boot's
+  state and records and drop S00's `failed` files (`rc_uboot_fresh`), so
+  the main OS gets fresh tries: U-Boot has no other kernel to fall back
+  to, and the kernel release string is the same in every build.
+- Going back to stock is the recovery OS's Return to Flashforge firmware
+  (`ad5x-return-stock`, `docs/recovery-os.md`): Kiln's U-Boot out of
+  0xA400 first, then stock's root and 5.10 into slot B, the flag last.
+  Kiln's SPL stays and starts stock from slot B like Flashforge's SPL;
+  with this printer's saved `boot.img` Flashforge's SPL can go back too.
+  `ad5x-restore-stock` (both systems) leads there.
+
+## Stock on Kiln's SPL (after Return to Flashforge firmware)
+
+Kiln's SPL in the first MiB, no U-Boot at 0xA400 (zeros, or Flashforge's
+unused U-Boot bytes from `boot.img`), U-Boot's `ota` sectors zeroed, slot B
+Flashforge's 5.10 and stock root, slot A Kiln's recovery OS on Kiln's 6.6.
+Kiln's SPL boots the flagged slot with the stock command line, as
+Flashforge's SPL does: stock from slot B (`ota:kernel2`); with the flag on
+slot A the recovery OS. Unlike Flashforge's SPL it checks the kernel's CRCs
+and tries the other slot when the flagged one doesn't start
+(`u-boot/README.md`, "Tries"). Flashforge's 5.10 in a slot is fine here:
+the rule "no Flashforge kernel in a slot under Kiln's boot loader" holds
+only while Kiln's U-Boot is installed. Stock's own updater writes the slot
+the flag doesn't name (slot A) and flips the flag; Kiln's SPL starts its
+5.10 there as well. The Kiln OS install stick works again (the install
+state is `returned`); it installs Kiln OS as on any stock printer, with
+Kiln's SPL left in place (no U-Boot until a loader install adds it).

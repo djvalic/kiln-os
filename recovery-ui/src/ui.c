@@ -227,7 +227,8 @@ static void page_home(void);
 static void page_update(void);
 static void page_backup(void);
 static void page_restore(void);
-static void page_stock(void);
+static void page_return(void);
+static void page_bootloader(void);
 static void page_network(void);
 static void page_logs(void);
 static void page_power(void);
@@ -441,7 +442,7 @@ static void confirm(const char *title, const char *text, const char *ok, bool da
 /* ------------------------------------------------------------ job launch */
 
 typedef enum { JK_CMD, JK_INSTALL, JK_WEB } job_kind;
-typedef enum { AFTER_NONE, AFTER_BOOT_MAIN, AFTER_REBOOT } job_after;
+typedef enum { AFTER_NONE, AFTER_BOOT_MAIN, AFTER_REBOOT, AFTER_POWEROFF } job_after;
 
 static struct {
 	job_kind kind;
@@ -502,7 +503,7 @@ static struct {
 	capture *cap;
 	bool cap_slots, want_slots;
 	char text[4096];
-	char slots[512];	/* slot_a= / slot_b= lines from the last --slots */
+	char slots[512];	/* slot_a=, slot_b=, bootloader= lines from the last --slots */
 	unsigned seq;
 	time_t last;
 } stc;
@@ -528,7 +529,7 @@ static void status_poll(void)
 		if (stc.cap_slots) {
 			stc.slots[0] = 0;
 			for (const char *l = stc.text; l && *l; l = strchr(l, '\n') ? strchr(l, '\n') + 1 : NULL)
-				if (!strncmp(l, "slot_", 5)) {
+				if (!strncmp(l, "slot_", 5) || !strncmp(l, "bootloader", 10)) {
 					size_t n = strlen(stc.slots);
 					snprintf(stc.slots + n, sizeof(stc.slots) - n, "%.*s\n",
 						 (int)strcspn(l, "\n"), l);
@@ -606,9 +607,34 @@ static const char *main_os_text(char *buf, size_t cap)
 	return buf;
 }
 
+/* A Return to Flashforge firmware started and not finished (ad5x-status
+ * return_stock=unfinished): slot B may hold part of a system, so Boot main
+ * OS and Install are locked; the dialog leads to the return page */
+static bool return_unfinished(void)
+{
+	char v[24];
+	return kv("return_stock", v, sizeof(v)) && !strcmp(v, "unfinished");
+}
+
+static void open_return(void)
+{
+	go(page_return);
+}
+
+static bool return_lock(void)
+{
+	if (!return_unfinished())
+		return false;
+	confirm(tr(RS_RS_LOCKED_Q), tr(RS_RS_LOCKED_TEXT), tr_sym(LV_SYMBOL_WARNING, RS_RS_OPEN),
+		true, NULL, open_return);
+	return true;
+}
+
 static void on_boot_main(lv_event_t *e)
 {
 	(void)e;
+	if (return_lock())
+		return;
 	char what[96];
 	main_os_text(what, sizeof(what));
 	if (strcmp(what, "empty") && strcmp(what, "not found") && strcmp(what, "unknown"))
@@ -625,6 +651,29 @@ static void home_refresh(void)
 	if (hm.seen == stc.seq + 1)
 		return;
 	hm.seen = stc.seq + 1;
+	/* Once per start: Return to Flashforge firmware asked for (main OS,
+	 * USB stick marker) or left unfinished opens its page; it writes
+	 * nothing without a tap there */
+	static bool return_shown;
+	char ro[24];
+	if (!return_shown && stc.seq > 0 && !job_running() &&
+	    ((kv("return_stock_open", ro, sizeof(ro)) && ro[0]) || return_unfinished())) {
+		return_shown = true;
+		slog("opening Return to Flashforge firmware (%s)", ro[0] ? ro : "unfinished");
+		go(page_return);
+		return;
+	}
+	/* Once per start: the first start after Kiln's boot loader was
+	 * installed (its result) or an unfinished install opens its page
+	 * (ad5x-bootloader-install --verify-start) */
+	static bool bl_shown;
+	char bo[16];
+	if (!bl_shown && stc.seq > 0 && !job_running() && kv("bootloader_open", bo, sizeof(bo))) {
+		bl_shown = true;
+		slog("opening Kiln's boot loader (%s)", bo);
+		go(page_bootloader);
+		return;
+	}
 	char ip[64], ifc[16], mode[16], ssh[16], buf[300], flag[32], slotb[96], v[64];
 
 	if (cur_ip(ip, sizeof(ip), ifc, sizeof(ifc))) {
@@ -735,7 +784,7 @@ static void page_home(void)
 	tile(grid, LV_SYMBOL_DOWNLOAD, tr(RS_INSTALL_UPDATE), C_ACCENT, false, on_go, page_update);
 	tile(grid, LV_SYMBOL_SAVE, tr(RS_BACK_UP), C_ACCENT, false, on_go, page_backup);
 	tile(grid, LV_SYMBOL_REFRESH, tr(RS_RESTORE), C_WARN, false, on_go, page_restore);
-	tile(grid, LV_SYMBOL_WARNING, tr(RS_RESTORE_STOCK), C_DANGER, false, on_go, page_stock);
+	tile(grid, LV_SYMBOL_WARNING, tr(RS_RESTORE_STOCK), C_DANGER, false, on_go, page_return);
 	tile(grid, LV_SYMBOL_WIFI, tr(RS_NETWORK_SSH), C_ACCENT, false, on_go, page_network);
 	tile(grid, LV_SYMBOL_LIST, tr(RS_LOGS), C_MUTED, false, on_go, page_logs);
 	tile(grid, LV_SYMBOL_POWER, tr(RS_REBOOT_POWER), C_MUTED, false, on_go, page_power);
@@ -954,7 +1003,7 @@ static void install_now(void)
 static void on_install(lv_event_t *e)
 {
 	(void)e;
-	if (up.sel < 0 || up.sel >= up.n)
+	if (up.sel < 0 || up.sel >= up.n || return_lock())
 		return;
 	static char t1[400], t2[400];
 	snprintf(t1, sizeof(t1), tr(RS_INSTALL_Q_TEXT), up.f[up.sel].name);
@@ -1338,82 +1387,369 @@ static void page_restore(void)
 	cur_refresh = rs_refresh;
 }
 
-/* ------------------------------------------------------------ stock page */
+/* ------------------------------------------- return to Flashforge page */
 
+/* ad5x-return-stock --check runs in the background when the page opens (and
+ * after Check): its "source:", "target:", "spl_option:" and "result:" lines
+ * fill the page; Return to Flashforge is enabled only when the result is
+ * "ready" (or "ready to go on" after a stop: Continue). Check shows the
+ * whole check as a job. The return itself is a job that writes the eMMC
+ * ("don't switch off"); after it, Shut down. */
 static struct {
-	lv_obj_t *go, *dry, *note;
-	unsigned seen;
-} sk;
+	lv_obj_t *status, *files, *after, *spl, *go, *check, *save;
+	capture *cap;
+	char source[200], target[240], why[240];
+	bool spl_offer, ready, resume, done_already, checked;
+} rt;
 
-static void stock_run(bool dry)
+static void rt_free(lv_event_t *e)
 {
-	const char *v[] = { "DRY", dry ? "--dry-run" : "", NULL };
-	char *c = cmd_expand(CMD_RESTORE_STOCK, v);
-	/* ad5x-restore-stock points the flag at slot B itself: offer a reboot */
-	start_job_x(JK_CMD, dry ? tr(RS_STOCK_DRY_RUN) : tr(RS_RESTORING_STOCK),
-		    "/data/ad5x/stock -> slot B", c, dry, false, !dry,
-		    dry ? AFTER_NONE : AFTER_REBOOT);
+	(void)e;
+	capture_free(rt.cap);
+	rt.cap = NULL;
+}
+
+static bool rt_spl(void)
+{
+	return rt.spl && rt.spl_offer && lv_obj_has_state(rt.spl, LV_STATE_CHECKED);
+}
+
+static void rt_start_check(void)
+{
+	if (rt.cap || job_running())
+		return;
+	const char *v[] = { "SPL", rt_spl() ? "--flashforge-spl" : "", NULL };
+	char *c = cmd_expand(CMD_RETURN_CHECK, v);
+	slog("return to Flashforge: %s", c);
+	rt.cap = capture_start(c, 16384);
+	free(c);
+	rt.checked = false;
+	lv_label_set_text(rt.status, tr_sym(LV_SYMBOL_REFRESH, RS_RS_CHECKING));
+	lv_obj_set_style_text_color(rt.status, C_MUTED, 0);
+	enable(rt.go, false);
+	enable(rt.check, false);
+}
+
+/* VALUE of the last line "KEY: VALUE" in text */
+static bool rt_line(const char *text, const char *key, char *out, size_t cap)
+{
+	size_t kl = strlen(key);
+	bool found = false;
+	for (const char *l = text; l && *l; l = strchr(l, '\n') ? strchr(l, '\n') + 1 : NULL)
+		if (!strncmp(l, key, kl) && l[kl] == ':' && l[kl + 1] == ' ') {
+			snprintf(out, cap, "%.*s", (int)strcspn(l + kl + 2, "\n"), l + kl + 2);
+			found = true;
+		}
+	return found;
+}
+
+static void rt_parse(const char *t)
+{
+	char res[240] = "", v[16] = "";
+	rt.source[0] = rt.target[0] = rt.why[0] = 0;
+	rt_line(t, "source", rt.source, sizeof(rt.source));
+	rt_line(t, "target", rt.target, sizeof(rt.target));
+	rt.spl_offer = rt_line(t, "spl_option", v, sizeof(v)) && !strcmp(v, "yes");
+	rt_line(t, "result", res, sizeof(res));
+	rt.ready = !strncmp(res, "ready", 5);
+	rt.resume = !strncmp(res, "ready to go on", 14);
+	rt.done_already = !strncmp(res, "done", 4);
+	/* a refusal: its first FAIL line says why */
+	for (const char *l = t; l && *l; l = strchr(l, '\n') ? strchr(l, '\n') + 1 : NULL)
+		if (!strncmp(l, "  FAIL  ", 8)) {
+			snprintf(rt.why, sizeof(rt.why), "%.*s", (int)strcspn(l + 8, "\n"), l + 8);
+			break;
+		}
+	if (!rt.why[0] && !rt.ready && !rt.done_already)
+		snprintf(rt.why, sizeof(rt.why), "%s", res[0] ? res : "?");
+	rt.checked = true;
+}
+
+static void rt_show(void)
+{
+	char t[480];
+	if (rt.source[0])
+		iconed(t, sizeof(t), LV_SYMBOL_DRIVE, "  ", tr(RS_RS_FILES), rt.source);
+	else
+		iconed(t, sizeof(t), LV_SYMBOL_DRIVE, "  ", "%s", rt.checked ? tr(RS_RS_NO_FILES) : "");
+	lv_label_set_text(rt.files, t);
+	if (rt.target[0])
+		iconed(t, sizeof(t), LV_SYMBOL_RIGHT, "  ", tr(RS_RS_AFTER), rt.target);
+	else
+		t[0] = 0;
+	lv_label_set_text(rt.after, t);
+	show(rt.spl, rt.spl_offer && !rt.done_already);
+	if (!rt.checked)
+		return;
+	lv_color_t c = C_OK;
+	if (rt.done_already)
+		snprintf(t, sizeof(t), "%s", tr_sym(LV_SYMBOL_OK, RS_RS_DONE_ALREADY));
+	else if (rt.resume)
+		snprintf(t, sizeof(t), "%s", tr_sym(LV_SYMBOL_WARNING, RS_RS_RESUME)), c = C_WARN;
+	else if (rt.ready)
+		snprintf(t, sizeof(t), "%s", tr_sym(LV_SYMBOL_OK, RS_RS_READY));
+	else
+		iconed(t, sizeof(t), LV_SYMBOL_CLOSE, "  ", tr(RS_RS_REFUSED), rt.why), c = C_WARN;
+	lv_label_set_text(rt.status, t);
+	lv_obj_set_style_text_color(rt.status, c, 0);
+	lv_label_set_text(lv_obj_get_child(rt.go, 0),
+			  tr_sym(rt.resume ? LV_SYMBOL_PLAY : LV_SYMBOL_WARNING,
+				 rt.resume ? RS_RS_CONTINUE : RS_RS_GO));
+	enable(rt.go, rt.ready);
+	enable(rt.check, true);
+}
+
+static void rt_refresh(void)
+{
+	if (rt.cap && capture_done(rt.cap)) {
+		const char *t = capture_text(rt.cap);
+		rt_parse(t ? t : "");
+		capture_free(rt.cap);
+		rt.cap = NULL;
+		rt_show();
+	}
+}
+
+static void return_now(void)
+{
+	const char *v[] = { "SPL", rt_spl() ? "--flashforge-spl" : "", NULL };
+	char *c = cmd_expand(CMD_RETURN_STOCK, v);
+	start_job_x(JK_CMD, tr(RS_RS_RUNNING), rt.source, c, false, false, true, AFTER_POWEROFF);
 	free(c);
 }
 
-static void stock_now(void)
-{
-	stock_run(false);
-}
-
-static void on_stock_dry(lv_event_t *e)
+static void on_rt_go(lv_event_t *e)
 {
 	(void)e;
-	stock_run(true);
-}
-
-static void on_stock(lv_event_t *e)
-{
-	(void)e;
-	confirm(tr(RS_RESTORE_STOCK_Q),
-		tr(RS_STOCK_Q_TEXT), tr_sym(LV_SYMBOL_WARNING, RS_RESTORE_STOCK), true,
-		tr(RS_STOCK_Q_TEXT2), stock_now);
-}
-
-static void stock_refresh(void)
-{
-	if (sk.seen == stc.seq + 1)
+	if (!rt.ready)
 		return;
-	sk.seen = stc.seq + 1;
-	char v[16];
-	bool known = kv("stock_saved", v, sizeof(v));
-	bool saved = !known || !strcmp(v, "yes");
-	enable(sk.go, saved);
-	enable(sk.dry, saved);
-	lv_label_set_text(sk.note, !known ? "" : saved
-			  ? tr_sym(LV_SYMBOL_OK, RS_STOCK_SAVED_NOTE)
-			  : tr_sym(LV_SYMBOL_CLOSE, RS_STOCK_NONE_NOTE));
-	lv_obj_set_style_text_color(sk.note, saved ? C_OK : C_WARN, 0);
+	if (rt.resume) {	/* asked before; finish it */
+		return_now();
+		return;
+	}
+	confirm(tr(RS_RS_Q), tr(RS_RS_Q_TEXT), tr_sym(LV_SYMBOL_WARNING, RS_RS_GO), true,
+		tr(RS_RS_Q_TEXT2), return_now);
 }
 
-static void page_stock(void)
+static void on_rt_check(lv_event_t *e)
 {
-	memset(&sk, 0, sizeof(sk));
-	lv_obj_t *body = page_frame(tr(RS_RESTORE_STOCK_FIRMWARE), true);
+	(void)e;
+	const char *v[] = { "SPL", rt_spl() ? "--flashforge-spl" : "", NULL };
+	char *c = cmd_expand(CMD_RETURN_CHECK, v);
+	start_job(JK_CMD, tr(RS_RS_CHECKING_TITLE), "", c, true, false);
+	free(c);
+}
+
+static void on_rt_save(lv_event_t *e)
+{
+	(void)e;
+	char *c = cmd_expand(CMD_STOCK_COPY_USB, NULL);
+	start_job(JK_CMD, tr(RS_RS_SAVING), "", c, true, false);
+	free(c);
+}
+
+static void on_rt_spl(lv_event_t *e)
+{
+	(void)e;
+	rt_start_check();
+}
+
+static void page_return(void)
+{
+	capture_free(rt.cap);
+	memset(&rt, 0, sizeof(rt));
+	lv_obj_t *body = page_frame(tr(RS_RS_TITLE), true);
 	lv_obj_t *c = card(body);
 	lv_obj_set_width(c, lv_pct(100));
 	lv_obj_set_flex_grow(c, 1);
 	lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
-	lv_obj_set_style_pad_all(c, 18, 0);
-	lv_obj_set_style_pad_row(c, 12, 0);
-	label(c, tr_sym(LV_SYMBOL_WARNING, RS_STOCK_BACK_TITLE), F24B, C_WARN);
-	wrap_label(c, tr(RS_STOCK_TEXT), F20, C_TEXT);
-	sk.note = wrap_label(c, "", F20, C_MUTED);
-	wrap_label(c, tr(RS_STOCK_BACKUP_FIRST), F16, C_MUTED);
+	lv_obj_set_style_pad_all(c, 16, 0);
+	lv_obj_set_style_pad_row(c, 8, 0);
+	lv_obj_add_event_cb(c, rt_free, LV_EVENT_DELETE, NULL);
+	wrap_label(c, tr(RS_RS_TEXT), F20, C_TEXT);
+	rt.files = wrap_label(c, "", F16, C_MUTED);
+	rt.after = wrap_label(c, "", F16, C_MUTED);
+	rt.status = wrap_label(c, "", F20B, C_MUTED);
+	rt.spl = lv_checkbox_create(c);
+	lv_checkbox_set_text(rt.spl, tr(RS_RS_SPL_BOX));
+	lv_obj_set_style_text_font(rt.spl, F20, 0);
+	lv_obj_set_style_pad_column(rt.spl, 12, 0);
+	lv_obj_set_style_width(rt.spl, 30, LV_PART_INDICATOR);
+	lv_obj_set_style_height(rt.spl, 30, LV_PART_INDICATOR);
+	lv_obj_set_ext_click_area(rt.spl, 8);
+	lv_obj_add_event_cb(rt.spl, on_rt_spl, LV_EVENT_VALUE_CHANGED, NULL);
+	show(rt.spl, false);
 	lv_obj_t *row = box(body, LV_FLEX_FLOW_ROW);
 	lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
 	lv_obj_set_style_pad_column(row, 12, 0);
-	sk.dry = button(row, LV_SYMBOL_EYE_OPEN, tr(RS_CHECK), 0, on_stock_dry, NULL);
-	lv_obj_set_width(sk.dry, 200);
-	sk.go = button(row, LV_SYMBOL_WARNING, tr(RS_RESTORE_STOCK_FW_BTN), 2, on_stock,
-		       NULL);
-	lv_obj_set_flex_grow(sk.go, 1);
-	cur_refresh = stock_refresh;
+	rt.check = button(row, LV_SYMBOL_EYE_OPEN, tr(RS_CHECK), 0, on_rt_check, NULL);
+	lv_obj_set_width(rt.check, 170);
+	rt.save = button(row, LV_SYMBOL_USB, tr(RS_RS_SAVE_USB), 0, on_rt_save, NULL);
+	lv_obj_set_width(rt.save, 250);
+	rt.go = button(row, LV_SYMBOL_WARNING, tr(RS_RS_GO), 2, on_rt_go, NULL);
+	lv_obj_set_flex_grow(rt.go, 1);
+	enable(rt.go, false);
+	rt_start_check();
+	cur_refresh = rt_refresh;
+}
+
+/* ------------------------------------------------- Kiln's boot loader */
+
+/* "Install Kiln's boot loader (experimental)": ad5x-bootloader-install
+ * --check runs in the background when the page opens (and after Check):
+ * its "board:" and "result:" lines and its first FAIL line fill the page.
+ * Install is enabled only when the result is "ready" (Continue after a
+ * stop); it asks twice, the second step armed after 3 s, with the risk
+ * spelled out, then runs the install as a job ("don't switch off") whose
+ * after-button restarts the printer: Kiln's SPL and U-Boot start this
+ * recovery OS again, which records the start (--verify-start) and opens
+ * this page with the result. Offered (Reboot / power) only when
+ * ad5x-status --slots says bootloader_offer=yes (the board on the
+ * allowlist, no Kiln U-Boot there yet) or an install is unfinished. The
+ * expert override (--unsupported-board, SSH only) is never run from here. */
+static struct {
+	lv_obj_t *status, *board, *go, *check;
+	capture *cap;
+	char why[240];
+	bool known, ready, resume, done_already, checked;
+} bl;
+
+static void bl_free(lv_event_t *e)
+{
+	(void)e;
+	capture_free(bl.cap);
+	bl.cap = NULL;
+}
+
+static void bl_start_check(void)
+{
+	if (bl.cap || job_running())
+		return;
+	char *c = cmd_expand(CMD_BOOTLOADER_CHECK, NULL);
+	slog("Kiln's boot loader: %s", c);
+	bl.cap = capture_start(c, 16384);
+	free(c);
+	bl.checked = false;
+	lv_label_set_text(bl.status, tr_sym(LV_SYMBOL_REFRESH, RS_BL_CHECKING));
+	lv_obj_set_style_text_color(bl.status, C_MUTED, 0);
+	enable(bl.go, false);
+	enable(bl.check, false);
+}
+
+static void bl_parse(const char *t)
+{
+	char res[240] = "", b[32] = "";
+	bl.why[0] = 0;
+	rt_line(t, "result", res, sizeof(res));
+	bl.known = rt_line(t, "board", b, sizeof(b)) && !strcmp(b, "known");
+	bl.ready = !strncmp(res, "ready", 5);
+	bl.resume = !strncmp(res, "ready to go on", 14);
+	bl.done_already = !strncmp(res, "done", 4);
+	for (const char *l = t; l && *l; l = strchr(l, '\n') ? strchr(l, '\n') + 1 : NULL)
+		if (!strncmp(l, "  FAIL  ", 8)) {
+			snprintf(bl.why, sizeof(bl.why), "%.*s", (int)strcspn(l + 8, "\n"), l + 8);
+			break;
+		}
+	if (!bl.why[0] && !bl.ready && !bl.done_already)
+		snprintf(bl.why, sizeof(bl.why), "%s", res[0] ? res : "?");
+	bl.checked = true;
+}
+
+static void bl_show(void)
+{
+	if (!bl.checked)
+		return;
+	char t[480], st[24];
+	lv_label_set_text(bl.board, tr(bl.known ? RS_BL_BOARD_KNOWN : RS_BL_BOARD_UNKNOWN));
+	lv_color_t c = C_OK;
+	if (bl.done_already) {
+		kv("bootloader_install", st, sizeof(st));
+		if (!strcmp(st, "verified"))
+			snprintf(t, sizeof(t), "%s", tr_sym(LV_SYMBOL_OK, RS_BL_VERIFIED));
+		else if (!strcmp(st, "unverified"))
+			snprintf(t, sizeof(t), "%s", tr_sym(LV_SYMBOL_WARNING, RS_BL_UNVERIFIED)), c = C_WARN;
+		else
+			snprintf(t, sizeof(t), "%s", tr_sym(LV_SYMBOL_OK, RS_BL_INSTALLED));
+	} else if (bl.resume) {
+		snprintf(t, sizeof(t), "%s", tr_sym(LV_SYMBOL_WARNING, RS_BL_RESUME)), c = C_WARN;
+	} else if (bl.ready) {
+		snprintf(t, sizeof(t), "%s", tr_sym(LV_SYMBOL_OK, RS_BL_READY));
+	} else {
+		iconed(t, sizeof(t), LV_SYMBOL_CLOSE, "  ", tr(RS_RS_REFUSED), bl.why), c = C_WARN;
+	}
+	lv_label_set_text(bl.status, t);
+	lv_obj_set_style_text_color(bl.status, c, 0);
+	lv_label_set_text(lv_obj_get_child(bl.go, 0),
+			  tr_sym(bl.resume ? LV_SYMBOL_PLAY : LV_SYMBOL_WARNING,
+				 bl.resume ? RS_RS_CONTINUE : RS_BL_GO));
+	enable(bl.go, bl.ready);
+	enable(bl.check, true);
+}
+
+static void bl_refresh(void)
+{
+	if (bl.cap && capture_done(bl.cap)) {
+		const char *t = capture_text(bl.cap);
+		bl_parse(t ? t : "");
+		capture_free(bl.cap);
+		bl.cap = NULL;
+		bl_show();
+	}
+}
+
+static void bl_install_now(void)
+{
+	char *c = cmd_expand(CMD_BOOTLOADER_INSTALL, NULL);
+	start_job_x(JK_CMD, tr(RS_BL_RUNNING), "", c, false, false, true, AFTER_REBOOT);
+	free(c);
+}
+
+static void on_bl_go(lv_event_t *e)
+{
+	(void)e;
+	if (!bl.ready)
+		return;
+	if (bl.resume) {	/* asked before; finish it */
+		bl_install_now();
+		return;
+	}
+	confirm(tr(RS_BL_Q), tr(RS_BL_Q_TEXT), tr_sym(LV_SYMBOL_WARNING, RS_BL_GO), true,
+		tr(RS_BL_Q_TEXT2), bl_install_now);
+}
+
+static void on_bl_check(lv_event_t *e)
+{
+	(void)e;
+	char *c = cmd_expand(CMD_BOOTLOADER_CHECK, NULL);
+	start_job(JK_CMD, tr(RS_BL_CHECKING_TITLE), "", c, true, false);
+	free(c);
+}
+
+static void page_bootloader(void)
+{
+	capture_free(bl.cap);
+	memset(&bl, 0, sizeof(bl));
+	lv_obj_t *body = page_frame(tr(RS_BL_TITLE), true);
+	lv_obj_t *c = card(body);
+	lv_obj_set_width(c, lv_pct(100));
+	lv_obj_set_flex_grow(c, 1);
+	lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
+	lv_obj_set_style_pad_all(c, 16, 0);
+	lv_obj_set_style_pad_row(c, 8, 0);
+	lv_obj_add_event_cb(c, bl_free, LV_EVENT_DELETE, NULL);
+	wrap_label(c, tr(RS_BL_TEXT), F20, C_TEXT);
+	bl.board = wrap_label(c, "", F16, C_MUTED);
+	bl.status = wrap_label(c, "", F20B, C_MUTED);
+	lv_obj_t *row = box(body, LV_FLEX_FLOW_ROW);
+	lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
+	lv_obj_set_style_pad_column(row, 12, 0);
+	bl.check = button(row, LV_SYMBOL_EYE_OPEN, tr(RS_CHECK), 0, on_bl_check, NULL);
+	lv_obj_set_width(bl.check, 170);
+	bl.go = button(row, LV_SYMBOL_WARNING, tr(RS_BL_GO), 2, on_bl_go, NULL);
+	lv_obj_set_flex_grow(bl.go, 1);
+	enable(bl.go, false);
+	bl_start_check();
+	cur_refresh = bl_refresh;
 }
 
 /* ---------------------------------------------------------- network page */
@@ -1732,6 +2068,16 @@ static void page_power(void)
 	label(c, tr_sym(LV_SYMBOL_POWER, RS_POWER), F24B, C_TEXT);
 	wrap_label(c, tr(RS_POWER_TEXT), F20, C_TEXT);
 	wrap_label(c, tr(RS_POWER_TEXT2), F20, C_MUTED);
+	/* Kiln's own boot loader: offered on a board on the allowlist without
+	 * it while slot B holds Kiln OS, or to finish an install that stopped
+	 * (ad5x-status --slots) */
+	char v[16], sb[96];
+	if ((kv("bootloader_offer", v, sizeof(v)) && !strcmp(v, "yes") &&
+	     kv("slot_b", sb, sizeof(sb)) && !strncmp(sb, "ad5x ", 5)) ||
+	    (kv("bootloader_install", v, sizeof(v)) && !strcmp(v, "started"))) {
+		lv_obj_t *b = button(c, LV_SYMBOL_DRIVE, tr(RS_BL_ENTRY), 0, on_go, page_bootloader);
+		lv_obj_set_width(b, lv_pct(100));
+	}
 	lv_obj_t *row = box(body, LV_FLEX_FLOW_ROW);
 	lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
 	lv_obj_set_style_pad_column(row, 12, 0);
@@ -1750,18 +2096,22 @@ static struct {
 	lv_obj_t *banner;
 	char *buf;
 	bool ended;
-	bool after_reboot;	/* the after-button reboots instead of ad5x-boot-main */
+	job_after after;	/* what the after-button does */
 } jp;
 
 #define JOB_VIEW_CAP 8192
 
 static void reboot_now(void);
+static void poweroff_now(void);
 
 static void on_after(lv_event_t *e)
 {
-	if (jp.after_reboot)
+	if (jp.after == AFTER_REBOOT)
 		confirm(tr(RS_REBOOT_Q), tr(RS_REBOOT_INTO_FLAG), tr_sym(LV_SYMBOL_REFRESH, RS_REBOOT),
 			false, NULL, reboot_now);
+	else if (jp.after == AFTER_POWEROFF)
+		confirm(tr(RS_SHUTDOWN_Q), tr(RS_SHUTDOWN_TEXT), tr_sym(LV_SYMBOL_POWER, RS_SHUT_DOWN),
+			false, NULL, poweroff_now);
 	else
 		on_boot_main(e);
 }
@@ -1909,11 +2259,15 @@ static void job_refresh(void)
 	show(jp.done, true);
 	if (ok && (jb.after == AFTER_BOOT_MAIN || (jb.kind == JK_WEB))) {
 		lv_label_set_text(lv_obj_get_child(jp.boot, 0), tr_sym(LV_SYMBOL_PLAY, RS_BOOT_MAIN_OS));
-		jp.after_reboot = false;
+		jp.after = AFTER_BOOT_MAIN;
 		show(jp.boot, true);
 	} else if (ok && jb.after == AFTER_REBOOT) {
 		lv_label_set_text(lv_obj_get_child(jp.boot, 0), tr_sym(LV_SYMBOL_REFRESH, RS_REBOOT));
-		jp.after_reboot = true;
+		jp.after = AFTER_REBOOT;
+		show(jp.boot, true);
+	} else if (ok && jb.after == AFTER_POWEROFF) {
+		lv_label_set_text(lv_obj_get_child(jp.boot, 0), tr_sym(LV_SYMBOL_POWER, RS_SHUT_DOWN));
+		jp.after = AFTER_POWEROFF;
 		show(jp.boot, true);
 	}
 	enable(back_btn, true);
@@ -2122,13 +2476,23 @@ int ui_run_shots(void (*shot)(const char *name))
 	wait_job();
 	shot("14-restore-failed");
 
-	go(page_stock);
+	go(page_return);
+	for (int i = 0; i < 100 && rt.cap; i++)
+		settle(20);
 	settle(200);
-	shot("15-stock");
-	on_stock(NULL);
+	shot("15-return");
+	on_rt_go(NULL);
 	settle(100);
-	shot("16-stock-confirm1");
+	shot("16-return-confirm1");
+	click(dlg.ok_btn);
+	settle(2400);
+	shot("16b-return-confirm2");
 	dlg_close();
+	return_now();
+	settle(1500);
+	shot("16c-return-running");
+	wait_job();
+	shot("16d-return-done");
 
 	go(page_network);
 	settle(600);
@@ -2150,12 +2514,28 @@ int ui_run_shots(void (*shot)(const char *name))
 	shot("21-reboot-confirm");
 	dlg_close();
 
+	go(page_bootloader);
+	for (int i = 0; i < 100 && bl.cap; i++)
+		settle(20);
+	settle(200);
+	shot("21b-bootloader");
+	on_bl_go(NULL);
+	settle(100);
+	shot("21c-bootloader-confirm1");
+	click(dlg.ok_btn);
+	settle(2400);
+	shot("21d-bootloader-confirm2");
+	dlg_close();
+	bl_install_now();
+	wait_job();
+	shot("21e-bootloader-done");
+
 	/* A browser upload arriving while on the home screen, with a dialog
 	 * open (its second stage, arm timer running): the job page replaces
 	 * it and gets the taps (issue #47) */
 	go(page_home);
 	settle(200);
-	on_stock(NULL);
+	confirm(tr(RS_RS_Q), tr(RS_RS_Q_TEXT), tr(RS_RS_GO), true, tr(RS_RS_Q_TEXT2), return_now);
 	settle(100);
 	click(dlg.ok_btn);
 	swu_inject(SWU_START, SWU_SRC_WEBSERVER, 0, 0, 0, "", NULL);

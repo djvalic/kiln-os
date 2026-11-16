@@ -1,0 +1,570 @@
+From 87e8fdf2cca6990b8ddb2e14674088fffea27606 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sat, 14 Nov 2026 18:00:07 -0700
+Subject: [PATCH 10/10] mips: jz47xx: x2600: SPL clock and DDR3 setup
+
+Port the clock and DDR3 setup of Ingenic's X2600 boot loader (U-Boot
+2013.07 xburst2: pllsetting.c, clk.c, ddr_innophy.c, ddr_innophy_x2600.c,
+the automatic-training path), which Flashforge's SPL for the Adventurer
+5X is built from: its PHY PLL code matches it instruction for
+instruction. The values are that SPL's: the PLL settings it reports
+(APLL 1152, MPLL 1800, EPLL 300 MHz, CPCCR 0x9a0b5410) and its
+X2600H-DDR3L parameter set (DDRC_CFG 0x82006a35, as read back from a
+running unit), DDR at 900 MHz from the MPLL.
+
+Skipped when the DDR is already running (clock on, DFI initialized), as
+when the SPL is chainloaded from Linux for tests. Not yet tested from the
+boot ROM. Also pass the lpj value of this SPL build (11476992).
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ arch/mips/mach-jz47xx/x2600/Makefile |   1 +
+ arch/mips/mach-jz47xx/x2600/sdram.c  | 488 +++++++++++++++++++++++++++
+ arch/mips/mach-jz47xx/x2600/x2600.c  |  17 +-
+ 3 files changed, 505 insertions(+), 1 deletion(-)
+ create mode 100644 arch/mips/mach-jz47xx/x2600/sdram.c
+
+diff --git a/arch/mips/mach-jz47xx/x2600/Makefile b/arch/mips/mach-jz47xx/x2600/Makefile
+index cdafa0b7..3853d0d2 100644
+--- a/arch/mips/mach-jz47xx/x2600/Makefile
++++ b/arch/mips/mach-jz47xx/x2600/Makefile
+@@ -1,3 +1,4 @@
+ # SPDX-License-Identifier: GPL-2.0+
+ 
+ obj-y := x2600.o
++obj-$(CONFIG_XPL_BUILD) += sdram.o
+diff --git a/arch/mips/mach-jz47xx/x2600/sdram.c b/arch/mips/mach-jz47xx/x2600/sdram.c
+new file mode 100644
+index 00000000..ae0ed18e
+--- /dev/null
++++ b/arch/mips/mach-jz47xx/x2600/sdram.c
+@@ -0,0 +1,488 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Ingenic X2600 SPL: clocks and DDR3 initialization.
++ *
++ * Follows Ingenic's X2600 boot loader (U-Boot 2013.07, xburst2:
++ * x2600/pllsetting.c, x2600/clk.c, ddr_innophy.c, ddr_innophy_x2600.c,
++ * the DDR3 path with the PHY's automatic training), which Flashforge's SPL
++ * for the Adventurer 5X is built from. The register values are that SPL's:
++ * the PLL settings it reports and its "X2600H-DDR3L" parameter set.
++ *
++ * Copyright (c) 2017-2025 Ingenic Semiconductor Co., Ltd.
++ */
++
++#include <hang.h>
++#include <stdio.h>
++#include <asm/io.h>
++#include <linux/bitops.h>
++#include <linux/delay.h>
++#include <linux/types.h>
++
++/* CPM */
++#define CPM			((void __iomem *)0xb0000000)
++#define CPM_CPCCR		0x00
++#define CPM_CPAPCR		0x10
++#define CPM_CPMPCR		0x14
++#define CPM_CPEPCR		0x18
++#define CPM_CLKGR0		0x20
++#define CPM_CLKGR1		0x28
++#define CPM_DDRCDR		0x2c
++#define CPM_MACPHYCDR		0x54
++#define CPM_SSICDR		0x5c
++#define CPM_LPCDR		0x64
++#define CPM_PWMCDR		0x6c
++#define CPM_SFCCDR		0x74
++#define CPM_CPCSR		0xd4
++#define CLKGR0_EFUSE		BIT(0)
++#define CLKGR1_DDR		BIT(23)
++#define PLL_EN			BIT(0)
++#define PLL_ON			BIT(3)
++/* CDR registers: parent 31:30, change enable 29, busy 28, stop 27 */
++#define CDR_CE			BIT(29)
++#define CDR_BUSY		BIT(28)
++#define CDR_STOP		BIT(27)
++
++/* DDR controller, its APB registers and the Innosilicon PHY */
++#define DDRC			((void __iomem *)0xb34f0000)
++#define DDRC_APB		((void __iomem *)0xb3012000)
++#define DDRP			((void __iomem *)0xb3011000)
++#define DDRC_CFG		0x08
++#define DDRC_CTRL		0x10
++#define DDRC_LMR		0x18
++#define DDRC_AUTOSR_EN		0x28
++#define DDRC_AUTOSR_CNT		0x30
++#define DDRC_REFCNT		0x38
++#define DDRC_TIMING(n)		(0x40 + 8 * ((n) - 1))
++#define DDRC_MMAP0		0x78
++#define DDRC_MMAP1		0x80
++#define DDRC_DWCFG		0x00	/* APB */
++#define DDRC_DWSTATUS		0x04	/* APB */
++#define DDRC_REMAP(n)		(0x08 + 4 * ((n) - 1))	/* APB */
++#define DDRC_CCHC0		0x24	/* APB */
++#define DDRC_CCHC1		0x28	/* APB */
++#define DDRC_CGUC0		0x68	/* APB */
++#define DDRC_CGUC1		0x6c	/* APB */
++#define DDRC_CTRL_CKE		BIT(1)
++#define DDRC_CTRL_PHY_RST	BIT(20)
++#define DDRC_CTRL_DFI_RST_N	BIT(23)	/* set: dfi_reset_n held low */
++#define DDRC_DWCFG_DFI_INIT	BIT(3)
++#define DDRC_DWCFG_PORT_OB_EN	BIT(5)
++#define DDRC_DWSTATUS_DFI_DONE	BIT(0)
++#define DDRC_LMR_START		BIT(0)
++#define DDRC_LMR_CMD_LMR	(2 << 6)
++#define DDRC_LMR_CMD_ZQCL_CS0	(3 << 6)
++#define DDRC_LMR_BA_BIT		9
++#define DDRC_LMR_ADDR_BIT	12
++
++#define DDRP_MEM_CFG		0x004
++#define DDRP_TRAINING_CTRL	0x008
++#define DDRP_CL			0x014
++#define DDRP_AL			0x018
++#define DDRP_CWL		0x01c
++#define DDRP_INVDELAYSEL_DQCMD	0x020
++#define DDRP_DQ_WIDTH_H		0x030
++#define DDRP_DQ_WIDTH		0x034
++#define DDRP_PLL_FBDIV		0x140
++#define DDRP_PLL_FBDIV_H	0x144
++#define DDRP_PLL_PDIV		0x148
++#define DDRP_PLL_CTRL		0x14c
++#define DDRP_PLL_LOCK		0x180
++#define DDRP_CALIB_DONE		0x184
++#define DDRP_CALIB_ERR		0x1a4
++#define DDRP_PD_DRV_CMD		0x4c0
++#define DDRP_PU_DRV_CMD		0x4c4
++#define DDRP_PD_DRV_CK		0x4c8
++#define DDRP_PU_DRV_CK		0x4cc
++#define DDRP_PD_ODT_DQ7_0	0x500
++#define DDRP_PU_ODT_DQ7_0	0x504
++#define DDRP_PD_DRV_DQ7_0	0x508
++#define DDRP_PU_DRV_DQ7_0	0x50c
++#define DDRP_PD_ODT_DQ15_8	0x540
++#define DDRP_PU_ODT_DQ15_8	0x544
++#define DDRP_PD_DRV_DQ15_8	0x548
++#define DDRP_PU_DRV_DQ15_8	0x54c
++#define DDRP_TRAINING_DSACE_START BIT(0)
++#define DDRP_TRAINING_DSCSE_BP	BIT(1)
++
++/* eFuse: TRIM1 can force chip ODT and auto self-refresh off */
++#define EFUSE			((void __iomem *)0xb3480000)
++#define EFUSE_CTRL		0x00
++#define EFUSE_CFG		0x04
++#define EFUSE_STATE		0x08
++#define EFUSE_DATA0		0x0c
++#define EFUSE_TRIM1_ADDR	0x61
++
++/*
++ * The DDR parameters, struct ddr_reg_value of Ingenic's X2600 boot loader,
++ * as Flashforge's SPL carries them for the X2600H ("X2600H-DDR3L").
++ */
++struct x2600_ddr_params {
++	char name[32];
++	u32 id, type, freq;
++	u32 ddrc_cfg, ddrc_ctrl, ddrc_dlmr, ddrc_ddlp;
++	u32 ddrc_mmap0, ddrc_mmap1, ddrc_refcnt;
++	u32 ddrc_timing[5];
++	u32 ddrc_autosr_cnt, ddrc_autosr_en, ddrc_hregpro, ddrc_pregpro;
++	u32 ddrc_cguc0, ddrc_cguc1;
++	u32 ddrp_memcfg, ddrp_cl, ddrp_cwl;
++	u32 mr0, mr1, mr2, mr3, mr10, mr11, mr63;
++	u32 chip0_size, chip1_size;
++	u32 remap[6];
++	/* PHY drive and ODT; per-bit deskew */
++	u8 use_drvodt;
++	u8 pu_drv_cmd, pd_drv_cmd, pu_drv_ck, pd_drv_ck;
++	u8 pu_drv_dq7_0, pd_drv_dq7_0, pu_drv_dq15_8, pd_drv_dq15_8;
++	u8 pu_odt_dq7_0, pd_odt_dq7_0, pu_odt_dq15_8, pd_odt_dq15_8;
++	u8 use_deskew;
++	u8 deskew_cmd;
++	u8 rx_dm0, tx_dm0, rx_dq7_0, tx_dq7_0, rx_dqs0, tx_dqs0;
++	u8 rx_dm1, tx_dm1, rx_dq15_8, tx_dq15_8, rx_dqs1, tx_dqs1;
++} __packed;
++
++#define X2600_DDR3		0	/* this table's type for DDR3 */
++
++static struct x2600_ddr_params ddr = {
++	.name		= "X2600H-DDR3L",
++	.id		= 0x84,
++	.type		= X2600_DDR3,
++	.freq		= 900000000,
++	.ddrc_cfg	= 0x82006a35,
++	.ddrc_ctrl	= 0x00003092,
++	.ddrc_mmap0	= 0x000020e0,
++	.ddrc_mmap1	= 0x00004000,
++	.ddrc_refcnt	= 0x40db0081,
++	.ddrc_timing	= { 0x08140e09, 0x0a0a070d, 0x030d040d, 0x202c1f06,
++			    0x8006a065 },
++	.ddrc_autosr_cnt = 0x76000101,
++	.ddrc_autosr_en	= 1,
++	.ddrc_hregpro	= 1,
++	.ddrc_pregpro	= 1,
++	.ddrc_cguc0	= 0x11111111,
++	.ddrc_cguc1	= 0x00000113,
++	.ddrp_memcfg	= 0x8a,
++	.ddrp_cl	= 0xd,
++	.ddrp_cwl	= 0x9,
++	.mr0		= 0x1f14,
++	.mr1		= 0x10006,
++	.mr2		= 0x20020,
++	.mr3		= 0x30000,
++	.chip0_size	= 0x20000000,
++	.remap		= { 0x12020100, 0x07061413, 0x0b0a0908, 0x0f0e0d0c,
++			    0x04031110, 0x17161505 },
++	.use_drvodt	= 1,
++	.pu_drv_cmd = 0xc, .pd_drv_cmd = 0xc, .pu_drv_ck = 0xc, .pd_drv_ck = 0xc,
++	.pu_drv_dq7_0 = 0xc, .pd_drv_dq7_0 = 0xc,
++	.pu_drv_dq15_8 = 0xc, .pd_drv_dq15_8 = 0xc,
++	.pu_odt_dq7_0 = 0x2, .pd_odt_dq7_0 = 0x2,
++	.pu_odt_dq15_8 = 0x2, .pd_odt_dq15_8 = 0x2,
++	.use_deskew	= 1,
++	.deskew_cmd	= 3,
++	.rx_dm0 = 3, .tx_dm0 = 3, .rx_dq7_0 = 3, .tx_dq7_0 = 3,
++	.rx_dqs0 = 3, .tx_dqs0 = 3,
++	.rx_dm1 = 3, .tx_dm1 = 3, .rx_dq15_8 = 3, .tx_dq15_8 = 3,
++	.rx_dqs1 = 3, .tx_dqs1 = 3,
++};
++
++static inline u32 cpm_rd(u32 off) { return readl(CPM + off); }
++static inline void cpm_wr(u32 v, u32 off) { writel(v, CPM + off); }
++static inline u32 ddrc_rd(u32 off) { return readl(DDRC + off); }
++static inline void ddrc_wr(u32 v, u32 off) { writel(v, DDRC + off); }
++static inline u32 apb_rd(u32 off) { return readl(DDRC_APB + off); }
++static inline void apb_wr(u32 v, u32 off) { writel(v, DDRC_APB + off); }
++static inline u32 phy_rd(u32 off) { return readl(DDRP + off); }
++static inline void phy_wr(u32 v, u32 off) { writel(v, DDRP + off); }
++
++/* Already running (we were chainloaded from Linux): don't touch it */
++bool x2600_ddr_running(void)
++{
++	/* clock on and DFI initialized (DDRC_CTRL's CKE reads 0 once running) */
++	return !(cpm_rd(CPM_CLKGR1) & CLKGR1_DDR) &&
++	       (apb_rd(DDRC_DWSTATUS) & DDRC_DWSTATUS_DFI_DONE);
++}
++
++/* ---- clocks (x2600/clk.c, pllsetting.c) ---- */
++
++static const u32 x2600_cdrs[] = {
++	CPM_DDRCDR, CPM_MACPHYCDR, CPM_LPCDR, CPM_SFCCDR, CPM_SSICDR,
++	CPM_PWMCDR,
++};
++
++/* Stop the dividers and set them to the maximum before the PLLs go up */
++static void x2600_clk_prepare(void)
++{
++	int i, timeout;
++
++	for (i = 0; i < ARRAY_SIZE(x2600_cdrs); i++) {
++		cpm_wr(cpm_rd(x2600_cdrs[i]) | 0xf | CDR_CE | CDR_STOP,
++		       x2600_cdrs[i]);
++		for (timeout = 0xfff; --timeout &&
++		     (cpm_rd(x2600_cdrs[i]) & CDR_BUSY); )
++			;
++		if (!timeout)
++			printf("SPL: clock %x busy\n", x2600_cdrs[i]);
++	}
++}
++
++/*
++ * M << 20 | N << 14 | OD1 << 11 | OD0 << 8 | EN, from the 24 MHz EXCLK:
++ * APLL 24 * 48 = 1152 MHz, MPLL 24 * 75 = 1800 MHz, EPLL 24 * 25 / 2 =
++ * 300 MHz (the values Flashforge's SPL reports).
++ */
++static void x2600_pll_set(u32 reg, u32 val)
++{
++	int timeout = 0x10000;
++
++	cpm_wr(cpm_rd(reg) & ~PLL_EN, reg);
++	cpm_wr(val | PLL_EN, reg);
++	while (!(cpm_rd(reg) & PLL_ON) && --timeout)
++		;
++	if (!timeout)
++		printf("SPL: PLL %x doesn't lock\n", reg);
++}
++
++/* CPU 1152 MHz (APLL), L2 /2, AHB0 /5, AHB2 /6, APB /12 */
++#define X2600_CPCCR_DIVS	0x000b5410
++#define X2600_CPCCR_SELS	0x9a000000
++
++static void x2600_pll_init(void)
++{
++	/* safe dividers first */
++	cpm_wr(0x55700000, CPM_CPCCR);
++	while ((cpm_rd(CPM_CPCSR) & 0xf0000007) != 0xf0000000)
++		;
++
++	x2600_pll_set(CPM_CPAPCR, 0x03004900);
++	x2600_pll_set(CPM_CPMPCR, 0x04b04900);
++	x2600_pll_set(CPM_CPEPCR, 0x01905100);
++
++	cpm_wr(0x55700000 | X2600_CPCCR_DIVS, CPM_CPCCR);
++	while (cpm_rd(CPM_CPCSR) & 7)
++		;
++	cpm_wr(X2600_CPCCR_SELS | X2600_CPCCR_DIVS, CPM_CPCCR);
++	while ((cpm_rd(CPM_CPCSR) & 0xf0000000) != 0xf0000000)
++		;
++}
++
++static void x2600_clk_init(void)
++{
++	cpm_wr(cpm_rd(CPM_CLKGR0) & ~CLKGR0_EFUSE, CPM_CLKGR0);
++	cpm_wr(cpm_rd(CPM_CLKGR1) & ~CLKGR1_DDR, CPM_CLKGR1);
++}
++
++/* DDR clock: MPLL (parent 2) / 2 = 900 MHz */
++static void x2600_ddr_clk_set(void)
++{
++	u32 val = cpm_rd(CPM_DDRCDR);
++
++	val &= ~(3U << 30 | CDR_BUSY | CDR_STOP | 0xff);
++	val |= 2U << 30 | CDR_CE | (1800000000 / ddr.freq - 1);
++	cpm_wr(val, CPM_DDRCDR);
++	while (cpm_rd(CPM_DDRCDR) & CDR_BUSY)
++		;
++}
++
++/* ---- DDR (ddr_innophy.c, ddr_innophy_x2600.c) ---- */
++
++static void x2600_efuse_trim1_overrides(void)
++{
++	u32 trim1;
++
++	writel((0x2 << 24) | (0x5 << 16), EFUSE + EFUSE_CFG);
++	writel(0, EFUSE + EFUSE_CTRL);
++	writel((EFUSE_TRIM1_ADDR << 21) | ((4 - 1) << 16) | BIT(0),
++	       EFUSE + EFUSE_CTRL);
++	while (!(readl(EFUSE + EFUSE_STATE) & BIT(0)))
++		;
++	trim1 = readl(EFUSE + EFUSE_DATA0);
++	writel(0, EFUSE + EFUSE_STATE);
++
++	if (trim1 & BIT(8)) {
++		ddr.ddrc_cfg &= ~BIT(2);
++		puts("SPL: efuse: DDR chip ODT off\n");
++	}
++	if (trim1 & BIT(9)) {
++		ddr.ddrc_autosr_en = 0;
++		puts("SPL: efuse: DDR auto self-refresh off\n");
++	}
++}
++
++static void ddrp_cfg(void)
++{
++	phy_wr(0, DDRP_DQ_WIDTH_H);
++	phy_wr(BIT(1) | BIT(0), DDRP_DQ_WIDTH);	/* DQ high and low bytes */
++	phy_wr(ddr.ddrp_memcfg, DDRP_MEM_CFG);
++	phy_wr((phy_rd(DDRP_CL) & ~0xf) | ddr.ddrp_cl, DDRP_CL);
++	phy_wr((phy_rd(DDRP_CWL) & ~0xf) | ddr.ddrp_cwl, DDRP_CWL);
++	phy_wr(phy_rd(DDRP_AL) & ~0xf, DDRP_AL);
++}
++
++static void ddrp_pll_init(void)
++{
++	phy_wr(20, DDRP_INVDELAYSEL_DQCMD);
++	phy_wr(0x00, DDRP_PLL_FBDIV);
++	phy_wr(0x86, DDRP_PLL_FBDIV_H);
++	phy_wr(0x41, DDRP_PLL_PDIV);
++	phy_wr(0x20, DDRP_PLL_CTRL);
++	while (!(phy_rd(DDRP_PLL_LOCK) & BIT(2)))
++		;
++}
++
++static void ddrc_prev_init(void)
++{
++	int i;
++
++	for (i = 0; i < 5; i++)
++		ddrc_wr(ddr.ddrc_timing[i], DDRC_TIMING(i + 1));
++	ddrc_wr(ddr.ddrc_mmap0, DDRC_MMAP0);
++	ddrc_wr(ddr.ddrc_mmap1, DDRC_MMAP1);
++	for (i = 0; i < ARRAY_SIZE(ddr.remap); i++)
++		apb_wr(ddr.remap[i], DDRC_REMAP(i + 1));
++	/* no self-refresh and refresh while it's set up */
++	ddrc_wr(0, DDRC_AUTOSR_EN);
++	ddrc_wr(0, DDRC_AUTOSR_CNT);
++	ddrc_wr(0, DDRC_REFCNT);
++}
++
++/* DDR3 mode register n through the controller */
++static u32 ddrc_lmr_mr(u32 mr)
++{
++	return ddr.ddrc_dlmr | DDRC_LMR_START | DDRC_LMR_CMD_LMR |
++	       ((mr & 0xffff) << DDRC_LMR_ADDR_BIT) |
++	       (((mr >> 16) & 0x7) << DDRC_LMR_BA_BIT);
++}
++
++static void ddrc_dfi_init(void)
++{
++	/* dfi_init_start low, 16-bit bus; wait for dfi_init_complete */
++	apb_wr(apb_rd(DDRC_DWCFG) & ~DDRC_DWCFG_DFI_INIT, DDRC_DWCFG);
++	while (!(apb_rd(DDRC_DWSTATUS) & DDRC_DWSTATUS_DFI_DONE))
++		;
++	ddrc_wr(ddrc_rd(DDRC_CTRL) & ~DDRC_CTRL_DFI_RST_N, DDRC_CTRL);
++	udelay(500);
++	ddrc_wr(ddr.ddrc_cfg, DDRC_CFG);
++	ddrc_wr(DDRC_CTRL_CKE, DDRC_CTRL);
++	udelay(500);
++
++	mdelay(1);
++	ddrc_wr(ddrc_lmr_mr(ddr.mr2), DDRC_LMR);
++	udelay(10);
++	ddrc_wr(ddrc_lmr_mr(ddr.mr3), DDRC_LMR);
++	udelay(10);
++	ddrc_wr(ddrc_lmr_mr(ddr.mr1), DDRC_LMR);
++	udelay(10);
++	ddrc_wr(ddrc_lmr_mr(ddr.mr0), DDRC_LMR);
++	udelay(10);
++	/* ZQ calibration, CS0 only */
++	ddrc_wr(ddr.ddrc_dlmr | DDRC_LMR_START | DDRC_LMR_CMD_ZQCL_CS0,
++		DDRC_LMR);
++	mdelay(1);
++}
++
++/* drive and ODT from the table (ZQ calibration bypassed, as Ingenic's) */
++static void ddrp_set_drvodt(void)
++{
++	phy_wr(ddr.pu_odt_dq7_0, DDRP_PU_ODT_DQ7_0);
++	phy_wr(ddr.pu_odt_dq7_0, DDRP_PU_ODT_DQ15_8);
++	phy_wr(ddr.pd_odt_dq7_0, DDRP_PD_ODT_DQ7_0);
++	phy_wr(ddr.pd_odt_dq7_0, DDRP_PD_ODT_DQ15_8);
++	phy_wr(ddr.pu_drv_dq7_0, DDRP_PU_DRV_DQ7_0);
++	phy_wr(ddr.pu_drv_dq7_0, DDRP_PU_DRV_DQ15_8);
++	phy_wr(ddr.pd_drv_dq7_0, DDRP_PD_DRV_DQ7_0);
++	phy_wr(ddr.pd_drv_dq7_0, DDRP_PD_DRV_DQ15_8);
++	phy_wr(ddr.pu_drv_cmd, DDRP_PU_DRV_CMD);
++	phy_wr(ddr.pd_drv_cmd, DDRP_PD_DRV_CMD);
++	phy_wr(ddr.pu_drv_ck, DDRP_PU_DRV_CK);
++	phy_wr(ddr.pd_drv_ck, DDRP_PD_DRV_CK);
++}
++
++/* the PHY's RX DQS training */
++static void ddrp_rx_dqs_auto_calibration(void)
++{
++	u32 timeout = 0xffffff;
++
++	phy_wr((phy_rd(DDRP_TRAINING_CTRL) & ~DDRP_TRAINING_DSCSE_BP) |
++	       DDRP_TRAINING_DSACE_START, DDRP_TRAINING_CTRL);
++	while ((phy_rd(DDRP_CALIB_DONE) & 3) != 3 && --timeout)
++		udelay(1);
++	if (!timeout) {
++		puts("SPL: DDR training timed out\n");
++		hang();
++	}
++	if (phy_rd(DDRP_CALIB_ERR) & BIT(6)) {
++		puts("SPL: DDR training passed with errors\n");
++		hang();
++	}
++	phy_wr(0, DDRP_TRAINING_CTRL);
++}
++
++/* the table's RX DQ deskew, on all 16 DQ lines */
++static void ddrp_set_rx_dq_deskew(void)
++{
++	/* PBDS_RX_DQ0..7 at 0x708 + 8n, DQ8..15 at 0x75c + 8n */
++	int i;
++
++	for (i = 0; i < 8; i++) {
++		phy_wr(ddr.rx_dq7_0, 0x708 + 8 * i);
++		phy_wr(ddr.rx_dq7_0, 0x75c + 8 * i);
++	}
++}
++
++static void ddrc_post_init(void)
++{
++	ddrc_wr(ddr.ddrc_autosr_cnt, DDRC_AUTOSR_CNT);
++	ddrc_wr(ddr.ddrc_refcnt, DDRC_REFCNT);
++	ddrc_wr(ddrc_rd(DDRC_CTRL) | (ddr.ddrc_ctrl & (0xf << 12)), DDRC_CTRL);
++	apb_wr(apb_rd(DDRC_DWCFG) | DDRC_DWCFG_PORT_OB_EN, DDRC_DWCFG);
++}
++
++void x2600_spl_clocks_init(void)
++{
++	x2600_clk_prepare();
++	x2600_pll_init();
++	x2600_clk_init();
++	printf("SPL: CPCCR %08x, APLL %08x, MPLL %08x, EPLL %08x\n",
++	       cpm_rd(CPM_CPCCR), cpm_rd(CPM_CPAPCR), cpm_rd(CPM_CPMPCR),
++	       cpm_rd(CPM_CPEPCR));
++}
++
++void x2600_sdram_init(void)
++{
++	if (ddr.type != X2600_DDR3) {
++		puts("SPL: not a DDR3 parameter set\n");
++		hang();
++	}
++	printf("SPL: DDR3 %s, %u MHz\n", ddr.name, ddr.freq / 1000000);
++
++	x2600_efuse_trim1_overrides();
++	x2600_ddr_clk_set();
++
++	/* PHY in reset with dfi_reset_n low while it's configured */
++	ddrc_wr(DDRC_CTRL_PHY_RST | DDRC_CTRL_DFI_RST_N, DDRC_CTRL);
++	mdelay(1);
++	ddrp_cfg();
++	ddrc_wr(ddrc_rd(DDRC_CTRL) & ~DDRC_CTRL_PHY_RST, DDRC_CTRL);
++	mdelay(1);
++	ddrp_pll_init();
++
++	ddrc_prev_init();
++	ddrc_dfi_init();
++
++	/* training before refresh starts (Ingenic's automatic training path) */
++	if (ddr.use_drvodt)
++		ddrp_set_drvodt();
++	ddrp_rx_dqs_auto_calibration();
++	if (ddr.use_deskew)
++		ddrp_set_rx_dq_deskew();
++	ddrc_post_init();
++
++	/* automatic clock gating and self-refresh only after training */
++	apb_wr(ddr.ddrc_cguc0, DDRC_CGUC0);
++	apb_wr(ddr.ddrc_cguc1, DDRC_CGUC1);
++	ddrc_wr(ddr.ddrc_autosr_en ? 1 : 0, DDRC_AUTOSR_EN);
++
++	/* the display before other masters (change_lcd_ddrc_process_priority) */
++	apb_wr(0xff404030, DDRC_CCHC0);
++	apb_wr(0xff404030, DDRC_CCHC1);
++
++	printf("SPL: DDR %u MiB up\n", ddr.chip0_size >> 20);
++}
+diff --git a/arch/mips/mach-jz47xx/x2600/x2600.c b/arch/mips/mach-jz47xx/x2600/x2600.c
+index a00dbd78..97068531 100644
+--- a/arch/mips/mach-jz47xx/x2600/x2600.c
++++ b/arch/mips/mach-jz47xx/x2600/x2600.c
+@@ -177,10 +177,13 @@ struct serial_device *default_serial_console(void)
+ #define AD5X_ARGS	"console=ttyS0,115200n8 loglevel=8 mem=236M@0x0 " \
+ 			"rmem=16M@0xec00000 rtos_size=4M@0xfc00000 " \
+ 			"mem=256M@0x30000000 init=/linuxrc root=/dev/mmcblk0pX " \
+-			"rootwait rootfstype=squashfs ro lpj=11935744"
++			"rootwait rootfstype=squashfs ro lpj=11476992"
+ #define AD5X_MAX_ARGS	16
+ 
+ int x2600_sdhci_init(void __iomem *base, unsigned int id, u32 max_clk);
++bool x2600_ddr_running(void);
++void x2600_spl_clocks_init(void);
++void x2600_sdram_init(void);
+ 
+ int board_mmc_init(struct bd_info *bis)
+ {
+@@ -275,6 +278,18 @@ void board_init_f(ulong dummy)
+ 	gd->flags |= GD_FLG_SPL_INIT;
+ 	preloader_console_init();
+ 
++	/*
++	 * Started by the boot ROM: clocks and DDR to set up. Chainloaded from
++	 * Linux (tests): both already running, and re-initializing the DDR
++	 * we run from would crash.
++	 */
++	if (x2600_ddr_running()) {
++		puts("SPL: DDR already running: clocks and DDR left as they are\n");
++	} else {
++		x2600_spl_clocks_init();
++		x2600_sdram_init();
++	}
++
+ 	ad5x_boot();
+ }
+ #endif /* CONFIG_XPL_BUILD */
+-- 
+2.43.0
+

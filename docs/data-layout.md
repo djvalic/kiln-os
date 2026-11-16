@@ -32,6 +32,7 @@ boot or the next start of the service.
 | `helixscreen.disable` | HelixScreen does not start. (Older docs say `helixscreen.enable`: the screen is on by default now.) | absent | `S70helixscreen` | you |
 | `wifi.disable` | No Wi-Fi at all: `wpa_supplicant` does not start, so the screen has nothing to switch on. The screen's own Wi-Fi switch is separate (HelixScreen's `settings.json`, rfkill). | absent | `S42ad5x-wifi` (main and recovery) | you |
 | `recovery-update.disable` | The main OS never rewrites the recovery OS in slot A. | absent | `S99ad5x-update-recovery` | you |
+| `watchdog.disable` | No hardware watchdog: a hung printer is not restarted on its own (a power cycle is needed, as before). Kiln's U-Boot then starts the kernel with the watchdog stopped, and `S05ad5x-watchdog` starts no feeder (and stops a watchdog that is running anyway). Takes effect at the next boot; `/etc/init.d/S05ad5x-watchdog start` applies it at once (with the feeder stopped first: `stop`). | absent (watchdog on, Kiln's kernels only) | `S05ad5x-watchdog` (main and recovery), U-Boot | you |
 | `recovery/noauto` | The recovery OS installs nothing on its own at boot (no staged update, no USB stick, no rescue marker). | absent | `S85ad5x-auto` (recovery) | you |
 | `kernel/mainline` | Start the opt-in mainline 7.3 kernel instead of 6.6. | absent | `S00ad5x-kernel`, `ad5x-kernel` | `ad5x-kernel mainline on` / `off` |
 | `kernel/cmdline-extra` | Extra kernel options added at the end of Kiln's kernel command line (for tests; `loglevel=8` brings the full console back). | absent | `S00ad5x-kernel` | you |
@@ -76,18 +77,19 @@ both paths name the same files.
 |---|---|---|---|
 | `clock` | Last known time (seconds since 1970, UTC). The printer has no battery clock. | `ad5x-clock save` (`S51ad5x-clock`, every 15 min and at stop) | `ad5x-clock restore` (`S05ad5x-data`, main and recovery), `S00ad5x-kernel` (times in failure records) |
 | `kernel/pending` | "UPTIME slot S RELEASE": Kiln's kernel was staged and jumped to, userspace not reached yet | `S00ad5x-kernel` (stock pass) | `S00ad5x-kernel` (next boot: a failure), `S99ad5x-booted` |
-| `kernel/started` | Kiln's kernel reached userspace, start-up not finished yet | `S00ad5x-kernel` (renames `pending`) | `S00ad5x-kernel`, `S99ad5x-booted` |
+| `kernel/started` | Kiln's kernel reached userspace, start-up not finished yet. "UPTIME slot S RELEASE direct" when a boot loader started it directly (no stock pass, no `pending`): `S99ad5x-booted` makes it `last-ok` as any other; the next stock pass drops such a marker without counting it | `S00ad5x-kernel` (renames `pending`, or writes it on a direct start) | `S00ad5x-kernel`, `S99ad5x-booted` |
 | `kernel/unfinished` | How many starts in a row reached userspace but not `S99ad5x-booted` (the second one counts as failed) | `S00ad5x-kernel` | `S00ad5x-kernel` |
 | `kernel/failed` | Release of Kiln's kernel that didn't finish starting (line 1) and why and when (line 2). While it names the image's release, boots stay on the stock kernel. | `S00ad5x-kernel` | `S00ad5x-kernel`, `ad5x-kernel`, Moonraker `kiln_os` (Fluidd warning, `GET /machine/kiln_os/kernel`) |
 | `kernel/failed-mainline` | The same for the opt-in 7.3: boots go on with 6.6 | `S00ad5x-kernel` | same as `failed` |
 | `kernel/history` | One line per failed or unfinished start | `S00ad5x-kernel` | `ad5x-kernel` (last line), you |
 | `kernel/last-ok` | The last start of Kiln's kernel that finished | `S99ad5x-booted` | you, `ad5x-kernel` |
 | `vendor/` | Flashforge's driver modules and board tools copied from this printer (`module_driver/`, `bin/`, `lib/`, `MANIFEST`, `SHA256SUMS`). Needed only on the stock kernel (fallback, recovery OS). Never in an image. | installer, `ad5x-vendor ensure` (`S06ad5x-modules`) | `S06ad5x-modules`, `S07ad5x-board`, `/usr/bin/cmd_*` wrappers (both OSes) |
-| `stock/` | The stock system saved before it was replaced: `rootfs.squashfs`, `kernel.img`, their sha256s | installer, `ad5x-update --replace-stock` | `ad5x-restore-stock` (both OSes), `ad5x-vendor` (to refill `vendor/`), `ad5x-status` |
+| `stock/` | The stock system saved before it was replaced: `rootfs.squashfs`, `kernel.img`, their sha256s (`SHA256SUMS`) | installer, `ad5x-update --replace-stock` | `ad5x-restore-stock` (both OSes), `ad5x-vendor` (to refill `vendor/`), `ad5x-status` |
+| `stock/boot.img`, `stock/boot.img.sha256`, `stock/boot.img.info` | The first MiB of the eMMC (the boot ROM's block, the GPT, Flashforge's SPL and its data), saved once, read only, before a boot loader of Kiln's own is ever written there. Its sha256 is in its own file, not in `SHA256SUMS`; `boot.img.info` names the SPL (its banner). Saved only from Flashforge's boot loader (`INGE` at 0, a GPT, `LPSM` at 0x4400, U-Boot SPL 2013.07), not from Kiln's own. Saved again unless `boot.img` is exactly 1 MiB (1048576 bytes) and its sha256 file checks; `ad5x-restore boot` takes only exactly 1 MiB with `INGE`, a GPT (entries where its header says, ending before 0x4400, CRCs right) and the SPL table's partitions. Kept when stock is saved again | `S99ad5x-booted` (main OS in slot B, when missing) | `ad5x-restore --i-know /data/ad5x/stock boot` (recovery OS), you (copy it off the printer) |
 | `mcu/` | Board firmware records and logs: `log`, `eboard`, `ifs`, `mainboard.uid`, `nations.log`, `iap.log`, `ifs.log`, `klipper-enabled`, `.mbver` | `ad5x-mcu` | `ad5x-mcu` (`ad5x-mcu status`), you |
 | `helixscreen/config/settings.json` | HelixScreen's settings (language, Wi-Fi switch, touch calibration, wizard done). Seeded on the first start; an existing file is never replaced. | `S70helixscreen` (first start), HelixScreen | HelixScreen, `S42ad5x-wifi` (Wi-Fi switch), `ad5x-touch-units`, the recovery UI (language) |
 | `helixscreen/cache/`, `helixscreen/.helixscreen/` | HelixScreen's cache and settings backups | HelixScreen | HelixScreen |
-| `recovery/touch-cal` | Touch range for the recovery UI, "min_x min_y max_x max_y" in stock-kernel units | `ad5x-touch-units --recovery-cal` (`S70helixscreen`) | `S80ad5x-recovery-ui` |
+| `recovery/touch-cal` | Touch range for the recovery UI, "min_x min_y max_x max_y" in stock-kernel units on every kernel (the UI converts it to raw units at use on our kernel) | `ad5x-touch-units --recovery-cal` (`S70helixscreen`) | `S80ad5x-recovery-ui` |
 | `recovery/update.log`, `recovery/update.tries` | Rewriting slot A with this image's recovery OS: log, and "ID tries" | `S99ad5x-update-recovery` | `S99ad5x-update-recovery`, you |
 | `ssh/hostkeys/` | SSH host keys, shared by both OSes (bound at `/run/dropbear`) | dropbear | dropbear |
 | `plugins/` | Other people's and your own plugins (git clones, owned by `klipper`). Never touched by updates. | you, `INSTALL_PLUGIN`, Moonraker's update manager | `ad5x_plugins.py`, `S62moonraker` |
@@ -113,7 +115,7 @@ Kiln's append-only logs (`update/last.log`, `recovery/update.log`, `mcu/log`,
 | `kiln-stage/` | Root-only (0700) staging: each request and file is moved here before root reads, hashes or unpacks it | `S68ad5x-update-agent` | `S68ad5x-update-agent` |
 | `kiln-log/agent.log` | Log of the update agent (root's folder, readable by `klipper`) | `S68ad5x-update-agent` | you (over SSH) |
 | `kiln-log/plugins-root.log` | Output and result of each plugin root script and boot script | `S68ad5x-update-agent`, `S69ad5x-plugin-boot` | you (over SSH) |
-| `update/` | Updates staged for the recovery OS (`*.swu`, `*.zip`); after an install `*.done` or `*.failed`, `last.log`, `applied.list` (sha256s of USB stick images already installed), `.work/` | `ad5x-update` (main), the installer, `ad5x-recovery-auto` (recovery) | `ad5x-recovery-auto`, `ad5x-status` (recovery) |
+| `update/` | Updates staged for the recovery OS (`*.swu`, `*.zip`); after an install `*.done` or `*.failed`; `*.stale`: still staged when the main OS started, so staged before that start and never installed (docs/updates.md, "Staged updates"); `last.log`, `applied.list` (sha256s of USB stick images already installed), `.work/` | `ad5x-update` (main), the installer, `S99ad5x-booted` (`*.stale`), `ad5x-recovery-auto` (recovery) | `ad5x-recovery-auto`, `ad5x-status` (recovery) |
 | `install/` | First install from stock: `recovery.squashfs` + `recovery.sha256` (written into slot A after the first start), `recovery.tries`, `state`, `install.log`, `dl/` | `tools/install/ad5x-install.sh`, `S99ad5x-install-recovery` | `S99ad5x-install-recovery`, `S99ad5x-update-recovery` and `S00ad5x-kernel` (while `recovery.squashfs` exists, slot A still holds stock) |
 
 ## /run (RAM, gone at reboot)
@@ -123,6 +125,7 @@ Main OS:
 | Path | What | Written by | Read by |
 |---|---|---|---|
 | `/run/ad5x-boot.log` | Boot trace: each script's start and end, uptime first | `rcS`, `ad5x-bootlog` | you, `ad5x-bootlog` (copies it into `ota` at 64 KiB) |
+| `/run/ad5x-booted` | This boot's start-up has finished (empty file): made after the boot flag is back on this slot (`lib/slot.sh`, `start_done`) | `S99ad5x-booted` | `S68ad5x-update-agent`, `ad5x-update`, `ad5x-boot-recovery` |
 | `/run/ad5x/logo-early` | `S02` drew the default logo (its depth in bpp) | `S02ad5x-logo` | `S07ad5x-board` |
 | `/run/ad5x/shadow` | `/etc/shadow` with stock's root password, bound over `/etc/shadow` | `S05ad5x-data` | login, dropbear |
 | `/run/dropbear` | Bind mount of `/data/ad5x/ssh/hostkeys` (`/etc/dropbear` points here) | `S05ad5x-data` | dropbear |
@@ -132,7 +135,7 @@ Main OS:
 | `/run/ad5x/ifs-klipper` | The IFS answered as Klipper at this start | `S61klipper` | `ad5x_plugins.py` |
 | `/run/moonraker/moonraker.conf` | Moonraker's top config (includes `moonraker-updates.conf`, your `moonraker.conf`, the plugins' list) | `S62moonraker` | Moonraker |
 | `/run/nginx/fluidd-root.conf` | Which Fluidd nginx serves (`root ...;`); also nginx's pid and temp files | `S61ad5x-web`, `S63nginx` | nginx |
-| `/run/ad5x-camera/`, `/run/ad5x-screen.pid`, `/run/ad5x-clock.pid`, `/run/ad5x-update-agent.pid`, `/run/ad5x-plugin-boot.pid`, `/run/ad5x-plugin-root/`, `/var/run/{klipper,moonraker,helixscreen}.pid` | pid files | the scripts | the scripts' `stop` |
+| `/run/ad5x-camera/`, `/run/ad5x-screen.pid`, `/run/ad5x-clock.pid`, `/run/ad5x-watchdog.pid`, `/run/ad5x-update-agent.pid`, `/run/ad5x-plugin-boot.pid`, `/run/ad5x-plugin-root/`, `/var/run/{klipper,moonraker,helixscreen}.pid` | pid files | the scripts | the scripts' `stop` |
 | `/run/ad5x-target`, `/run/ad5x-recovery-write.pid` | Mount point and lock while a slot is written | `ad5x-update`, `ad5x-boot-recovery` | the same |
 
 Recovery OS:
@@ -146,6 +149,7 @@ Recovery OS:
 | `/run/ad5x/usb/<dev>` | USB stick mounts | `ad5x-usb` |
 | `/run/ad5x/rescue-root` | Root of a system started from a rescue stick | `ad5x-usb-rescue` |
 | `/run/ad5x/ready` | Start-up finished (date) | `S99ad5x-recovery-ready` |
+| `/run/ad5x-watchdog.pid` | The watchdog feeder (on Kiln's 6.6 only) | `S05ad5x-watchdog` |
 
 ## Other places outside /data/ad5x
 

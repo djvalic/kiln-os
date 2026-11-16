@@ -22,6 +22,10 @@
 # slot A) and reboots; refused as kernel-retry is. The recovery OS then
 # installs what is waiting (an update zip on a stick with ad5x-autoupdate,
 # docs/updates.md) or shows its touch UI.
+# Also: "return-stock" (POST /machine/kiln_os/return_stock, HelixScreen's
+# Return to Flashforge firmware): the same with "ad5x-boot-recovery
+# --no-reboot --return-stock", so the recovery OS opens Return to
+# Flashforge firmware, which writes nothing before a tap there.
 # Also: "plugin-request" (written by Klipper's ad5x_plugins): a plugin's
 # root script (root/install.sh, update.sh, uninstall.sh) from the packed
 # root/ folder next to it, answered in "plugin-status"; refused as the
@@ -31,9 +35,17 @@
 # plugin's script never overlaps an update install.
 # Also: "service" (Fluidd's service buttons through Moonraker's kiln_agent
 # provider, components/kiln_os.py): "ACTION NAME", see service_request.
+# Also: "reboot" and "shutdown" (Moonraker's /machine/reboot and
+# /machine/shutdown through the same provider: Fluidd's and the touch
+# screen's Reboot and Shutdown): see power_request.
 # A Kiln OS update is also refused before start-up has finished: the
 # reboot would leave our kernel's start marker behind, which counts as an
-# unfinished start of it (issue #47).
+# unfinished start of it (issue #47). And while the recovery OS is being
+# written into slot A (S99ad5x-update-recovery, after an update of the main
+# OS): refused at once, so Moonraker's answer says what happens (ad5x-update
+# would wait up to 3 minutes for the write, longer than Moonraker waits).
+# Refused too when slot A doesn't hold the recovery OS or a whole kernel
+# (ad5x-update's exit code 4, its reason passed on).
 # Installs, kernel-retry and boot-recovery are refused while a print may run: Moonraker
 # gives no answer at all, or Klipper is ready and its print state is
 # printing, paused or unknown. A Klipper that is not ready (startup,
@@ -89,8 +101,22 @@ say() {
 	rm -f "$t"; log "no status written: $D/$ANSWER is not a file"; return 1
 }
 
-# S99ad5x-booted has pointed the boot flag back at this slot
-started_up() { [ -z "$SLOT" ] || [ "$(read_flag)" = "$(flag_for $SLOT)" ]; }
+# S99ad5x-booted has pointed the boot flag back at this slot and made its
+# marker (lib/slot.sh, start_done); no slot (USB test mode): yes
+started_up() { [ -z "$SLOT" ] || start_done; }
+
+# The recovery OS is being written into slot A (ad5x-update's lock)
+WLOCK=${AD5X_RECOVERY_WLOCK:-/run/ad5x-recovery-write.pid}
+writing() { [ -f $WLOCK ] && kill -0 "$(cat $WLOCK)" 2>/dev/null; }
+
+# How long after boot a reboot or shutdown waits for start-up to finish
+# (power_request): a start that takes longer has hung somewhere, and
+# rebooting it (into the recovery OS, the boot flag still points there) is
+# what the user then needs. A normal start finishes in 1-2 minutes.
+POWER_GRACE=600
+
+# uptime: whole seconds since boot
+uptime_s() { cut -d. -f1 /proc/uptime; }
 
 # Klipper's print_stats state through Moonraker; empty without an answer
 print_state() {
@@ -283,6 +309,38 @@ service_request() {
 	esac
 }
 
+# power_request reboot|shutdown: Moonraker's /machine/reboot and
+# /machine/shutdown (and its reboot_machine, shutdown_machine remote
+# methods) through the kiln_agent provider (components/kiln_os.py; the
+# klipper user has no sudo for it). Refused while a print may run (busy),
+# while the recovery OS is being written into slot A (a reboot or power-off
+# would cut it short: slot A then holds no recovery OS until the next
+# start writes it again), and before start-up has finished (the boot flag
+# still on the recovery OS, which would start instead, and our kernel's
+# start would count as unfinished), the last only for the first
+# POWER_GRACE s after boot. The answer ("rebooting", "shutting down") comes
+# first, then the reboot or power-off.
+power_request() {
+	local what=$1 cmd=reboot ans=rebooting
+	[ $what = shutdown ] && cmd=poweroff ans="shutting down"
+	busy $what && return
+	if writing; then
+		log "$what refused: the recovery OS is being written"
+		say "refused: the recovery OS is being written into slot A, try again in a few minutes"
+	elif ! started_up && [ "$(uptime_s)" -lt $POWER_GRACE ]; then
+		log "$what refused: start-up not finished"
+		say "refused: start-up has not finished yet, try again in a minute"
+	else
+		started_up || log "$what: start-up not finished after $POWER_GRACE s, going ahead"
+		log "$what: $ans"
+		say "$ans"
+		sync
+		sleep 2
+		$cmd
+		exit 0
+	fi
+}
+
 agent_once() {
 	if [ -f $D/restart-moonraker ]; then
 		rm -f $D/restart-moonraker
@@ -331,6 +389,31 @@ agent_once() {
 			say "refused: ${out#ad5x-boot-recovery: }"
 		fi
 	fi
+	if [ -f $D/return-stock ]; then
+		rm -f $D/return-stock
+		if busy "return to Flashforge firmware"; then
+			:
+		elif ! started_up; then
+			log "return to Flashforge firmware refused: start-up not finished"
+			say "refused: start-up has not finished yet, try again in a minute"
+		elif out=$(ad5x-boot-recovery --no-reboot --return-stock 2>&1); then
+			log "return to Flashforge firmware: $out; rebooting"
+			say "rebooting"
+			sync
+			sleep 2
+			reboot
+			exit 0
+		else
+			log "return to Flashforge firmware refused: $out"
+			say "refused: ${out#ad5x-boot-recovery: }"
+		fi
+	fi
+	for p in reboot shutdown; do
+		if [ -e $D/$p ] || [ -L $D/$p ]; then
+			rm -f $D/$p
+			power_request $p
+		fi
+	done
 	if [ -e $D/service ] || [ -L $D/service ]; then
 		service_request
 	fi
@@ -351,7 +434,7 @@ agent_once() {
 # install_request: Moonraker's "install" (file name, sha256), read from the
 # staged copy; the download is staged when the install goes ahead
 install_request() {
-	local req r f sum pkg
+	local req r f sum pkg urc
 	if ! req=$(stage install); then
 		log "ignored an install request that is not a plain file"
 		say "failed: bad request"; return
@@ -383,23 +466,40 @@ install_request() {
 	elif ! started_up; then
 		log "$f refused: start-up not finished"
 		say "refused: start-up has not finished yet, try again in a minute"
+	elif writing; then
+		log "$f refused: the recovery OS is being written"
+		say "refused: the recovery OS is being written into slot A, try again in a few minutes"
 	elif ! pkg=$(stage "$f"); then
 		log "$f: missing or not a plain file"
 		say "failed: the download is missing or not a plain file"
 	else
 		log "staging $f"
-		if ad5x-update "$pkg" "$sum" >> $LOG 2>&1; then
-			unstage "$pkg"
+		# --no-wait: a recovery OS write that started just now is refused
+		# (exit code 3), not waited for
+		ad5x-update --no-wait "$pkg" "$sum" >> $LOG 2>&1
+		urc=$?
+		unstage "$pkg"
+		case $urc in
+		0)
 			log "staged, rebooting"
 			say "rebooting"
 			sync
 			sleep 2
 			reboot
-			exit 0
-		fi
-		unstage "$pkg"
-		log "ad5x-update failed"
-		say "failed: ad5x-update, see $LOG"
+			exit 0 ;;
+		3)
+			log "$f refused: the recovery OS is being written"
+			say "refused: the recovery OS is being written into slot A, try again in a few minutes" ;;
+		4)
+			# slot A can't start the recovery OS; ad5x-update's last
+			# line says why (reason no_recovery in Moonraker)
+			why=$(tail -n 1 $LOG | sed 's/^ad5x-update: //')
+			log "$f refused: $why"
+			say "refused: $why" ;;
+		*)
+			log "ad5x-update failed"
+			say "failed: ad5x-update, see $LOG" ;;
+		esac
 	fi
 }
 
@@ -422,7 +522,8 @@ start)
 	[ -f /data/ad5x/kiln-os.token ] &&
 		chown root:klipper /data/ad5x/kiln-os.token &&
 		chmod 640 /data/ad5x/kiln-os.token
-	rm -f $D/install $D/kernel-retry $D/boot-recovery $D/service $D/status
+	rm -f $D/install $D/kernel-retry $D/boot-recovery $D/service $D/reboot \
+		$D/shutdown $D/status
 	# Staged files a reboot left behind (root's own; a folder klipper
 	# swapped in stays)
 	mkdir -p $STAGE && chown root:root $STAGE && chmod 700 $STAGE

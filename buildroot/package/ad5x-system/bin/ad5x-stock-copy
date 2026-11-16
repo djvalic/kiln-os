@@ -1,0 +1,114 @@
+#!/bin/sh
+# A second copy of this printer's stock files, where a wipe of the data
+# partition doesn't reach it. Return to Flashforge firmware
+# (ad5x-return-stock, recovery OS) takes them from there when
+# /data/ad5x/stock is gone.
+#
+# usage: ad5x-stock-copy usershare [--if-changed]
+#        ad5x-stock-copy usb
+#        ad5x-stock-copy DIR
+#   usershare  the usershare partition (p6, stock's own programs; the copy
+#              goes into its folder kiln-stock-backup), only when at least
+#              64 MiB stay free there. --if-changed: nothing to do when the
+#              copy made last time still has the same files (the main OS's
+#              S99ad5x-stock-copy runs it so at every start)
+#   usb        the first USB stick the recovery OS has mounted
+#              (/run/ad5x/usb/...): its top folder's kiln-stock-backup
+#   DIR        DIR/kiln-stock-backup
+#
+# The files: /data/ad5x/stock's kernel.img, rootfs.squashfs, SHA256SUMS,
+# MANIFEST.txt, and this printer's first MiB boot.img with boot.img.sha256
+# and boot.img.info when they are there (saved before Kiln's boot loader).
+# The source is checked first (SHA256SUMS, boot.img.sha256), copied into
+# kiln-stock-backup.new, the copy checked, then renamed over the old one.
+# Last line: "stock-copy: OK DIR", "stock-copy: nothing to do" or
+# "stock-copy: FAILED ...".
+# AD5X_SYS, AD5X_DEV, AD5X_DATA, AD5X_RUN, AD5X_MOUNTS (tests).
+: "${AD5X_SYS:=/sys}" "${AD5X_DEV:=/dev}" "${AD5X_DATA:=/data}" "${AD5X_RUN:=/run/ad5x}"
+: "${AD5X_MOUNTS:=/proc/mounts}"
+SRC=$AD5X_DATA/ad5x/stock
+NAME=kiln-stock-backup
+MARK=$SRC/.usershare-copy
+KEEP_FREE_KB=65536
+
+fail() { echo "stock-copy: FAILED $*"; exit 1; }
+part() {	# GPT name -> device (sysfs PARTNAME)
+	for u in "$AD5X_SYS"/class/block/*/uevent; do
+		[ -f "$u" ] || continue
+		grep -qx "PARTNAME=$1" "$u" && { echo "$AD5X_DEV/$(sed -n 's/^DEVNAME=//p' "$u")"; return 0; }
+	done
+	return 1
+}
+sums() {	# what identifies the copy: both sum files
+	cat "$SRC/SHA256SUMS" "$SRC/boot.img.sha256" 2>/dev/null | sha256sum | cut -d' ' -f1
+}
+
+target=$1 ifchanged=
+[ "${2:-}" = --if-changed ] && ifchanged=1
+case "$target" in
+''|-h|--help) sed -n '2,29p' "$0"; [ -n "$target" ]; exit $? ;;
+esac
+
+# the source, checked
+[ -f "$SRC/kernel.img" ] && [ -f "$SRC/rootfs.squashfs" ] && [ -f "$SRC/SHA256SUMS" ] ||
+	fail "no stock copy in $SRC (kernel.img, rootfs.squashfs, SHA256SUMS)"
+( cd "$SRC" && sha256sum -c SHA256SUMS >/dev/null 2>&1 ) || fail "$SRC doesn't match its SHA256SUMS"
+files="kernel.img rootfs.squashfs SHA256SUMS"
+[ -f "$SRC/MANIFEST.txt" ] && files="$files MANIFEST.txt"
+if [ -f "$SRC/boot.img" ] && [ -f "$SRC/boot.img.sha256" ]; then
+	if ( cd "$SRC" && sha256sum -c boot.img.sha256 >/dev/null 2>&1 ); then
+		files="$files boot.img boot.img.sha256"
+		[ -f "$SRC/boot.img.info" ] && files="$files boot.img.info"
+	else
+		echo "stock-copy: boot.img doesn't match boot.img.sha256: left out"
+	fi
+fi
+need=0
+for f in $files; do need=$((need + $(wc -c < "$SRC/$f"))); done
+need=$((need / 1024 + 1))
+
+M= DEST=
+cleanup() { [ -n "$M" ] && { umount "$M" 2>/dev/null; rmdir "$M" 2>/dev/null; }; return 0; }
+trap cleanup EXIT
+case "$target" in
+usershare)
+	if [ -n "$ifchanged" ] && [ "$(cat "$MARK" 2>/dev/null)" = "$(sums)" ]; then
+		echo "stock-copy: nothing to do (the usershare copy has these files)"; exit 0
+	fi
+	dev=$(part usershare) || fail "no usershare partition"
+	M=$AD5X_RUN/stock-copy-usershare
+	mkdir -p "$M"
+	mount -t ext4 -o noatime "$dev" "$M" 2>/dev/null || { rmdir "$M"; M=; fail "can't mount usershare ($dev)"; }
+	DEST=$M ;;
+usb)
+	DEST=$(awk -v p="$AD5X_RUN/usb/" 'index($2, p) == 1 { print $2; exit }' "$AD5X_MOUNTS")
+	if [ -z "$DEST" ] && command -v ad5x-usb >/dev/null 2>&1; then
+		ad5x-usb mount 3 >/dev/null 2>&1
+		DEST=$(awk -v p="$AD5X_RUN/usb/" 'index($2, p) == 1 { print $2; exit }' "$AD5X_MOUNTS")
+	fi
+	[ -n "$DEST" ] || fail "no USB stick mounted (put one in, then try again)" ;;
+*)	[ -d "$target" ] || fail "no folder $target"
+	DEST=$target ;;
+esac
+# room: the copy, plus (on usershare) what stock needs to keep
+have=$(df -k "$DEST" 2>/dev/null | awk 'NR == 2 { print $4 }')
+old=$(du -sk "$DEST/$NAME" 2>/dev/null | cut -f1)
+extra=0; [ "$target" = usershare ] && extra=$KEEP_FREE_KB
+[ -n "$have" ] && [ $((have + ${old:-0})) -ge $((need + extra)) ] ||
+	fail "$DEST has ${have:-?} KiB free, the copy needs $need KiB$([ $extra != 0 ] && echo " and $extra KiB stay free for stock")"
+
+N=$DEST/$NAME.new
+rm -rf "$N"
+mkdir -p "$N" || fail "can't make $N"
+for f in $files; do
+	cp "$SRC/$f" "$N/$f" || { rm -rf "$N"; fail "copying $f"; }
+done
+sync
+{ echo 3 > /proc/sys/vm/drop_caches; } 2>/dev/null
+( cd "$N" && sha256sum -c SHA256SUMS >/dev/null 2>&1 &&
+  { [ ! -f boot.img.sha256 ] || sha256sum -c boot.img.sha256 >/dev/null 2>&1; } ) ||
+	{ rm -rf "$N"; fail "the copy in $N reads back wrong"; }
+rm -rf "$DEST/$NAME" && mv "$N" "$DEST/$NAME" && sync || fail "renaming $N"
+[ "$target" = usershare ] && sums > "$MARK" && sync
+echo "stock-copy: OK $DEST/$NAME ($(echo $files | wc -w) files, $need KiB)"
+exit 0

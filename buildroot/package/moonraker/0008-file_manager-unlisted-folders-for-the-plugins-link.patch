@@ -1,0 +1,80 @@
+file_manager: folders that server.files.list doesn't walk
+
+server.files.list walks a root recursively, on the event loop, and
+get_path_info() costs ~14 ms per file on the AD5X (a resolve() and the
+reserved path checks, Path.parents for each reserved path). Mainsail and
+Fluidd ask for the config root at each page load. Since v0.1.0-rc1 the
+config folder holds the "plugins" link to /data/ad5x/plugins
+(kiln_os.link_plugins), so the list walks every installed plugin too:
+with kiln-notify and afc-kiln (~2200 files) each page load blocked
+Moonraker for about a minute (EVENT LOOP BLOCKED 56-58 s), the web UIs
+stopped loading and the Klippy connection dropped.
+
+add_unlisted_path() names a folder that get_file_list() doesn't enter
+wherever it is reached in a root, through a link or not. The folders are
+matched by device and inode, which the walk already reads for each
+folder, so the check costs one stat per unlisted folder per list.
+Clients still browse the folder with get_directory, its files can be
+read, edited, uploaded and deleted as before, and inotify still watches
+it; its files are only missing from the flat list. kiln_os registers the
+plugins folder.
+
+From PR #70 by DIEHARDave.
+
+Upstream: not submitted (AD5X open OS)
+
+--- a/moonraker/components/file_manager/file_manager.py
++++ b/moonraker/components/file_manager/file_manager.py
+@@ -69,6 +69,8 @@
+         self.server = config.get_server()
+         self.event_loop = self.server.get_event_loop()
+         self.reserved_paths: Dict[str, Tuple[pathlib.Path, bool]] = {}
++        # Kiln OS: folders server.files.list doesn't walk (add_unlisted_path)
++        self.unlisted_paths: Set[pathlib.Path] = set()
+         self.full_access_roots: Set[str] = set()
+         self.file_paths: Dict[str, str] = {}
+         app_args = self.server.get_app_args()
+@@ -349,6 +351,18 @@
+                 )
+         return False
+ 
++    def add_unlisted_path(self, path: StrOrPath) -> None:
++        """Kiln OS: a folder that get_file_list() (server.files.list) doesn't
++        enter when it is reached inside a root, through a link or not. It
++        stays browsable with get_directory, and its files can be read,
++        written, uploaded and deleted as before; inotify still watches it.
++        For big trees linked into a root, such as the plugins folder in
++        config: the list runs on the event loop and costs several ms per
++        file on the AD5X (get_path_info)."""
++        if isinstance(path, str):
++            path = pathlib.Path(path)
++        self.unlisted_paths.add(path.expanduser().resolve())
++
+     def add_reserved_path(
+         self, name: str, res_path: StrOrPath, read_access: bool = True
+     ) -> bool:
+@@ -1044,6 +1058,15 @@
+         logging.info(f"Updating File List <{root}>...")
+         st = os.stat(path)
+         visited_dirs = {(st.st_dev, st.st_ino)}
++        # Kiln OS: the unlisted folders, by device and inode as below (a
++        # folder made after add_unlisted_path() counts as well)
++        unlisted: Set[Tuple[int, int]] = set()
++        for upath in self.unlisted_paths:
++            try:
++                ust = upath.stat()
++            except OSError:
++                continue
++            unlisted.add((ust.st_dev, ust.st_ino))
+         for dir_path, dir_names, files in os.walk(path, followlinks=True):
+             scan_dirs: List[str] = []
+             # Filter out directories that have already been visited. This
+@@ -1054,7 +1077,7 @@
+                     continue
+                 st = os.stat(full_path)
+                 key = (st.st_dev, st.st_ino)
+-                if key not in visited_dirs:
++                if key not in visited_dirs and key not in unlisted:
+                     visited_dirs.add(key)
+                     if not self.check_reserved_path(full_path, False, False):
+                         scan_dirs.append(dname)

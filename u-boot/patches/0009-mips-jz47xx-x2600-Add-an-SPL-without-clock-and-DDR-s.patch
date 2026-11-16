@@ -1,0 +1,331 @@
+From f7deba28232dba0e6e633b1ae83ddb0e28f08b84 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sat, 14 Nov 2026 16:58:40 -0700
+Subject: [PATCH 09/10] mips: jz47xx: x2600: Add an SPL (without clock and DDR
+ setup yet)
+
+Started where the boot ROM starts Flashforge's SPL (code at 0x80001800),
+it does what that SPL does once the clocks and the DDR are up: stops the
+watchdog the boot ROM leaves running, sets up UART0 on the DEBUG header
+(pins, 115200 from the 24 MHz EXCLK, the Ingenic enable bit), reads the
+boot flag from 'ota', loads the uImage of the chosen slot's kernel
+partition and starts it with the stock SPL's command line as argc/argv.
+
+Clock and DDR setup are still missing: tested by chainload from Linux,
+with both already set up, where it boots the stock kernel from kernel2
+to the main OS.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ arch/mips/mach-jz47xx/start.S       |  22 +++
+ arch/mips/mach-jz47xx/x2600/x2600.c | 210 ++++++++++++++++++++++++++++
+ configs/ad5x_defconfig              |  17 +++
+ include/configs/ad5x.h              |   9 ++
+ 4 files changed, 258 insertions(+)
+
+diff --git a/arch/mips/mach-jz47xx/start.S b/arch/mips/mach-jz47xx/start.S
+index 0d40e637..b187a8e7 100644
+--- a/arch/mips/mach-jz47xx/start.S
++++ b/arch/mips/mach-jz47xx/start.S
+@@ -20,8 +20,10 @@
+ _start:
+ #ifdef CONFIG_XPL_BUILD
+ 
++#ifndef CONFIG_SOC_X2600
+ 	/* magic value ("MSPL") */
+ 	.word 0x4d53504c
++#endif
+ 
+ 	/* Invalidate BTB */
+ 	mfc0	t0, CP0_CONFIG, 7
+@@ -49,6 +51,26 @@ _start:
+ 	sw	t1, 0x24(t0)
+ #endif
+ 
++#ifdef CONFIG_SOC_X2600
++	/*
++	 * The boot ROM leaves the watchdog running (0x13630000): stop it as
++	 * the stock SPL does, with the stop bit in TSSR and TCER cleared.
++	 */
++	li	t0, 0xb3630000
++	lw	t1, 0x2c(t0)
++	lui	t2, 0x1
++	or	t1, t1, t2
++	sw	t1, 0x2c(t0)
++	lw	t1, 0x04(t0)
++	li	t2, ~1
++	and	t1, t1, t2
++	sw	t1, 0x04(t0)
++	/* KSEG0 cacheable, as the stock SPL sets it */
++	li	t0, 3
++	mtc0	t0, CP0_CONFIG
++	sync
++#endif
++
+ 	/* Set up stack */
+ 	li	sp, CONFIG_SPL_STACK
+ 
+diff --git a/arch/mips/mach-jz47xx/x2600/x2600.c b/arch/mips/mach-jz47xx/x2600/x2600.c
+index a74403b3..a00dbd78 100644
+--- a/arch/mips/mach-jz47xx/x2600/x2600.c
++++ b/arch/mips/mach-jz47xx/x2600/x2600.c
+@@ -68,3 +68,213 @@ unsigned long long get_ticks(void)
+ 
+ 	return ((u64)hi << 32) | lo;
+ }
++
++#ifdef CONFIG_XPL_BUILD
++/*
++ * SPL: started by the boot ROM like Flashforge's (code at 0x80001800), or,
++ * for tests, chainloaded from Linux. Clocks and DDR: not set up here yet.
++ */
++#include <asm/sections.h>
++#include <serial.h>
++#include <blk.h>
++#include <cpu_func.h>
++#include <hang.h>
++#include <image.h>
++#include <mmc.h>
++#include <spl.h>
++#include <asm/cache.h>
++#include <linux/string.h>
++#include <asm/global_data.h>
++
++DECLARE_GLOBAL_DATA_PTR;
++gd_t gdata __section(".bss");
++
++/* GPIO port E: function 1 on PE9-PE12 (UART0, the DEBUG header) */
++#define X2600_GPE		((void __iomem *)0xb3605000)
++#define GPIO_INTC		0x18
++#define GPIO_MSKC		0x28
++#define GPIO_PAT1C		0x38
++#define GPIO_PAT0S		0x44
++#define UART0_PINS		(0xf << 9)
++
++/* UART0 registers, 4 bytes apart */
++#define UART_THR		0x00
++#define UART_DLL		0x00
++#define UART_IER		0x04
++#define UART_DLM		0x04
++#define UART_FCR		0x08
++#define UART_LCR		0x0c
++#define UART_LSR		0x14
++#define UART_FCR_FIFO		0x07	/* enable, clear RX and TX */
++#define UART_FCR_UME		0x10	/* Ingenic: the UART's enable bit */
++#define UART_LCR_8N1		0x03
++#define UART_LCR_DLAB		0x80
++#define UART_LSR_THRE		0x20
++#define UART_LSR_TEMT		0x40
++/* 24 MHz / (16 * 13) = 115384 baud */
++#define UART_DIV_115200		13
++
++static void x2600_spl_uart_init(void)
++{
++	writel(UART0_PINS, X2600_GPE + GPIO_INTC);
++	writel(UART0_PINS, X2600_GPE + GPIO_MSKC);
++	writel(UART0_PINS, X2600_GPE + GPIO_PAT1C);
++	writel(UART0_PINS, X2600_GPE + GPIO_PAT0S);
++
++	writel(0, X2600_UART0 + UART_IER);
++	writel(UART_LCR_DLAB | UART_LCR_8N1, X2600_UART0 + UART_LCR);
++	writel(UART_DIV_115200, X2600_UART0 + UART_DLL);
++	writel(0, X2600_UART0 + UART_DLM);
++	writel(UART_LCR_8N1, X2600_UART0 + UART_LCR);
++	x2600_uart0_plain_baud();
++	writel(UART_FCR_FIFO | UART_FCR_UME, X2600_UART0 + UART_FCR);
++}
++
++static void x2600_spl_putc(const char c)
++{
++	if (c == '\n')
++		x2600_spl_putc('\r');
++	while (!(readl(X2600_UART0 + UART_LSR) & UART_LSR_THRE))
++		;
++	writel(c, X2600_UART0 + UART_THR);
++}
++
++static void x2600_spl_puts(const char *s)
++{
++	while (*s)
++		x2600_spl_putc(*s++);
++}
++
++static int x2600_spl_serial_start(void) { return 0; }
++static int x2600_spl_serial_stop(void) { return 0; }
++static void x2600_spl_setbrg(void) { }
++static int x2600_spl_getc(void) { return 0; }
++static int x2600_spl_tstc(void) { return 0; }
++
++static struct serial_device x2600_spl_serial = {
++	.name	= "x2600-uart0",
++	.start	= x2600_spl_serial_start,
++	.stop	= x2600_spl_serial_stop,
++	.setbrg	= x2600_spl_setbrg,
++	.putc	= x2600_spl_putc,
++	.puts	= x2600_spl_puts,
++	.getc	= x2600_spl_getc,
++	.tstc	= x2600_spl_tstc,
++};
++
++struct serial_device *default_serial_console(void)
++{
++	return &x2600_spl_serial;
++}
++
++/* the boot flag and kernel slots, at the SPL's built-in LBAs */
++#define AD5X_OTA_LBA		0x6c800
++#define AD5X_KERNEL_A_LBA	0x800
++#define AD5X_KERNEL_B_LBA	0x36800
++#define AD5X_FLAG_B		"ota:kernel2"
++
++/* the stock SPL's command line, root filled in per slot */
++#define AD5X_ARGS	"console=ttyS0,115200n8 loglevel=8 mem=236M@0x0 " \
++			"rmem=16M@0xec00000 rtos_size=4M@0xfc00000 " \
++			"mem=256M@0x30000000 init=/linuxrc root=/dev/mmcblk0pX " \
++			"rootwait rootfstype=squashfs ro lpj=11935744"
++#define AD5X_MAX_ARGS	16
++
++int x2600_sdhci_init(void __iomem *base, unsigned int id, u32 max_clk);
++
++int board_mmc_init(struct bd_info *bis)
++{
++	return x2600_sdhci_init((void __iomem *)0xb3450000, 0, 25000000);
++}
++
++static u8 spl_sector[512] __aligned(ARCH_DMA_MINALIGN);
++static char spl_args[sizeof(AD5X_ARGS)];
++static char *spl_argv[AD5X_MAX_ARGS + 1];
++
++/* split spl_args in place into spl_argv[1..], argv[0] being "spl" */
++static int ad5x_build_argv(char root)
++{
++	char *p;
++	int argc = 0;
++
++	strcpy(spl_args, AD5X_ARGS);
++	p = strstr(spl_args, "mmcblk0pX");
++	p[8] = root;
++
++	spl_argv[argc++] = "spl";
++	for (p = spl_args; *p && argc < AD5X_MAX_ARGS; ) {
++		spl_argv[argc++] = p;
++		while (*p && *p != ' ')
++			p++;
++		if (*p)
++			*p++ = '\0';
++	}
++	spl_argv[argc] = NULL;
++	return argc;
++}
++
++static void __noreturn ad5x_boot(void)
++{
++	typedef void __noreturn (*kernel_entry_t)(int, char **, char **, int);
++	struct legacy_img_hdr *hdr = (void *)spl_sector;
++	struct blk_desc *desc;
++	struct mmc *mmc;
++	ulong lba, size, load, ep, blocks;
++	int slot_b, argc;
++
++	if (mmc_initialize(NULL) || !(mmc = find_mmc_device(0)) ||
++	    mmc_init(mmc)) {
++		puts("SPL: eMMC init failed\n");
++		hang();
++	}
++	desc = mmc_get_blk_desc(mmc);
++	if (blk_dread(desc, AD5X_OTA_LBA, 1, spl_sector) != 1) {
++		puts("SPL: can't read the boot flag\n");
++		hang();
++	}
++	slot_b = !strncmp((char *)spl_sector, AD5X_FLAG_B,
++			  strlen(AD5X_FLAG_B));
++	lba = slot_b ? AD5X_KERNEL_B_LBA : AD5X_KERNEL_A_LBA;
++	printf("SPL: slot %c, kernel at LBA 0x%lx\n", slot_b ? 'b' : 'a', lba);
++
++	if (blk_dread(desc, lba, 1, spl_sector) != 1 ||
++	    image_get_magic(hdr) != IH_MAGIC) {
++		puts("SPL: no uImage in the kernel partition\n");
++		hang();
++	}
++	size = image_get_data_size(hdr);
++	load = image_get_load(hdr);
++	ep = image_get_ep(hdr);
++	printf("SPL: %s, 0x%lx bytes, load 0x%lx, entry 0x%lx\n",
++	       image_get_name(hdr), size, load, ep);
++
++	blocks = (size + sizeof(*hdr) + desc->blksz - 1) / desc->blksz;
++	if (blk_dread(desc, lba, blocks, (void *)(load - sizeof(*hdr))) !=
++	    blocks) {
++		puts("SPL: reading the kernel failed\n");
++		hang();
++	}
++	flush_cache(load - sizeof(*hdr), blocks * desc->blksz);
++
++	argc = ad5x_build_argv(slot_b ? '4' : '2');
++	puts("SPL: starting the kernel\n");
++	((kernel_entry_t)ep)(argc, spl_argv, NULL, 0);
++}
++
++void board_init_f(ulong dummy)
++{
++	gd = &gdata;
++	memset(__bss_start, 0, (size_t)__bss_end - (size_t)__bss_start);
++
++	x2600_spl_uart_init();
++	timer_init();
++	mips_cache_probe();
++	gd->malloc_base = 0x80009000;
++	gd->malloc_limit = 0x2000;
++	gd->malloc_ptr = 0;
++	gd->flags |= GD_FLG_SPL_INIT;
++	preloader_console_init();
++
++	ad5x_boot();
++}
++#endif /* CONFIG_XPL_BUILD */
+diff --git a/configs/ad5x_defconfig b/configs/ad5x_defconfig
+index 594b0ce2..47e6299b 100644
+--- a/configs/ad5x_defconfig
++++ b/configs/ad5x_defconfig
+@@ -43,3 +43,20 @@ CONFIG_CMD_SQUASHFS=y
+ CONFIG_FS_SQUASHFS=y
+ CONFIG_LZO=y
+ CONFIG_SYS_CBSIZE=1024
++CONFIG_SPL=y
++CONFIG_SPL_TEXT_BASE=0x80001800
++CONFIG_SPL_MAX_SIZE=0x5800
++CONFIG_SPL_HAVE_INIT_STACK=y
++CONFIG_SPL_STACK=0x8000d000
++CONFIG_SPL_BSS_START_ADDR=0x80007000
++CONFIG_SPL_BSS_MAX_SIZE=0x2000
++# CONFIG_SPL_DM is not set
++CONFIG_SPL_SERIAL=y
++CONFIG_SPL_LIBGENERIC_SUPPORT=y
++CONFIG_SPL_TINY_MEMSET=y
++CONFIG_SPL_LIBCOMMON_SUPPORT=y
++# CONFIG_SPL_SHARES_INIT_SP_ADDR is not set
++CONFIG_SPL_MMC=y
++CONFIG_SPL_SYS_MALLOC_SIMPLE=y
++CONFIG_SPL_SYS_MALLOC_F=y
++CONFIG_SPL_SYS_MALLOC_F_LEN=0x2000
+diff --git a/include/configs/ad5x.h b/include/configs/ad5x.h
+index e154ad13..26967457 100644
+--- a/include/configs/ad5x.h
++++ b/include/configs/ad5x.h
+@@ -10,4 +10,13 @@
+ #define CFG_SYS_INIT_SP_OFFSET		0x800000
+ #define CFG_SYS_NS16550_CLK		24000000
+ 
++/*
++ * The SPL has its own console (the Ingenic UART needs its enable bit, which
++ * the legacy 16550 driver doesn't set); ns16550.c is still compiled for it
++ * and needs a register layout, though nothing uses it.
++ */
++#if defined(CONFIG_XPL_BUILD) && !defined(CONFIG_SYS_NS16550_REG_SIZE)
++#define CONFIG_SYS_NS16550_REG_SIZE	(-4)
++#endif
++
+ #endif /* __CONFIG_AD5X_H__ */
+-- 
+2.43.0
+

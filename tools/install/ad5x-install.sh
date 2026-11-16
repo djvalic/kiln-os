@@ -196,8 +196,13 @@ st=$(sed -n 's/^state=//p' "$I/state" 2>/dev/null)
 case "$st" in
 flag-set|done)
 	[ -n "$retry" ] || refuse "an earlier install already switched to Kiln OS (state '$st', $I/install.log), and the printer is running stock again: the new system didn't finish starting, or stock was put back. To install again anyway: --retry (USB: put a file ad5x-install-retry on the stick)" ;;
+returned)
+	# Return to Flashforge firmware (the recovery OS's ad5x-return-stock)
+	# removed Kiln OS on purpose: a new install needs no --retry
+	log "Kiln OS was removed earlier (Return to Flashforge firmware): installing again" ;;
+'')	;;
+*)	log "earlier attempt stopped at '$st'; continuing" ;;
 esac
-[ -n "$st" ] && log "earlier attempt stopped at '$st'; continuing"
 
 flag=$(read_flag)
 # the boot loader starts slot B on "ota:kernel2" and slot A on anything else
@@ -286,11 +291,22 @@ if [ -f "$STOCK/SHA256SUMS" ] && grep -q "^$RSHA  rootfs.squashfs\$" "$STOCK/SHA
 		( cd "$STOCK" && sha256sum -c SHA256SUMS >/dev/null 2>&1 ); then
 	log "stock already saved in $STOCK (rootfs $RSHA)"
 else
+	prev=
 	if [ -d "$STOCK" ]; then
 		n=1; while [ -e "$STOCK.prev-$n" ]; do n=$((n + 1)); done
 		mv "$STOCK" "$STOCK.prev-$n"; log "an older, different stock copy moved to $STOCK.prev-$n"
+		prev=$STOCK.prev-$n
 	fi
 	mkdir -p "$STOCK.new"
+	# This printer's first MiB from before Kiln's boot loader (boot.img,
+	# S99ad5x-booted) can't be saved again once Kiln's SPL is in: it stays
+	# with the stock copy (Return to Flashforge firmware reads it there)
+	if [ -n "$prev" ] && [ -f "$prev/boot.img" ]; then
+		for f in boot.img boot.img.sha256 boot.img.info; do
+			[ -f "$prev/$f" ] && cp "$prev/$f" "$STOCK.new/$f"
+		done
+		log "the saved first MiB (boot.img) kept with the new stock copy"
+	fi
 	head -c "$used" "$RUNROOT" > "$STOCK.new/rootfs.squashfs" || fail "copying stock's root"
 	cat "$RUNKERN" > "$STOCK.new/kernel.img" || fail "copying stock's kernel"
 	sync; drop_caches

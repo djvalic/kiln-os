@@ -1,0 +1,39 @@
+From b62039d86ded0dfdb8f08f8fa655ac07259c2d47 Mon Sep 17 00:00:00 2001
+From: valix <djvalic.wc@gmail.com>
+Date: Sun, 15 Nov 2026 13:14:50 -0500
+Subject: [PATCH 24/25] mips: jz47xx: x2600: SPL: MSC0's clock gate open before
+ the controller reset
+
+ad5x_emmc_init() reset the SDHCI controller and only then opened its
+clock gate (CLKGR0 bit 2, in emmc_set_clock()). From the eMMC that
+works because the boot ROM read the SPL through MSC0 and left the gate
+open. Started by the boot ROM over USB, nothing has opened it: the
+reset and the register set-up after it would go to a gated controller.
+
+Open the gate first, as the stock SPL's clk_init() does before its
+msc_reset(). The chainload-test build does the same.
+---
+ arch/mips/mach-jz47xx/x2600/spl_emmc.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/arch/mips/mach-jz47xx/x2600/spl_emmc.c b/arch/mips/mach-jz47xx/x2600/spl_emmc.c
+index fc639906..98ed2353 100644
+--- a/arch/mips/mach-jz47xx/x2600/spl_emmc.c
++++ b/arch/mips/mach-jz47xx/x2600/spl_emmc.c
+@@ -211,6 +211,13 @@ int ad5x_emmc_init(void)
+ 	for (t = 0; (readl(CPM_MSC0CDR) & CDR_BUSY) && t < 10000; t++)
+ 		udelay(1);
+ #endif
++	/*
++	 * The controller's clock before its first register access: the boot
++	 * ROM opens it only when it boots from the eMMC; started over USB
++	 * the gate may still be closed. The stock SPL's clk_init() opens it
++	 * before the reset too.
++	 */
++	clrbits_le32(CPM_CLKGR0, CLKGR0_MSC0);
+ 	if (emmc_reset(RESET_ALL))
+ 		return -EIO;
+ 	writel(~0U, MSC0 + SD_INT_ENABLE);	/* latch every status bit */
+-- 
+2.56.0
+

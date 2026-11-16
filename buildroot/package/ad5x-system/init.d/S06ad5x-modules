@@ -11,7 +11,8 @@
 # system saved in /data/ad5x/stock, or an older image that bundled them).
 # A private build that bundles /module_driver uses that instead.
 # On our own kernel (6.6) every driver is built in: nothing to load.
-# (shared with the recovery OS, which always runs the stock kernel)
+# (shared with the recovery OS, which runs the stock kernel by default and
+# can run ours too: docs/recovery-os.md, "Our kernel")
 
 # Files this creates are readable by klipper and www-data, whoever started
 # it (a root SSH session may run with umask 077; issue #31)

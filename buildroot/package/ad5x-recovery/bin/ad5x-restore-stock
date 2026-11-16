@@ -19,7 +19,12 @@
 # that, rather than rebooting: the toolhead board takes new firmware only
 # right after power-on. Note: a stock firmware update run from slot B
 # would write slot A, this recovery system.
-. /usr/lib/ad5x-recovery/recovery.sh
+# With Kiln's boot loader in the first MiB (Kiln's SPL), or started by
+# Kiln's U-Boot (ad5x.uboot=1), this runs ad5x-return-stock instead
+# (Return to Flashforge firmware: Kiln's U-Boot out, stock started by
+# Kiln's SPL): --dry-run is its --check, DIR its --source, --reboot reboots
+# after it; --no-flag is refused there.
+. ${AD5X_RECOVERY_LIB:-/usr/lib/ad5x-recovery}/recovery.sh
 dry= noflag= rb=
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -32,6 +37,14 @@ while [ $# -gt 0 ]; do
 	esac
 	shift
 done
+if rc_uboot || [ "$(rc_boot_loader)" = kiln ]; then
+	[ -n "$noflag" ] && rc_die "--no-flag: not with Kiln's boot loader (ad5x-return-stock sets the flag last)"
+	set -- ${1:+--source "$1"}
+	if [ -n "$dry" ]; then exec ad5x-return-stock --check "$@"; fi
+	ad5x-return-stock --yes "$@" || exit $?
+	[ -n "$rb" ] && { sync; reboot; }
+	exit 0
+fi
 DIR=${1:-$AD5X_DATA/ad5x/stock}
 [ -f "$DIR/rootfs.squashfs" ] && [ -f "$DIR/kernel.img" ] ||
 	rc_die "no saved stock system in $DIR (rootfs.squashfs + kernel.img)"

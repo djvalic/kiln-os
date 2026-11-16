@@ -3,20 +3,45 @@
 # (the previous, known-good system); S99ad5x-booted points it back at this
 # slot once start-up has finished. A system (or update) that fails after
 # this point comes back up on the other slot at the next power cycle.
-# Does nothing in USB test mode.
+# Does nothing in USB test mode. Keeping the flag off the other slot also
+# goes into the boot trace (ad5x-bootlog).
+# Started by Kiln's U-Boot (ad5x.uboot=1): the flag stays on this slot.
+# U-Boot counted this start in its state sector before it jumped (ota
+# 0x90000) and S99ad5x-booted confirms it; an unconfirmed start counts at
+# the next one, and U-Boot itself falls back (7.3 -> 6.6 -> recovery OS,
+# u-boot/README.md "Boot rules"). A flag on slot A would send the next
+# start to the recovery OS without U-Boot seeing a failure. A start-up
+# that hangs is reset by the watchdog (S05ad5x-watchdog: the kernel feeds
+# it for 300 s at most, the feeder stops after the start-up limit).
+# AD5X_LIB overrides /usr/lib/ad5x (tools/test_kernel_fallback.sh).
 
 # Files this creates are readable by klipper and www-data, whoever started
 # it (a root SSH session may run with umask 077; issue #31)
 umask 022
 
-. /usr/lib/ad5x/slot.sh
+. ${AD5X_LIB:-/usr/lib/ad5x}/slot.sh
 case "$1" in
 start)
 	[ -n "$SLOT" ] || exit 0
+	case " $(cat /proc/cmdline 2>/dev/null) " in
+	*" ad5x.uboot=1 "*)
+		echo "tryboot: started by Kiln's U-Boot; boot flag stays on slot $SLOT (U-Boot counts this start until S99ad5x-booted confirms it)"
+		ad5x-bootlog "  tryboot: Kiln's U-Boot, flag stays on $SLOT"
+		exit 0 ;;
+	esac
 	# A slot whose root has no squashfs superblock can't start (a recovery
 	# write cut short, see ad5x-update): stay on this one.
 	if [ "$(head -c 4 "$(rootfs_of $OTHER)" 2>/dev/null)" != hsqs ]; then
 		echo "tryboot: slot $OTHER holds no root filesystem; boot flag stays on slot $SLOT"
+		ad5x-bootlog "  tryboot: slot $OTHER has no root, flag stays on $SLOT"
+		exit 0
+	fi
+	# Nor one whose kernel partition holds no uImage with a right header
+	# CRC (a kernel copy cut short: ad5x-update and ad5x-slot-b.sh write
+	# the header last).
+	if ! uimage_ok "$(kernel_of $OTHER)"; then
+		echo "tryboot: slot $OTHER holds no kernel (uImage); boot flag stays on slot $SLOT"
+		ad5x-bootlog "  tryboot: slot $OTHER has no kernel, flag stays on $SLOT"
 		exit 0
 	fi
 	set_flag $OTHER

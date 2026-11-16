@@ -1,0 +1,291 @@
+From e390cef8f8c85dfa9c609f08c404cd4e6b793153 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sat, 14 Nov 2026 15:01:21 -0700
+Subject: [PATCH 02/10] mmc: Add the Ingenic X2600 SDHCI (DWC MSHC) driver
+
+The X2600's MSC controllers are Synopsys DWC MSHC cores whose card clock
+comes from the CGU: the SDCLK frequency select bits have no effect, so
+the clock is set in the controller's CGU divider (MSCnCDR). Only the
+parent and divider fields change; the parent switches while the clock is
+gated, the divider while it runs.
+
+Enable it for the Adventurer 5X's eMMC (MSC0), 4-bit at 50 MHz, in PIO
+mode, with eMMC writes left out for now.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ arch/mips/dts/ad5x.dts    |  16 ++++
+ configs/ad5x_defconfig    |   9 ++
+ drivers/mmc/Kconfig       |   9 ++
+ drivers/mmc/Makefile      |   1 +
+ drivers/mmc/x2600_sdhci.c | 176 ++++++++++++++++++++++++++++++++++++++
+ 5 files changed, 211 insertions(+)
+ create mode 100644 drivers/mmc/x2600_sdhci.c
+
+diff --git a/arch/mips/dts/ad5x.dts b/arch/mips/dts/ad5x.dts
+index 416b90eb..bb0a3ca7 100644
+--- a/arch/mips/dts/ad5x.dts
++++ b/arch/mips/dts/ad5x.dts
+@@ -12,6 +12,7 @@
+ 	model = "Flashforge Adventurer 5X";
+ 
+ 	aliases {
++		mmc0 = &msc0;
+ 		serial0 = &uart0;
+ 	};
+ 
+@@ -39,5 +40,20 @@
+ 			clock-frequency = <24000000>;
+ 			bootph-all;
+ 		};
++
++		/*
++		 * MSC0, the eMMC. 4-bit: the SPL sets up only PD0-PD5 (the
++		 * 4-bit group). 50 MHz, as Kiln's kernels run it.
++		 */
++		msc0: mmc@13450000 {
++			compatible = "ingenic,x2600-dwcmshc";
++			reg = <0x13450000 0x10000>;
++			ingenic,msc-id = <0>;
++			bus-width = <4>;
++			max-frequency = <50000000>;
++			non-removable;
++			no-sd;
++			no-sdio;
++		};
+ 	};
+ };
+diff --git a/configs/ad5x_defconfig b/configs/ad5x_defconfig
+index a07a369d..7ba34210 100644
+--- a/configs/ad5x_defconfig
++++ b/configs/ad5x_defconfig
+@@ -21,3 +21,12 @@ CONFIG_VERSION_VARIABLE=y
+ CONFIG_ENV_IS_NOWHERE=y
+ CONFIG_DM_SERIAL=y
+ CONFIG_SYS_NS16550=y
++CONFIG_CMD_MMC=y
++CONFIG_CMD_PART=y
++CONFIG_MMC=y
++CONFIG_DM_MMC=y
++CONFIG_MMC_SDHCI=y
++CONFIG_MMC_SDHCI_X2600=y
++# CONFIG_MMC_HW_PARTITIONING is not set
++CONFIG_EFI_PARTITION=y
++# CONFIG_MMC_WRITE is not set
+diff --git a/drivers/mmc/Kconfig b/drivers/mmc/Kconfig
+index f9f7aa5c..e4ccf720 100644
+--- a/drivers/mmc/Kconfig
++++ b/drivers/mmc/Kconfig
+@@ -302,6 +302,15 @@ config MMC_SDHCI_ADI
+ 	  This enables support for the SD/MMC controller included in some Analog
+ 	  Devices SC5XX Socs.
+ 
++config MMC_SDHCI_X2600
++	bool "Ingenic X2600 SD/MMC controller support"
++	depends on SOC_X2600
++	depends on DM_MMC && OF_CONTROL
++	depends on MMC_SDHCI
++	help
++	  This enables support for the MSC controllers of the Ingenic X2600,
++	  Synopsys DWC MSHC (SDHCI) cores clocked by the CGU.
++
+ config MMC_DW_SOCFPGA
+ 	bool "SOCFPGA specific extensions for Synopsys DW Memory Card Interface"
+ 	depends on ARCH_SOCFPGA
+diff --git a/drivers/mmc/Makefile b/drivers/mmc/Makefile
+index a23336d7..001aef7a 100644
+--- a/drivers/mmc/Makefile
++++ b/drivers/mmc/Makefile
+@@ -69,6 +69,7 @@ obj-$(CONFIG_MMC_SDHCI_NPCM)            += npcm_sdhci.o
+ obj-$(CONFIG_MMC_SDHCI_PIC32)		+= pic32_sdhci.o
+ obj-$(CONFIG_MMC_SDHCI_ROCKCHIP)	+= rockchip_sdhci.o
+ obj-$(CONFIG_MMC_SDHCI_ADI)		+= adi_sdhci.o
++obj-$(CONFIG_MMC_SDHCI_X2600)		+= x2600_sdhci.o
+ obj-$(CONFIG_MMC_SDHCI_S5P)		+= s5p_sdhci.o
+ obj-$(CONFIG_MMC_SDHCI_SNPS)		+= snps_sdhci.o
+ obj-$(CONFIG_MMC_SDHCI_STI)		+= sti_sdhci.o
+diff --git a/drivers/mmc/x2600_sdhci.c b/drivers/mmc/x2600_sdhci.c
+new file mode 100644
+index 00000000..e77ad2fa
+--- /dev/null
++++ b/drivers/mmc/x2600_sdhci.c
+@@ -0,0 +1,176 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Ingenic X2600 MSC: a Synopsys DWC MSHC (SDHCI), whose card clock comes
++ * from the CGU. As on Rockchip, the SDCLK frequency select bits of the
++ * Clock Control register have no effect: the clock is set here, in the
++ * controller's CGU divider (MSCnCDR), and the core's divider is ignored.
++ */
++
++#include <dm.h>
++#include <sdhci.h>
++#include <asm/io.h>
++#include <linux/bitops.h>
++#include <linux/delay.h>
++
++#define EMMC_MIN_FREQ		400000
++
++/* CGU, KSEG1 */
++#define CGU_CLKGR0		((void __iomem *)0xb0000020)
++/* MSCnCDR and the CLKGR0 gate bit, per controller */
++static const struct {
++	ulong cdr;
++	u32 gate;
++} x2600_msc_clk[] = {
++	{ 0xb0000068, BIT(2) },	/* MSC0 */
++	{ 0xb00000a4, BIT(3) },	/* MSC1 */
++};
++
++/* MSCnCDR: parent 31:30, change enable 29, busy 28, stop 27, div 7:0 */
++#define CDR_PARENT_SHIFT	30
++#define CDR_PARENT_MPLL		1
++#define CDR_PARENT_EXCLK	2
++#define CDR_CE			BIT(29)
++#define CDR_BUSY		BIT(28)
++#define CDR_STOP		BIT(27)
++#define CDR_DIV_MASK		0xff
++
++#define EXCLK_RATE		24000000
++#define MPLL_RATE		1800000000
++/* below this the CGU feeds the card from EXCLK (identification) */
++#define EXCLK_MAX_CARD_RATE	1700000
++
++struct x2600_sdhci_plat {
++	struct mmc_config cfg;
++	struct mmc mmc;
++	void __iomem *cdr;
++	u32 gate;
++};
++
++/* rate = parent / ((div + 1) * 4), rounded down to at most @rate */
++static void x2600_msc_set_rate(struct x2600_sdhci_plat *plat, ulong rate)
++{
++	ulong parent_rate;
++	u32 parent, div, val;
++	int timeout;
++
++	if (rate <= EXCLK_MAX_CARD_RATE) {
++		parent = CDR_PARENT_EXCLK;
++		parent_rate = EXCLK_RATE;
++	} else {
++		parent = CDR_PARENT_MPLL;
++		parent_rate = MPLL_RATE;
++	}
++
++	div = DIV_ROUND_UP(parent_rate, rate * 4);
++	div = div ? div - 1 : 0;
++	if (div > CDR_DIV_MASK)
++		div = CDR_DIV_MASK;
++
++	/*
++	 * Only the parent and divider fields change: the others (stock sets
++	 * bits 21 and 15) stay as the SPL or Linux left them. The parent only
++	 * switches while the clock is gated; the divider only takes effect
++	 * (busy clears) while it runs.
++	 */
++	val = readl(plat->cdr);
++	if (((val >> CDR_PARENT_SHIFT) & 3) != parent) {
++		setbits_le32(CGU_CLKGR0, plat->gate);
++		val &= ~(3U << CDR_PARENT_SHIFT);
++		val |= parent << CDR_PARENT_SHIFT;
++		writel(val & ~CDR_CE, plat->cdr);
++	}
++	clrbits_le32(CGU_CLKGR0, plat->gate);
++
++	val &= ~(CDR_DIV_MASK | CDR_STOP);
++	val |= div | CDR_CE;
++	writel(val, plat->cdr);
++	for (timeout = 100000; timeout && (readl(plat->cdr) & CDR_BUSY);
++	     timeout--)
++		udelay(1);
++	writel(val & ~CDR_CE, plat->cdr);
++
++	if (!timeout)
++		printf("x2600-sdhci: CGU divider stays busy\n");
++}
++
++static void x2600_sdhci_set_clock(struct sdhci_host *host, u32 div)
++{
++	struct x2600_sdhci_plat *plat = dev_get_plat(host->mmc->dev);
++
++	if (host->mmc->clock)
++		x2600_msc_set_rate(plat, host->mmc->clock);
++}
++
++static const struct sdhci_ops x2600_sdhci_ops = {
++	.set_clock	= x2600_sdhci_set_clock,
++};
++
++static int x2600_sdhci_probe(struct udevice *dev)
++{
++	struct mmc_uclass_priv *upriv = dev_get_uclass_priv(dev);
++	struct x2600_sdhci_plat *plat = dev_get_plat(dev);
++	struct sdhci_host *host = dev_get_priv(dev);
++	int ret;
++
++	host->max_clk = dev_read_u32_default(dev, "max-frequency", 50000000);
++	host->quirks = SDHCI_QUIRK_NO_HISPD_BIT | SDHCI_QUIRK_32BIT_DMA_ADDR;
++	if (host->bus_width == 8)
++		host->host_caps |= MMC_MODE_8BIT;
++
++	host->mmc = &plat->mmc;
++	host->mmc->priv = host;
++	host->mmc->dev = dev;
++	upriv->mmc = host->mmc;
++	host->ops = &x2600_sdhci_ops;
++
++	/* identification clock first, with the gate open */
++	x2600_msc_set_rate(plat, EMMC_MIN_FREQ);
++
++	ret = sdhci_setup_cfg(&plat->cfg, host, host->max_clk, EMMC_MIN_FREQ);
++	if (ret)
++		return ret;
++
++	return sdhci_probe(dev);
++}
++
++static int x2600_sdhci_of_to_plat(struct udevice *dev)
++{
++	struct x2600_sdhci_plat *plat = dev_get_plat(dev);
++	struct sdhci_host *host = dev_get_priv(dev);
++	u32 id = dev_read_u32_default(dev, "ingenic,msc-id", 0);
++
++	host->name = dev->name;
++	host->ioaddr = dev_read_addr_ptr(dev);
++	host->bus_width = dev_read_u32_default(dev, "bus-width", 4);
++
++	if (id >= ARRAY_SIZE(x2600_msc_clk))
++		return -EINVAL;
++	plat->cdr = (void __iomem *)x2600_msc_clk[id].cdr;
++	plat->gate = x2600_msc_clk[id].gate;
++
++	return 0;
++}
++
++static int x2600_sdhci_bind(struct udevice *dev)
++{
++	struct x2600_sdhci_plat *plat = dev_get_plat(dev);
++
++	return sdhci_bind(dev, &plat->mmc, &plat->cfg);
++}
++
++static const struct udevice_id x2600_sdhci_ids[] = {
++	{ .compatible = "ingenic,x2600-dwcmshc" },
++	{ }
++};
++
++U_BOOT_DRIVER(x2600_sdhci) = {
++	.name		= "x2600_sdhci",
++	.id		= UCLASS_MMC,
++	.of_match	= x2600_sdhci_ids,
++	.of_to_plat	= x2600_sdhci_of_to_plat,
++	.ops		= &sdhci_ops,
++	.bind		= x2600_sdhci_bind,
++	.probe		= x2600_sdhci_probe,
++	.priv_auto	= sizeof(struct sdhci_host),
++	.plat_auto	= sizeof(struct x2600_sdhci_plat),
++};
+-- 
+2.43.0
+

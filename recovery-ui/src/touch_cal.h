@@ -6,7 +6,11 @@
  * be used, the panel's usual range from the seed settings of HelixScreen
  * (helixscreen-settings.json). The driver's full range is never used: the
  * panel never reports its edges, so Back in the top left corner could not
- * be reached. */
+ * be reached.
+ * Our 6.6 kernel's tsc2007 reports raw 0-4095 instead, with Y not flipped.
+ * The calibration stays in stock units (the file, the variable and the
+ * default); with AD5X_RUI_TOUCH_UNITS=raw (S80ad5x-recovery-ui, from
+ * kernel.sh) touch_cal_to_raw converts it at use. */
 #ifndef RUI_TOUCH_CAL_H
 #define RUI_TOUCH_CAL_H
 
@@ -21,5 +25,12 @@
  * was used, false for the default. ENV must be four whole numbers within
  * -10000..10000 with min != max on each axis. */
 bool touch_cal_from_env(const char *env, int v[4]);
+
+/* v (stock units, as touch_cal_from_env gives it) -> the raw tsc2007 units
+ * of our 6.6 kernel, edge for edge: x * 4096 / 800 and (480 - y) * 4096 /
+ * 480, rounded, the inverse of the main OS's ad5x-touch-units
+ * --recovery-cal. Y comes out the other way round (min above max), which
+ * LVGL's calibration takes as an inverted axis. */
+void touch_cal_to_raw(int v[4]);
 
 #endif

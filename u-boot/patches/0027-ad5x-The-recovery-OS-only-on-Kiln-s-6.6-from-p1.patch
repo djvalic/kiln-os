@@ -1,0 +1,142 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: valix <djvalic.wc@gmail.com>
+Date: Mon, 16 Nov 2026 18:00:00 -0500
+Subject: [PATCH 27/27] ad5x: The recovery OS only on Kiln's 6.6 from p1
+
+Since 0026 U-Boot never starts Flashforge's 5.10 for the main OS, but
+it still started the recovery OS with whatever good Linux uImage p1
+held, 5.10 included. Slot A is now startable only when p1's kernel is
+Kiln's 6.6 (uImage name "Linux-6.6-ad5x", ad5x_slot_a_kernel_ok, which
+the host tests build): Kiln's main OS puts it there once Kiln's SPL is
+in the first MiB. With a 5.10 there, slot A counts as not startable
+(the main OS again, never a loop), so this U-Boot can't start a
+Flashforge kernel at all; a bootm typed at the prompt still starts
+anything.
+
+The recovery OS's command line always gets "ad5x.kernel=own panic=10
+loglevel=5" now, as p1 can only hold Kiln's 6.6.
+---
+ board/flashforge/ad5x/ad5x.c      |  23 +++++++++++------------
+ board/flashforge/ad5x/bootlogic.c |   9 +++++++--
+ board/flashforge/ad5x/bootlogic.h |  14 +++++++++++---
+ 3 files changed, 29 insertions(+), 17 deletions(-)
+
+diff --git a/board/flashforge/ad5x/ad5x.c b/board/flashforge/ad5x/ad5x.c
+--- a/board/flashforge/ad5x/ad5x.c
++++ b/board/flashforge/ad5x/ad5x.c
+@@ -260,14 +260,13 @@
+ }
+ 
+ /*
+- * The name of the kernel slot A holds (its uImage's, set by
+- * ad5x_gather) and whether it is Kiln's 6.6, which the main OS writes
+- * there once this U-Boot has started it (S99ad5x-update-recovery; the
+- * build names it "Linux-6.6-ad5x"). Until then p1 holds the printer's
+- * stock 5.10, which starts the recovery OS as well.
++ * The name of the kernel slot A holds (its uImage's, set by ad5x_gather).
++ * Only Kiln's 6.6 starts the recovery OS (ad5x_slot_a_kernel_ok): the
++ * main OS writes it there once Kiln's SPL is in the first MiB
++ * (S99ad5x-update-recovery). A p1 with Flashforge's 5.10 makes slot A not
++ * startable: this U-Boot never starts that kernel.
+  */
+ static char ad5x_a_name[IH_NMLEN + 1];
+-static int ad5x_a_own;
+ 
+ /* ---- the environment ---- */
+ 
+@@ -372,12 +371,11 @@
+ 
+ 	/* slot A: p1's kernel (loaded to AD5X_LOAD_A) and p2's root */
+ 	ad5x_a_name[0] = '\0';
+-	ad5x_a_own = 0;
+ 	if (ad5x_check_kernel(AD5X_KERNEL_A_LBA, AD5X_LOAD_A)) {
+ 		strlcpy(ad5x_a_name, image_get_name(map_sysmem(AD5X_LOAD_A, 0)),
+ 			sizeof(ad5x_a_name));
+-		ad5x_a_own = !strncmp(ad5x_a_name, "Linux-6.6-ad5x", 14);
+-		in->slot_a_ok = ad5x_squashfs_at(AD5X_ROOTFS_A_LBA);
++		in->slot_a_ok = ad5x_slot_a_kernel_ok(ad5x_a_name) &&
++				ad5x_squashfs_at(AD5X_ROOTFS_A_LBA);
+ 	}
+ }
+ 
+@@ -398,7 +396,8 @@
+ 	       in->have_73 ? "yes" : "no", in->rel_73,
+ 	       in->slot_a_ok ? "ok" : "not startable",
+ 	       ad5x_a_name[0] ? ad5x_a_name : "no kernel",
+-	       ad5x_a_own ? " (Kiln's)" : "");
++	       !ad5x_a_name[0] || ad5x_slot_a_kernel_ok(ad5x_a_name) ? "" :
++	       " (not Kiln's 6.6: never started)");
+ 	printf("ad5x: watchdog: wdt_os %lu, rootfs2 %s, /data %s\n",
+ 	       env_get_ulong("wdt_os", 10, 0),
+ 	       in->wdt_capable ? "feeds it" : "doesn't feed it",
+@@ -562,8 +561,8 @@
+ 		ad5x_commit(&d);
+ 
+ 		if (d.target == AD5X_BOOT_RECOVERY) {
+-			/* p1's kernel, loaded and checked by ad5x_gather */
+-			ad5x_bootargs("/dev/mmcblk0p2", ad5x_a_own, 0, 0);
++			/* p1's Kiln 6.6, loaded and checked by ad5x_gather */
++			ad5x_bootargs("/dev/mmcblk0p2", 1, 0, 0);
+ 			ad5x_ub_what = AD5X_UB_RECOVERY;
+ 			ad5x_ub_tries = 0;
+ 			ad5x_bootm(AD5X_LOAD_A);
+diff --git a/board/flashforge/ad5x/bootlogic.c b/board/flashforge/ad5x/bootlogic.c
+--- a/board/flashforge/ad5x/bootlogic.c
++++ b/board/flashforge/ad5x/bootlogic.c
+@@ -7,8 +7,8 @@
+  * Rules (u-boot/README.md, "Boot rules"):
+  *
+  * - Flag on slot A: start the recovery OS if slot A is startable (p1 a
+- *   uImage with good header and data CRCs that isn't U-Boot, p2 starting
+- *   with "hsqs"); that start also gives the main OS fresh tries (the state
++ *   uImage with good header and data CRCs that isn't U-Boot and is Kiln's
++ *   6.6, ad5x_slot_a_kernel_ok; p2 starting with "hsqs"); that start also gives the main OS fresh tries (the state
+  *   is cleared). Slot A not startable: start the main OS and point the flag
+  *   at slot B, so the flag tells the truth.
+  * - Flag on slot B, the main OS: the state counts its unconfirmed starts
+@@ -261,6 +261,11 @@
+ 	return 0;
+ }
+ 
++int ad5x_slot_a_kernel_ok(const char *name)
++{
++	return !strncmp(name, "Linux-6.6-ad5x", 14);
++}
++
+ static int same(const char *a, const char *b)
+ {
+ 	return a[0] && b[0] && !strcmp(a, b);
+diff --git a/board/flashforge/ad5x/bootlogic.h b/board/flashforge/ad5x/bootlogic.h
+--- a/board/flashforge/ad5x/bootlogic.h
++++ b/board/flashforge/ad5x/bootlogic.h
+@@ -80,9 +80,8 @@
+ 	char rel_73[AD5X_REL_LEN];
+ 	/*
+ 	 * slot A startable: p1 a Linux uImage for MIPS with good header and
+-	 * data CRCs that isn't a U-Boot (Kiln's 6.6, which the main OS puts
+-	 * there once this U-Boot has started it, or the stock 5.10 until
+-	 * then), and p2 starting with "hsqs"
++	 * data CRCs that isn't a U-Boot and is Kiln's 6.6
++	 * (ad5x_slot_a_kernel_ok), and p2 starting with "hsqs"
+ 	 */
+ 	int slot_a_ok;
+ 	/* the watchdog (ad5x_wdt_seconds) */
+@@ -118,6 +117,15 @@
+ 			      const struct ad5x_decision *d,
+ 			      unsigned long wdt_os);
+ 
++/*
++ * Whether p1's kernel, by its uImage name (ih_name, @name NUL-terminated),
++ * may start the recovery OS: only Kiln's 6.6 ("Linux-6.6-ad5x...", as
++ * kernel-ingenic66/build.sh names it). Kiln's main OS puts it there once
++ * Kiln's SPL is in the first MiB; Flashforge's 5.10 is never started by
++ * this U-Boot, a p1 holding it makes slot A not startable.
++ */
++int ad5x_slot_a_kernel_ok(const char *name);
++
+ /* text sectors: buf is AD5X_REC_SIZE bytes */
+ void ad5x_state_format(const struct ad5x_state *st, char *buf);
+ int ad5x_state_parse(const char *buf, struct ad5x_state *st);
+-- 
+2.56.0
+

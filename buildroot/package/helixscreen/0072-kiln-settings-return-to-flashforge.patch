@@ -1,0 +1,583 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ad5xrecon <ad5xrecon@localhost>
+Date: Mon, 16 Nov 2026 10:00:00 -0500
+Subject: [PATCH] settings: Return to Flashforge firmware on Kiln OS
+
+Settings > System gets "Return to Flashforge firmware" under Boot into
+recovery: after a confirmation it calls Moonraker's
+machine.kiln_os.return_stock (Kiln's kiln_os component), which restarts
+the printer into the recovery OS and has it offer putting Flashforge's
+own firmware back. Nothing is written until that is tapped on the
+recovery screen; the confirmation says so. Like Boot into recovery, the
+request goes over the screen's own connection to Moonraker (127.0.0.1),
+the row is greyed while a print is active and shows only on Kiln OS
+builds (HELIX_KILN_AD5X, the same kiln_boot_recovery_available subject).
+
+The answer {"state": "rebooting", "result": "rebooting"} is read from
+"state", or "result" when there is no state. A refusal is shown without
+Kiln's "[reason] " in front, and without the update agent's older
+"Update agent: ", "refused: " and "failed: " prefixes (Boot into
+recovery shows its refusals the same way now). Boot into recovery and
+the new row share the request and confirmation code. Strings in en and
+ru.
+
+Tests: the method name, the rebooting answers (state and result, each
+alone), a refusal with and without the reason as data, an unexpected or
+empty answer; the row's callback, its visibility and greying.
+
+Upstream: not applicable (AD5X OS specific)
+---
+ include/ui_settings_kiln_recovery.h           | 33 +++++++++++---
+ src/ui/ui_settings_kiln_recovery.cpp          | 97 +++++++++++++++++++++++++++++-----------
+ src/ui/ui_settings_system.cpp                 |  7 ++-
+ tests/unit/test_settings_kiln_recovery.cpp    | 94 ++++++++++++++++++++++++++++++++++++--
+ tests/unit/test_settings_system_callbacks.cpp | 37 +++++++++++++++
+ translations/en.yml                           |  5 ++
+ translations/ru.yml                           |  5 ++
+ ui_xml/settings_system_overlay.xml            | 10 ++++-
+ 8 files changed, 247 insertions(+), 41 deletions(-)
+
+diff --git a/include/ui_settings_kiln_recovery.h b/include/ui_settings_kiln_recovery.h
+--- a/include/ui_settings_kiln_recovery.h
++++ b/include/ui_settings_kiln_recovery.h
+@@ -2,7 +2,8 @@
+ 
+ /**
+  * @file ui_settings_kiln_recovery.h
+- * @brief Kiln OS: Settings > System > Boot into recovery (issue #47)
++ * @brief Kiln OS: Settings > System > Boot into recovery (issue #47) and
++ *        Return to Flashforge firmware
+  *
+  * Moonraker's kiln_os component answers `machine.kiln_os.boot_recovery`
+  * (POST /machine/kiln_os/boot_recovery): Kiln's root update agent points the
+@@ -14,9 +15,14 @@
+  * "Errors"). MoonrakerError::from_json_rpc leaves "[<reason>] " out of the
+  * message and keeps the reason in kiln_reason().
+  *
+- * The row shows on HELIX_KILN_AD5X builds only (`kiln_boot_recovery_available`)
+- * and is greyed while a print is active (print_active). It goes through the
+- * screen's own Moonraker connection (127.0.0.1), so it works with the network
++ * `machine.kiln_os.return_stock` (POST /machine/kiln_os/return_stock) does
++ * the same and also tells the recovery OS to offer putting Flashforge's own
++ * firmware back; nothing is written before that is tapped there. It answers
++ * {"state": "rebooting", "result": "rebooting"} and refuses the same way.
++ *
++ * Both rows show on HELIX_KILN_AD5X builds only (`kiln_boot_recovery_available`)
++ * and are greyed while a print is active (print_active). They go through the
++ * screen's own Moonraker connection (127.0.0.1), so they work with the network
+  * down.
+  *
+  * @threading Main thread; Moonraker's answer hops over through the UpdateQueue
+@@ -41,6 +47,9 @@
+ /// The JSON-RPC method of POST /machine/kiln_os/boot_recovery
+ inline constexpr const char* kMethod = "machine.kiln_os.boot_recovery";
+ 
++/// The JSON-RPC method of POST /machine/kiln_os/return_stock
++inline constexpr const char* kReturnStockMethod = "machine.kiln_os.return_stock";
++
+ /// Moonraker waits up to 30 s for the update agent; a little more here
+ inline constexpr uint32_t kTimeoutMs = 45000;
+ 
+@@ -48,8 +57,10 @@
+ bool available();
+ void set_available_for_test(std::optional<bool> value);
+ 
+-/// Moonraker's error message without a "[<reason>] " in front: "A print is
+-/// running", "Start-up has not finished yet, try again in a minute", ...
++/// Moonraker's error message without a "[<reason>] " in front and without
++/// the update agent's older "Update agent: ", "refused: " and "failed: "
++/// prefixes: "A print is running", "Start-up has not finished yet, try again
++/// in a minute", ...
+ std::string refusal_text(const std::string& message);
+ 
+ /// The answer, on the main thread: @p rebooting true when the printer is
+@@ -59,10 +70,18 @@
+ /// Send the request over @p client.
+ void request(IMoonrakerClient& client, Done done);
+ 
++/// Send machine.kiln_os.return_stock over @p client. @p rebooting is true
++/// when the answer's "state" (or else its "result") starts with "rebooting".
++void request_return_stock(IMoonrakerClient& client, Done done);
++
+ /// The row's action: confirm, then request, with a toast for the outcome.
+ void confirm_and_request();
+ 
+-/// The row's subject: `kiln_boot_recovery_available` (1 shows the row).
++/// Return to Flashforge firmware's action: confirm, then
++/// request_return_stock, with a toast for the outcome.
++void confirm_and_request_return_stock();
++
++/// The rows' subject: `kiln_boot_recovery_available` (1 shows them).
+ class RecoveryRow {
+   public:
+     RecoveryRow() = default;
+diff --git a/src/ui/ui_settings_kiln_recovery.cpp b/src/ui/ui_settings_kiln_recovery.cpp
+--- a/src/ui/ui_settings_kiln_recovery.cpp
++++ b/src/ui/ui_settings_kiln_recovery.cpp
+@@ -34,21 +34,20 @@
+ 
+ std::optional<bool> g_available_override;
+ 
+-} // namespace
+-
+-bool available() {
+-    return g_available_override.value_or(kBuiltIn);
++void strip_prefix(std::string& text, const char* prefix) {
++    const std::string p(prefix);
++    if (text.compare(0, p.size(), p) == 0) {
++        text.erase(0, p.size());
++    }
+ }
+ 
+-void set_available_for_test(std::optional<bool> value) {
+-    g_available_override = value;
+-}
++/// What in a method's answer says the printer is restarting
++enum class Reply {
++    State,         ///< boot_recovery: result.state is "rebooting"
++    StateOrResult, ///< return_stock: result.state, else result.result, starts with "rebooting"
++};
+ 
+-std::string refusal_text(const std::string& message) {
+-    return MoonrakerError::strip_kiln_reason(message);
+-}
+-
+-void request(IMoonrakerClient& client, Done done) {
++void send(IMoonrakerClient& client, const char* method, Reply reply, Done done) {
+     auto shared = std::make_shared<Done>(std::move(done));
+     auto finish = [shared](bool rebooting, std::string text) {
+         helix::ui::queue_update("kiln_recovery::answer", [shared, rebooting, text]() {
+@@ -57,16 +56,21 @@
+             }
+         });
+     };
+-    spdlog::info("[Kiln recovery] {}", kMethod);
++    spdlog::info("[Kiln recovery] {}", method);
+     client.send_jsonrpc(
+-        kMethod, json::object(),
+-        [finish](const json& response) {
++        method, json::object(),
++        [finish, reply](const json& response) {
+             // {"state": "rebooting"}, the JSON-RPC result itself
+             const json* result = json_util::find_member(response, "result");
+             const json* state = result ? json_util::find_member(*result, "state") : nullptr;
++            if (reply == Reply::StateOrResult && result && !(state && state->is_string())) {
++                state = json_util::find_member(*result, "result");
++            }
+             const std::string answer =
+                 state && state->is_string() ? state->get<std::string>() : std::string();
+-            if (answer == "rebooting") {
++            const bool rebooting = reply == Reply::State ? answer == "rebooting"
++                                                         : answer.rfind("rebooting", 0) == 0;
++            if (rebooting) {
+                 spdlog::info("[Kiln recovery] Rebooting into the recovery OS");
+                 finish(true, answer);
+             } else {
+@@ -83,34 +87,74 @@
+         kTimeoutMs, /*silent=*/true);
+ }
+ 
+-void confirm_and_request() {
++/// Confirm, then @p send_request over the screen's own Moonraker client: a
++/// toast when the printer restarts, else @p error_format with the reason.
++void confirm_then(const char* title, const char* text,
++                  void (*send_request)(IMoonrakerClient&, Done), std::string error_format) {
+     if (!available()) {
+         return;
+     }
+     helix::ui::modal_confirm(
+-        lv_tr("Boot into recovery?"),
+-        lv_tr("The printer restarts into the recovery OS, where it can't print. To come back, "
+-              "tap Boot main OS on its screen."),
+-        ModalSeverity::Warning, lv_tr("Restart"), [] {
++        title, text, ModalSeverity::Warning, lv_tr("Restart"),
++        [send_request, error_format = std::move(error_format)] {
+             IMoonrakerClient* client = get_moonraker_client();
+             if (!client || client->get_connection_state() != ConnectionState::CONNECTED) {
+                 NOTIFY_WARNING("{}", lv_tr("Not connected to the printer"));
+                 return;
+             }
+-            request(*client, [](bool rebooting, const std::string& text) {
++            send_request(*client, [error_format](bool rebooting, const std::string& why) {
+                 if (rebooting) {
+                     ToastManager::instance().show(ToastSeverity::INFO,
+                                                   lv_tr("Restarting into the recovery OS..."),
+                                                   5000);
+                 } else {
+-                    NOTIFY_ERROR("{}", fmt::format(fmt::runtime(lv_tr(
+-                                                       "Can't boot into recovery: {}")),
+-                                                   text));
++                    NOTIFY_ERROR("{}", fmt::format(fmt::runtime(error_format), why));
+                 }
+             });
+         });
+ }
+ 
++} // namespace
++
++bool available() {
++    return g_available_override.value_or(kBuiltIn);
++}
++
++void set_available_for_test(std::optional<bool> value) {
++    g_available_override = value;
++}
++
++std::string refusal_text(const std::string& message) {
++    std::string text = MoonrakerError::strip_kiln_reason(message);
++    strip_prefix(text, "Update agent: ");
++    strip_prefix(text, "refused: ");
++    strip_prefix(text, "failed: ");
++    return text;
++}
++
++void request(IMoonrakerClient& client, Done done) {
++    send(client, kMethod, Reply::State, std::move(done));
++}
++
++void request_return_stock(IMoonrakerClient& client, Done done) {
++    send(client, kReturnStockMethod, Reply::StateOrResult, std::move(done));
++}
++
++void confirm_and_request() {
++    confirm_then(lv_tr("Boot into recovery?"),
++                 lv_tr("The printer restarts into the recovery OS, where it can't print. To come "
++                       "back, tap Boot main OS on its screen."),
++                 &request, lv_tr("Can't boot into recovery: {}"));
++}
++
++void confirm_and_request_return_stock() {
++    confirm_then(lv_tr("Return to Flashforge firmware?"),
++                 lv_tr("The printer restarts into the recovery OS. There, check what it found and "
++                       "tap Return to Flashforge firmware to start. Nothing is changed before "
++                       "that tap."),
++                 &request_return_stock, lv_tr("Can't return to Flashforge firmware: {}"));
++}
++
+ RecoveryRow::~RecoveryRow() {
+     subjects_.deinit_all();
+ }
+@@ -119,7 +163,8 @@
+     if (subjects_initialized_) {
+         return;
+     }
+-    // 1 shows Settings > System > Boot into recovery (Kiln OS builds)
++    // 1 shows Settings > System > Boot into recovery and Return to Flashforge
++    // firmware (Kiln OS builds)
+     UI_MANAGED_SUBJECT_INT(available_, available() ? 1 : 0, "kiln_boot_recovery_available",
+                            subjects_);
+     subjects_initialized_ = true;
+diff --git a/src/ui/ui_settings_system.cpp b/src/ui/ui_settings_system.cpp
+--- a/src/ui/ui_settings_system.cpp
++++ b/src/ui/ui_settings_system.cpp
+@@ -37,7 +37,8 @@
+ void SystemSettingsOverlay::init_subjects() {
+     // Kiln OS: the Log detail row binds these; the model may not be attached yet
+     helix::ad5x_log::model().init_subjects();
+-    // Kiln OS: Boot into recovery shows on the AD5X build only
++    // Kiln OS: Boot into recovery and Return to Flashforge firmware show on the
++    // AD5X build only
+     helix::kiln_recovery::row().init_subjects();
+ }
+ 
+@@ -84,6 +85,10 @@
+         // Kiln OS: restart into the recovery OS (machine.kiln_os.boot_recovery)
+         {"on_kiln_boot_recovery_clicked",
+          [](lv_event_t*) { helix::kiln_recovery::confirm_and_request(); }},
++        // Kiln OS: the same, then the recovery OS offers Flashforge's firmware
++        // back (machine.kiln_os.return_stock)
++        {"on_kiln_return_stock_clicked",
++         [](lv_event_t*) { helix::kiln_recovery::confirm_and_request_return_stock(); }},
+         {"on_factory_reset_clicked",
+          [](lv_event_t*) { get_system_settings_overlay().handle_factory_reset_clicked(); }},
+         {"on_factory_reset_confirm",
+diff --git a/tests/unit/test_settings_kiln_recovery.cpp b/tests/unit/test_settings_kiln_recovery.cpp
+--- a/tests/unit/test_settings_kiln_recovery.cpp
++++ b/tests/unit/test_settings_kiln_recovery.cpp
+@@ -5,6 +5,9 @@
+ // the recovery OS, and shows why when Kiln's update agent refuses. Kiln's
+ // replies: the object {"state": "rebooting"}; errors with an HTTP status as
+ // the code, "[reason] text" as the message and {"reason": ...} as the data.
++// Return to Flashforge firmware (machine.kiln_os.return_stock) restarts into the
++// recovery OS the same way; it answers {"state": "rebooting", "result":
++// "rebooting"}.
+ 
+ #include "ui_settings_kiln_recovery.h"
+ #include "ui_update_queue.h"
+@@ -30,18 +33,23 @@
+     std::string text;
+ };
+ 
+-/// Send the request, then let @p reply answer the recorded call.
+-template <typename Reply> Answer ask(Reply reply) {
++using Request = void (*)(helix::IMoonrakerClient&, recovery::Done);
++
++/// Send the request (@p send, which should call @p method), then let @p reply
++/// answer the recorded call.
++template <typename Reply>
++Answer ask(Reply reply, Request send = &recovery::request,
++           const char* method = "machine.kiln_os.boot_recovery") {
+     FakeMoonrakerClient client;
+     Answer answer;
+-    recovery::request(client, [&answer](bool rebooting, const std::string& text) {
++    send(client, [&answer](bool rebooting, const std::string& text) {
+         answer.called = true;
+         answer.rebooting = rebooting;
+         answer.text = text;
+     });
+     REQUIRE(client.rpc_calls.size() == 1);
+     const auto& call = client.rpc_calls[0];
+-    CHECK(call.method == "machine.kiln_os.boot_recovery");
++    CHECK(call.method == method);
+     CHECK(call.timeout_ms == recovery::kTimeoutMs);
+     reply(call);
+     // The answer reaches the caller on the main thread, through the queue
+@@ -51,12 +59,18 @@
+     return answer;
+ }
+ 
++/// Return to Flashforge firmware's request, answered by @p reply
++template <typename Reply> Answer ask_return_stock(Reply reply) {
++    return ask(reply, &recovery::request_return_stock, "machine.kiln_os.return_stock");
++}
++
+ /// A Kiln error as Moonraker's JSON-RPC layer sends it
+-MoonrakerError kiln_error(int code, const std::string& reason, const std::string& text) {
++MoonrakerError kiln_error(int code, const std::string& reason, const std::string& text,
++                          const char* method = "machine.kiln_os.boot_recovery") {
+     return MoonrakerError::from_json_rpc({{"code", code},
+                                           {"message", "[" + reason + "] " + text},
+                                           {"data", {{"reason", reason}}}},
+-                                         "machine.kiln_os.boot_recovery");
++                                         method);
+ }
+ 
+ } // namespace
+@@ -68,6 +82,11 @@
+           "Start-up has not finished yet, try again in a minute");
+     CHECK(recovery::refusal_text("A print is running") == "A print is running");
+     CHECK(recovery::refusal_text("Method not found") == "Method not found");
++    // The update agent's older prefixes come off too
++    CHECK(recovery::refusal_text("Update agent: refused: a print is running") ==
++          "a print is running");
++    CHECK(recovery::refusal_text("Update agent: failed: no saved stock system") ==
++          "no saved stock system");
+ }
+ 
+ TEST_CASE("Kiln errors: the reason is the data, the message the text", "[kiln][moonraker][error]") {
+@@ -156,6 +175,69 @@
+     }
+ }
+ 
++TEST_CASE("Kiln recovery: Return to Flashforge firmware calls return_stock",
++          "[kiln][kiln_recovery]") {
++    CHECK(std::string(recovery::kReturnStockMethod) == "machine.kiln_os.return_stock");
++    CHECK(std::string(recovery::kReturnStockMethod) != recovery::kMethod);
++}
++
++TEST_CASE_METHOD(LVGLTestFixture,
++                 "Kiln recovery: Return to Flashforge firmware's answer reaches the caller",
++                 "[kiln][kiln_recovery]") {
++    SECTION("rebooting, as Kiln OS answers") {
++        const Answer a = ask_return_stock([](const FakeMoonrakerClient::RpcCall& call) {
++            REQUIRE(call.success_cb);
++            call.success_cb(json{{"jsonrpc", "2.0"},
++                                 {"result", {{"state", "rebooting"}, {"result", "rebooting"}}}});
++        });
++        CHECK(a.rebooting);
++    }
++    SECTION("rebooting in state alone") {
++        const Answer a = ask_return_stock([](const FakeMoonrakerClient::RpcCall& call) {
++            call.success_cb(json{{"jsonrpc", "2.0"}, {"result", {{"state", "rebooting"}}}});
++        });
++        CHECK(a.rebooting);
++    }
++    SECTION("rebooting in result alone") {
++        const Answer a = ask_return_stock([](const FakeMoonrakerClient::RpcCall& call) {
++            call.success_cb(json{{"jsonrpc", "2.0"}, {"result", {{"result", "rebooting"}}}});
++        });
++        CHECK(a.rebooting);
++    }
++    SECTION("refused while printing") {
++        const Answer a = ask_return_stock([](const FakeMoonrakerClient::RpcCall& call) {
++            REQUIRE(call.error_cb);
++            call.error_cb(
++                kiln_error(409, "printing", "A print is running", "machine.kiln_os.return_stock"));
++        });
++        CHECK_FALSE(a.rebooting);
++        CHECK(a.text == "A print is running");
++    }
++    SECTION("refused, the reason left in the message") {
++        const Answer a = ask_return_stock([](const FakeMoonrakerClient::RpcCall& call) {
++            call.error_cb(MoonrakerError::from_json_rpc(
++                {{"code", 409}, {"message", "[printing] A print is running"}},
++                "machine.kiln_os.return_stock"));
++        });
++        CHECK_FALSE(a.rebooting);
++        CHECK(a.text == "A print is running");
++    }
++    SECTION("an answer that is not rebooting is not taken for one") {
++        const Answer a = ask_return_stock([](const FakeMoonrakerClient::RpcCall& call) {
++            call.success_cb(json{{"jsonrpc", "2.0"}, {"result", {{"state", "queued"}}}});
++        });
++        CHECK_FALSE(a.rebooting);
++        CHECK(a.text == "queued");
++    }
++    SECTION("no answer at all is not taken for rebooting") {
++        const Answer a = ask_return_stock([](const FakeMoonrakerClient::RpcCall& call) {
++            call.success_cb(json{{"jsonrpc", "2.0"}, {"result", json::object()}});
++        });
++        CHECK_FALSE(a.rebooting);
++        CHECK_FALSE(a.text.empty());
++    }
++}
++
+ TEST_CASE("Kiln recovery: only the Kiln OS build has the row", "[kiln][kiln_recovery]") {
+ #if defined(HELIX_KILN_AD5X)
+     CHECK(recovery::available());
+diff --git a/tests/unit/test_settings_system_callbacks.cpp b/tests/unit/test_settings_system_callbacks.cpp
+--- a/tests/unit/test_settings_system_callbacks.cpp
++++ b/tests/unit/test_settings_system_callbacks.cpp
+@@ -113,6 +113,7 @@
+                              Binding{"row_telemetry_view_data", "on_telemetry_view_data"},
+                              Binding{"row_restart_helix", "on_restart_helix_settings_clicked"},
+                              Binding{"row_kiln_boot_recovery", "on_kiln_boot_recovery_clicked"},
++                             Binding{"row_kiln_return_stock", "on_kiln_return_stock_clicked"},
+                              Binding{"row_factory_reset", "on_factory_reset_clicked"}}) {
+         CAPTURE(b.row, b.callback);
+         CHECK(row_runs(b.row, b.callback));
+@@ -175,4 +176,40 @@
+ 
+     lv_subject_set_int(available, available_before);
+     process_lvgl(5);
++}
++
++// Kiln OS: Return to Flashforge firmware shows with Boot into recovery
++// (kiln_boot_recovery_available) and is greyed while a print is active.
++TEST_CASE_METHOD(SystemCallbacksFixture,
++                 "System page: Return to Flashforge firmware shows on Kiln OS and greys during a "
++                 "print",
++                 "[settings][system_callbacks][kiln]") {
++    lv_subject_t* available = lv_xml_get_subject(nullptr, "kiln_boot_recovery_available");
++    REQUIRE(available != nullptr);
++    lv_subject_t* print_active = lv_xml_get_subject(nullptr, "print_active");
++    REQUIRE(print_active != nullptr);
++    const int available_before = lv_subject_get_int(available);
++    lv_obj_t* row = lv_obj_find_by_name(root_, "row_kiln_return_stock");
++    REQUIRE(row != nullptr);
++
++    // The test build is not HELIX_KILN_AD5X: hidden there
++    CHECK(lv_obj_has_flag(row, LV_OBJ_FLAG_HIDDEN) == !helix::kiln_recovery::available());
++
++    lv_subject_set_int(available, 1);
++    process_lvgl(5);
++    CHECK_FALSE(lv_obj_has_flag(row, LV_OBJ_FLAG_HIDDEN));
++
++    lv_subject_set_int(print_active, 1);
++    process_lvgl(5);
++    CHECK(lv_obj_has_state(row, LV_STATE_DISABLED));
++    lv_subject_set_int(print_active, 0);
++    process_lvgl(5);
++    CHECK_FALSE(lv_obj_has_state(row, LV_STATE_DISABLED));
++
++    lv_subject_set_int(available, 0);
++    process_lvgl(5);
++    CHECK(lv_obj_has_flag(row, LV_OBJ_FLAG_HIDDEN));
++
++    lv_subject_set_int(available, available_before);
++    process_lvgl(5);
+ }
+diff --git a/translations/en.yml b/translations/en.yml
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -5083,6 +5083,7 @@
+   'Calibration stopped. Heaters off, nothing saved.': 'Calibration stopped. Heaters off, nothing saved.'
+   'Can''t boot into recovery: {}': 'Can''t boot into recovery: {}'
+   'Can''t calibrate now': 'Can''t calibrate now'
++  'Can''t return to Flashforge firmware: {}': 'Can''t return to Flashforge firmware: {}'
+   'Change the nozzle size to {}?': 'Change the nozzle size to {}?'
+   'Changing filament': 'Changing filament'
+   'Changing the nozzle size... Klipper will restart.': 'Changing the nozzle size... Klipper will restart.'
+@@ -5192,9 +5193,12 @@
+   'Purge box': 'Purge box'
+   'Remove {}?': 'Remove {}?'
+   'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': 'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)'
++  'Restart into the recovery OS to put Flashforge''s own firmware back': 'Restart into the recovery OS to put Flashforge''s own firmware back'
+   'Restarting into the recovery OS...': 'Restarting into the recovery OS...'
+   'Retracting filament': 'Retracting filament'
+   'Retracting {}': 'Retracting {}'
++  'Return to Flashforge firmware': 'Return to Flashforge firmware'
++  'Return to Flashforge firmware?': 'Return to Flashforge firmware?'
+   'Run Again': 'Run Again'
+   'Run Setup Wizard': 'Run Setup Wizard'
+   'Run the hotend PID tune and the first-layer Z offset test now? (The bed doesn''t need retuning.)': 'Run the hotend PID tune and the first-layer Z offset test now? (The bed doesn''t need retuning.)'
+@@ -5238,6 +5242,7 @@
+   'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.': 'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.'
+   'The nozzle size can''t change during a print': 'The nozzle size can''t change during a print'
+   'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.'
++  'The printer restarts into the recovery OS. There, check what it found and tap Return to Flashforge firmware to start. Nothing is changed before that tap.': 'The printer restarts into the recovery OS. There, check what it found and tap Return to Flashforge firmware to start. Nothing is changed before that tap.'
+   'The results of the tuning so far. Check them, then Save.': 'The results of the tuning so far. Check them, then Save.'
+   'The results so far, before Save': 'The results so far, before Save'
+   'The temperature to measure, from a cold bed': 'The temperature to measure, from a cold bed'
+diff --git a/translations/ru.yml b/translations/ru.yml
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -5249,6 +5249,7 @@
+   'Calibration stopped. Heaters off, nothing saved.': 'Калибровка остановлена. Нагреватели выключены, ничего не сохранено.'
+   'Can''t boot into recovery: {}': 'Не удалось загрузить систему восстановления: {}'
+   'Can''t calibrate now': 'Сейчас калибровка невозможна'
++  'Can''t return to Flashforge firmware: {}': 'Не удалось вернуть прошивку Flashforge: {}'
+   'Change the nozzle size to {}?': 'Изменить размер сопла на {}?'
+   'Changing filament': 'Смена филамента'
+   'Changing the nozzle size... Klipper will restart.': 'Смена размера сопла... Klipper перезапустится.'
+@@ -5358,9 +5359,12 @@
+   'Purge box': 'Лоток для отходов'
+   'Remove {}?': 'Удалить {}?'
+   'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': 'Перезапуск в систему восстановления (установка обновления с USB-флешки или через веб-страницу на порту 8080)'
++  'Restart into the recovery OS to put Flashforge''s own firmware back': 'Перезапуск в систему восстановления, чтобы вернуть родную прошивку Flashforge'
+   'Restarting into the recovery OS...': 'Перезапуск в систему восстановления...'
+   'Retracting filament': 'Втягивание филамента'
+   'Retracting {}': 'Втягивание: {}'
++  'Return to Flashforge firmware': 'Вернуть прошивку Flashforge'
++  'Return to Flashforge firmware?': 'Вернуть прошивку Flashforge?'
+   'Run Again': 'Ещё раз'
+   'Run Setup Wizard': 'Запустить мастер настройки'
+   'Run the hotend PID tune and the first-layer Z offset test now? (The bed doesn''t need retuning.)': 'Запустить сейчас настройку PID хотенда и тест смещения по Z на первом слое? (Стол перенастраивать не нужно.)'
+@@ -5404,6 +5408,7 @@
+   'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.': 'Сопло, установленное на принтере. От него зависят ширина линий, длина продувки и тест первого слоя. Изменить его можно позже в настройках.'
+   'The nozzle size can''t change during a print': 'Размер сопла нельзя изменить во время печати'
+   'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'Принтер перезапустится в систему восстановления, где печать недоступна. Чтобы вернуться, нажмите на её экране «Запустить ОС».'
++  'The printer restarts into the recovery OS. There, check what it found and tap Return to Flashforge firmware to start. Nothing is changed before that tap.': 'Принтер перезапустится в систему восстановления. Там проверьте, что она нашла, и нажмите «Вернуть прошивку Flashforge», чтобы начать. До этого нажатия ничего не меняется.'
+   'The results of the tuning so far. Check them, then Save.': 'Результаты настройки на данный момент. Проверьте их, затем сохраните.'
+   'The results so far, before Save': 'Результаты на данный момент, до сохранения'
+   'The temperature to measure, from a cold bed': 'Температура для измерения, начиная с холодного стола'
+diff --git a/ui_xml/settings_system_overlay.xml b/ui_xml/settings_system_overlay.xml
+--- a/ui_xml/settings_system_overlay.xml
++++ b/ui_xml/settings_system_overlay.xml
+@@ -2,7 +2,7 @@
+ <!-- Copyright (C) 2025-2026 356C LLC -->
+ <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+ <!-- System Settings Overlay -->
+-<!-- Security, performance, telemetry, log level, restart, boot into recovery (Kiln OS), factory reset -->
++<!-- Security, performance, telemetry, log level, restart, boot into recovery and return to Flashforge firmware (Kiln OS), factory reset -->
+ <component>
+   <view name="settings_system_overlay" extends="overlay_panel" title="System" bg_color="#screen_bg">
+     <!-- Content Area - no padding, rows handle their own -->
+@@ -78,6 +78,14 @@
+                             callback="on_kiln_boot_recovery_clicked" disabled="print_active">
+           <bind_flag_if_eq subject="kiln_boot_recovery_available" flag="hidden" ref_value="0"/>
+         </setting_action_row>
++        <!-- Kiln OS: machine.kiln_os.return_stock, the recovery OS then offers
++             Flashforge's firmware back; greyed during a print -->
++        <setting_action_row name="row_kiln_return_stock"
++                            label="Return to Flashforge firmware" icon="undo"
++                            description="Restart into the recovery OS to put Flashforge's own firmware back"
++                            callback="on_kiln_return_stock_clicked" disabled="print_active">
++          <bind_flag_if_eq subject="kiln_boot_recovery_available" flag="hidden" ref_value="0"/>
++        </setting_action_row>
+         <!-- ================================================================== -->
+         <!-- FACTORY RESET -->
+         <!-- ================================================================== -->
+-- 
+2.56.0
+

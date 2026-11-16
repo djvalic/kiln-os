@@ -1215,10 +1215,10 @@ class IFS:
             if now >= end:
                 raise self._timeout_error(what, st)
             self.reactor.pause(now + self.poll_interval)
-        # Stop the feed. The IFS refuses only while a fault is latched.
-        reply = self._request("F112")
-        if "yes" not in reply:
-            raise IfsError("F112 refused: %s" % (reply,))
+        # Stop the feed. The IFS refuses only while a fault is latched
+        # ("F112 ok. error."). 3.0.7 answers "F112 ok. yes.", 3.0.6 only
+        # "F112 ok." (issue #72), so only a refusal counts as one.
+        self._command("F112")
         return self._wait_ready(self.select_timeout, what)
     def _load(self, chan, length, speed):
         if self._head_has_filament():
@@ -1312,9 +1312,7 @@ class IFS:
             now = self.reactor.monotonic()
             self.last_feed = min(length, (now - start) * speed / 60.)
             if self._head_has_filament():
-                reply = self._request("F112")
-                if "yes" not in reply:
-                    raise IfsError("F112 refused: %s" % (reply,))
+                self._command("F112")
                 self._wait_ready(self.select_timeout, what)
                 return True
             if now >= next_query:

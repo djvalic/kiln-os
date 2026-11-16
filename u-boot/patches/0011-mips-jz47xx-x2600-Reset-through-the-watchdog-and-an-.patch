@@ -1,0 +1,182 @@
+From 729cba498588e7186bcb65f9de4496366c8f47cf Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sun, 15 Nov 2026 01:39:35 -0700
+Subject: [PATCH 11/12] mips: jz47xx: x2600: Reset through the watchdog, and an
+ ad5x_wdt command
+
+The X2600 watchdog has the JZ47xx TCU watchdog registers in a block of
+its own at 0x13630000. It counts the RTC clock, here EXCLK / 512 (there
+is no 32.768 kHz crystal), through a prescaler of 4^n. The counter
+ignores writes; TCSR's CLRZ clears it.
+
+Open the TCU0 bus clock (CLKGR1 bit 8) and the RTC clock gate (CLKGR0
+bit 29), as Linux's drivers do, select EXCLK / 512 and start it for
+reset_cpu() (10 ms). ad5x_wdt SECONDS|off starts it with a timeout of up
+to about 1431 s, or stops it, so a boot can run with it armed and a hang
+in U-Boot, the kernel or early user space resets the board.
+
+Tested by chainload from Flashforge's 5.10: after ad5x_wdt 600 the
+counter runs at about 45 Hz; reset restarts the board, which comes up
+through the SPL as after a power cycle.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ arch/mips/mach-jz47xx/include/mach/x2600.h |  8 +++
+ arch/mips/mach-jz47xx/x2600/x2600.c        | 70 ++++++++++++++++++++++
+ board/flashforge/ad5x/ad5x.c               | 32 ++++++++++
+ 3 files changed, 110 insertions(+)
+ create mode 100644 arch/mips/mach-jz47xx/include/mach/x2600.h
+
+diff --git a/arch/mips/mach-jz47xx/include/mach/x2600.h b/arch/mips/mach-jz47xx/include/mach/x2600.h
+new file mode 100644
+index 00000000..69906d51
+--- /dev/null
++++ b/arch/mips/mach-jz47xx/include/mach/x2600.h
+@@ -0,0 +1,8 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++#ifndef __MACH_X2600_H__
++#define __MACH_X2600_H__
++
++void x2600_wdt_start(unsigned int ms);
++void x2600_wdt_stop(void);
++
++#endif
+diff --git a/arch/mips/mach-jz47xx/x2600/x2600.c b/arch/mips/mach-jz47xx/x2600/x2600.c
+index 97068531..364a45ea 100644
+--- a/arch/mips/mach-jz47xx/x2600/x2600.c
++++ b/arch/mips/mach-jz47xx/x2600/x2600.c
+@@ -7,6 +7,7 @@
+ #include <init.h>
+ #include <asm/io.h>
+ #include <linux/bitops.h>
++#include <mach/x2600.h>
+ 
+ /* UART0: Ingenic's fractional baud registers, after the 16550 ones */
+ #define X2600_UART0		((void __iomem *)0xb0030000)
+@@ -69,6 +70,75 @@ unsigned long long get_ticks(void)
+ 	return ((u64)hi << 32) | lo;
+ }
+ 
++#ifndef CONFIG_XPL_BUILD
++/*
++ * Watchdog (0x13630000): the JZ47xx TCU watchdog registers in a block of
++ * their own. It counts the RTC clock, which comes from EXCLK / 512
++ * (46.875 kHz; OPCR bit 2 clear, there is no 32.768 kHz crystal), through a
++ * prescaler of 4^n. The TCU0 bus clock (CLKGR1 bit 8) and the RTC clock
++ * gate (CLKGR0 bit 29, as mainline's CGU driver has it) are opened first,
++ * as Linux's drivers do; the counter has been seen running with bit 29
++ * reading set under the vendor 6.6, so that gate may not be all of it.
++ * The counter ignores writes; TCSR's CLRZ clears it. RSR bit 1 records a
++ * watchdog reset.
++ */
++#define X2600_CPM_OPCR		((void __iomem *)0xb0000024)
++#define X2600_CPM_CLKGR1	((void __iomem *)0xb0000028)
++#define OPCR_ERCS		BIT(2)		/* RTC clock: set = RTCLK */
++#define CLKGR0_RTC		BIT(29)
++#define CLKGR1_TCU0		BIT(8)
++#define X2600_WDT		((void __iomem *)0xb3630000)
++#define WDT_TDR			0x00
++#define WDT_TCER		0x04
++#define WDT_TCSR		0x0c
++#define WDT_TSCR		0x3c		/* stop clear */
++#define TCSR_RTC_EN		BIT(1)
++#define TCSR_PRESCALE(n)	((n) << 3)
++#define TCSR_CLRZ		BIT(10)
++#define TSCR_WDT		BIT(16)
++#define WDT_HZ			(24000000 / 512)
++
++/* Start (or restart) the watchdog to reset after ms, up to about 1431 s */
++void x2600_wdt_start(unsigned int ms)
++{
++	u64 ticks = (u64)WDT_HZ * ms / 1000;
++	unsigned int n = 0;
++
++	while (n < 5 && (ticks >> (2 * n)) > 0xffff)
++		n++;
++	ticks >>= 2 * n;
++	if (ticks > 0xffff)
++		ticks = 0xffff;
++	if (!ticks)
++		ticks = 1;
++
++	clrbits_le32(X2600_CPM_CLKGR1, CLKGR1_TCU0);
++	clrbits_le32(X2600_CPM_CLKGR0, CLKGR0_RTC);
++	clrbits_le32(X2600_CPM_OPCR, OPCR_ERCS);
++
++	writel(0, X2600_WDT + WDT_TCER);
++	writel(TCSR_RTC_EN | TCSR_PRESCALE(n), X2600_WDT + WDT_TCSR);
++	writel(ticks, X2600_WDT + WDT_TDR);
++	writel(TCSR_RTC_EN | TCSR_PRESCALE(n) | TCSR_CLRZ,
++	       X2600_WDT + WDT_TCSR);
++	writel(TSCR_WDT, X2600_WDT + WDT_TSCR);
++	writel(BIT(0), X2600_WDT + WDT_TCER);
++}
++
++void x2600_wdt_stop(void)
++{
++	clrbits_le32(X2600_CPM_CLKGR1, CLKGR1_TCU0);
++	writel(0, X2600_WDT + WDT_TCER);
++}
++
++void _machine_restart(void)
++{
++	x2600_wdt_start(10);
++	while (1)
++		;
++}
++#endif /* !CONFIG_XPL_BUILD */
++
+ #ifdef CONFIG_XPL_BUILD
+ /*
+  * SPL: started by the boot ROM like Flashforge's (code at 0x80001800), or,
+diff --git a/board/flashforge/ad5x/ad5x.c b/board/flashforge/ad5x/ad5x.c
+index 3c946191..3e0178ca 100644
+--- a/board/flashforge/ad5x/ad5x.c
++++ b/board/flashforge/ad5x/ad5x.c
+@@ -11,7 +11,9 @@
+ #include <mmc.h>
+ #include <asm/cache.h>
+ #include <asm/global_data.h>
++#include <mach/x2600.h>
+ #include <linux/string.h>
++#include <vsprintf.h>
+ #include <version_string.h>
+ 
+ DECLARE_GLOBAL_DATA_PTR;
+@@ -151,3 +153,33 @@ U_BOOT_CMD(ad5x_flag, 2, 0, do_ad5x_flag,
+ 	   "show or set the SPL's boot flag",
+ 	   "      - show the slot the SPL boots (a: recovery, b: main)\n"
+ 	   "ad5x_flag a|b  - set it for the next start");
++
++/*
++ * ad5x_wdt SECONDS|off: start the watchdog, so a hang from here on (in
++ * U-Boot, the kernel or early user space) resets the board; Linux takes it
++ * over and keeps it fed once it runs (/dev/watchdog).
++ */
++static int do_ad5x_wdt(struct cmd_tbl *cmdtp, int flag, int argc,
++		       char *const argv[])
++{
++	unsigned long s;
++
++	if (argc != 2)
++		return CMD_RET_USAGE;
++	if (!strcmp(argv[1], "off")) {
++		x2600_wdt_stop();
++		printf("watchdog off\n");
++		return CMD_RET_SUCCESS;
++	}
++	s = dectoul(argv[1], NULL);
++	if (!s || s > 1431)
++		return CMD_RET_USAGE;
++	x2600_wdt_start(s * 1000);
++	printf("watchdog: reset in %lu s unless fed\n", s);
++	return CMD_RET_SUCCESS;
++}
++
++U_BOOT_CMD(ad5x_wdt, 2, 0, do_ad5x_wdt,
++	   "start or stop the watchdog",
++	   "SECONDS  - reset the board after SECONDS (1-1431) unless fed\n"
++	   "ad5x_wdt off      - stop it");
+-- 
+2.43.0
+

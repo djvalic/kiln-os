@@ -1,0 +1,356 @@
+From ec59db986891bb2b15bf2317b4d01e3aca495a4e Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sat, 14 Nov 2026 14:14:16 -0700
+Subject: [PATCH 01/10] mips: jz47xx: Add the Ingenic X2600 and the Flashforge
+ Adventurer 5X
+
+U-Boot proper only: the boot ROM's SPL (or Linux, for tests) has set up
+the clocks and the DRAM before it runs. Console on UART0 (the DEBUG
+header), the fractional baud registers reset so that plain 16550 divisors
+from the 24 MHz EXCLK work. Timer: the global OST, a 64-bit counter at
+24 MHz (the CP0 counter doesn't run). RAM: the 236 MiB of lowmem below
+rmem and the RISC-V co-processor's region.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ arch/mips/dts/Makefile               |  1 +
+ arch/mips/dts/ad5x.dts               | 43 +++++++++++++++++
+ arch/mips/mach-jz47xx/Kconfig        | 15 ++++++
+ arch/mips/mach-jz47xx/Makefile       |  1 +
+ arch/mips/mach-jz47xx/x2600/Makefile |  3 ++
+ arch/mips/mach-jz47xx/x2600/x2600.c  | 70 ++++++++++++++++++++++++++++
+ board/flashforge/ad5x/Kconfig        | 12 +++++
+ board/flashforge/ad5x/MAINTAINERS    |  8 ++++
+ board/flashforge/ad5x/Makefile       |  3 ++
+ board/flashforge/ad5x/ad5x.c         | 30 ++++++++++++
+ configs/ad5x_defconfig               | 23 +++++++++
+ include/configs/ad5x.h               | 13 ++++++
+ 12 files changed, 222 insertions(+)
+ create mode 100644 arch/mips/dts/ad5x.dts
+ create mode 100644 arch/mips/mach-jz47xx/x2600/Makefile
+ create mode 100644 arch/mips/mach-jz47xx/x2600/x2600.c
+ create mode 100644 board/flashforge/ad5x/Kconfig
+ create mode 100644 board/flashforge/ad5x/MAINTAINERS
+ create mode 100644 board/flashforge/ad5x/Makefile
+ create mode 100644 board/flashforge/ad5x/ad5x.c
+ create mode 100644 configs/ad5x_defconfig
+ create mode 100644 include/configs/ad5x.h
+
+diff --git a/arch/mips/dts/Makefile b/arch/mips/dts/Makefile
+index 7c4ee8b6..407f6aa6 100644
+--- a/arch/mips/dts/Makefile
++++ b/arch/mips/dts/Makefile
+@@ -30,6 +30,7 @@ dtb-$(CONFIG_BOARD_SFR_NB4_SER) += sfr,nb4-ser.dtb
+ dtb-$(CONFIG_BOARD_TPLINK_WDR4300) += tplink_wdr4300.dtb
+ dtb-$(CONFIG_BOARD_VOCORE2) += vocore_vocore2.dtb
+ dtb-$(CONFIG_TARGET_JZ4780_CI20) += ci20.dtb
++dtb-$(CONFIG_TARGET_AD5X) += ad5x.dtb
+ dtb-$(CONFIG_SOC_LUTON) += luton_pcb090.dtb luton_pcb091.dtb
+ dtb-$(CONFIG_SOC_OCELOT) += ocelot_pcb120.dtb ocelot_pcb123.dtb
+ dtb-$(CONFIG_SOC_JR2) += jr2_pcb110.dtb jr2_pcb111.dtb serval2_pcb112.dtb
+diff --git a/arch/mips/dts/ad5x.dts b/arch/mips/dts/ad5x.dts
+new file mode 100644
+index 00000000..416b90eb
+--- /dev/null
++++ b/arch/mips/dts/ad5x.dts
+@@ -0,0 +1,43 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Flashforge Adventurer 5X (Ingenic X2600), U-Boot proper.
++ */
++
++/dts-v1/;
++
++/ {
++	#address-cells = <1>;
++	#size-cells = <1>;
++	compatible = "flashforge,ad5x", "ingenic,x2600";
++	model = "Flashforge Adventurer 5X";
++
++	aliases {
++		serial0 = &uart0;
++	};
++
++	chosen {
++		stdout-path = "serial0:115200n8";
++	};
++
++	memory@0 {
++		device_type = "memory";
++		reg = <0x00000000 0x0ec00000>;
++	};
++
++	soc {
++		compatible = "simple-bus";
++		#address-cells = <1>;
++		#size-cells = <1>;
++		ranges;
++		bootph-all;
++
++		/* UART0, on the DEBUG header (PE9/PE10), 24 MHz EXCLK */
++		uart0: serial@10030000 {
++			compatible = "ingenic,x2600-uart", "ingenic,jz4780-uart";
++			reg = <0x10030000 0x100>;
++			reg-shift = <2>;
++			clock-frequency = <24000000>;
++			bootph-all;
++		};
++	};
++};
+diff --git a/arch/mips/mach-jz47xx/Kconfig b/arch/mips/mach-jz47xx/Kconfig
+index 858173e7..9a8b9375 100644
+--- a/arch/mips/mach-jz47xx/Kconfig
++++ b/arch/mips/mach-jz47xx/Kconfig
+@@ -12,6 +12,16 @@ config SOC_JZ4780
+ 	help
+ 	  Support for Ingenic JZ4780 family SoCs.
+ 
++config SOC_X2600
++	bool
++	select SUPPORT_LITTLE_ENDIAN
++	select SUPPORTS_CPU_MIPS32_R1
++	select SUPPORTS_CPU_MIPS32_R2
++	help
++	  Support for Ingenic X2600 family SoCs (XBurst II). U-Boot proper
++	  only: the boot ROM's SPL, or Linux, has set up the clocks and the
++	  DRAM before it runs.
++
+ choice
+ 	prompt "Board select"
+ 
+@@ -19,8 +29,13 @@ config TARGET_JZ4780_CI20
+ 	bool "Creator CI20 Reference Board"
+ 	select SOC_JZ4780
+ 
++config TARGET_AD5X
++	bool "Flashforge Adventurer 5X"
++	select SOC_X2600
++
+ endchoice
+ 
+ source "board/imgtec/ci20/Kconfig"
++source "board/flashforge/ad5x/Kconfig"
+ 
+ endmenu
+diff --git a/arch/mips/mach-jz47xx/Makefile b/arch/mips/mach-jz47xx/Makefile
+index 5621a09b..53cb2872 100644
+--- a/arch/mips/mach-jz47xx/Makefile
++++ b/arch/mips/mach-jz47xx/Makefile
+@@ -3,3 +3,4 @@
+ extra-$(CONFIG_XPL_BUILD)	:= start.o
+ 
+ obj-$(CONFIG_SOC_JZ4780)	+= jz4780/
++obj-$(CONFIG_SOC_X2600)		+= x2600/
+diff --git a/arch/mips/mach-jz47xx/x2600/Makefile b/arch/mips/mach-jz47xx/x2600/Makefile
+new file mode 100644
+index 00000000..cdafa0b7
+--- /dev/null
++++ b/arch/mips/mach-jz47xx/x2600/Makefile
+@@ -0,0 +1,3 @@
++# SPDX-License-Identifier: GPL-2.0+
++
++obj-y := x2600.o
+diff --git a/arch/mips/mach-jz47xx/x2600/x2600.c b/arch/mips/mach-jz47xx/x2600/x2600.c
+new file mode 100644
+index 00000000..a74403b3
+--- /dev/null
++++ b/arch/mips/mach-jz47xx/x2600/x2600.c
+@@ -0,0 +1,70 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Ingenic X2600 SoC: U-Boot proper started by the boot ROM's SPL (or by
++ * Linux, for tests), which has already set up the clocks and the DRAM.
++ */
++
++#include <init.h>
++#include <asm/io.h>
++#include <linux/bitops.h>
++
++/* UART0: Ingenic's fractional baud registers, after the 16550 ones */
++#define X2600_UART0		((void __iomem *)0xb0030000)
++#define UART_UMR		0x24
++#define UART_UACR		0x28
++
++int print_cpuinfo(void)
++{
++	printf("CPU:   Ingenic X2600\n");
++	return 0;
++}
++
++/*
++ * Plain 16550 divisors from the 24 MHz clock need the fractional baud
++ * registers at their reset values (16 cycles per bit, no extra cycles).
++ * Linux may leave them otherwise; set them before the console starts.
++ */
++void x2600_uart0_plain_baud(void)
++{
++	writel(16, X2600_UART0 + UART_UMR);
++	writel(0, X2600_UART0 + UART_UACR);
++}
++
++/*
++ * Timer: the global OST, a 64-bit counter at the 24 MHz EXCLK. The CP0
++ * counter doesn't run here (a "sleep" on it never ends). The clock gate is
++ * CLKGR0 bit 28 (set = off); started unless already running, so a count
++ * left by the SPL or Linux carries on.
++ */
++#define X2600_CPM_CLKGR0	((void __iomem *)0xb0000020)
++#define CLKGR0_OST		BIT(28)
++#define X2600_OST		((void __iomem *)0xb2000000)
++#define GOST_CCR		0x00	/* prescaler */
++#define GOST_ER			0x04	/* enable */
++#define GOST_CR			0x08	/* clear */
++#define GOST_CNTH		0x0c
++#define GOST_CNTL		0x10
++
++int timer_init(void)
++{
++	clrbits_le32(X2600_CPM_CLKGR0, CLKGR0_OST);
++	if (!(readl(X2600_OST + GOST_ER) & BIT(0))) {
++		writel(0, X2600_OST + GOST_CCR);	/* divide by 1 */
++		writel(BIT(0), X2600_OST + GOST_CR);
++		writel(BIT(0), X2600_OST + GOST_ER);
++	}
++	return 0;
++}
++
++unsigned long long get_ticks(void)
++{
++	u32 hi, lo;
++
++	/* the high word again until the low word didn't wrap in between */
++	do {
++		hi = readl(X2600_OST + GOST_CNTH);
++		lo = readl(X2600_OST + GOST_CNTL);
++	} while (hi != readl(X2600_OST + GOST_CNTH));
++
++	return ((u64)hi << 32) | lo;
++}
+diff --git a/board/flashforge/ad5x/Kconfig b/board/flashforge/ad5x/Kconfig
+new file mode 100644
+index 00000000..ea16d173
+--- /dev/null
++++ b/board/flashforge/ad5x/Kconfig
+@@ -0,0 +1,12 @@
++if TARGET_AD5X
++
++config SYS_BOARD
++	default "ad5x"
++
++config SYS_VENDOR
++	default "flashforge"
++
++config SYS_CONFIG_NAME
++	default "ad5x"
++
++endif
+diff --git a/board/flashforge/ad5x/MAINTAINERS b/board/flashforge/ad5x/MAINTAINERS
+new file mode 100644
+index 00000000..44f47c09
+--- /dev/null
++++ b/board/flashforge/ad5x/MAINTAINERS
+@@ -0,0 +1,8 @@
++FLASHFORGE ADVENTURER 5X
++M:	Hunter Laux <hunterlaux@gmail.com>
++S:	Maintained
++F:	board/flashforge/ad5x/
++F:	include/configs/ad5x.h
++F:	configs/ad5x_defconfig
++F:	arch/mips/dts/ad5x.dts
++F:	arch/mips/mach-jz47xx/x2600/
+diff --git a/board/flashforge/ad5x/Makefile b/board/flashforge/ad5x/Makefile
+new file mode 100644
+index 00000000..af4d3fb2
+--- /dev/null
++++ b/board/flashforge/ad5x/Makefile
+@@ -0,0 +1,3 @@
++# SPDX-License-Identifier: GPL-2.0+
++
++obj-y := ad5x.o
+diff --git a/board/flashforge/ad5x/ad5x.c b/board/flashforge/ad5x/ad5x.c
+new file mode 100644
+index 00000000..26f7bd0e
+--- /dev/null
++++ b/board/flashforge/ad5x/ad5x.c
+@@ -0,0 +1,30 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Flashforge Adventurer 5X (Ingenic X2600)
++ */
++
++#include <init.h>
++#include <asm/global_data.h>
++
++DECLARE_GLOBAL_DATA_PTR;
++
++void x2600_uart0_plain_baud(void);
++
++int board_early_init_f(void)
++{
++	x2600_uart0_plain_baud();
++	return 0;
++}
++
++/*
++ * 512 MiB in two banks: 236 MiB at 0 (lowmem, the only part KSEG0 reaches
++ * below the rmem and rtos regions) and 256 MiB at 0x30000000. Above 236 MiB
++ * the low bank holds rmem (16 MiB at 0x0ec00000) and the RISC-V
++ * co-processor's 4 MiB (0x0fc00000), which the SPL may have started: U-Boot
++ * keeps to the 236 MiB below them.
++ */
++int dram_init(void)
++{
++	gd->ram_size = 236 << 20;
++	return 0;
++}
+diff --git a/configs/ad5x_defconfig b/configs/ad5x_defconfig
+new file mode 100644
+index 00000000..a07a369d
+--- /dev/null
++++ b/configs/ad5x_defconfig
+@@ -0,0 +1,23 @@
++CONFIG_MIPS=y
++CONFIG_SKIP_LOWLEVEL_INIT=y
++CONFIG_TEXT_BASE=0x80100000
++CONFIG_SYS_MALLOC_LEN=0x1000000
++CONFIG_NR_DRAM_BANKS=1
++CONFIG_DEFAULT_DEVICE_TREE="ad5x"
++CONFIG_SYS_MONITOR_LEN=524288
++CONFIG_SYS_LOAD_ADDR=0x81000000
++CONFIG_ARCH_JZ47XX=y
++CONFIG_TARGET_AD5X=y
++CONFIG_SYS_MIPS_TIMER_FREQ=24000000
++CONFIG_DISPLAY_CPUINFO=y
++CONFIG_BOARD_EARLY_INIT_F=y
++CONFIG_HUSH_PARSER=y
++CONFIG_SYS_PROMPT="ad5x# "
++CONFIG_BOOTDELAY=-1
++CONFIG_CMD_DM=y
++CONFIG_CMD_MEMORY=y
++CONFIG_CMD_TIME=y
++CONFIG_VERSION_VARIABLE=y
++CONFIG_ENV_IS_NOWHERE=y
++CONFIG_DM_SERIAL=y
++CONFIG_SYS_NS16550=y
+diff --git a/include/configs/ad5x.h b/include/configs/ad5x.h
+new file mode 100644
+index 00000000..e154ad13
+--- /dev/null
++++ b/include/configs/ad5x.h
+@@ -0,0 +1,13 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Flashforge Adventurer 5X (Ingenic X2600)
++ */
++
++#ifndef __CONFIG_AD5X_H__
++#define __CONFIG_AD5X_H__
++
++#define CFG_SYS_SDRAM_BASE		0x80000000 /* cached (KSEG0) address */
++#define CFG_SYS_INIT_SP_OFFSET		0x800000
++#define CFG_SYS_NS16550_CLK		24000000
++
++#endif /* __CONFIG_AD5X_H__ */
+-- 
+2.43.0
+

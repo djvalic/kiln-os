@@ -147,7 +147,9 @@ puts its recovery OS in slot A and the main OS in slot B.
 2. **Stock is saved** to `/usr/data/ad5x/stock/`: `rootfs.squashfs` (the
    running root, its used bytes), `kernel.img` (the running slot's kernel
    partition), `SHA256SUMS`, `MANIFEST.txt`. Copied and read back. A copy that
-   is already there and matches is kept. `ad5x-restore-stock` uses it. Then the
+   is already there and matches is kept (an older, different one is moved
+   aside, its `boot.img` kept with the new copy). Return to Flashforge
+   firmware uses it. Then the
    optional eMMC copy (stick, or `--emmc-backup`).
 3. **Vendor files** are copied from the running stock system into
    `/usr/data/ad5x/vendor/` (below), from a fresh read-only mount of the stock
@@ -167,7 +169,8 @@ puts its recovery OS in slot A and the main OS in slot B.
    printer restarts (USB, or SSH with `--reboot`).
 
 State: `/usr/data/ad5x/install/state` (`checked`, `backed-up`, `vendor`,
-`slot-written`, `staged`, `flag-set`, `done`). Running the installer again
+`slot-written`, `staged`, `flag-set`, `done`; `returned` after Return to
+Flashforge firmware, which a new install accepts without `--retry`). Running the installer again
 after a failure goes through the same steps; finished ones are checked and
 not repeated (a matching stock copy, slot or kernel is left as is).
 
@@ -275,61 +278,100 @@ Private builds can still put the stock kernel in an update (`make_swu.sh -k`).
 
 ## Going back to stock
 
-The restore runs in the recovery OS (slot A), which writes the stock copy
-saved at install (`/data/ad5x/stock`) back into slot B. From the main OS,
-over SSH as root:
+**Return to Flashforge firmware** puts Flashforge's own firmware back. It
+runs in the recovery OS and needs only the touch screen, and at most a USB
+stick and a power cycle. It works on printers with Flashforge's boot loader
+and on printers with Kiln's own boot loader.
 
-```
-ad5x-restore-stock --dry-run     # checks only: slot, no print, stock copy, slot A
-ad5x-restore-stock               # the same checks, then asks and reboots into recovery
-```
+### 1. Start it
 
-On the recovery screen, tap **Restore stock**, then **Check**, then **Restore
-stock firmware**. Or over SSH in the recovery OS:
+Any of these:
 
-```
-ad5x-restore-stock --dry-run     # checks /data/ad5x/stock
-ad5x-restore-stock --reboot      # stock -> slot B, flag -> B, restart
-```
+- On the touch screen: **Settings > System > Return to Flashforge
+  firmware**, then **Restart**. The printer restarts into the recovery OS.
+- On the recovery screen: the **Restore stock** tile.
+- With a USB stick: an empty file named `kiln-return-to-stock` in the
+  stick's top folder opens the page whenever the recovery OS starts, for
+  example when the main OS no longer starts and the printer comes up in the
+  recovery OS.
+- Over SSH in the main OS: `ad5x-restore-stock --dry-run` (checks only),
+  then `ad5x-restore-stock`, which asks and restarts into the recovery OS.
 
-**Then switch the printer off and on** (not just reboot), so stock writes its
-own board firmware back over Kiln OS's Klipper (`docs/mcu-flashing.md`).
-"Boot main OS" on the recovery screen (`ad5x-boot-main`) goes back to Kiln OS
-without changing anything.
+In each case the recovery screen opens the Return to Flashforge firmware
+page by itself. **Nothing is changed until you tap Return to Flashforge
+there** (twice, to be sure). Not while a print runs.
 
+### 2. The files it needs
+
+The page shows where it found Flashforge's files. It looks, in this order:
+
+1. the copy of stock saved on the printer when Kiln OS was installed
+   (`/data/ad5x/stock`);
+2. a second copy on the usershare partition (Kiln OS makes it by itself);
+3. on a USB stick: a copy made with **Save files to USB** on this page,
+   the backup folder the install stick made (`ad5x-backup-install-N`), or
+   **Flashforge's own update file** (`AD5X-....tgz`), downloaded from
+   Flashforge's website and copied to the stick's top folder.
+
+If it finds nothing, put Flashforge's update file on a stick and tap
+**Check**. Any version works; stock can update itself afterwards. Tip: tap
+**Save files to USB** now, while the printer's own copy is there, and keep
+that stick.
+
+### 3. Return
+
+Tap **Return to Flashforge** and confirm. It takes a few minutes. **Don't
+switch the printer off until the screen says it is done.** If the power
+goes off anyway, the printer starts the recovery OS again, the page opens,
+and **Continue** finishes the job from where it stopped.
+
+When it is done, tap **Shut down**, then switch the printer off and on.
+Flashforge's firmware starts and writes its own firmware back into the
+printer's boards (that needs a real power cycle, not a restart). If
+Flashforge's update file is still on the stick, stock installs it fully at
+that start; take the stick out afterwards.
+
+### What it changes
+
+- The main slot (B) gets Flashforge's system; Kiln OS there is gone. Your
+  settings, prints and logs on the data partition stay.
+- The recovery OS stays in slot A as a safety net. Stock doesn't use it;
+  stock's next firmware update writes over it.
+- With Kiln's own boot loader on the printer: its second stage (U-Boot) is
+  removed, and its small first stage stays and starts Flashforge's firmware
+  the way Flashforge's own boot loader does. If the printer still has its
+  own first MiB from before Kiln's boot loader (saved as
+  `/data/ad5x/stock/boot.img`), the page also offers **Also put back
+  Flashforge's own boot loader**. You don't need it for stock to work.
+- Over SSH in the recovery OS the same tool is `ad5x-return-stock --check`
+  and `ad5x-return-stock --yes` (`--status` shows how far it got; details
+  in `docs/recovery-os.md`).
+
+### Installing Kiln OS again
+
+The Kiln OS install stick works again as on any stock printer; no
+`ad5x-install-retry` file is needed after Return to Flashforge firmware.
+Printers that went back to stock some other way still need it: the
+installer refuses otherwise, because `/data/ad5x/install/state` remembers
+the earlier install.
+
+### Older releases
+
+Before v1.0 the recovery screen's Restore stock wrote only the stock copy in
+`/data/ad5x/stock` back into slot B (`ad5x-restore-stock --reboot` over SSH
+in the recovery OS), and refused on printers with Kiln's own boot loader.
 Before v0.0.45 the main OS had no `ad5x-restore-stock` ("not found", issue
-#35). Boot the recovery OS by hand instead: `echo ota:kernel >
-/dev/mmcblk0p5; sync; reboot`. If the recovery OS was never written to slot A
-(`S99ad5x-install-recovery` gave up; `ad5x-restore-stock --dry-run` says so),
-slot A still holds stock, and that reboot starts stock directly.
-
-Stock then starts from slot B and stays (it has no try-once). Slot A still
-holds the recovery OS; stock doesn't use it. To make slot A stock too, run
-a Flashforge firmware update from stock as usual (a stick with
-`AD5X-*.tgz`): stock's updater writes the slot the flag doesn't name, slot A,
-so the printer is then stock in both slots. Take the stick out afterwards,
-or it installs again at every start. Or by hand (from stock, as root over
-SSH):
-
-```
-cd /usr/data/ad5x/stock && sha256sum -c SHA256SUMS
-dd if=rootfs.squashfs of=/dev/mmcblk0p2 bs=1M conv=fsync
-dd if=kernel.img of=/dev/mmcblk0p1 bs=1M conv=fsync
-```
-
-`/usr/data/ad5x` (our settings, the stock copy, the vendor files) can then be
-deleted. A whole-eMMC backup (`docs/emmc-backup.md`) restores everything,
-including the boot loader area.
+#35): boot the recovery OS by hand with `echo ota:kernel >
+/dev/mmcblk0p5; sync; reboot`. If the recovery OS was never written to slot
+A (`S99ad5x-install-recovery` gave up), slot A still holds stock, and that
+reboot starts stock directly.
 
 A Flashforge firmware update (`AD5X-*.tgz`) does nothing while Kiln OS
-runs: only stock's own start-up reads the stick. Apply one only after the
-restore above, with stock running from slot B. While stock still runs from
-slot A (before the install, or the case above), its updater would write slot
-B and overwrite Kiln OS.
-
-To install Kiln OS again after going back to stock, put an empty file
-`ad5x-install-retry` on the install stick: the installer otherwise refuses,
-because `/data/ad5x/install/state` remembers the earlier install.
+runs: only stock's own start-up reads the stick. While stock runs from
+slot A with Kiln OS in slot B (before an install finished), stock's updater
+would write slot B and overwrite Kiln OS. A whole-eMMC backup
+(`docs/emmc-backup.md`) restores everything, including the boot loader
+area.
 
 ## Updating a printer that already runs Kiln OS
 
@@ -385,3 +427,8 @@ Not done yet:
 - `ad5x-vendor ensure` at the first start (`unsquashfs` of the saved stock
   root before any driver is loaded: a few seconds longer start-up, once).
 - The eMMC copy to a FAT stick (time, 1 GB `usershare.img`).
+- Return to Flashforge firmware on a printer (laptop only so far:
+  `tools/test_return_stock.sh`): each source, the decryption time of a
+  Flashforge `.tgz` on the printer, stock 5.10 and its programs started by
+  Kiln's SPL, stock's own board update at the first start, stock's next
+  update writing slot A, and a Kiln OS install afterwards.

@@ -1,0 +1,104 @@
+From 1ee291107c83642e0981d52255a85f7f1583dace Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Sat, 14 Nov 2026 16:58:40 -0700
+Subject: [PATCH 08/10] mmc: x2600_sdhci: Support use without driver model
+
+Register MSC0 with add_sdhci() from x2600_sdhci_init() for the SPL, which
+has no driver model, sharing the CGU clock handling with the driver.
+Without the 32-bit DMA quirk there: its 512 KiB bounce buffer doesn't fit
+the SPL's heap, and PIO doesn't need it.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ drivers/mmc/x2600_sdhci.c | 48 +++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 46 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/mmc/x2600_sdhci.c b/drivers/mmc/x2600_sdhci.c
+index 3789b224..ee1a1e92 100644
+--- a/drivers/mmc/x2600_sdhci.c
++++ b/drivers/mmc/x2600_sdhci.c
+@@ -46,6 +46,8 @@ struct x2600_sdhci_plat {
+ 	u32 gate;
+ };
+ 
++static struct x2600_sdhci_plat *x2600_sdhci_plat(struct sdhci_host *host);
++
+ /* rate = parent / ((div + 1) * 4), rounded down to at most @rate */
+ static void x2600_msc_set_rate(struct x2600_sdhci_plat *plat, ulong rate)
+ {
+@@ -88,7 +90,7 @@ static void x2600_msc_set_rate(struct x2600_sdhci_plat *plat, ulong rate)
+ /* After the core has set the clock: let the CGU divider settle */
+ static int x2600_sdhci_set_ios_post(struct sdhci_host *host)
+ {
+-	struct x2600_sdhci_plat *plat = dev_get_plat(host->mmc->dev);
++	struct x2600_sdhci_plat *plat = x2600_sdhci_plat(host);
+ 	u32 val = readl(plat->cdr);
+ 	int timeout;
+ 
+@@ -107,9 +109,24 @@ static int x2600_sdhci_set_ios_post(struct sdhci_host *host)
+ 	return 0;
+ }
+ 
++#if !CONFIG_IS_ENABLED(DM_MMC)
++/* without driver model (the SPL): one controller */
++static struct x2600_sdhci_plat x2600_sdhci_legacy_plat;
++static struct sdhci_host x2600_sdhci_legacy_host;
++#endif
++
++static struct x2600_sdhci_plat *x2600_sdhci_plat(struct sdhci_host *host)
++{
++#if CONFIG_IS_ENABLED(DM_MMC)
++	return dev_get_plat(host->mmc->dev);
++#else
++	return &x2600_sdhci_legacy_plat;
++#endif
++}
++
+ static void x2600_sdhci_set_clock(struct sdhci_host *host, u32 div)
+ {
+-	struct x2600_sdhci_plat *plat = dev_get_plat(host->mmc->dev);
++	struct x2600_sdhci_plat *plat = x2600_sdhci_plat(host);
+ 
+ 	if (host->mmc->clock)
+ 		x2600_msc_set_rate(plat, host->mmc->clock);
+@@ -120,6 +137,7 @@ static const struct sdhci_ops x2600_sdhci_ops = {
+ 	.set_ios_post	= x2600_sdhci_set_ios_post,
+ };
+ 
++#if CONFIG_IS_ENABLED(DM_MMC)
+ static int x2600_sdhci_probe(struct udevice *dev)
+ {
+ 	struct mmc_uclass_priv *upriv = dev_get_uclass_priv(dev);
+@@ -186,3 +204,29 @@ U_BOOT_DRIVER(x2600_sdhci) = {
+ 	.priv_auto	= sizeof(struct sdhci_host),
+ 	.plat_auto	= sizeof(struct x2600_sdhci_plat),
+ };
++#else
++/*
++ * x2600_sdhci_init() - register MSC @id at @base without driver model
++ * (the SPL), 4-bit, up to @max_clk
++ */
++int x2600_sdhci_init(void __iomem *base, unsigned int id, u32 max_clk)
++{
++	struct x2600_sdhci_plat *plat = &x2600_sdhci_legacy_plat;
++	struct sdhci_host *host = &x2600_sdhci_legacy_host;
++
++	if (id >= ARRAY_SIZE(x2600_msc_clk))
++		return -EINVAL;
++	plat->cdr = (void __iomem *)x2600_msc_clk[id].cdr;
++	plat->gate = x2600_msc_clk[id].gate;
++
++	host->name = "x2600-msc";
++	host->ioaddr = base;
++	host->bus_width = 4;
++	/* PIO: no 32-bit DMA quirk, whose bounce buffer (512 KiB) won't fit */
++	host->quirks = SDHCI_QUIRK_NO_HISPD_BIT;
++	host->ops = &x2600_sdhci_ops;
++	host->max_clk = max_clk;
++
++	return add_sdhci(host, max_clk, EMMC_MIN_FREQ);
++}
++#endif
+-- 
+2.43.0
+

@@ -1,5 +1,8 @@
 config BR2_PACKAGE_AD5X_KERNEL66
 	bool "ad5x-kernel66"
+	# regulatory.db and its signature are built into the kernel
+	# (build.sh, REGDB_DIR)
+	select BR2_PACKAGE_WIRELESS_REGDB
 	help
 	  Our 6.6 kernel (Ingenic's X2600 SDK kernel with the AD5X device
 	  tree and patches, kernel-ingenic66/) and chainload.ko, which starts

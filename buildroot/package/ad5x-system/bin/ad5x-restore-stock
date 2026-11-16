@@ -8,10 +8,14 @@
 #              in /data/ad5x/stock, what slot A holds
 #   --yes      don't ask before rebooting
 #
-# Then, on the recovery screen: Restore stock, Check, Restore stock
-# firmware (or over SSH: ad5x-restore-stock --reboot). Switch the printer
-# off and on once stock is up, so it writes its own board firmware back.
-# "Boot main OS" (ad5x-boot-main) returns here without changing anything.
+# The recovery screen then opens Return to Flashforge firmware by itself
+# (/data/ad5x/return-stock/request): check what it found, tap Return to
+# Flashforge (or over SSH there: ad5x-return-stock --check, then --yes).
+# It writes nothing before that tap; "Boot main OS" (ad5x-boot-main)
+# returns here without changing anything. Switch the printer off and on
+# once it is done. With Kiln's own boot loader the recovery OS also takes
+# Flashforge's files from a USB stick (a Flashforge AD5X-*.tgz), so a
+# missing /data/ad5x/stock is only noted.
 #
 # If slot A still holds stock (the recovery OS was never written,
 # S99ad5x-install-recovery gave up), the reboot starts stock directly.
@@ -38,6 +42,14 @@ done
 
 [ "$SLOT" = A ] && die "this printer runs the main OS from slot A (root=/dev/mmcblk0p2): there is no recovery OS to restore from. See docs/recovery-os.md, section 'Main OS in slot A'."
 [ "$SLOT" = B ] || die "run from the main OS in slot B (this is slot '${SLOT:-?}')"
+# Kiln's boot loader (Kiln's SPL in the first MiB, or ad5x.uboot=1): the
+# recovery OS's Return to Flashforge firmware (ad5x-return-stock) removes
+# Kiln's U-Boot and leaves stock started by Kiln's SPL
+kiln=
+if { [ -f $LIB/uboot.sh ] && . $LIB/uboot.sh && uboot_started; } ||
+   { command -v boot_loader >/dev/null 2>&1 && [ "$(boot_loader)" = kiln ]; }; then
+	kiln=1
+fi
 
 st=$(wget -q -T 5 -O- 'http://127.0.0.1:7125/printer/objects/query?print_stats=state' 2>/dev/null |
 	sed -n 's/.*"state": *"\([a-z]*\)".*/\1/p')
@@ -46,10 +58,14 @@ printing|paused) die "a print is $st: cancel it first" ;;
 esac
 
 S=$DATA/ad5x/stock
-[ -f $S/rootfs.squashfs ] && [ -f $S/kernel.img ] && [ -f $S/SHA256SUMS ] ||
+if [ -f $S/rootfs.squashfs ] && [ -f $S/kernel.img ] && [ -f $S/SHA256SUMS ]; then
+	say "checking the saved stock system in $S"
+	( cd $S && sha256sum -c SHA256SUMS ) || die "the saved stock system in $S is damaged"
+elif [ -n "$kiln" ]; then
+	say "no saved stock system in $S: the recovery OS also takes Flashforge's update file (AD5X-*.tgz, from Flashforge's website) from a USB stick"
+else
 	die "no saved stock system in $S (rootfs.squashfs, kernel.img, SHA256SUMS)"
-say "checking the saved stock system in $S"
-( cd $S && sha256sum -c SHA256SUMS ) || die "the saved stock system in $S is damaged"
+fi
 
 # As ad5x-update: wait for a recovery OS write before looking at slot A
 WLOCK=$RUN/ad5x-recovery-write.pid
@@ -70,8 +86,9 @@ if mount -t squashfs -o ro $AROOT $MNT 2>/dev/null; then
 	umount $MNT
 fi
 case $holds in
-recovery) say "slot A holds the recovery OS: the reboot starts it; there, tap Restore stock, then Check, then Restore stock firmware" ;;
-stock) say "slot A still holds stock (the recovery OS was never written there): the reboot starts stock directly" ;;
+recovery) say "slot A holds the recovery OS: the reboot starts it, and it opens Return to Flashforge firmware; check what it found there, then tap Return to Flashforge" ;;
+stock) [ -n "$kiln" ] && die "slot A holds stock, not the recovery OS, under Kiln's boot loader: not rebooting (docs/recovery-os.md)"
+	say "slot A still holds stock (the recovery OS was never written there): the reboot starts stock directly" ;;
 *) die "slot A holds neither the recovery OS nor stock ($holds): not rebooting. See docs/recovery-os.md." ;;
 esac
 
@@ -85,6 +102,11 @@ fi
 # Stock writes its own eboard firmware: Kiln OS's record of the last
 # eboard flash no longer holds (the recovery OS's restore drops it too)
 [ $holds = stock ] && rm -f $DATA/ad5x/mcu/eboard
+# The recovery OS opens Return to Flashforge firmware (ad5x-recovery-auto)
+if [ $holds = recovery ]; then
+	mkdir -p $DATA/ad5x/return-stock && date > $DATA/ad5x/return-stock/request ||
+		die "can't write $DATA/ad5x/return-stock/request"
+fi
 set_flag A
 say "boot flag on slot A ($(read_flag)); rebooting"
 [ $holds = stock ] && say "once stock is up, switch the printer off and on so it writes its own board firmware"

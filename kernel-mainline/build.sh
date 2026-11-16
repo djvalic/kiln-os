@@ -17,8 +17,8 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(cd "$HERE/.." && pwd)
-KVER=7.3.3
-KSHA256=79c66dde66cd96877fcde8f7d36aec946b1f423d2b97b5a7b1751b75c764f3d1
+KVER=7.3.4
+KSHA256=b11b6df8295e8e991ff040b71aaa4994a8b55caa23b6b092907f195b5840fd1f
 WORK=${WORK:-$HOME/workspace/kernel-mainline-ad5x}
 TOOLBIN=${TOOLBIN:-$REPO/buildroot/output/host/bin}
 JOBS=${JOBS:-$(nproc)}

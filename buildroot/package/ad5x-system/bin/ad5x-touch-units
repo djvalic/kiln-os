@@ -12,14 +12,19 @@ The two kernels report the TSC2007 touch in different units:
 HelixScreen stores input.touch_range in device units and an affine
 correction (input.calibration a..f) in screen pixels, applied after the
 range maps the device units to 800x480. This rewrites both for the running
-kernel and records the units in input.ad5x_touch_units ("stock" when
-missing: the calibration was made on the stock kernel). Converting twice
-gives the original values back, so switching kernels keeps one calibration.
+kernel and records the units in input.ad5x_touch_units. HelixScreen
+(patch 0071) writes that tag itself with every range it saves ("stock" on
+the 5.10 kernel, "own" on ours); a range without it is taken for stock
+units (calibrations from before patch 0071, and the seed settings).
+Converting twice gives the original values back, so switching kernels
+keeps one calibration.
 
 --recovery-cal FILE also writes the calibrated range for the recovery OS's
-touch UI (issue #47): "min_x min_y max_x max_y" in stock-kernel units (the
-recovery OS always runs the stock kernel), converted when the settings are
-in our kernel's units. The affine part is left out. Written only when it
+touch UI (issue #47): "min_x min_y max_x max_y" in stock-kernel units
+whatever the kernel (docs/data-layout.md), converted when the settings are
+in our kernel's units. The recovery UI converts it back to raw units at use
+when it runs on our kernel (recovery-ui/src/touch_cal.c, the inverse of
+recovery_cal below). The affine part is left out. Written only when it
 changes; without a calibration the file is left as it is.
 
 Run by S70helixscreen before HelixScreen starts (it must not be running).
