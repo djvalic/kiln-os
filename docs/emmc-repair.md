@@ -46,16 +46,14 @@ piece doesn't read back as written, the chip may be at the end of its life.
   - e2fsprogs (`debugfs`, `e2fsck`);
   - root for the disk commands;
   - the udev rule from `USB-BOOT.md`, so the boot ROM's device (`a108:eaef`) can be used without root.
-- **The boot files:** `spl-usb2.bin` and `u-boot.bin` from `u-boot/build.sh` (`$WORK/out/dist`).
-- **To write a system:** a release's eMMC files, made with `tools/ad5x_emmc_image.py` from the release's SPL, U-Boot, Kiln's 6.6 kernel, the main OS's `rootfs.squashfs` and the recovery OS's:
+- **The release's rescue kit**, `kiln-os-VERSION-rescue.zip`. It holds this guide, the PC tools, and `boot/spl-usb2.bin` and `boot/u-boot.bin`, which start Kiln's U-Boot over USB. Run the commands below from the unpacked kit. From a repository checkout, the same tools are in `tools/` and `u-boot/tools/`, and `u-boot/build.sh` makes the two boot files.
+- **The release's update zip**, `kiln-os-VERSION-update.zip`, to write a system. `ad5x_emmc_image.py` takes everything from it: the main OS, and the Kiln kernel, recovery OS, SPL and U-Boot it carries, each checked against the release's sha256s.
 
   ```
-  python3 tools/ad5x_emmc_image.py --spl spl-mmc.img --uboot u-boot-emmc.img \
-      --kernel xImage-6.6 --main rootfs.squashfs \
-      --recovery recovery.squashfs emmc-files/
+  python3 tools/ad5x_emmc_image.py --from-update kiln-os-VERSION-update.zip emmc-files/
   ```
 
-  Releases don't ship these files ready-made yet.
+  You need squashfs-tools (`unsquashfs`) for this. Use the release whose kit you have, or a newer one: the network rescue (below) needs a U-Boot that has it, and the tool refuses one that doesn't.
 - **Optional:** the serial console on the DEBUG header (`serial-console.md`), to watch what the printer does.
 
 ## 1. Into the boot ROM's USB mode
@@ -82,7 +80,7 @@ lsusb | grep a108          # ID a108:eaef Ingenic ... USB BOOT DEVICE
 ## 2. The eMMC as a USB disk
 
 ```
-python3 u-boot/tools/ad5x_usbboot.py run-uboot spl-usb2.bin u-boot.bin
+python3 u-boot/tools/ad5x_usbboot.py run-uboot boot/spl-usb2.bin boot/u-boot.bin
 python3 tools/ad5x_emmc_repair.py find
 # /dev/sda  58.2 GiB  AD5X eMMC over USB (Kiln's U-Boot)
 ```
@@ -199,8 +197,7 @@ console is needed.
    address of the PC that will serve them:
 
    ```
-   python3 tools/ad5x_emmc_image.py --spl spl-mmc.img --uboot u-boot-emmc.img \
-       --kernel xImage-6.6 --main rootfs.squashfs --recovery recovery.squashfs \
+   python3 tools/ad5x_emmc_image.py --from-update kiln-os-VERSION-update.zip \
        --usershare ad5x-backup-.../ --usershare old-whole-emmc.img \
        --mac 24:A1:0D:12:34:56 \
        --rescue 192.168.1.10:8000 rescue-set/

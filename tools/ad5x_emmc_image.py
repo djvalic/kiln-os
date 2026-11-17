@@ -5,6 +5,11 @@ host that sees the eMMC as a disk), from release images only.
     ad5x_emmc_image.py --spl spl-mmc.img --uboot u-boot-emmc.img \\
         --kernel xImage --main rootfs.squashfs --recovery recovery.squashfs \\
         OUTDIR [--data-mib 64] [--test-image]
+    ad5x_emmc_image.py --from-update kiln-os-VERSION-update.zip OUTDIR
+        [--usershare SOURCE]... [--mac MAC|random] [--rescue SERVER[:PORT]]
+
+--from-update takes all five from a release's update zip: the main OS, and
+inside it Kiln's 6.6, the recovery OS, and in that the SPL and U-Boot.
 
 The layout is stock's: p1-p7 keep their sectors, so Kiln's SPL (its built-in
 partition table), the ota flag and the factory partition stay valid on every
@@ -41,11 +46,13 @@ import argparse
 import binascii
 import hashlib
 import os
+import shutil
 import struct
 import subprocess
 import sys
 import tempfile
 import uuid
+import zipfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "u-boot", "tools"))
@@ -268,7 +275,84 @@ def protective_mbr_entry(total_sectors):
                        1, n) + bytes(48) + b"\x55\xaa"
 
 
+# where a release's main OS keeps what the eMMC needs (the recovery OS
+# inside it keeps the boot loader)
+MAIN_KERNEL = "usr/lib/ad5x/kernel66/xImage"
+MAIN_RECOVERY = "usr/share/ad5x/recovery/rootfs.squashfs"
+MAIN_RECOVERY_SHA = "usr/share/ad5x/recovery/rootfs.sha256"
+REC_BOOT = "usr/share/ad5x/bootloader/"
+
+
+def squash_cat(image, path):
+    r = subprocess.run(["unsquashfs", "-cat", image, path],
+                       capture_output=True)
+    if r.returncode or not r.stdout:
+        raise ImageError("%s: no %s in it (unsquashfs: %s)" % (
+            image, path, r.stderr.decode(errors="replace").strip()[-200:]))
+    return r.stdout
+
+
+def from_update(a, td):
+    """--from-update: the main OS (an update zip's rootfs.squashfs, checked
+    against the zip's SHA256SUMS, or a rootfs.squashfs) and what it
+    carries: Kiln's 6.6, the recovery OS, and the recovery OS's SPL and
+    U-Boot (checked against its SHA256SUMS). Fills what isn't given."""
+    if not shutil.which("unsquashfs"):
+        raise ImageError("--from-update needs unsquashfs (squashfs-tools)")
+    src = a.from_update
+    main = os.path.join(td, "main.squashfs")
+    if zipfile.is_zipfile(src):
+        with zipfile.ZipFile(src) as z:
+            names = z.namelist()
+            if "rootfs.squashfs" not in names:
+                raise ImageError("%s: no rootfs.squashfs: not an update zip" %
+                                 src)
+            with z.open("rootfs.squashfs") as f, open(main, "wb") as o:
+                shutil.copyfileobj(f, o)
+            if "SHA256SUMS" in names:
+                sums = z.read("SHA256SUMS").decode().split("\n")
+                want = [l.split()[0] for l in sums
+                        if l.split()[1:] == ["rootfs.squashfs"]]
+                if want and want[0] != sha256(read(main)):
+                    raise ImageError("%s: rootfs.squashfs doesn't match its "
+                                     "SHA256SUMS" % src)
+    else:
+        shutil.copyfile(src, main)
+    rec = os.path.join(td, "recovery.squashfs")
+    with open(rec, "wb") as f:
+        f.write(squash_cat(main, MAIN_RECOVERY))
+    want = squash_cat(main, MAIN_RECOVERY_SHA).split()[0].decode()
+    if sha256(read(rec)) != want:
+        raise ImageError("the recovery OS in %s doesn't match its sha256" % src)
+    kern = os.path.join(td, "xImage")
+    with open(kern, "wb") as f:
+        f.write(squash_cat(main, MAIN_KERNEL))
+    bsums = squash_cat(rec, REC_BOOT + "SHA256SUMS").decode().split("\n")
+    for name, attr in (("spl-mmc.img", "spl"), ("u-boot-emmc.img", "uboot")):
+        out = os.path.join(td, name)
+        b = squash_cat(rec, REC_BOOT + name)
+        want = [l.split()[0] for l in bsums if l.split()[1:] == [name]]
+        if not want or want[0] != sha256(b):
+            raise ImageError("%s in the recovery OS doesn't match its "
+                             "SHA256SUMS" % name)
+        with open(out, "wb") as f:
+            f.write(b)
+        if not getattr(a, attr):
+            setattr(a, attr, out)
+    for attr, path in (("main", main), ("recovery", rec), ("kernel", kern)):
+        if not getattr(a, attr):
+            setattr(a, attr, path)
+
+
 def build(a):
+    if a.from_update:
+        with tempfile.TemporaryDirectory() as td:
+            from_update(a, td)
+            a.from_update = None
+            return build(a)
+    for attr in ("spl", "uboot", "kernel", "main", "recovery"):
+        if not getattr(a, attr):
+            raise ImageError("--%s (or --from-update) is needed" % attr)
     spl_img = read(a.spl)
     uboot = read(a.uboot)
     kernel = read(a.kernel)
@@ -288,6 +372,11 @@ def build(a):
     if check_uimage(uboot, "--uboot") is None or \
             UBOOT_OFF + len(uboot) > MIB:
         raise ImageError("--uboot: doesn't fit before 1 MiB")
+    if a.rescue and b"KILN-RESCUE 1" not in uboot:
+        raise ImageError("this U-Boot (%s) has no network rescue: it came "
+                         "before Kiln's U-Boot patch 0038; use a newer release"
+                         % check_uimage(uboot, "--uboot").decode(
+                             errors="replace"))
     if not check_uimage(kernel, "--kernel").startswith(KERNEL_NAME):
         raise ImageError("--kernel: not Kiln's 6.6 (uImage name %s...)" %
                          KERNEL_NAME.decode())
@@ -410,14 +499,20 @@ def build(a):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--spl", required=True, help="spl-mmc.img (u-boot/build.sh)")
-    p.add_argument("--uboot", required=True, help="u-boot-emmc.img")
-    p.add_argument("--kernel", required=True,
+    p.add_argument("--spl", help="spl-mmc.img (u-boot/build.sh)")
+    p.add_argument("--uboot", help="u-boot-emmc.img")
+    p.add_argument("--kernel",
                    help="Kiln's 6.6 uImage (/usr/lib/ad5x/kernel66/xImage)")
-    p.add_argument("--main", required=True, help="the main OS rootfs.squashfs")
-    p.add_argument("--recovery", required=True, help="recovery.squashfs")
+    p.add_argument("--main", help="the main OS rootfs.squashfs")
+    p.add_argument("--recovery", help="recovery.squashfs")
     p.add_argument("--data-mib", type=int, default=64,
                    help="userdata's size in the image (MiB, default 64)")
+    p.add_argument("--from-update", metavar="ZIP",
+                   help="a release's kiln-os-VERSION-update.zip (or its "
+                   "rootfs.squashfs): the main OS, and the 6.6 kernel, the "
+                   "recovery OS, the SPL and U-Boot it carries, for "
+                   "whichever of --spl --uboot --kernel --main --recovery "
+                   "isn't given")
     p.add_argument("--usershare", action="append", metavar="SOURCE",
                    help="this printer's usershare: usershare.img, an "
                    "ad5x-backup directory or a whole-eMMC dump (repeat to "

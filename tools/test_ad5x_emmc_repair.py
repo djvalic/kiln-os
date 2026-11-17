@@ -52,7 +52,8 @@ def release(td):
         f.write("NAME=test\n")
     files = {
         "spl": img.spl.spl_image(b"U-Boot SPL 2026.10 test" + bytes(3000)),
-        "uboot": uimage(b"Kiln U-Boot test", os.urandom(200000)),
+        "uboot": uimage(b"Kiln U-Boot test",
+                        b"KILN-RESCUE 1\n" + os.urandom(200000)),
         "kernel": uimage(b"Linux-6.6-ad5x", os.urandom(300000)),
     }
     for k, b in files.items():

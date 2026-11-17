@@ -152,6 +152,59 @@ def main():
                        os.path.join(src, "rootfs.squashfs"), "--usershare",
                        bad, "--rescue", "192.168.1.10", out3])
         check("no good usershare and no --mac: refused", rc == 1)
+        # --from-update: an update zip whose main OS carries the kernel and
+        # the recovery OS, which carries the SPL and U-Boot
+        def squash(tree, out):
+            subprocess.run(["mksquashfs", tree, out, "-quiet", "-noappend"],
+                           check=True, stdout=subprocess.DEVNULL)
+
+        def update_zip(name, uboot):
+            rt = os.path.join(td, name + "-rec")
+            bl = os.path.join(rt, "usr/share/ad5x/bootloader")
+            os.makedirs(bl)
+            spl_b = open(os.path.join(src, "spl"), "rb").read()
+            for n, b in (("spl-mmc.img", spl_b), ("u-boot-emmc.img", uboot)):
+                open(os.path.join(bl, n), "wb").write(b)
+            open(os.path.join(bl, "SHA256SUMS"), "w").write(
+                "%s  spl-mmc.img\n%s  u-boot-emmc.img\n" %
+                (img.sha256(spl_b), img.sha256(uboot)))
+            rec = os.path.join(td, name + "-rec.squashfs")
+            squash(rt, rec)
+            mt = os.path.join(td, name + "-main")
+            for d in ("usr/lib/ad5x/kernel66", "usr/share/ad5x/recovery"):
+                os.makedirs(os.path.join(mt, d))
+            kern = open(os.path.join(src, "kernel"), "rb").read()
+            open(os.path.join(mt, img.MAIN_KERNEL), "wb").write(kern)
+            rb = open(rec, "rb").read()
+            open(os.path.join(mt, img.MAIN_RECOVERY), "wb").write(rb)
+            open(os.path.join(mt, img.MAIN_RECOVERY_SHA), "w").write(
+                img.sha256(rb) + "\n")
+            main = os.path.join(td, name + "-main.squashfs")
+            squash(mt, main)
+            z = os.path.join(td, name + "-update.zip")
+            import zipfile
+            with zipfile.ZipFile(z, "w") as zf:
+                zf.write(main, "rootfs.squashfs")
+                zf.writestr("SHA256SUMS", "%s  rootfs.squashfs\n" %
+                            img.sha256(open(main, "rb").read()))
+            return z, kern, rb
+
+        new_uboot = t.uimage(b"Kiln U-Boot test",
+                             b"KILN-RESCUE 1\n" + os.urandom(100000))
+        z, kern, rb = update_zip("new", new_uboot)
+        out4 = os.path.join(td, "set4")
+        rc = img.main(["--from-update", z, "--mac", mac, "--rescue",
+                       "192.168.1.10", out4])
+        check("--from-update --rescue", rc == 0 and
+              open(os.path.join(out4, "p1-kernel.img"), "rb").read() == kern
+              and open(os.path.join(out4, "p2-rootfs-recovery.img"),
+                       "rb").read() == rb)
+        old_uboot = t.uimage(b"Kiln U-Boot test", os.urandom(100000))
+        z, _, _ = update_zip("old", old_uboot)
+        rc = img.main(["--from-update", z, "--mac", mac, "--rescue",
+                       "192.168.1.10", os.path.join(td, "set5")])
+        check("a U-Boot without the rescue: refused", rc == 1 and
+              not os.path.exists(os.path.join(td, "set5")))
     print("failures: %d" % fails)
     return 1 if fails else 0
 
