@@ -98,13 +98,19 @@ def check_uimage(b, what):
     return b[32:64].split(b"\0")[0]
 
 
+def last_usable_lba(total_sectors):
+    """The last LBA a partition may use: the backup GPT's entries and
+    header take the sectors after it."""
+    return total_sectors - 1 - GPT_ENTRIES * GPT_ENTRY_SIZE // SECTOR - 1
+
+
 def gpt(total_sectors):
     """Primary (LBA 1, entries at LBA 2) and backup GPT (entries before the
     last sector), as stock: 8 entries, basic data type, no attributes."""
     last = total_sectors - 1
     n_ent_sectors = GPT_ENTRIES * GPT_ENTRY_SIZE // SECTOR
     first_usable = 34                       # as stock: SPL at LBA 34
-    last_usable = last - n_ent_sectors - 1
+    last_usable = last_usable_lba(total_sectors)
     ents = bytearray(GPT_ENTRIES * GPT_ENTRY_SIZE)
     for num, name, start, count in PARTS:
         end = (last_usable if count == 0 else start + count - 1)
@@ -184,18 +190,22 @@ def build(a):
     first[SPL_OFF + len(spl_img):UBOOT_OFF] = b"\xff" * (UBOOT_OFF - SPL_OFF - len(spl_img))
     first[UBOOT_OFF:UBOOT_OFF + len(uboot)] = uboot
 
-    # p7: an empty ext4 of --data-mib
+    # p7: an empty ext4 of userdata's size in the GPT (--data-mib less the
+    # backup GPT at its end), whole 4 KiB blocks: the kernel refuses an
+    # ext4 larger than its partition
+    p7_sectors = last_usable_lba(total) - data_start + 1
+    fs_bytes = p7_sectors * SECTOR // 4096 * 4096
     with tempfile.TemporaryDirectory() as td:
         dimg = os.path.join(td, "userdata.img")
         with open(dimg, "wb") as f:
-            f.truncate(a.data_mib * MIB)
+            f.truncate(fs_bytes)
         subprocess.run(["mke2fs", "-q", "-F", "-t", "ext4", "-O",
                         MKE2FS_FEATURES, "-L", "userdata", "-E",
                         "root_owner=0:0", dimg], check=True)
         data = read(dimg)
     # the backup GPT sits in the last sectors of userdata's range
     tail = ents + backup
-    data = data[:len(data) - len(tail)] + tail if a.data_mib else data
+    data = data.ljust(a.data_mib * MIB - len(tail), b"\0") + tail
 
     ota = bytearray(PARTS[4][3] * SECTOR)
     ota[0:len(FLAG)] = FLAG
