@@ -34,6 +34,10 @@ start)
 		echo "ad5x-data: no userdata partition, using tmpfs (not kept)"
 		mount -t tmpfs -o mode=0755 tmpfs /data
 	fi
+	# userdata to the end of the eMMC (once; quick, online): not in safe mode
+	if ! safe_mode && grep -q " /data ext4 " /proc/mounts; then
+		mkdir -p /data/ad5x && ad5x-grow-data >> /data/ad5x/grow-data.log 2>&1 &
+	fi
 	# No battery clock: the last known time instead of 1970 (ad5x-clock)
 	ad5x-clock restore
 	# Crash log of our kernel (ramoops, ad5x.dts): read it from /sys/fs/pstore
@@ -52,16 +56,16 @@ start)
 		[ -n "$us" ] && mount -t ext4 -o ro "/dev/$us" /tmp/usershare \
 			&& us_mounted=1
 	fi
-	# Root login: the same password as stock's (its /etc/shadow on
-	# usershare), so SSH works as before without a password in the image.
+	# Root login: "root" as the image sets it (as zMod's), unless the owner
+	# chose another with ad5x-passwd (its hash in /data/ad5x/root-password).
 	# SSH keys: /data/ad5x/ssh/authorized_keys.
-	hash=$(sed -n 's/^root:\([^:]*\):.*/\1/p' /tmp/usershare/etc/shadow 2>/dev/null)
+	hash=$(sed -n 1p /data/ad5x/root-password 2>/dev/null)
 	if [ -n "$hash" ] && ! grep -q ' /etc/shadow ' /proc/mounts; then
 		mkdir -p /run/ad5x
 		(umask 077; sed "s|^root:[^:]*:|root:$hash:|" /etc/shadow > /run/ad5x/shadow)
 		chmod 600 /run/ad5x/shadow
 		mount --bind /run/ad5x/shadow /etc/shadow
-		echo "ad5x-data: root password from stock's settings"
+		echo "ad5x-data: root password: the owner's (/data/ad5x/root-password)"
 	fi
 	# Per-printer calibration from the stock settings file, once; stock
 	# defaults without it.

@@ -1,0 +1,29 @@
+#!/bin/sh
+# Change root's password and keep it across restarts and updates: the
+# image's /etc/shadow is read-only (its default password is "root"), so the
+# hash goes to /data/ad5x/root-password, which S05ad5x-data binds over it
+# at every start.
+#   ad5x-passwd          asks for the new password (twice)
+#   ad5x-passwd --reset  back to the image's "root"
+set -e
+F=/data/ad5x/root-password
+if [ "${1:-}" = --reset ]; then
+	rm -f $F
+	echo "ad5x-passwd: back to the default at the next start"
+	exit 0
+fi
+stty -echo 2>/dev/null; printf 'New password: '; read -r a; printf '\nAgain: '; read -r b; stty echo 2>/dev/null; echo
+[ -n "$a" ] && [ "$a" = "$b" ] || { echo "ad5x-passwd: empty or not the same; nothing changed" >&2; exit 1; }
+h=$(printf '%s' "$a" | mkpasswd -m sha512 -P 0 2>/dev/null || printf '%s' "$a" | cryptpw -m sha512 -P 0)
+case "$h" in '$'*) ;; *) echo "ad5x-passwd: hashing failed; nothing changed" >&2; exit 1 ;; esac
+mkdir -p /data/ad5x
+(umask 077; echo "$h" > $F.new) && mv $F.new $F
+# now too: the bound copy in /run
+if grep -q ' /etc/shadow ' /proc/mounts; then
+	sed -i "s|^root:[^:]*:|root:$h:|" /run/ad5x/shadow
+else
+	mkdir -p /run/ad5x
+	(umask 077; sed "s|^root:[^:]*:|root:$h:|" /etc/shadow > /run/ad5x/shadow)
+	mount --bind /run/ad5x/shadow /etc/shadow
+fi
+echo "ad5x-passwd: changed (kept in $F)"
