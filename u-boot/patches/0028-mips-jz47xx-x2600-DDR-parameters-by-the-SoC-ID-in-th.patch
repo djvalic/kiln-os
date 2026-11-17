@@ -1,0 +1,681 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Mon, 16 Nov 2026 22:30:00 -0700
+Subject: [PATCH 28/29] mips: jz47xx: x2600: DDR parameters by the SoC ID in
+ the eFuse
+
+The X2600 comes in variants with different DDR dies in the package:
+the AD5X ships with the X2600H (512 MiB DDR3L) and the X2600E (256 MiB
+DDR3). The SPL always set up the X2600H's DDR, so on an X2600E its DDR
+test failed.
+
+Read the SoC info from the eFuse as Ingenic's check_socid() does, build
+the DDR ID from it and pick the matching table: the X2600H's as before,
+the X2600E's and the X2600N's as the 2025 stock SPL carries them. With
+no SoC info in the eFuse the X2600H's table stays the choice.
+
+With 256 MiB, test only the address lines the DDR has, and leave the
+second bank (mem=256M@0x30000000) off the kernel command line, in the
+SPL and in U-Boot proper, as the stock SPL does.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ arch/mips/mach-jz47xx/include/mach/x2600.h |  21 ++
+ arch/mips/mach-jz47xx/x2600/sdram.c        | 281 +++++++++++++++------
+ arch/mips/mach-jz47xx/x2600/spl.c          |  38 ++-
+ arch/mips/mach-jz47xx/x2600/spl.h          |   7 +
+ arch/mips/mach-jz47xx/x2600/x2600.c        |  55 ++++
+ board/flashforge/ad5x/ad5x.c               |   8 +
+ 6 files changed, 316 insertions(+), 94 deletions(-)
+
+diff --git a/arch/mips/mach-jz47xx/include/mach/x2600.h b/arch/mips/mach-jz47xx/include/mach/x2600.h
+index 8d72d4be..2f90b5cf 100644
+--- a/arch/mips/mach-jz47xx/include/mach/x2600.h
++++ b/arch/mips/mach-jz47xx/include/mach/x2600.h
+@@ -6,6 +6,7 @@
+ #ifndef __MACH_X2600_H__
+ #define __MACH_X2600_H__
+ 
++#include <linux/bitops.h>
+ #include <linux/types.h>
+ 
+ void x2600_uart0_plain_baud(void);
+@@ -23,6 +24,26 @@ void x2600_wdt_stop(void);
+ u32 x2600_cpspr_read(void);
+ void x2600_cpspr_write(u32 val);
+ 
++/*
++ * The X2600 comes in variants with different DDR dies in the package. The
++ * eFuse says which (Ingenic's x2600/check_socid.c): 20 bits of SoC info,
++ * the variant in 19:16 (1 X2600E, 3 X2600H, ...), DDR3 in 15 (else DDR2),
++ * the DDR vendor in 14:11 and the capacity code in 10:7. x2600_socid()
++ * returns them, or -1 when the eFuse has none. The DDR ID that picks the
++ * DDR parameters is built from them as Ingenic's DDR_CHIP_ID().
++ */
++int x2600_socid(void);
++#define X2600_SOC(id)		(((id) >> 16) & 0xf)
++#define X2600_DDR_ID(id)	(((id) & BIT(15) ? 2 : 3) << 6 |	\
++				 (((id) >> 11) & 0xf) << 3 |		\
++				 (((id) >> 7) & 0xf))
++/* the capacity code in MiB (Ingenic's MEM_256M .. MEM_1G) */
++unsigned int x2600_ddr_mib(unsigned int ddr_id);
++/* the RAM this unit has: from the eFuse, else 512 MiB (an X2600H) */
++unsigned int x2600_ram_mib(void);
++/* the X2600H's second bank on the kernel command line, gone with 256 MiB */
++#define AD5X_ARGS_HIGH		" mem=256M@0x30000000"
++
+ /*
+  * The eMMC as the stock SPL sees it: its built-in partition table (the
+  * GPT agrees on every AD5X examined), 512-byte sectors.
+diff --git a/arch/mips/mach-jz47xx/x2600/sdram.c b/arch/mips/mach-jz47xx/x2600/sdram.c
+index 4e41c86b..dff92865 100644
+--- a/arch/mips/mach-jz47xx/x2600/sdram.c
++++ b/arch/mips/mach-jz47xx/x2600/sdram.c
+@@ -15,6 +15,7 @@
+  */
+ 
+ #include "spl.h"
++#include <mach/x2600.h>
+ #include <stdio.h>
+ #include <asm/io.h>
+ #include <linux/bitops.h>
+@@ -148,48 +149,130 @@ struct x2600_ddr_params {
+ 
+ #define X2600_DDR3		0	/* this table's type for DDR3 */
+ 
+-static struct x2600_ddr_params ddr = {
+-	.name		= "W634GU6QG-11",
+-	.id		= 0x84,
+-	.type		= X2600_DDR3,
+-	.freq		= 900000000,
+-	.ddrc_cfg	= 0x82006a35,
+-	.ddrc_ctrl	= 0x00003092,
+-	.ddrc_mmap0	= 0x000020e0,
+-	.ddrc_mmap1	= 0x00004000,
+-	.ddrc_refcnt	= 0x40db0081,
+-	.ddrc_timing	= { 0x08140e09, 0x0a0a070d, 0x030d040d, 0x202c1f06,
+-			    0x8006a065 },
+-	.ddrc_autosr_cnt = 0x76000101,
+-	.ddrc_autosr_en	= 0,	/* as the stock SPL's table (0x8898 in its build) */
+-	.ddrc_hregpro	= 1,
+-	.ddrc_pregpro	= 1,
+-	.ddrc_cguc0	= 0x11111111,
+-	.ddrc_cguc1	= 0x00000113,
+-	.ddrp_memcfg	= 0x8a,
+-	.ddrp_cl	= 0xd,
+-	.ddrp_cwl	= 0x9,
+-	.mr0		= 0x1f14,
+-	.mr1		= 0x10006,
+-	.mr2		= 0x20020,
+-	.mr3		= 0x30000,
+-	.chip0_size	= 0x20000000,
+-	.remap		= { 0x12020100, 0x07061413, 0x0b0a0908, 0x0f0e0d0c,
+-			    0x04031110, 0x17161505 },
+-	.use_drvodt	= 1,
+-	.pu_drv_cmd = 0xc, .pd_drv_cmd = 0xc, .pu_drv_ck = 0xc, .pd_drv_ck = 0xc,
+-	.pu_drv_dq7_0 = 0xc, .pd_drv_dq7_0 = 0xc,
+-	.pu_drv_dq15_8 = 0xc, .pd_drv_dq15_8 = 0xc,
+-	.pu_odt_dq7_0 = 0x2, .pd_odt_dq7_0 = 0x2,
+-	.pu_odt_dq15_8 = 0x2, .pd_odt_dq15_8 = 0x2,
+-	.use_deskew	= 1,
+-	.deskew_cmd	= 3,
+-	.rx_dm0 = 3, .tx_dm0 = 3, .rx_dq7_0 = 3, .tx_dq7_0 = 3,
+-	.rx_dqs0 = 3, .tx_dqs0 = 3,
+-	.rx_dm1 = 3, .tx_dm1 = 3, .rx_dq15_8 = 3, .tx_dq15_8 = 3,
+-	.rx_dqs1 = 3, .tx_dqs1 = 3,
++/*
++ * One table per X2600 variant with a DDR3 die, picked by the DDR ID from
++ * the eFuse as the newer stock SPL (2013.07-00437, Nov 2025) does. The
++ * X2600H's first, "W634GU6QG-11" as the 2024 stock SPL has it (also the
++ * one used when the eFuse has no SoC info); then the X2600E's (256 MiB)
++ * and the X2600N's (128 MiB) as the 2025 stock SPL carries them. The
++ * X2600M's DDR2 isn't supported.
++ */
++static struct x2600_ddr_params ddr_tables[] = {
++	{
++		.name		= "W634GU6QG-11",
++		.id		= 0x84,
++		.type		= X2600_DDR3,
++		.freq		= 900000000,
++		.ddrc_cfg	= 0x82006a35,
++		.ddrc_ctrl	= 0x00003092,
++		.ddrc_mmap0	= 0x000020e0,
++		.ddrc_mmap1	= 0x00004000,
++		.ddrc_refcnt	= 0x40db0081,
++		.ddrc_timing	= { 0x08140e09, 0x0a0a070d, 0x030d040d, 0x202c1f06,
++				    0x8006a065 },
++		.ddrc_autosr_cnt = 0x76000101,
++		.ddrc_autosr_en	= 0,	/* as the stock SPL's table (0x8898 in its build) */
++		.ddrc_hregpro	= 1,
++		.ddrc_pregpro	= 1,
++		.ddrc_cguc0	= 0x11111111,
++		.ddrc_cguc1	= 0x00000113,
++		.ddrp_memcfg	= 0x8a,
++		.ddrp_cl	= 0xd,
++		.ddrp_cwl	= 0x9,
++		.mr0		= 0x1f14,
++		.mr1		= 0x10006,
++		.mr2		= 0x20020,
++		.mr3		= 0x30000,
++		.chip0_size	= 0x20000000,
++		.remap		= { 0x12020100, 0x07061413, 0x0b0a0908, 0x0f0e0d0c,
++				    0x04031110, 0x17161505 },
++		.use_drvodt	= 1,
++		.pu_drv_cmd = 0xc, .pd_drv_cmd = 0xc, .pu_drv_ck = 0xc, .pd_drv_ck = 0xc,
++		.pu_drv_dq7_0 = 0xc, .pd_drv_dq7_0 = 0xc,
++		.pu_drv_dq15_8 = 0xc, .pd_drv_dq15_8 = 0xc,
++		.pu_odt_dq7_0 = 0x2, .pd_odt_dq7_0 = 0x2,
++		.pu_odt_dq15_8 = 0x2, .pd_odt_dq15_8 = 0x2,
++		.use_deskew	= 1,
++		.deskew_cmd	= 3,
++		.rx_dm0 = 3, .tx_dm0 = 3, .rx_dq7_0 = 3, .tx_dq7_0 = 3,
++		.rx_dqs0 = 3, .tx_dqs0 = 3,
++		.rx_dm1 = 3, .tx_dm1 = 3, .rx_dq15_8 = 3, .tx_dq15_8 = 3,
++		.rx_dqs1 = 3, .tx_dqs1 = 3,
++	},
++	{
++		.name		= "X2600E-DDR3",
++		.id		= 0x80,
++		.type		= X2600_DDR3,
++		.freq		= 900000000,
++		.ddrc_cfg	= 0x82004a35,
++		.ddrc_ctrl	= 0x00003092,
++		.ddrc_mmap0	= 0x000020f0,
++		.ddrc_mmap1	= 0x00003000,
++		.ddrc_refcnt	= 0x40db0081,
++		.ddrc_timing	= { 0x08140e09, 0x0a0a070d, 0x030d040d, 0x202c1f06,
++				    0x8006a065 },
++		.ddrc_autosr_cnt = 0x52000101,
++		.ddrc_autosr_en	= 1,
++		.ddrc_hregpro	= 1,
++		.ddrc_pregpro	= 1,
++		.ddrc_cguc0	= 0x11111111,
++		.ddrc_cguc1	= 0x00000113,
++		.ddrp_memcfg	= 0x8a,
++		.ddrp_cl	= 0xd,
++		.ddrp_cwl	= 0x9,
++		.mr0		= 0x1f14,
++		.mr1		= 0x10002,
++		.mr2		= 0x20020,
++		.mr3		= 0x30000,
++		.chip0_size	= 0x10000000,
++		.remap		= { 0x11020100, 0x07061312, 0x0b0a0908, 0x0f0e0d0c,
++				    0x05040310, 0x17161514 },
++	},
++	{
++		.name		= "X2600N-DDR3",
++		.id		= 0x81,
++		.type		= X2600_DDR3,
++		.freq		= 900000000,
++		.ddrc_cfg	= 0x82002a35,
++		.ddrc_ctrl	= 0x00003092,
++		.ddrc_mmap0	= 0x000020f8,
++		.ddrc_mmap1	= 0x00002800,
++		.ddrc_refcnt	= 0x40db0081,
++		.ddrc_timing	= { 0x08140e09, 0x0a0a070d, 0x030d040d, 0x202c1f06,
++				    0x8006a065 },
++		.ddrc_autosr_cnt = 0x32000101,
++		.ddrc_autosr_en	= 1,
++		.ddrc_hregpro	= 1,
++		.ddrc_pregpro	= 1,
++		.ddrc_cguc0	= 0x11111111,
++		.ddrc_cguc1	= 0x00000113,
++		.ddrp_memcfg	= 0x8a,
++		.ddrp_cl	= 0xd,
++		.ddrp_cwl	= 0x9,
++		.mr0		= 0x1f14,
++		.mr1		= 0x10006,
++		.mr2		= 0x20020,
++		.mr3		= 0x30000,
++		.chip0_size	= 0x08000000,
++		.remap		= { 0x10020100, 0x07061211, 0x0b0a0908, 0x0f0e0d0c,
++				    0x13050403, 0x17161514 },
++		.use_drvodt	= 1,
++		.pu_drv_cmd = 0xc, .pd_drv_cmd = 0xc, .pu_drv_ck = 0xc, .pd_drv_ck = 0xc,
++		.pu_drv_dq7_0 = 0xc, .pd_drv_dq7_0 = 0xc,
++		.pu_drv_dq15_8 = 0xc, .pd_drv_dq15_8 = 0xc,
++		.pu_odt_dq7_0 = 0x2, .pd_odt_dq7_0 = 0x2,
++		.pu_odt_dq15_8 = 0x2, .pd_odt_dq15_8 = 0x2,
++		.use_deskew	= 1,
++		.deskew_cmd	= 3,
++		.rx_dm0 = 3, .tx_dm0 = 3, .rx_dq7_0 = 3, .tx_dq7_0 = 3,
++		.rx_dqs0 = 3, .tx_dqs0 = 3,
++		.rx_dm1 = 3, .tx_dm1 = 3, .rx_dq15_8 = 3, .tx_dq15_8 = 3,
++		.rx_dqs1 = 3, .tx_dqs1 = 3,
++	},
+ };
+ 
++static struct x2600_ddr_params *ddr = &ddr_tables[0];
++
+ static inline u32 cpm_rd(u32 off) { return readl(CPM + off); }
+ static inline void cpm_wr(u32 v, u32 off) { writel(v, CPM + off); }
+ static inline u32 ddrc_rd(u32 off) { return readl(DDRC + off); }
+@@ -319,7 +402,7 @@ static void x2600_ddr_clk_set(void)
+ 	u32 val = cpm_rd(CPM_DDRCDR);
+ 
+ 	val &= ~(3U << 30 | CDR_BUSY | CDR_STOP | 0xff);
+-	val |= 2U << 30 | CDR_CE | (1800000000 / ddr.freq - 1);
++	val |= 2U << 30 | CDR_CE | (1800000000 / ddr->freq - 1);
+ 	cpm_wr(val, CPM_DDRCDR);
+ 	while (cpm_rd(CPM_DDRCDR) & CDR_BUSY)
+ 		;
+@@ -341,11 +424,11 @@ static void x2600_efuse_trim1_overrides(void)
+ 	writel(0, EFUSE + EFUSE_STATE);
+ 
+ 	if (trim1 & BIT(8)) {
+-		ddr.ddrc_cfg &= ~BIT(2);
++		ddr->ddrc_cfg &= ~BIT(2);
+ 		puts("SPL: efuse: DDR chip ODT off\n");
+ 	}
+ 	if (trim1 & BIT(9)) {
+-		ddr.ddrc_autosr_en = 0;
++		ddr->ddrc_autosr_en = 0;
+ 		puts("SPL: efuse: DDR auto self-refresh off\n");
+ 	}
+ }
+@@ -354,9 +437,9 @@ static void ddrp_cfg(void)
+ {
+ 	phy_wr(0, DDRP_DQ_WIDTH_H);
+ 	phy_wr(BIT(1) | BIT(0), DDRP_DQ_WIDTH);	/* DQ high and low bytes */
+-	phy_wr(ddr.ddrp_memcfg, DDRP_MEM_CFG);
+-	phy_wr((phy_rd(DDRP_CL) & ~0xf) | ddr.ddrp_cl, DDRP_CL);
+-	phy_wr((phy_rd(DDRP_CWL) & ~0xf) | ddr.ddrp_cwl, DDRP_CWL);
++	phy_wr(ddr->ddrp_memcfg, DDRP_MEM_CFG);
++	phy_wr((phy_rd(DDRP_CL) & ~0xf) | ddr->ddrp_cl, DDRP_CL);
++	phy_wr((phy_rd(DDRP_CWL) & ~0xf) | ddr->ddrp_cwl, DDRP_CWL);
+ 	phy_wr(phy_rd(DDRP_AL) & ~0xf, DDRP_AL);
+ }
+ 
+@@ -376,11 +459,11 @@ static void ddrc_prev_init(void)
+ 	int i;
+ 
+ 	for (i = 0; i < 5; i++)
+-		ddrc_wr(ddr.ddrc_timing[i], DDRC_TIMING(i + 1));
+-	ddrc_wr(ddr.ddrc_mmap0, DDRC_MMAP0);
+-	ddrc_wr(ddr.ddrc_mmap1, DDRC_MMAP1);
+-	for (i = 0; i < ARRAY_SIZE(ddr.remap); i++)
+-		apb_wr(ddr.remap[i], DDRC_REMAP(i + 1));
++		ddrc_wr(ddr->ddrc_timing[i], DDRC_TIMING(i + 1));
++	ddrc_wr(ddr->ddrc_mmap0, DDRC_MMAP0);
++	ddrc_wr(ddr->ddrc_mmap1, DDRC_MMAP1);
++	for (i = 0; i < ARRAY_SIZE(ddr->remap); i++)
++		apb_wr(ddr->remap[i], DDRC_REMAP(i + 1));
+ 	/* no self-refresh and refresh while it's set up */
+ 	ddrc_wr(0, DDRC_AUTOSR_EN);
+ 	ddrc_wr(0, DDRC_AUTOSR_CNT);
+@@ -390,7 +473,7 @@ static void ddrc_prev_init(void)
+ /* DDR3 mode register n through the controller */
+ static u32 ddrc_lmr_mr(u32 mr)
+ {
+-	return ddr.ddrc_dlmr | DDRC_LMR_START | DDRC_LMR_CMD_LMR |
++	return ddr->ddrc_dlmr | DDRC_LMR_START | DDRC_LMR_CMD_LMR |
+ 	       ((mr & 0xffff) << DDRC_LMR_ADDR_BIT) |
+ 	       (((mr >> 16) & 0x7) << DDRC_LMR_BA_BIT);
+ }
+@@ -403,21 +486,21 @@ static void ddrc_dfi_init(void)
+ 		;
+ 	ddrc_wr(ddrc_rd(DDRC_CTRL) & ~DDRC_CTRL_DFI_RST_N, DDRC_CTRL);
+ 	udelay(500);
+-	ddrc_wr(ddr.ddrc_cfg, DDRC_CFG);
++	ddrc_wr(ddr->ddrc_cfg, DDRC_CFG);
+ 	ddrc_wr(DDRC_CTRL_CKE, DDRC_CTRL);
+ 	udelay(500);
+ 
+ 	mdelay(1);
+-	ddrc_wr(ddrc_lmr_mr(ddr.mr2), DDRC_LMR);
++	ddrc_wr(ddrc_lmr_mr(ddr->mr2), DDRC_LMR);
+ 	udelay(10);
+-	ddrc_wr(ddrc_lmr_mr(ddr.mr3), DDRC_LMR);
++	ddrc_wr(ddrc_lmr_mr(ddr->mr3), DDRC_LMR);
+ 	udelay(10);
+-	ddrc_wr(ddrc_lmr_mr(ddr.mr1), DDRC_LMR);
++	ddrc_wr(ddrc_lmr_mr(ddr->mr1), DDRC_LMR);
+ 	udelay(10);
+-	ddrc_wr(ddrc_lmr_mr(ddr.mr0), DDRC_LMR);
++	ddrc_wr(ddrc_lmr_mr(ddr->mr0), DDRC_LMR);
+ 	udelay(10);
+ 	/* ZQ calibration, CS0 only */
+-	ddrc_wr(ddr.ddrc_dlmr | DDRC_LMR_START | DDRC_LMR_CMD_ZQCL_CS0,
++	ddrc_wr(ddr->ddrc_dlmr | DDRC_LMR_START | DDRC_LMR_CMD_ZQCL_CS0,
+ 		DDRC_LMR);
+ 	mdelay(1);
+ }
+@@ -425,18 +508,18 @@ static void ddrc_dfi_init(void)
+ /* drive and ODT from the table (ZQ calibration bypassed, as Ingenic's) */
+ static void ddrp_set_drvodt(void)
+ {
+-	phy_wr(ddr.pu_odt_dq7_0, DDRP_PU_ODT_DQ7_0);
+-	phy_wr(ddr.pu_odt_dq7_0, DDRP_PU_ODT_DQ15_8);
+-	phy_wr(ddr.pd_odt_dq7_0, DDRP_PD_ODT_DQ7_0);
+-	phy_wr(ddr.pd_odt_dq7_0, DDRP_PD_ODT_DQ15_8);
+-	phy_wr(ddr.pu_drv_dq7_0, DDRP_PU_DRV_DQ7_0);
+-	phy_wr(ddr.pu_drv_dq7_0, DDRP_PU_DRV_DQ15_8);
+-	phy_wr(ddr.pd_drv_dq7_0, DDRP_PD_DRV_DQ7_0);
+-	phy_wr(ddr.pd_drv_dq7_0, DDRP_PD_DRV_DQ15_8);
+-	phy_wr(ddr.pu_drv_cmd, DDRP_PU_DRV_CMD);
+-	phy_wr(ddr.pd_drv_cmd, DDRP_PD_DRV_CMD);
+-	phy_wr(ddr.pu_drv_ck, DDRP_PU_DRV_CK);
+-	phy_wr(ddr.pd_drv_ck, DDRP_PD_DRV_CK);
++	phy_wr(ddr->pu_odt_dq7_0, DDRP_PU_ODT_DQ7_0);
++	phy_wr(ddr->pu_odt_dq7_0, DDRP_PU_ODT_DQ15_8);
++	phy_wr(ddr->pd_odt_dq7_0, DDRP_PD_ODT_DQ7_0);
++	phy_wr(ddr->pd_odt_dq7_0, DDRP_PD_ODT_DQ15_8);
++	phy_wr(ddr->pu_drv_dq7_0, DDRP_PU_DRV_DQ7_0);
++	phy_wr(ddr->pu_drv_dq7_0, DDRP_PU_DRV_DQ15_8);
++	phy_wr(ddr->pd_drv_dq7_0, DDRP_PD_DRV_DQ7_0);
++	phy_wr(ddr->pd_drv_dq7_0, DDRP_PD_DRV_DQ15_8);
++	phy_wr(ddr->pu_drv_cmd, DDRP_PU_DRV_CMD);
++	phy_wr(ddr->pd_drv_cmd, DDRP_PD_DRV_CMD);
++	phy_wr(ddr->pu_drv_ck, DDRP_PU_DRV_CK);
++	phy_wr(ddr->pd_drv_ck, DDRP_PD_DRV_CK);
+ }
+ 
+ /* the PHY's RX DQS training: 0, or -1 for the SPL's second try */
+@@ -467,16 +550,16 @@ static void ddrp_set_rx_dq_deskew(void)
+ 	int i;
+ 
+ 	for (i = 0; i < 8; i++) {
+-		phy_wr(ddr.rx_dq7_0, 0x708 + 8 * i);
+-		phy_wr(ddr.rx_dq7_0, 0x75c + 8 * i);
++		phy_wr(ddr->rx_dq7_0, 0x708 + 8 * i);
++		phy_wr(ddr->rx_dq7_0, 0x75c + 8 * i);
+ 	}
+ }
+ 
+ static void ddrc_post_init(void)
+ {
+-	ddrc_wr(ddr.ddrc_autosr_cnt, DDRC_AUTOSR_CNT);
+-	ddrc_wr(ddr.ddrc_refcnt, DDRC_REFCNT);
+-	ddrc_wr(ddrc_rd(DDRC_CTRL) | (ddr.ddrc_ctrl & (0xf << 12)), DDRC_CTRL);
++	ddrc_wr(ddr->ddrc_autosr_cnt, DDRC_AUTOSR_CNT);
++	ddrc_wr(ddr->ddrc_refcnt, DDRC_REFCNT);
++	ddrc_wr(ddrc_rd(DDRC_CTRL) | (ddr->ddrc_ctrl & (0xf << 12)), DDRC_CTRL);
+ 	apb_wr(apb_rd(DDRC_DWCFG) | DDRC_DWCFG_PORT_OB_EN, DDRC_DWCFG);
+ }
+ 
+@@ -490,13 +573,45 @@ void x2600_spl_clocks_init(void)
+ 	       cpm_rd(CPM_CPEPCR));
+ }
+ 
++/* the table for this unit's DDR die: 0, or -1 when there is none */
++static int x2600_ddr_select(void)
++{
++	int socid = x2600_socid(), i;
++	u32 id;
++
++	if (socid < 0) {
++		printf("SPL: no SoC ID in the eFuse: %s\n", ddr->name);
++		return 0;
++	}
++	id = X2600_DDR_ID(socid);
++	for (i = 0; i < ARRAY_SIZE(ddr_tables); i++) {
++		/* the vendor bits don't count, as in Ingenic's match */
++		if ((ddr_tables[i].id & ~(7 << 3)) == (id & ~(7 << 3))) {
++			ddr = &ddr_tables[i];
++			printf("SPL: SoC ID %05x (variant %u), DDR ID %02x\n",
++			       socid, X2600_SOC(socid), id);
++			return 0;
++		}
++	}
++	printf("SPL: SoC ID %05x (variant %u), DDR ID %02x: no DDR3 table "
++	       "for it\n", socid, X2600_SOC(socid), id);
++	return -1;
++}
++
++unsigned int x2600_sdram_mib(void)
++{
++	return ddr->chip0_size >> 20;
++}
++
+ int x2600_sdram_init(void)
+ {
+-	if (ddr.type != X2600_DDR3) {
++	if (x2600_ddr_select())
++		return -1;
++	if (ddr->type != X2600_DDR3) {
+ 		puts("SPL: not a DDR3 parameter set\n");
+ 		return -1;
+ 	}
+-	printf("SPL: DDR3 %s, %u MHz\n", ddr.name, ddr.freq / 1000000);
++	printf("SPL: DDR3 %s, %u MHz\n", ddr->name, ddr->freq / 1000000);
+ 
+ 	x2600_efuse_trim1_overrides();
+ 	x2600_ddr_clk_set();
+@@ -513,23 +628,23 @@ int x2600_sdram_init(void)
+ 	ddrc_dfi_init();
+ 
+ 	/* training before refresh starts (Ingenic's automatic training path) */
+-	if (ddr.use_drvodt)
++	if (ddr->use_drvodt)
+ 		ddrp_set_drvodt();
+ 	if (ddrp_rx_dqs_auto_calibration())
+ 		return -1;
+-	if (ddr.use_deskew)
++	if (ddr->use_deskew)
+ 		ddrp_set_rx_dq_deskew();
+ 	ddrc_post_init();
+ 
+ 	/* automatic clock gating and self-refresh only after training */
+-	apb_wr(ddr.ddrc_cguc0, DDRC_CGUC0);
+-	apb_wr(ddr.ddrc_cguc1, DDRC_CGUC1);
+-	ddrc_wr(ddr.ddrc_autosr_en ? 1 : 0, DDRC_AUTOSR_EN);
++	apb_wr(ddr->ddrc_cguc0, DDRC_CGUC0);
++	apb_wr(ddr->ddrc_cguc1, DDRC_CGUC1);
++	ddrc_wr(ddr->ddrc_autosr_en ? 1 : 0, DDRC_AUTOSR_EN);
+ 
+ 	/* the display before other masters (change_lcd_ddrc_process_priority) */
+ 	apb_wr(0xff404030, DDRC_CCHC0);
+ 	apb_wr(0xff404030, DDRC_CCHC1);
+ 
+-	printf("SPL: DDR %u MiB up\n", ddr.chip0_size >> 20);
++	printf("SPL: DDR %u MiB up\n", ddr->chip0_size >> 20);
+ 	return 0;
+ }
+diff --git a/arch/mips/mach-jz47xx/x2600/spl.c b/arch/mips/mach-jz47xx/x2600/spl.c
+index 6c9e0d73..43a51b02 100644
+--- a/arch/mips/mach-jz47xx/x2600/spl.c
++++ b/arch/mips/mach-jz47xx/x2600/spl.c
+@@ -44,6 +44,7 @@
+ #include <asm/sections.h>
+ #include <linux/bitops.h>
+ #include <linux/delay.h>
++#include <linux/kernel.h>
+ #include <linux/string.h>
+ #include <mach/ad5x_start.h>
+ #include <mach/x2600.h>
+@@ -230,10 +231,11 @@ static void spl_usb_check(void)
+ #ifndef CONFIG_AD5X_SPL_CHAINLOAD
+ /*
+  * A short DDR test for the USB cold starts, uncached (KSEG1) so that it
+- * reaches the chips: the data lines at one word; address lines 2-27 with
+- * words that differ from 0x04100000 in one bit each (the low 256 MiB,
+- * which KSEG1 maps; the upper 256 MiB at 0x30000000 needs the kernel's
+- * mappings); 16 MiB from 0x01000000 with each word's address, then its
++ * reaches the chips: the data lines at one word; the address lines from 2
++ * up to the size of the low bank (27 for 256 MiB) with words that differ
++ * from 0x04100000 in one bit each (the low 256 MiB, which KSEG1 maps; the
++ * upper 256 MiB of an X2600H at 0x30000000 needs the kernel's mappings);
++ * 16 MiB from 0x01000000 with each word's address, then its
+  * inverse. Physical 0x00100000-0x0C100000 only: not the first MiB (the
+  * SRAM window), not ramoops at 0x0EB00000.
+  */
+@@ -258,6 +260,7 @@ static int spl_ddr_test(void)
+ 	volatile u32 *base = (volatile u32 *)DDR_T_BASE, *p;
+ 	volatile u32 *end = (volatile u32 *)(DDR_T_FILL + DDR_T_FILL_LEN);
+ 	u32 i, j, x, t0 = (u32)get_ticks();
++	u32 lines = __ffs(min(x2600_sdram_mib(), 256U)) + 20;
+ 
+ 	/* data lines: walking 1 and walking 0, another word in between */
+ 	for (i = 0; i < 64; i++) {
+@@ -269,18 +272,18 @@ static int spl_ddr_test(void)
+ 	}
+ 
+ 	/* address lines: no word may change another (Barr's test) */
+-	for (i = 2; i < 28; i++)
++	for (i = 2; i < lines; i++)
+ 		*DDR_T_AT(i) = 0xaaaaaaaa;
+ 	*base = 0x55555555;
+-	for (i = 2; i < 28; i++)
++	for (i = 2; i < lines; i++)
+ 		if (spl_ddr_bad(DDR_T_AT(i), 0xaaaaaaaa))
+ 			return -1;
+ 	*base = 0xaaaaaaaa;
+-	for (j = 2; j < 28; j++) {
++	for (j = 2; j < lines; j++) {
+ 		*DDR_T_AT(j) = 0x55555555;
+ 		if (spl_ddr_bad(base, 0xaaaaaaaa))
+ 			return -1;
+-		for (i = 2; i < 28; i++)
++		for (i = 2; i < lines; i++)
+ 			if (i != j && spl_ddr_bad(DDR_T_AT(i), 0xaaaaaaaa))
+ 				return -1;
+ 		*DDR_T_AT(j) = 0xaaaaaaaa;
+@@ -295,8 +298,8 @@ static int spl_ddr_test(void)
+ 			if (spl_ddr_bad(p, (u32)p ^ -x))
+ 				return -1;
+ 	}
+-	printf("SPL: DDR test: data lines, address lines 2-27, 16 MiB at "
+-	       "0x%x: good (%u ms)\n", DDR_T_FILL & 0x1fffffff,
++	printf("SPL: DDR test: data lines, address lines 2-%u, 16 MiB at "
++	       "0x%x: good (%u ms)\n", lines - 1, DDR_T_FILL & 0x1fffffff,
+ 	       ((u32)get_ticks() - t0) / 24000);
+ 	return 0;
+ }
+@@ -398,7 +401,10 @@ static ulong spl_load_uimage(u32 lba, ulong max, u8 os)
+ 	return ep;
+ }
+ 
+-/* the stock SPL's command line (lpj as the stock SPL passes it) */
++/*
++ * the stock SPL's command line (lpj as the stock SPL passes it); without
++ * the second bank on a unit with 256 MiB, as the stock SPL starts it
++ */
+ #define AD5X_ARGS	"console=ttyS0,115200n8 loglevel=8 mem=236M@0x0 " \
+ 			"rmem=16M@0xec00000 rtos_size=4M@0xfc00000 " \
+ 			"mem=256M@0x30000000 init=/linuxrc root=/dev/mmcblk0pX " \
+@@ -417,6 +423,11 @@ static int ad5x_build_argv(char root)
+ 	strcpy(spl_args, AD5X_ARGS);
+ 	p = strstr(spl_args, "mmcblk0pX");
+ 	p[8] = root;
++	if (x2600_sdram_mib() < 512) {
++		p = strstr(spl_args, AD5X_ARGS_HIGH);
++		memmove(p, p + strlen(AD5X_ARGS_HIGH),
++			strlen(p + strlen(AD5X_ARGS_HIGH)) + 1);
++	}
+ 
+ 	spl_argv[argc++] = "spl";
+ 	for (p = spl_args; *p && argc < AD5X_MAX_ARGS; ) {
+@@ -437,6 +448,11 @@ static void __noreturn ad5x_boot(void)
+ 	ulong ep;
+ 	int slot_b, argc;
+ 
++	/* the kernels' memory layout needs the low 256 MiB (rmem, rtos) */
++	if (x2600_sdram_mib() < 256)
++		spl_fail(AD5X_PH_DDR, plan.slot_b,
++			 "no kernel memory layout for this DDR size");
++
+ 	spl_phase(AD5X_PH_EMMC, plan.slot_b);
+ 	if (ad5x_emmc_init())
+ 		spl_fail(AD5X_PH_EMMC, plan.slot_b, "eMMC init failed");
+diff --git a/arch/mips/mach-jz47xx/x2600/spl.h b/arch/mips/mach-jz47xx/x2600/spl.h
+index ddab059e..9138cadf 100644
+--- a/arch/mips/mach-jz47xx/x2600/spl.h
++++ b/arch/mips/mach-jz47xx/x2600/spl.h
+@@ -10,5 +10,12 @@ int ad5x_emmc_read(u32 lba, u32 cnt, void *dst);
+ 
+ void x2600_spl_clocks_init(void);
+ int x2600_sdram_init(void);
++/* the RAM the DDR table set up, in MiB (chainload: the eFuse's answer) */
++#ifdef CONFIG_AD5X_SPL_CHAINLOAD
++#include <mach/x2600.h>
++#define x2600_sdram_mib()	x2600_ram_mib()
++#else
++unsigned int x2600_sdram_mib(void);
++#endif
+ 
+ #endif
+diff --git a/arch/mips/mach-jz47xx/x2600/x2600.c b/arch/mips/mach-jz47xx/x2600/x2600.c
+index c1c13223..ad772eed 100644
+--- a/arch/mips/mach-jz47xx/x2600/x2600.c
++++ b/arch/mips/mach-jz47xx/x2600/x2600.c
+@@ -191,3 +191,58 @@ void _machine_restart(void)
+ 		;
+ }
+ #endif
++
++/*
++ * eFuse: the SoC info as Ingenic's x2600/check_socid.c reads it, two words
++ * from word 0x1a: 20 bits from byte 0x6b (bit 24 of the first word), then
++ * the same 20 bits again as a check. Read only; the eFuse clock gate is
++ * left as it was found.
++ */
++#define X2600_EFUSE		((void __iomem *)0xb3480000)
++#define EFUSE_CTRL		0x00
++#define EFUSE_CFG		0x04
++#define EFUSE_STATE		0x08
++#define EFUSE_DATA(n)		(0x0c + 4 * (n))
++#define EFUSE_CTRL_RD_EN	BIT(0)
++#define CLKGR0_EFUSE		BIT(0)
++#define SOCINFO_WORD		0x1a
++
++int x2600_socid(void)
++{
++	u32 gate = readl(X2600_CPM_CLKGR0) & CLKGR0_EFUSE;
++	u32 d0, d1, a, b;
++	int timeout = 100000;
++
++	clrbits_le32(X2600_CPM_CLKGR0, CLKGR0_EFUSE);
++	writel(0x4 << 24, X2600_EFUSE + EFUSE_CFG);	/* RD_ADJ 4 */
++	writel(0, X2600_EFUSE + EFUSE_CTRL);
++	writel(SOCINFO_WORD << 21 | (2 - 1) << 16 | EFUSE_CTRL_RD_EN,
++	       X2600_EFUSE + EFUSE_CTRL);
++	while (!(readl(X2600_EFUSE + EFUSE_STATE) & BIT(0)) && --timeout)
++		;
++	d0 = readl(X2600_EFUSE + EFUSE_DATA(0));
++	d1 = readl(X2600_EFUSE + EFUSE_DATA(1));
++	writel(0, X2600_EFUSE + EFUSE_STATE);
++	setbits_le32(X2600_CPM_CLKGR0, gate);
++
++	a = (d0 >> 24 | d1 << 8) & 0xfffff;
++	b = d1 >> 12;
++	if (!timeout || a != b || !a)
++		return -1;
++	return a;
++}
++
++unsigned int x2600_ddr_mib(unsigned int ddr_id)
++{
++	/* Ingenic's MEM_256M .. MEM_1G codes */
++	static const u16 mib[8] = { 256, 128, 64, 32, 512, 16, 8, 1024 };
++
++	return mib[ddr_id & 7];
++}
++
++unsigned int x2600_ram_mib(void)
++{
++	int id = x2600_socid();
++
++	return id < 0 ? 512 : x2600_ddr_mib(X2600_DDR_ID(id));
++}
+diff --git a/board/flashforge/ad5x/ad5x.c b/board/flashforge/ad5x/ad5x.c
+index 155ec9c3..ff3b01f1 100644
+--- a/board/flashforge/ad5x/ad5x.c
++++ b/board/flashforge/ad5x/ad5x.c
+@@ -455,6 +455,14 @@ static void ad5x_bootargs(const char *root, int own, int extra_ok,
+ 	snprintf(args, CONFIG_SYS_CBSIZE, "%s root=%s%s ad5x.uboot=1",
+ 		 env_get("args_spl"), root,
+ 		 own ? " ad5x.kernel=own panic=10 loglevel=5" : "");
++	/* an X2600 with 256 MiB has no second bank (mach/x2600.h) */
++	if (x2600_ram_mib() < 512) {
++		char *p = strstr(args, AD5X_ARGS_HIGH);
++
++		if (p)
++			memmove(p, p + strlen(AD5X_ARGS_HIGH),
++				strlen(p + strlen(AD5X_ARGS_HIGH)) + 1);
++	}
+ 	/* the watchdog runs into this kernel: for how long (information) */
+ 	if (wdt)
+ 		snprintf(args + strlen(args), CONFIG_SYS_CBSIZE - strlen(args),
+-- 
+2.43.0
+

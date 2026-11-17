@@ -42,6 +42,8 @@ starts no Flashforge kernel at all.
 | `patches/0025` | SPL started over USB: the `KILNUSB1` tag or CPM_SLPC's soft request seen and cleared, a fresh start, a DDR test |
 | `patches/0027` | slot A startable only with Kiln's 6.6 in p1 (`ad5x_slot_a_kernel_ok`, uImage name `Linux-6.6-ad5x`): a Flashforge 5.10 there is never started |
 | `patches/0026` | no stock-kernel rung: 7.3 -> 6.6 -> the recovery OS; slot A broken: the main OS again on its own kernel; a Kiln 6.6 in p1 gets Kiln's command line; `0x55NK` in CPSPR before the jump (`ad5x_start_uboot_kernel`) |
+| `patches/0028` | DDR parameters by the SoC ID in the eFuse (Ingenic's `check_socid()`): X2600H as before, X2600E (256 MiB) and X2600N (128 MiB) as the 2025 stock SPL; no `mem=256M@0x30000000` on a 256 MiB unit (SPL and U-Boot proper) |
+| `patches/0029` | SPL: eMMC data at RX sample phase 3 (MSC0CDR 19:17, tuning off): phase 0 gives data CRC errors on an X2600E unit's A31M8C eMMC |
 | `USB-BOOT.md` | starting the SPL from the boot ROM over J28 (phase 4): wiring, soft entry and K4, the cold-start test |
 | `build.sh` | fetch v2026.10 (sha256-pinned), patch, build, check; `--container` for the laptop |
 | `Containerfile` | the builder's pinned Debian base + Debian's `gcc-mipsel-linux-gnu` |
