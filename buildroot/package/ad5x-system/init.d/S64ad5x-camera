@@ -253,7 +253,7 @@ stop() {
 }
 
 case "$1" in
-start) start ;;
+start) . /usr/lib/ad5x/safe.sh; safe_skip S64ad5x-camera; start ;;
 stop) stop ;;
 restart) stop; sleep 1; start ;;
 esac

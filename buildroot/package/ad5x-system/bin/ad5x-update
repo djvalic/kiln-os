@@ -41,6 +41,8 @@
 # B and makes /run/ad5x-booted: start_done in lib/slot.sh): a reboot before
 # that leaves our kernel's start marker behind, which counts as an
 # unfinished start of it (issue #47).
+# A/B layout (/data/ad5x/ab, or AD5X_AB=1 for the first one): FILE goes
+# straight into the other slot instead (lib/ab-update.sh).
 # AD5X_LIB overrides /usr/lib/ad5x (tests).
 set -e
 LIB=${AD5X_LIB:-/usr/lib/ad5x}
@@ -71,6 +73,12 @@ done
 [ $# -ge 1 ] || [ $mode = kernel2 ] || usage
 FILE=${1:-} WANT=${2:-}
 
+# A/B layout (lib/ab-update.sh): the main OS goes into the other slot
+. $LIB/ab-update.sh
+if [ $mode = swu ] && { ab_layout || [ -n "${AD5X_AB:-}" ]; }; then
+	ab_install "$FILE" "$WANT" "$reboot_after"
+fi
+[ $mode = swu ] || ! ab_layout || die "this printer has the main OS in both slots (/data/ad5x/ab): no recovery OS or kernel2 job"
 if [ "$SLOT" = A ]; then die "$SLOTA_MSG"; fi
 [ "$SLOT" = B ] || die "run from the main OS in slot B (this is slot '${SLOT:-?}')"
 if [ $mode = swu ] || [ -n "$reboot_after" ]; then

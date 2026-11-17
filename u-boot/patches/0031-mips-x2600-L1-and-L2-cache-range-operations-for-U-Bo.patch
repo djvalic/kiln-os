@@ -1,0 +1,123 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Tue, 17 Nov 2026 03:41:00 -0700
+Subject: [PATCH 31/33] mips: x2600: L1 and L2 cache range operations for
+ U-Boot proper
+
+The generic MIPS range operations skip the L2 without MIPS_L2_CACHE,
+which would also have the SPL initialise it. After DMA the CPU then
+reads stale L2 lines: DWC2's second SETUP packet came back as the first,
+so SET_ADDRESS was answered as GET_DESCRIPTOR and ums never enumerated.
+Line sizes from Config1/Config2; an uncached load before the L2 Hit
+ops, as Linux's WAR_INGENIC_L2_HIT_CACHEOP.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ arch/mips/mach-jz47xx/x2600/Makefile |  3 +
+ arch/mips/mach-jz47xx/x2600/cache.c  | 86 ++++++++++++++++++++++++++++
+ 2 files changed, 89 insertions(+)
+ create mode 100644 arch/mips/mach-jz47xx/x2600/cache.c
+
+diff --git a/arch/mips/mach-jz47xx/x2600/Makefile b/arch/mips/mach-jz47xx/x2600/Makefile
+index d08538bc..0466e52f 100644
+--- a/arch/mips/mach-jz47xx/x2600/Makefile
++++ b/arch/mips/mach-jz47xx/x2600/Makefile
+@@ -5,3 +5,6 @@ obj-$(CONFIG_XPL_BUILD) += spl.o spl_emmc.o
+ ifndef CONFIG_AD5X_SPL_CHAINLOAD
+ obj-$(CONFIG_XPL_BUILD) += sdram.o
+ endif
++ifndef CONFIG_XPL_BUILD
++obj-y += cache.o
++endif
+diff --git a/arch/mips/mach-jz47xx/x2600/cache.c b/arch/mips/mach-jz47xx/x2600/cache.c
+new file mode 100644
+index 00000000..74137ad0
+--- /dev/null
++++ b/arch/mips/mach-jz47xx/x2600/cache.c
+@@ -0,0 +1,86 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * X2600 (XBurst II) cache range operations for U-Boot proper: L1 and the
++ * L2. The generic MIPS ones reach the L2 only with MIPS_L2_CACHE, which
++ * also has the SPL initialise the L2; without them a buffer read after
++ * DMA comes back from a stale L2 line (DWC2's second SETUP packet read
++ * as the first). The L2's Hit ops get an uncached load first, as
++ * Ingenic's kernels and Linux's WAR_INGENIC_L2_HIT_CACHEOP do: with the
++ * L2-to-DDR prefetcher on, Hit invalidates without it can leave stale
++ * data.
++ */
++
++#include <cpu_func.h>
++#include <asm/addrspace.h>
++#include <asm/cacheops.h>
++#include <asm/io.h>
++#include <asm/mipsregs.h>
++#include <asm/system.h>
++
++static unsigned long line_size(unsigned long field)
++{
++	return field ? 2 << field : 0;
++}
++
++static unsigned long l1d_line(void)
++{
++	return line_size((read_c0_config1() & MIPS_CONF1_DL) >>
++			 MIPS_CONF1_DL_SHF);
++}
++
++static unsigned long l1i_line(void)
++{
++	return line_size((read_c0_config1() & MIPS_CONF1_IL) >>
++			 MIPS_CONF1_IL_SHF);
++}
++
++static unsigned long l2_line(void)
++{
++	return line_size((read_c0_config2() & MIPS_CONF2_SL) >>
++			 MIPS_CONF2_SL_SHF);
++}
++
++/* a macro: the CACHE instruction takes its op as a constant */
++#define range(start, stop, line, op) do {				\
++	ulong _ls = (line), _a, _end;					\
++									\
++	if (!_ls || (start) >= (stop))					\
++		break;							\
++	_end = ((stop) - 1) & ~(_ls - 1);				\
++	for (_a = (start) & ~(_ls - 1); _a <= _end; _a += _ls)		\
++		mips_cache(op, (void *)_a);				\
++} while (0)
++
++/* the uncached load before the L2's Hit ops */
++static void l2_hit_war(void)
++{
++	(void)readl((void __iomem *)CKSEG1ADDR(0));
++}
++
++void flush_cache(ulong start_addr, ulong size)
++{
++	if (!size)
++		return;
++	range(start_addr, start_addr + size, l1d_line(), HIT_WRITEBACK_INV_D);
++	l2_hit_war();
++	range(start_addr, start_addr + size, l2_line(), HIT_WRITEBACK_INV_SD);
++	range(start_addr, start_addr + size, l1i_line(), HIT_INVALIDATE_I);
++	sync();
++	instruction_hazard_barrier();
++}
++
++void flush_dcache_range(ulong start_addr, ulong stop)
++{
++	range(start_addr, stop, l1d_line(), HIT_WRITEBACK_INV_D);
++	l2_hit_war();
++	range(start_addr, stop, l2_line(), HIT_WRITEBACK_INV_SD);
++	sync();
++}
++
++void invalidate_dcache_range(ulong start_addr, ulong stop)
++{
++	l2_hit_war();
++	range(start_addr, stop, l2_line(), HIT_INVALIDATE_SD);
++	range(start_addr, stop, l1d_line(), HIT_INVALIDATE_D);
++	sync();
++}

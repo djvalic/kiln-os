@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Mon, 16 Nov 2026 22:30:00 -0700
+Subject: [PATCH 29/29] mips: jz47xx: x2600: SPL: eMMC data at the middle of
+ the sample window
+
+The SPL reads the eMMC at 25 MHz with the sample point the boot ROM
+leaves in MSC0CDR, RX phase 0. On an X2600E unit with an A31M8C eMMC
+every data read then fails with a data CRC error, while commands and
+reads at 400 kHz work. Swept on that unit, reads are correct from RX
+phase 1 to 5 (2 to 5 with the TX phase at 270 degrees).
+
+Set RX phase 3 with tuning off when switching to the data clock, as
+Ingenic's soc_mmc_set_rx_phase() does for its working clock.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ arch/mips/mach-jz47xx/x2600/spl_emmc.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/arch/mips/mach-jz47xx/x2600/spl_emmc.c b/arch/mips/mach-jz47xx/x2600/spl_emmc.c
+index 98ed2353..682a1166 100644
+--- a/arch/mips/mach-jz47xx/x2600/spl_emmc.c
++++ b/arch/mips/mach-jz47xx/x2600/spl_emmc.c
+@@ -73,6 +73,10 @@
+ #define CDR_BUSY		BIT(28)
+ #define CDR_STOP		BIT(27)
+ #define CDR_EXCK_E		BIT(21)	/* SDK MSCCDR_EXCK_E, in MSC0CDR */
++#define CDR_TUNING_OFF		BIT(20)	/* set: the fixed phases below */
++#define CDR_RX_PHASE_SHIFT	17	/* 19:17, the sample point */
++#define CDR_RX_PHASE_MASK	(7 << CDR_RX_PHASE_SHIFT)
++#define CDR_RX_PHASE_DATA	3
+ #define CDR_DIV_MASK		0xff
+ /* what the boot ROM's cpm_desc leaves (ad5x_spl_image.py): APLL / 16 */
+ #define MSC0CDR_BOOT_ROM	0x20108003
+@@ -141,6 +145,17 @@ static void emmc_set_clock(bool fast)
+ 		setbits_le32(CPM_MSC0CDR, CDR_EXCK_E);
+ 	val = readl(CPM_MSC0CDR) & ~(3U << CDR_PARENT_SHIFT);
+ 	val |= parent << CDR_PARENT_SHIFT;
++	/*
++	 * The sample point for the 25 MHz data clock, tuning off (Ingenic's
++	 * soc_mmc_set_rx_phase()). What the boot ROM leaves, 0, fails with
++	 * data CRC errors on an X2600E unit's eMMC (A31M8C), which reads
++	 * correctly from 1 (2 with the TX phase at 270 degrees) to 5: 3, the
++	 * middle. Identification at 400 kHz keeps the boot ROM's.
++	 */
++	if (fast) {
++		val &= ~CDR_RX_PHASE_MASK;
++		val |= CDR_TUNING_OFF | CDR_RX_PHASE_DATA << CDR_RX_PHASE_SHIFT;
++	}
+ 	val &= ~(CDR_STOP | CDR_BUSY | CDR_DIV_MASK);
+ 	writel(val | CDR_CE | div, CPM_MSC0CDR);
+ 	for (val = 0; (readl(CPM_MSC0CDR) & CDR_BUSY) && val < 10000; val++)
+-- 
+2.43.0
+

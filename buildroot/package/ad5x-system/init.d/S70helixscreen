@@ -29,6 +29,13 @@ LOG=/data/ad5x/printer_data/logs/helixscreen.log
 PID=/var/run/helixscreen.pid
 case "$1" in
 start)
+	. /usr/lib/ad5x/safe.sh
+	if safe_mode; then
+		# no HelixScreen: the safe-mode screen, redrawn while the address comes up
+		( for i in $(seq 12); do ad5x-safe-screen >/dev/null 2>&1; sleep 10; done ) &
+		echo "S70helixscreen: safe mode: the safe-mode screen instead"
+		exit 0
+	fi
 	if [ -f /data/ad5x/helixscreen.disable ]; then
 		echo "helixscreen: off (remove /data/ad5x/helixscreen.disable to start it)"
 		exit 0

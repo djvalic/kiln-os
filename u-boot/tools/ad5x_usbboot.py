@@ -111,6 +111,11 @@ PARAMS_OFF = 0x100
 PARAMS_ID = b"INGE"
 USB_TAG_OFF = 0x7F0
 USB_TAG = b"KILNUSB1"
+# stage 1 only: the SPL sets up DDR and goes back to the boot ROM, which
+# then takes U-Boot proper as stage 2 (run-uboot)
+USB_TAG_STAGE2 = b"KILNUSB2"
+UBOOT_ADDR = 0x80100000       # U-Boot proper's CONFIG_TEXT_BASE
+STAGE1_RETURN_MS = 20000      # PROG_START1 until the SPL is back in the ROM
 CHAINLOAD_MARKER = b"KILN-SPL-CHAINLOAD-TEST-ONLY"
 
 EXIT_OK, EXIT_ERROR, EXIT_START_UNCONFIRMED = 0, 1, 3
@@ -133,7 +138,7 @@ def split(value):
 
 # ---- the image ----
 
-def check_image(img):
+def check_image(img, tag=None):
     """Kiln's boot ROM image (spl-usb.bin or spl-mmc.img): a list of
     notes; UsbBootError when it can't be sent."""
     n = len(img)
@@ -159,8 +164,9 @@ def check_image(img):
         raise UsbBootError("%d bytes, the boot ROM takes at most %d" %
                            (n, STAGE1_MAX))
     notes = []
-    tag = img[USB_TAG_OFF:USB_TAG_OFF + len(USB_TAG)]
-    if tag != USB_TAG:
+    want = tag or USB_TAG
+    tag = img[USB_TAG_OFF:USB_TAG_OFF + len(want)]
+    if tag != want:
         notes.append("no USB tag (this is spl-mmc.img, not spl-usb.bin): "
                      "the SPL will count the scratch pad's tries and skip "
                      "its DDR test, as on an eMMC start")
@@ -277,6 +283,43 @@ def prog_start1(t, entry, timeout=CTRL_TIMEOUT_MS):
         raise StartUnconfirmed(
             "%s. The data went out; the boot ROM may have jumped before "
             "the status stage: watch the serial console" % e)
+
+
+def prog_start2(t, entry, timeout=CTRL_TIMEOUT_MS):
+    v, i = split(entry)
+    try:
+        t.ctrl_out(PROG_START2, v, i, timeout, " (entry 0x%08x)" % entry)
+    except UsbBootError as e:
+        raise StartUnconfirmed(
+            "%s. U-Boot went out; the boot ROM may have jumped before the "
+            "status stage: watch the serial console" % e)
+
+
+def run_uboot(t, spl_img, uboot, timeout=CTRL_TIMEOUT_MS,
+              bulk_timeout=BULK_TIMEOUT_MS, cpu_info_len=CPU_INFO_LEN,
+              out=print, sleep=None):
+    """Stage 1 (the SPL tagged KILNUSB2: DDR, then back to the ROM), then
+    U-Boot proper into DDR as stage 2."""
+    import time
+    sleep = sleep or time.sleep
+    for note in check_image(spl_img, USB_TAG_STAGE2):
+        out("note: " + note)
+    info = get_cpu_info(t, cpu_info_len, timeout)
+    if info:
+        out("boot ROM: %s" % format_cpu_info(info))
+    send(t, LOAD_ADDR, spl_img, timeout, bulk_timeout)
+    flush_cache(t, timeout)
+    # the status stage comes back once the SPL returns to the ROM (DDR set
+    # up and tested: a few seconds)
+    v, i = split(ENTRY_ADDR)
+    t.ctrl_out(PROG_START1, v, i, STAGE1_RETURN_MS,
+               " (entry 0x%08x; stage 1 returns)" % ENTRY_ADDR)
+    out("stage 1 done: DDR is up, the boot ROM is back")
+    sleep(0.2)
+    send(t, UBOOT_ADDR, uboot, timeout, bulk_timeout)
+    flush_cache(t, timeout)
+    prog_start2(t, UBOOT_ADDR, timeout)
+    return info
 
 
 def run_spl(t, img, flush=True, timeout=CTRL_TIMEOUT_MS,
@@ -455,6 +498,13 @@ def main(argv=None, out=print, err=None, opener=open_device,
     r.add_argument("image", help="spl-usb.bin (u-boot/build.sh output)")
     r.add_argument("--no-flush", action="store_true",
                    help="no FLUSH_CACHE before PROG_START1")
+    u = sub.add_parser("run-uboot", help="the SPL as stage 1 (DDR only, "
+                       "tagged KILNUSB2), then U-Boot proper to 0x%08x as "
+                       "stage 2: Kiln's U-Boot then offers the eMMC as a "
+                       "USB disk (ums)" % UBOOT_ADDR)
+    u.add_argument("image", help="spl-usb2.bin: spl-mmc.img tagged KILNUSB2")
+    u.add_argument("uboot", help="u-boot.bin (raw, linked at 0x%08x)" %
+                   UBOOT_ADDR)
     args = ap.parse_args(argv)
     for name in ("timeout", "bulk_timeout", "cpu_info_length"):
         if getattr(args, name) <= 0:
@@ -464,9 +514,11 @@ def main(argv=None, out=print, err=None, opener=open_device,
 
     dev = None
     try:
-        img = read_file(args.image) if args.cmd == "run-spl" else None
+        img = read_file(args.image) if args.cmd in ("run-spl",
+                                                    "run-uboot") else None
         if img is not None:
-            check_image(img)
+            check_image(img, USB_TAG_STAGE2 if args.cmd == "run-uboot"
+                        else None)
         if args.dry_run:
             out("dry run: nothing is sent; the transfers, in order:")
             t = DryRunTransport(out)
@@ -481,6 +533,14 @@ def main(argv=None, out=print, err=None, opener=open_device,
             info = get_cpu_info(t, args.cpu_info_length, args.timeout)
             if not args.dry_run:
                 out("GET_CPU_INFO: %s" % format_cpu_info(info))
+        elif args.cmd == "run-uboot":
+            run_uboot(t, img, read_file(args.uboot), timeout=args.timeout,
+                      bulk_timeout=args.bulk_timeout,
+                      cpu_info_len=args.cpu_info_length, out=out,
+                      sleep=(lambda s: None) if args.dry_run else None)
+            if not args.dry_run:
+                out("U-Boot proper started; it offers the eMMC over USB "
+                    "(watch for a new USB disk on this host)")
         else:
             run_spl(t, img, flush=not args.no_flush, timeout=args.timeout,
                     bulk_timeout=args.bulk_timeout,

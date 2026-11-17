@@ -42,13 +42,28 @@ starts no Flashforge kernel at all.
 | `patches/0025` | SPL started over USB: the `KILNUSB1` tag or CPM_SLPC's soft request seen and cleared, a fresh start, a DDR test |
 | `patches/0027` | slot A startable only with Kiln's 6.6 in p1 (`ad5x_slot_a_kernel_ok`, uImage name `Linux-6.6-ad5x`): a Flashforge 5.10 there is never started |
 | `patches/0026` | no stock-kernel rung: 7.3 -> 6.6 -> the recovery OS; slot A broken: the main OS again on its own kernel; a Kiln 6.6 in p1 gets Kiln's command line; `0x55NK` in CPSPR before the jump (`ad5x_start_uboot_kernel`) |
-| `USB-BOOT.md` | starting the SPL from the boot ROM over J28 (phase 4): wiring, soft entry and K4, the cold-start test |
+| `patches/0028` | DDR parameters by the SoC ID in the eFuse (Ingenic's `check_socid()`): X2600H as before, X2600E (256 MiB) and X2600N (128 MiB) as the 2025 stock SPL; no `mem=256M@0x30000000` on a 256 MiB unit (SPL and U-Boot proper) |
+| `patches/0029` | SPL: eMMC data at RX sample phase 3 (MSC0CDR 19:17, tuning off): phase 0 gives data CRC errors on an X2600E unit's A31M8C eMMC |
+| `patches/0030` | U-Boot proper over USB as stage 2: the `KILNUSB2` SPL sets up DDR and goes back to the boot ROM, U-Boot runs `ums 0 mmc 0` (the eMMC as a USB disk); MSC pads at 1.8 V; the DWC2 gadget driver on MIPS |
+| `patches/0031` | X2600: L1 and L2 cache range operations in U-Boot proper (the generic ones skip the L2: stale SETUP packets after DMA, ums never enumerated) |
+| `patches/0032` | mmc: CMD12 after a failed multi-block read, and the chunk read again (a data CRC error left the card sending and ums dropped the disk) |
+| `patches/0033` | dts: the OTG controller, FIFO sizes within its 3576 words |
+| `patches/0034` | X2600: DMA alignment to the L2's 64-byte lines (`SYS_CACHE_SHIFT_6`; was the L1's 32) |
+| `patches/0035` | net: designware: `virt_to_phys()`/`phys_to_virt()` between CPU and DMA addresses, registers mapped uncached (MIPS KSEG0/KSEG1) |
+| `patches/0036` | net: `dwmac_ingenic`: the X2600 GMAC's pins (PC16-PC24), clock gate, 50 MHz MAC clock from the MPLL, RMII in the CPM; enhanced descriptors |
+| `patches/0037` | AD5X: the MAC and its IP101G in the device tree, the address from usershare `/MAC`, `dhcp`/`ping`/`mii`/`wget`/`hash` |
+| `patches/0038` | network rescue: a record in the first MiB's last sector (`ad5x_emmc_image.py --rescue`) makes U-Boot fetch, check and write the rest of the eMMC over HTTP; U-Boot proper ends one sector earlier |
+| `patches/0039` | netconsole: U-Boot's console over UDP 6666 when `/data/ad5x/netconsole` exists (the PC's IP, or empty for the LAN) or `ad5x_nc` is set; always in the network rescue |
+| `patches/0040` | prototype: the main OS in both slots (A/B), safe mode as the last fallback, all of the RAM to Linux (`mem=256M@0x0`, no `rmem=`/`rtos_size=`) |
+| `USB-BOOT.md` | starting the SPL from the boot ROM over J28 (phase 4): wiring, soft entry and K4, the cold-start test; the eMMC as a USB disk (`run-uboot`) |
 | `build.sh` | fetch v2026.10 (sha256-pinned), patch, build, check; `--container` for the laptop |
 | `Containerfile` | the builder's pinned Debian base + Debian's `gcc-mipsel-linux-gnu` |
 | `tools/ad5x_spl_image.py` | boot ROM header + INGE params generator; the SPL's memory-map check; a first-MiB candidate from a unit's dump; its write plan |
 | `tools/check_first_mib.py` | offline check of a candidate first MiB against stock dumps, the build's `spl-mmc.img` and the unit's stock DDR table and clocks |
 | `tools/spl_stack.py` | worst-case SPL stack from GCC's call graph (`--nm` for merged functions) |
+| `../tools/ad5x_netconsole.py` | PC: U-Boot's netconsole, any OS with Python 3 (UDP 6666; Ctrl-C sends the stop key) |
 | `tools/bootlogic_cli.c` | host driver for the boot rules (tests) |
+| `tools/test_bootlogic_ab.py` | the A/B and safe-mode boot rules through `bootlogic_cli` |
 | `tools/spl_uimage_cli.c` | host driver for the SPL's uImage loader, cut out of `spl.c` (`test_spl_uimage.py`) |
 | `tools/ad5x_start_cli.c` | host driver for the start-up tries and the stop key (`test_ad5x_start.py`) |
 | `tools/ad5x_usbboot.py` | laptop: the X2600 boot ROM's USB protocol, `info` and `run-spl` (pyusb; `--dry-run` without) |
@@ -385,6 +400,17 @@ jolting's fixes.
   table (p1-p5 start LBAs and names, p7 `userdata`).
 - Recovery kernel: read whole by its uImage header (any size up to 8 MiB),
   header and data CRC checked.
+- Ethernet (patches 0034-0037): the X2600's GMAC, RMII to the IP101G at
+  MDIO address 1, at the prompt only; nothing starts over the network by
+  itself. The address is stock's, the first line of `/MAC` on usershare
+  (p6), read only. Commands: `dhcp`, `ping`, `mii`, `wget` (HTTP; another
+  port with `httpdstp`) and `hash -v sha256` to check what came in, e.g.
+
+  ```
+  setenv autoload no; dhcp
+  setenv httpdstp 8000; wget ${loadaddr} 192.168.1.10:/rootfs.squashfs
+  hash -v sha256 ${loadaddr} ${filesize} <sha256 from SHA256SUMS>
+  ```
 
 ### `ota` layout (p5, 1 MiB)
 

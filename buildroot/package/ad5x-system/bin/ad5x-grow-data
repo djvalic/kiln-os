@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""Grow the userdata partition (p7, /data) to the end of the eMMC.
+
+    ad5x-grow-data [--dry-run]
+
+AD5X eMMCs come in several sizes (7.3, 14.7 and 58 GiB seen so far) but
+the factory GPT, and Kiln's flashable image, end userdata early, some with
+the backup GPT in the middle of the disk. This moves the backup GPT to the
+last sectors, ends userdata just before it, tells the kernel (BLKPG resize,
+works on the mounted partition) and grows the mounted ext4 (the kernel's
+online resize, as resize2fs does). Nothing else changes: p1-p6 keep their
+sectors (the SPL, U-Boot and the factory data rely on them).
+
+Only for the layout it knows (p1-p7 named and placed as stock, primary GPT
+and its entries with good CRCs); with nothing to do it says so and exits 0.
+Writes the backup GPT first, then the primary: cut short in between, the
+primary still describes the old, valid layout.
+"""
+import ctypes
+import fcntl
+import os
+import struct
+import sys
+import zlib
+
+DISK = "/dev/mmcblk0"
+SECTOR = 512
+# stock's partitions (mach/x2600.h, the SPL's built-in table): name, start
+LAYOUT = [(1, "kernel", 0x800), (2, "rootfs", 0x4800), (3, "kernel2", 0x36800),
+          (4, "rootfs2", 0x3a800), (5, "ota", 0x6c800),
+          (6, "usershare", 0x6d000), (7, "userdata", 0x26d000)]
+DATA_PART = 7
+MOUNT = "/data"
+# MIPS ioctl numbers (direction bits 29-31: none 1, write 4)
+BLKPG = 0x20001269                  # _IO(0x12, 105)
+BLKPG_RESIZE_PARTITION = 3
+EXT4_IOC_RESIZE_FS = 0x80086610     # _IOW('f', 16, __u64)
+
+
+class GrowError(Exception):
+    pass
+
+
+def crc(b):
+    return zlib.crc32(b) & 0xffffffff
+
+
+def read_at(f, lba, n=1):
+    f.seek(lba * SECTOR)
+    return f.read(n * SECTOR)
+
+
+def parse_header(b):
+    (sig, rev, hsz, hcrc, _, cur, alt, first, last, disk, elba, n, esz,
+     ecrc) = struct.unpack_from("<8sIIIIQQQQ16sQIII", b)
+    if sig != b"EFI PART" or hsz < 92 or hsz > SECTOR:
+        raise GrowError("no GPT header at LBA 1")
+    h = bytearray(b[:hsz])
+    struct.pack_into("<I", h, 16, 0)
+    if crc(bytes(h)) != hcrc:
+        raise GrowError("the GPT header's CRC is wrong")
+    return dict(hsz=hsz, cur=cur, alt=alt, first=first, last=last,
+                elba=elba, n=n, esz=esz, ecrc=ecrc, raw=bytearray(b[:hsz]))
+
+
+def header_bytes(h, cur, alt, last, elba, ecrc):
+    b = bytearray(h["raw"])
+    struct.pack_into("<QQ", b, 24, cur, alt)
+    struct.pack_into("<Q", b, 48, last)
+    struct.pack_into("<Q", b, 72, elba)
+    struct.pack_into("<I", b, 88, ecrc)
+    struct.pack_into("<I", b, 16, 0)
+    struct.pack_into("<I", b, 16, crc(bytes(b)))
+    return bytes(b).ljust(SECTOR, b"\0")
+
+
+def entry(ents, h, i):
+    o = (i - 1) * h["esz"]
+    e = ents[o:o + h["esz"]]
+    start, end = struct.unpack_from("<QQ", e, 32)
+    name = e[56:128].decode("utf-16le", "replace").split("\0")[0]
+    return start, end, name
+
+
+class BlkpgPartition(ctypes.Structure):
+    _fields_ = [("start", ctypes.c_longlong), ("length", ctypes.c_longlong),
+                ("pno", ctypes.c_int), ("devname", ctypes.c_char * 64),
+                ("volname", ctypes.c_char * 64)]
+
+
+class BlkpgArg(ctypes.Structure):
+    _fields_ = [("op", ctypes.c_int), ("flags", ctypes.c_int),
+                ("datalen", ctypes.c_int), ("data", ctypes.c_void_p)]
+
+
+def kernel_resize(fd, pno, start, sectors):
+    p = BlkpgPartition(start * SECTOR, sectors * SECTOR, pno, b"", b"")
+    a = BlkpgArg(BLKPG_RESIZE_PARTITION, 0, ctypes.sizeof(p),
+                 ctypes.cast(ctypes.pointer(p), ctypes.c_void_p))
+    fcntl.ioctl(fd, BLKPG, a)
+
+
+def main(argv):
+    dry = "--dry-run" in argv
+    total = int(open("/sys/block/%s/size" % os.path.basename(DISK)).read())
+    with open(DISK, "r+b" if not dry else "rb", buffering=0) as f:
+        h = parse_header(read_at(f, 1))
+        es = (h["n"] * h["esz"] + SECTOR - 1) // SECTOR
+        ents = bytearray(read_at(f, h["elba"], es))
+        if crc(bytes(ents[:h["n"] * h["esz"]])) != h["ecrc"]:
+            raise GrowError("the GPT entries' CRC is wrong")
+        for pno, name, start in LAYOUT:
+            s, e, n = entry(ents, h, pno)
+            if n != name or s != start:
+                raise GrowError("p%d isn't %s at LBA 0x%x (%s at 0x%x): "
+                                "not the layout this knows" %
+                                (pno, name, start, n, s))
+        alt = total - 1
+        last = alt - es - 1
+        dstart, dend, _ = entry(ents, h, DATA_PART)
+        # the end of userdata: the last usable sector, the size a whole
+        # number of 4 KiB blocks
+        new_end = dstart + (last - dstart + 1) // 8 * 8 - 1
+        if new_end <= dend and h["alt"] == alt and h["last"] == last:
+            print("ad5x-grow-data: userdata already ends at the end of the "
+                  "eMMC (%.1f GiB)" % ((dend - dstart + 1) * SECTOR / 2**30))
+            return 0
+        if new_end < dend:
+            raise GrowError("userdata (to %d) is larger than the disk allows "
+                            "(%d): nothing done" % (dend, new_end))
+        print("ad5x-grow-data: userdata %.1f -> %.1f GiB; backup GPT LBA "
+              "%d -> %d" % ((dend - dstart + 1) * SECTOR / 2**30,
+                            (new_end - dstart + 1) * SECTOR / 2**30,
+                            h["alt"], alt))
+        if dry:
+            return 0
+        o = (DATA_PART - 1) * h["esz"]
+        struct.pack_into("<Q", ents, o + 40, new_end)
+        ecrc = crc(bytes(ents[:h["n"] * h["esz"]]))
+        # 1. the backup at the end, 2. the primary, 3. the protective MBR
+        f.seek((alt - es) * SECTOR)
+        f.write(bytes(ents))
+        f.seek(alt * SECTOR)
+        f.write(header_bytes(h, alt, 1, last, alt - es, ecrc))
+        os.fsync(f.fileno())
+        f.seek(h["elba"] * SECTOR)
+        f.write(bytes(ents))
+        f.seek(SECTOR)
+        f.write(header_bytes(h, 1, alt, last, h["elba"], ecrc))
+        mbr = bytearray(read_at(f, 0))
+        if mbr[0x1c2] == 0xee:
+            struct.pack_into("<I", mbr, 0x1ca, min(total - 1, 0xffffffff))
+            f.seek(0)
+            f.write(bytes(mbr))
+        os.fsync(f.fileno())
+        # check what is on the disk now
+        h2 = parse_header(read_at(f, 1))
+        if h2["alt"] != alt or h2["ecrc"] != ecrc:
+            raise GrowError("the primary GPT doesn't read back as written")
+        kernel_resize(f.fileno(), DATA_PART, dstart, new_end - dstart + 1)
+    print("ad5x-grow-data: GPT written, the kernel's p%d now %d sectors" %
+          (DATA_PART, int(open("/sys/class/block/%sp%d/size" %
+                               (os.path.basename(DISK), DATA_PART)).read())))
+    st = os.statvfs(MOUNT)
+    blocks = (new_end - dstart + 1) * SECTOR // st.f_frsize
+    fd = os.open(MOUNT, os.O_RDONLY)
+    try:
+        fcntl.ioctl(fd, EXT4_IOC_RESIZE_FS, struct.pack("<Q", blocks))
+    finally:
+        os.close(fd)
+    st = os.statvfs(MOUNT)
+    print("ad5x-grow-data: %s is %.1f GiB now" %
+          (MOUNT, st.f_blocks * st.f_frsize / 2**30))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except (GrowError, OSError) as e:
+        print("ad5x-grow-data: %s" % e, file=sys.stderr)
+        sys.exit(1)

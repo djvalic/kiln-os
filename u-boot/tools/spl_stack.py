@@ -37,6 +37,9 @@ DEFAULT_INDIRECT = ("x2600_spl_putc", "x2600_spl_puts", "x2600_spl_getc",
 # console" (and hangs) only when default_serial_console() returns NULL; the
 # SPL's never does
 DEAD_EDGES = {("get_current", "puts"), ("get_current", "hang")}
+# hand-written (start.S), no stack of the SPL's: ad5x_return_to_rom puts the
+# boot ROM's stack pointer back and jumps to the ROM
+ASM_NO_STACK = ("ad5x_return_to_rom",)
 
 
 def load(outdir):
@@ -143,6 +146,8 @@ def main(argv=None):
                     if t in ("memcpy", "memset") or \
                             t.startswith("__builtin_"):
                         continue        # expanded inline
+                    if t in ASM_NO_STACK:
+                        continue
                     if re.search(r"\.part\.\d+$", t):
                         # a split part merged with an identical function
                         cands = aliases(t, frames, names, nm)

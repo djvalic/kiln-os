@@ -14,6 +14,7 @@ KROOT=$(app_root klipper)
 MROOT=$(app_root moonraker)
 case "$1" in
 start)
+	. /usr/lib/ad5x/safe.sh; safe_skip S62moonraker
 	[ -f $PD/config/moonraker.conf ] || {
 		echo "moonraker: no $PD/config/moonraker.conf"; exit 0; }
 	# Plugins' Moonraker parts (docs/plugins.md): bring the list of the
