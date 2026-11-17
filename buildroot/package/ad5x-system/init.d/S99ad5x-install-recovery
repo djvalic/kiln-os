@@ -17,6 +17,7 @@ umask 022
 I=/data/ad5x/install
 case "$1" in
 start)
+	. /usr/lib/ad5x/safe.sh; safe_skip S99ad5x-install-recovery
 	[ "$SLOT" = B ] && [ -f $I/recovery.squashfs ] && [ -f $I/recovery.sha256 ] || exit 0
 	[ "$(read_flag)" = ota:kernel2 ] || { echo "install-recovery: start-up not complete, later"; exit 0; }
 	n=$(cat $I/recovery.tries 2>/dev/null || echo 0)

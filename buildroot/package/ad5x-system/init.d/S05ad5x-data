@@ -19,6 +19,13 @@ find_part() {
 case "$1" in
 start)
 	dev=$(find_part userdata)
+	# Safe mode (lib/safe.sh): no slot finished starting, maybe because of
+	# /data. Check it before mounting, repairing what e2fsck -p may.
+	. /usr/lib/ad5x/safe.sh
+	if safe_mode && [ -n "$dev" ] && ! grep -q ' /data ' /proc/mounts; then
+		e2fsck -p "/dev/$dev"
+		echo "ad5x-data: safe mode: e2fsck -p /dev/$dev: exit $?"
+	fi
 	if grep -q ' /data ' /proc/mounts; then
 		echo "ad5x-data: /data already mounted (USB test mode)"
 	elif [ -n "$dev" ] && mount -t ext4 -o noatime "/dev/$dev" /data; then

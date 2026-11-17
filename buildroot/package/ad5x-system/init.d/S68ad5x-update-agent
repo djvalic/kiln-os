@@ -512,6 +512,7 @@ agent() {
 
 case "$1" in
 start)
+	. /usr/lib/ad5x/safe.sh; safe_skip S68ad5x-update-agent
 	mkdir -p $D $APPS $LOGD
 	chown klipper:klipper $D
 	chown root:root $LOGD

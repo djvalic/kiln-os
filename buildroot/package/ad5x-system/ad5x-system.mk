@@ -32,6 +32,10 @@ define AD5X_SYSTEM_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/usr/bin/ad5x-flash-n32
 	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-mcu $(TARGET_DIR)/usr/bin/ad5x-mcu
 	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-fb-show $(TARGET_DIR)/usr/bin/ad5x-fb-show
+	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-safe $(TARGET_DIR)/usr/bin/ad5x-safe
+	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-safe-screen \
+		$(TARGET_DIR)/usr/bin/ad5x-safe-screen
+	$(INSTALL) -D -m 0644 $(@D)/lib/safe.sh $(TARGET_DIR)/usr/lib/ad5x/safe.sh
 	$(AD5X_SYSTEM_INSTALL_MCU_FIRMWARE)
 	$(INSTALL) -D -m 0644 $(@D)/lib/network.sh \
 		$(TARGET_DIR)/usr/lib/ad5x/network.sh

@@ -156,6 +156,7 @@ boot_stop() {
 
 case "$1" in
 start)
+	. /usr/lib/ad5x/safe.sh; safe_skip S69ad5x-plugin-boot
 	# -b: its own session, so stop can end it
 	start-stop-daemon -S -b -m -p $PID -x /bin/sh -- $0 boot
 	;;

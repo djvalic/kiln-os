@@ -11,6 +11,7 @@ umask 022
 SPEC=/usr/share/ad5x/fluidd-macros.json
 case "$1" in
 start)
+	. /usr/lib/ad5x/safe.sh; safe_skip S66ad5x-fluidd-defaults
 	[ -f $SPEC ] || exit 0
 	( /usr/bin/python3 - $SPEC <<'PY' >/dev/null 2>&1 & )
 import json, sys, time, urllib.request

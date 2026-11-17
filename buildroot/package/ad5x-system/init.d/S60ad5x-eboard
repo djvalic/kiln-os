@@ -11,6 +11,7 @@ umask 022
 
 case "$1" in
 start)
+	. /usr/lib/ad5x/safe.sh; safe_skip S60ad5x-eboard
 	ad5x-mcu boot || echo "ad5x-eboard: boards not ready (ad5x-mcu status, /data/ad5x/mcu/log)"
 	;;
 esac

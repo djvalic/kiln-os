@@ -10,6 +10,7 @@ NGINX=/usr/sbin/nginx
 PID=/run/nginx/nginx.pid
 case "$1" in
 start)
+	. /usr/lib/ad5x/safe.sh; safe_skip S63nginx
 	[ -x $NGINX ] || exit 0
 	mkdir -p /run/nginx /var/log/nginx
 	# Fluidd's directory (S61ad5x-web); the image's if S61 didn't run

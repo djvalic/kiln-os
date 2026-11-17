@@ -14,6 +14,7 @@ PID=/var/run/klipper.pid
 KROOT=$(app_root klipper)
 case "$1" in
 start)
+	. /usr/lib/ad5x/safe.sh; safe_skip S61klipper
 	if [ ! -f /data/ad5x/klipper.enable ]; then
 		echo "klipper: off (create /data/ad5x/klipper.enable to start it;"
 		echo "  only once the boards run mainline Klipper firmware)"

@@ -1,0 +1,49 @@
+#!/bin/sh
+# Safe mode (lib/safe.sh): see why the printer is in it and get out of it.
+#
+#   ad5x-safe            what U-Boot recorded, the slots, the boot flag
+#   ad5x-safe retry      forget U-Boot's failure records and start normally
+#   ad5x-safe slot a|b   start that slot's main OS normally (flag, records)
+. /usr/lib/ad5x/safe.sh
+. /usr/lib/ad5x/slot.sh
+OTA=$(part ota)
+flag() { read_flag; }
+records() { dd if=$OTA bs=512 skip=1153 count=1 2>/dev/null | tr -d '\000' | grep -v -e '^kiln-uboot' -e '^crc32'; }
+slot_info() {	# slot partition
+	echo "  slot $1: $(dd if=/dev/mmcblk0p$2 bs=4 count=1 2>/dev/null | grep -q hsqs && echo 'a root filesystem' || echo 'no root filesystem')"
+}
+case "${1:-}" in
+'')
+	safe_mode && echo "SAFE MODE: started by Kiln's U-Boot because no slot finished starting." \
+		|| echo "Not in safe mode."
+	echo "running from: $(grep -o 'root=[^ ]*' /proc/cmdline)"
+	echo "boot flag: $(flag)"
+	slot_info A 2
+	slot_info B 4
+	echo "U-Boot's records:"
+	records | sed 's/^/  /'
+	echo
+	echo "ad5x-safe retry      forget these records and start normally"
+	echo "ad5x-safe slot a|b   start that slot normally"
+	;;
+retry)
+	ad5x-kernel retry && echo "restarting" && sync && reboot
+	;;
+slot)
+	case "${2:-}" in
+	a|A) s=A ;;
+	b|B) s=B ;;
+	*) echo "usage: ad5x-safe slot a|b" >&2; exit 2 ;;
+	esac
+	f=$(flag_for $s)
+	ad5x-kernel retry || exit 1
+	set_flag $s
+	[ "$(flag)" = "$f" ] || { echo "ad5x-safe: writing the boot flag failed" >&2; exit 1; }
+	echo "boot flag: $f; restarting"
+	sync && reboot
+	;;
+*)
+	echo "usage: ad5x-safe [retry | slot a|b]" >&2
+	exit 2
+	;;
+esac

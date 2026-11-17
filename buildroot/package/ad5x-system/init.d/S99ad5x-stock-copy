@@ -15,6 +15,7 @@ umask 022
 . /usr/lib/ad5x/slot.sh
 case "$1" in
 start)
+	. /usr/lib/ad5x/safe.sh; safe_skip S99ad5x-stock-copy
 	[ "$SLOT" = B ] && [ -f /data/ad5x/stock/SHA256SUMS ] || exit 0
 	[ -e /data/ad5x/stock-copy.disable ] && { echo "stock-copy: off (/data/ad5x/stock-copy.disable)"; exit 0; }
 	mkdir -p /data/ad5x/kiln-log
