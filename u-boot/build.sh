@@ -50,7 +50,7 @@ WORK=${WORK:-$HOME/workspace/u-boot-ad5x-build}
 TOOLBIN=${TOOLBIN:-$REPO/buildroot/output/host/bin}
 JOBS=${JOBS:-$(nproc)}
 O=${O:-$WORK/out}
-UBOOT_EMMC_MAX=$((0x100000 - 0xa400))	# eMMC 0xA400 to the end of the first MiB
+UBOOT_EMMC_MAX=$((0x100000 - 512 - 0xa400))	# eMMC 0xA400 to the first MiB's last sector (the rescue record)
 UBOOT_SLOT_MAX=$((8 << 20))		# a kernel slot
 
 log() { printf '\n=== %s\n' "$*"; }
@@ -178,7 +178,7 @@ ver=$(sed -n 's/^#define PLAIN_VERSION "\(.*\)"/\1/p' "$O/include/generated/vers
 	"$D/u-boot-kernel-slot.img"
 sz=$(stat -c %s "$D/u-boot-emmc.img")
 [ "$sz" -le $UBOOT_EMMC_MAX ] ||
-	die "u-boot-emmc.img is $sz bytes, more than the $UBOOT_EMMC_MAX from 0xA400 to 1 MiB"
+	die "u-boot-emmc.img is $sz bytes, more than the $UBOOT_EMMC_MAX from 0xA400 to the rescue record's sector"
 [ "$(stat -c %s "$D/u-boot-kernel-slot.img")" -le $UBOOT_SLOT_MAX ] ||
 	die "u-boot-kernel-slot.img doesn't fit a kernel slot"
 {

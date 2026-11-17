@@ -52,6 +52,7 @@ starts no Flashforge kernel at all.
 | `patches/0035` | net: designware: `virt_to_phys()`/`phys_to_virt()` between CPU and DMA addresses, registers mapped uncached (MIPS KSEG0/KSEG1) |
 | `patches/0036` | net: `dwmac_ingenic`: the X2600 GMAC's pins (PC16-PC24), clock gate, 50 MHz MAC clock from the MPLL, RMII in the CPM; enhanced descriptors |
 | `patches/0037` | AD5X: the MAC and its IP101G in the device tree, the address from usershare `/MAC`, `dhcp`/`ping`/`mii`/`wget`/`hash` |
+| `patches/0038` | network rescue: a record in the first MiB's last sector (`ad5x_emmc_image.py --rescue`) makes U-Boot fetch, check and write the rest of the eMMC over HTTP; U-Boot proper ends one sector earlier |
 | `USB-BOOT.md` | starting the SPL from the boot ROM over J28 (phase 4): wiring, soft entry and K4, the cold-start test; the eMMC as a USB disk (`run-uboot`) |
 | `build.sh` | fetch v2026.10 (sha256-pinned), patch, build, check; `--container` for the laptop |
 | `Containerfile` | the builder's pinned Debian base + Debian's `gcc-mipsel-linux-gnu` |

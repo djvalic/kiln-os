@@ -186,10 +186,70 @@ Run `check` again, then:
 
 After a restore from a release, Kiln OS starts from slot B.
 
+## With USBCloner: the first MiB, then the rest over Ethernet
+
+When only Ingenic's USBCloner reaches the printer (on Windows, say), it
+writes one small file: the first MiB with Kiln's SPL and U-Boot. This is
+the same one-entry, 1 MiB write that restored a printer's boot loader
+before (#68). Kiln's U-Boot then fetches the rest of the eMMC from a PC
+on the printer's network, checks every piece and writes it. No serial
+console is needed.
+
+1. **Make the files**, on any PC with Python 3 and e2fsprogs, giving the
+   address of the PC that will serve them:
+
+   ```
+   python3 tools/ad5x_emmc_image.py --spl spl-mmc.img --uboot u-boot-emmc.img \
+       --kernel xImage-6.6 --main rootfs.squashfs --recovery recovery.squashfs \
+       --usershare ad5x-backup-.../ --usershare old-whole-emmc.img \
+       --mac 24:A1:0D:12:34:56 \
+       --rescue 192.168.1.10:8000 rescue-set/
+   ```
+
+   For usershare (p6), every `--usershare` you give is tried in turn:
+   - an `ad5x-backup` folder, a `usershare.img`, or a whole-eMMC dump;
+   - the first one that checks clean (`e2fsck -n`, a usable `/MAC`) is used.
+
+   When none is usable (or none is given), a new usershare is made with
+   the address given in `--mac`:
+   - Use the printer's own address if you can find it: an old router lease, a log, a label.
+   - `--mac random` picks a locally administered one.
+   - The new usershare holds `/MAC` and empty `/config` and `/wifi`, in the factory's ext4 format. Flashforge's firmware can't run from it.
+
+   `tools/ad5x_usershare.py check SOURCE...` shows what each source holds before you build.
+
+   `--rescue-ip 192.168.1.50/255.255.255.0` gives the printer a fixed address
+   instead of DHCP.
+2. **Serve them** from that PC:
+
+   ```
+   python3 -m http.server 8000 --directory rescue-set/
+   ```
+3. **USBCloner** writes `rescue-set/rescue-first-mib.bin` at offset 0
+   with the settings in `rescue-set/RESCUE.txt`: one policy, ops MMC0,
+   force erase None, readback on.
+4. **Power off and on.** Kiln's U-Boot finds the rescue record in the
+   first MiB's last sector and then:
+   - turns the watchdog off;
+   - gets an address;
+   - fetches `rescue/rescue.scr` and checks it against the SHA-256 in the record.
+
+   The script then takes each 32 MiB piece in turn: it fetches it (three
+   tries), checks its SHA-256, writes it, and checks what reads back. The
+   normal first MiB comes last and clears the record. The printer resets
+   and Kiln OS starts from slot B.
+
+   If anything fails, U-Boot resets after 10 s and starts the rescue
+   again. The PC's server log shows each piece as it is fetched; the
+   serial console shows the progress.
+5. **Afterwards** `/data` is small (64 MiB). To give it the rest of the eMMC, run `restore --image rescue-set/ --keep-data` over USB.
+
+Not tried yet on hardware: the rescue run itself (simulated by
+`tools/test_ad5x_rescue.py`), and USBCloner on an X2600E (256 MiB) printer.
+
 ## Other ways in
 
 - **Ethernet in U-Boot:** at Kiln's U-Boot prompt, a file can come over the network instead (`dhcp`, `wget`, `hash -v sha256`; `u-boot/README.md`, U-Boot proper).
-- **USBCloner:** Ingenic's tool writes the same files; `ad5x_emmc_image.py` writes a policy list for it that leaves p6 alone. It reads nothing back and keeps no backup.
 
 ## Tested
 

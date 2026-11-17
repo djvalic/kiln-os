@@ -29,9 +29,11 @@ restore  writes what is given, each piece read back:
                        eMMC; --keep-data leaves p7 as it is. Either way
                        userdata gets the rest of the eMMC in the new GPT
          --backup DIR  an ad5x-backup: boot, kernel, rootfs, kernel2,
-                       rootfs2, ota; userdata when it has one; usershare
-                       only with --usershare (this unit's own: refused
-                       when its /MAC differs from the one on the eMMC)
+                       rootfs2, ota; userdata when it has one
+         --usershare   also usershare, from the backup or the image
+                       (ad5x_emmc_image.py --usershare/--mac): refused when
+                       the eMMC's own usershare is usable and its /MAC
+                       differs
          --parts       only these (first-mib,p1,...,p7 or backup names)
          Partitions first, the first MiB last, then the backup GPT from
          the primary. Pieces that already hold the same bytes are left
@@ -335,9 +337,6 @@ def image_pieces(d):
         if key not in IMAGE_FILES:
             continue
         name, off = IMAGE_FILES[key]
-        if name == "p%d" % USERSHARE:
-            raise RepairError("%s has a usershare file: not ad5x_emmc_image.py's"
-                              " output, refused" % d)
         out.append((name, off, os.path.join(d, f), sha))
     if not any(p[0] == "first-mib" for p in out):
         raise RepairError("%s: no 00-first-mib.bin in SHA256SUMS" % d)
@@ -666,6 +665,8 @@ def plan_restore(a, disk):
         for name, off, path, sha in image_pieces(a.image):
             if name == "p%d" % USERDATA and a.keep_data:
                 continue
+            if name == "p%d" % USERSHARE and not a.usershare:
+                continue
             plan.append([name, off, path, sha])
     else:
         sums = read_sums(a.backup)
@@ -690,19 +691,22 @@ def plan_restore(a, disk):
                                       "on this eMMC (%d)" % (bname, size,
                                                              rname, ext[1]))
             plan.append([rname, off, path, has[bname]])
-        if any(p[0] == "p%d" % USERSHARE for p in plan):
-            mine = usershare_mac(disk, g)
-            with tempfile.TemporaryDirectory() as td:
-                t = os.path.join(td, "u.img")
-                with open(t, "wb") as f:
-                    f.write(file_bytes(os.path.join(a.backup, "usershare.img")))
-                theirs = mac_or_none(debugfs_cat(t, "/MAC"))
-            if mine and theirs and mine.lower() != theirs.lower():
-                raise RepairError("the backup's usershare is another printer's"
-                                  " (/MAC %s, this eMMC's %s): refused" %
-                                  (theirs, mine))
-            print("restore: usershare from the backup (/MAC %s)" %
-                  (theirs or "not read"))
+    us = [p for p in plan if p[0] == "p%d" % USERSHARE]
+    if us:
+        g = parse_gpt(disk, 1)
+        mine = usershare_mac(disk, None if isinstance(g, str) else g)
+        with tempfile.TemporaryDirectory() as td:
+            t = os.path.join(td, "u.img")
+            with open(t, "wb") as f:
+                f.write(file_bytes(us[0][2]))
+            theirs = mac_or_none(debugfs_cat(t, "/MAC"))
+        if mine and theirs and mine.lower() != theirs.lower():
+            raise RepairError("the eMMC has a usable usershare with /MAC %s; "
+                              "the one to write has %s: refused (it would "
+                              "replace this printer's factory data)" %
+                              (mine, theirs))
+        print("restore: usershare from %s (/MAC %s)" %
+              (a.image or a.backup, theirs or "not read"))
     if want is not None:
         unknown = want - {p[0] for p in plan}
         if unknown:
@@ -849,8 +853,6 @@ def main(argv=None):
     a = p.parse_args(argv)
     if a.cmd == "restore" and a.keep_data and not a.image:
         p.error("--keep-data goes with --image")
-    if a.cmd == "restore" and a.usershare and not a.backup:
-        p.error("--usershare goes with --backup")
     try:
         return {"find": cmd_find, "check": cmd_check, "backup": cmd_backup,
                 "restore": cmd_restore}[a.cmd](a)
