@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Tue, 17 Nov 2026 03:41:00 -0700
+Subject: [PATCH 32/33] mmc: stop and retry a failed multi-block read
+
+A data CRC error left the card sending: no CMD12 on the error path, so
+every later command failed until the card was initialised again (ums
+dropped the disk). Send the stop, as mmc_write_blocks() does, and read
+the chunk again, twice at most. Seen under ums on the AD5X's A31M8C at
+52 MHz: about one CRC error per 2 GB read, each recovered.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ drivers/mmc/mmc.c | 23 +++++++++++++++++++----
+ 1 file changed, 19 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/mmc/mmc.c b/drivers/mmc/mmc.c
+index 670e92ee..5ed28433 100644
+--- a/drivers/mmc/mmc.c
++++ b/drivers/mmc/mmc.c
+@@ -482,8 +482,16 @@ static int mmc_read_blocks(struct mmc *mmc, void *dst, lbaint_t start,
+ 	data.blocksize = mmc->read_bl_len;
+ 	data.flags = MMC_DATA_READ;
+ 
+-	if (mmc_send_cmd(mmc, &cmd, &data))
++	if (mmc_send_cmd(mmc, &cmd, &data)) {
++		/*
++		 * The card may still be sending (a data CRC error, say): stop
++		 * it, as mmc_write_blocks() does, or every later command
++		 * fails until the card is initialised again.
++		 */
++		if (blkcnt > 1 && !(mmc->host_caps & MMC_CAP_CMD23))
++			mmc_send_stop_transmission(mmc, false);
+ 		return 0;
++	}
+ 
+ 	if (blkcnt > 1 && !(mmc->host_caps & MMC_CAP_CMD23)) {
+ 		if (mmc_send_stop_transmission(mmc, false)) {
+@@ -553,10 +561,17 @@ ulong mmc_bread(struct blk_desc *block_dev, lbaint_t start, lbaint_t blkcnt,
+ 	b_max = mmc_get_b_max(mmc, dst, blkcnt);
+ 
+ 	do {
++		int tries = 3;
++
+ 		cur = (blocks_todo > b_max) ? b_max : blocks_todo;
+-		if (mmc_read_blocks(mmc, dst, start, cur) != cur) {
+-			pr_debug("%s: Failed to read blocks\n", __func__);
+-			return 0;
++		/* a transfer error (data CRC) is read again, twice at most */
++		while (mmc_read_blocks(mmc, dst, start, cur) != cur) {
++			if (!--tries) {
++				pr_debug("%s: Failed to read blocks\n", __func__);
++				return 0;
++			}
++			printf("mmc: read of " LBAF " blocks at " LBAF
++				    " failed, again\n", cur, start);
+ 		}
+ 		blocks_todo -= cur;
+ 		start += cur;

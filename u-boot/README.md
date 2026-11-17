@@ -44,7 +44,11 @@ starts no Flashforge kernel at all.
 | `patches/0026` | no stock-kernel rung: 7.3 -> 6.6 -> the recovery OS; slot A broken: the main OS again on its own kernel; a Kiln 6.6 in p1 gets Kiln's command line; `0x55NK` in CPSPR before the jump (`ad5x_start_uboot_kernel`) |
 | `patches/0028` | DDR parameters by the SoC ID in the eFuse (Ingenic's `check_socid()`): X2600H as before, X2600E (256 MiB) and X2600N (128 MiB) as the 2025 stock SPL; no `mem=256M@0x30000000` on a 256 MiB unit (SPL and U-Boot proper) |
 | `patches/0029` | SPL: eMMC data at RX sample phase 3 (MSC0CDR 19:17, tuning off): phase 0 gives data CRC errors on an X2600E unit's A31M8C eMMC |
-| `USB-BOOT.md` | starting the SPL from the boot ROM over J28 (phase 4): wiring, soft entry and K4, the cold-start test |
+| `patches/0030` | U-Boot proper over USB as stage 2: the `KILNUSB2` SPL sets up DDR and goes back to the boot ROM, U-Boot runs `ums 0 mmc 0` (the eMMC as a USB disk); MSC pads at 1.8 V; the DWC2 gadget driver on MIPS |
+| `patches/0031` | X2600: L1 and L2 cache range operations in U-Boot proper (the generic ones skip the L2: stale SETUP packets after DMA, ums never enumerated) |
+| `patches/0032` | mmc: CMD12 after a failed multi-block read, and the chunk read again (a data CRC error left the card sending and ums dropped the disk) |
+| `patches/0033` | dts: the OTG controller, FIFO sizes within its 3576 words |
+| `USB-BOOT.md` | starting the SPL from the boot ROM over J28 (phase 4): wiring, soft entry and K4, the cold-start test; the eMMC as a USB disk (`run-uboot`) |
 | `build.sh` | fetch v2026.10 (sha256-pinned), patch, build, check; `--container` for the laptop |
 | `Containerfile` | the builder's pinned Debian base + Debian's `gcc-mipsel-linux-gnu` |
 | `tools/ad5x_spl_image.py` | boot ROM header + INGE params generator; the SPL's memory-map check; a first-MiB candidate from a unit's dump; its write plan |

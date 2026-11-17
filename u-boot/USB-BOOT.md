@@ -182,6 +182,33 @@ the ROM waits on USB again. Write down the SPL's last line and the
 scratch pad value the next USB start prints. Nothing goes onto the eMMC
 because of a failure.
 
+## The eMMC as a USB disk (ums)
+
+`run-uboot` starts the SPL as stage 1 only and then Kiln's U-Boot proper
+from the laptop. U-Boot runs `ums 0 mmc 0`, so the laptop sees the whole
+eMMC as a USB disk (`UMS disk 0`, the eMMC's size), with nothing on the
+eMMC needed and nothing written by the start itself:
+
+```
+# the printer in the boot ROM's USB mode (above), then:
+python3 u-boot/tools/ad5x_usbboot.py run-uboot \
+    $WORK/out/dist/spl-usb2.bin $WORK/out/dist/u-boot.bin
+lsblk -o NAME,SIZE,MODEL        # the new disk: check it before writing
+```
+
+- `spl-usb2.bin` is `spl-mmc.img` tagged `KILNUSB2`: it sets up DDR (and
+  the eMMC's pads) and goes back to the boot ROM, which takes
+  `u-boot.bin` as stage 2 (patch 0030). The watchdog stays off.
+- Ctrl-C on the console ends `ums`; a power cycle starts from the eMMC
+  again.
+- Reads run at about 14 MB/s. On printer 2 (A31M8C eMMC at 52 MHz) about
+  one data CRC error per 2 GB read turned up under ums; U-Boot stops the
+  read and reads that chunk again (patch 0032), so the host sees no
+  error. Read back what you write (`sha256sum` over the same range).
+- Back up the eMMC first: everything up to the end of p6 (0x4da00000;
+  p6 holds the unit's factory data, never write it from another unit's
+  backup) and what you need of p7.
+
 ## Getting back
 
 - **Power cycle** (off for a few seconds; the smart plug): CPM_SLPC
