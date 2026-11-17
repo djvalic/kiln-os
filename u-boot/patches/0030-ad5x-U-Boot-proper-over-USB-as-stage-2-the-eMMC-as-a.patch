@@ -26,12 +26,12 @@ Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
  arch/mips/mach-jz47xx/start.S                 | 64 +++++++++++++++++++
  arch/mips/mach-jz47xx/x2600/spl.c             | 23 ++++++-
  arch/mips/mach-jz47xx/x2600/spl_emmc.c        |  9 +++
- board/flashforge/ad5x/ad5x.c                  | 18 ++++++
+ board/flashforge/ad5x/ad5x.c                  | 21 ++++++
  configs/ad5x_defconfig                        | 10 +++
  drivers/usb/gadget/Kconfig                    |  2 +-
  drivers/usb/gadget/dwc2_udc_otg.c             |  2 +
  drivers/usb/gadget/dwc2_udc_otg_xfer_dma.c    | 12 ++--
- 11 files changed, 153 insertions(+), 9 deletions(-)
+ 11 files changed, 156 insertions(+), 9 deletions(-)
 
 diff --git a/arch/mips/dts/ad5x.dts b/arch/mips/dts/ad5x.dts
 index bb0a3ca7..ebe16a80 100644
@@ -249,7 +249,7 @@ index 682a1166..2af6ef8c 100644
  		return -EIO;
  	writel(~0U, MSC0 + SD_INT_ENABLE);	/* latch every status bit */
 diff --git a/board/flashforge/ad5x/ad5x.c b/board/flashforge/ad5x/ad5x.c
-index ff3b01f1..1a63c0f8 100644
+index ff3b01f1..2ac1a1ef 100644
 --- a/board/flashforge/ad5x/ad5x.c
 +++ b/board/flashforge/ad5x/ad5x.c
 @@ -55,6 +55,11 @@ DECLARE_GLOBAL_DATA_PTR;
@@ -264,26 +264,29 @@ index ff3b01f1..1a63c0f8 100644
  	/*
  	 * A hang in U-Boot resets the board. The SPL then sees U-Boot proper
  	 * up (started from 0xA400: it boots the slot itself next) or a U-Boot
-@@ -293,6 +298,19 @@ int board_late_init(void)
+@@ -291,6 +296,22 @@ static void ad5x_env_follow_build(void)
+ 
+ int board_late_init(void)
  {
- 	ad5x_env_follow_build();
- 	env_set("ad5x_slot", ad5x_read_slot());
 +	/*
 +	 * Loaded by the boot ROM over USB after Kiln's SPL set up DDR as stage
 +	 * 1 only (kiln-usbboot run-uboot): offer the eMMC as a USB disk on
-+	 * J28 (the host writes the image, docs: ad5x_emmc_image.py); the
-+	 * environment is left as it is on the eMMC.
++	 * J28 (the host writes the image, docs: ad5x_emmc_image.py). This
++	 * build's default environment in RAM only: the start writes nothing
++	 * to the eMMC, whichever build's environment is there.
 +	 */
 +	if (x2600_cpspr_read() == AD5X_USB_STAGE2) {
 +		x2600_cpspr_write(0);
 +		printf("ad5x: started over USB: the eMMC as a USB disk (ums); "
 +		       "Ctrl-C stops it\n");
++		env_set_default(NULL, 0);
 +		env_set("bootcmd", "ums 0 mmc 0");
 +		env_set("bootdelay", "0");
++		return 0;
 +	}
+ 	ad5x_env_follow_build();
+ 	env_set("ad5x_slot", ad5x_read_slot());
  	return 0;
- }
- 
 diff --git a/configs/ad5x_defconfig b/configs/ad5x_defconfig
 index 1abaa139..120248ff 100644
 --- a/configs/ad5x_defconfig
