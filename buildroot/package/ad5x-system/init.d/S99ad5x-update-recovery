@@ -113,6 +113,7 @@ kernel2_due() {
 case "$1" in
 start)
 	. /usr/lib/ad5x/safe.sh; safe_skip S99ad5x-update-recovery
+	[ -f /data/ad5x/ab ] && { echo "S99ad5x-update-recovery: A/B layout (/data/ad5x/ab): no recovery OS"; exit 0; }
 	[ "$SLOT" = B ] || exit 0
 	# A first install still writing its recovery OS (S99ad5x-install-recovery)
 	[ -f /data/ad5x/install/recovery.squashfs ] && exit 0

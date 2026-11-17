@@ -36,6 +36,8 @@ define AD5X_SYSTEM_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-safe-screen \
 		$(TARGET_DIR)/usr/bin/ad5x-safe-screen
 	$(INSTALL) -D -m 0644 $(@D)/lib/safe.sh $(TARGET_DIR)/usr/lib/ad5x/safe.sh
+	$(INSTALL) -D -m 0644 $(@D)/lib/ab-update.sh \
+		$(TARGET_DIR)/usr/lib/ad5x/ab-update.sh
 	$(AD5X_SYSTEM_INSTALL_MCU_FIRMWARE)
 	$(INSTALL) -D -m 0644 $(@D)/lib/network.sh \
 		$(TARGET_DIR)/usr/lib/ad5x/network.sh
