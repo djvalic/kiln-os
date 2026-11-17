@@ -240,12 +240,42 @@ console is needed.
    and Kiln OS starts from slot B.
 
    If anything fails, U-Boot resets after 10 s and starts the rescue
-   again. The PC's server log shows each piece as it is fetched; the
-   serial console shows the progress.
+   again. To follow it on the serving PC, run `tools/ad5x_netconsole.py` there (see Netconsole below). The server log also shows each piece as it is fetched.
 5. **Afterwards** `/data` is small (64 MiB). To give it the rest of the eMMC, run `restore --image rescue-set/ --keep-data` over USB.
 
 Not tried yet on hardware: the rescue run itself (simulated by
 `tools/test_ad5x_rescue.py`), and USBCloner on an X2600E (256 MiB) printer.
+
+## Netconsole: U-Boot's console without a serial cable
+
+Kiln's U-Boot can send its console over the network, and take keys back:
+- you see what it does at every start (the boot rules, which kernel);
+- you can stop it with Ctrl-C and use the U-Boot prompt from a PC.
+
+Switch it on from Kiln OS, as root, then restart the printer:
+
+```
+echo 192.168.1.10 > /data/ad5x/netconsole   # this PC's IP
+```
+
+On the PC:
+
+```
+python3 tools/ad5x_netconsole.py            # or: nc -u -l -p 6666
+```
+
+What happens at each start:
+- U-Boot gets an address by DHCP. That takes milliseconds, at most 10 s; without one, the start goes on as usual.
+- The console then goes to UDP port 6666 on the PC.
+- Ctrl-C within the first 2 seconds gives the U-Boot prompt, with the watchdog off; `reset` starts normally again.
+
+Other settings:
+- An empty file sends to the whole network instead. Where the PC is on Wi-Fi, part of the output gets lost that way (access points pass broadcasts slowly), so give the PC's IP when you can.
+- At the U-Boot prompt, `setenv ad5x_nc 192.168.1.10; saveenv` does the same as the file.
+- `rm /data/ad5x/netconsole` switches it off.
+
+The network rescue (above) always sends its console to the PC that serves
+it: start `ad5x_netconsole.py` there to follow it.
 
 ## Other ways in
 
