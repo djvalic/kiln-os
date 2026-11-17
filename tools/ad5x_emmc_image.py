@@ -3,7 +3,7 @@
 host that sees the eMMC as a disk), from release images only.
 
     ad5x_emmc_image.py --spl spl-mmc.img --uboot u-boot-emmc.img \\
-        --kernel xImage --main rootfs.squashfs --recovery recovery.squashfs \\
+        --kernel xImage --main rootfs.squashfs [--recovery recovery.squashfs] \\
         OUTDIR [--data-mib 64] [--test-image]
     ad5x_emmc_image.py --from-update kiln-os-VERSION-update.zip OUTDIR
         [--usershare SOURCE]... [--mac MAC|random] [--rescue SERVER[:PORT]]
@@ -19,15 +19,17 @@ board. What goes where:
             protective MBR, a new GPT (8 entries at LBA 2, as stock), Kiln's
             SPL at 0x4400, Kiln's U-Boot at 0xA400
     p1      kernel     Kiln's 6.6 (uImage "Linux-6.6-ad5x")
-    p2      rootfs     the recovery OS          (slot A, as Kiln OS 1.x)
+    p2      rootfs     the main OS, slot A (A/B, the default); with
+                       --layout 1x (or --recovery) Kiln OS 1.x's recovery OS
     p3      kernel2    Kiln's 6.6
     p4      rootfs2    the main OS              (slot B)
     p5      ota        boot flag "ota:kernel2", U-Boot's areas empty
     p6      usershare  only with --usershare (this printer's own, checked) or
                        --mac (a new one with that Ethernet address); without
                        them no file: the factory data stays as it is
-    p7      userdata   a small empty ext4 (/data); the GPT's last partition
-                       ends with the image, on any eMMC size
+    p7      userdata   a small ext4 (/data); A/B: with /ad5x/ab (updates go
+                       into the other slot), and the main OS grows it to the
+                       end of the eMMC at its first start (ad5x-grow-data)
 
 Every file is written at its own offset; without --usershare or --mac p6
 has no file, so flashing all of them leaves the factory partition as it
@@ -339,9 +341,12 @@ def from_update(a, td):
             f.write(b)
         if not getattr(a, attr):
             setattr(a, attr, out)
-    for attr, path in (("main", main), ("recovery", rec), ("kernel", kern)):
+    for attr, path in (("main", main), ("kernel", kern)):
         if not getattr(a, attr):
             setattr(a, attr, path)
+    # the 1.x layout's slot A: the recovery OS the main OS carries
+    if a.layout == "1x" and not a.recovery:
+        a.recovery = rec
 
 
 def build(a):
@@ -350,14 +355,19 @@ def build(a):
             from_update(a, td)
             a.from_update = None
             return build(a)
-    for attr in ("spl", "uboot", "kernel", "main", "recovery"):
+    if a.layout == "ab" and a.recovery:
+        raise ImageError("--recovery goes with --layout 1x (A/B has the main "
+                         "OS in both slots)")
+    for attr in ("spl", "uboot", "kernel", "main") + \
+            (("recovery",) if a.layout == "1x" else ()):
         if not getattr(a, attr):
             raise ImageError("--%s (or --from-update) is needed" % attr)
     spl_img = read(a.spl)
     uboot = read(a.uboot)
     kernel = read(a.kernel)
     main = read(a.main)
-    rec = read(a.recovery)
+    ab = a.layout == "ab"
+    rec = main if ab else read(a.recovery)
 
     # the SPL image as the boot ROM loads it, from the build's own check
     magic, count, _ = spl.decode(spl_img, 0)
@@ -380,7 +390,8 @@ def build(a):
     if not check_uimage(kernel, "--kernel").startswith(KERNEL_NAME):
         raise ImageError("--kernel: not Kiln's 6.6 (uImage name %s...)" %
                          KERNEL_NAME.decode())
-    for b, what, part in ((main, "--main", 4), (rec, "--recovery", 2)):
+    for b, what, part in ((main, "--main", 4),
+                          (rec, "--main" if ab else "--recovery", 2)):
         if b[:4] != SQUASHFS_MAGIC:
             raise ImageError("%s: not a SquashFS" % what)
         if len(b) > PARTS[part - 1][3] * SECTOR:
@@ -414,9 +425,19 @@ def build(a):
         dimg = os.path.join(td, "userdata.img")
         with open(dimg, "wb") as f:
             f.truncate(fs_bytes)
+        seed = os.path.join(td, "data")
+        os.makedirs(os.path.join(seed, "ad5x"))
+        if ab:	# the A/B marker (lib/ab-update.sh)
+            open(os.path.join(seed, "ad5x", "ab"), "w").close()
         subprocess.run(["mke2fs", "-q", "-F", "-t", "ext4", "-O",
                         MKE2FS_FEATURES, "-L", "userdata", "-E",
-                        "root_owner=0:0", dimg], check=True)
+                        "root_owner=0:0", "-d", seed, dimg], check=True)
+        # mke2fs -d keeps the builder's owner: root's, as the printer's own
+        for path in ("/ad5x", "/ad5x/ab") if ab else ("/ad5x",):
+            for field in ("uid", "gid"):
+                subprocess.run(["debugfs", "-w", "-R",
+                                "sif %s %s 0" % (path, field), dimg],
+                               check=True, capture_output=True)
         data = read(dimg)
     # the backup GPT sits in the last sectors of userdata's range
     tail = ents + backup
@@ -447,7 +468,8 @@ def build(a):
     files = [  # name, eMMC byte offset, bytes
         ("00-first-mib.bin", 0, bytes(first)),
         ("p1-kernel.img", PARTS[0][2] * SECTOR, kernel),
-        ("p2-rootfs-recovery.img", PARTS[1][2] * SECTOR, rec),
+        ("p2-rootfs-main.img" if ab else "p2-rootfs-recovery.img",
+         PARTS[1][2] * SECTOR, rec),
         ("p3-kernel2.img", PARTS[2][2] * SECTOR, kernel),
         ("p4-rootfs2-main.img", PARTS[3][2] * SECTOR, main),
         ("p5-ota.img", PARTS[4][2] * SECTOR, bytes(ota)),
@@ -486,9 +508,10 @@ def build(a):
                 dhcp="" if a.rescue_ip else " by DHCP"))
     with open(os.path.join(a.out, "SHA256SUMS"), "w") as f:
         f.write("\n".join(sums) + "\n")
-    print("eMMC image files in %s: %d sectors (%.1f MiB) up to the end of "
-          "userdata (%d MiB); usershare (p6): %s" %
-          (a.out, total, total * SECTOR / MIB, a.data_mib,
+    print("eMMC image files in %s (%s): %d sectors (%.1f MiB) up to the end "
+          "of userdata (%d MiB); usershare (p6): %s" %
+          (a.out, "A/B" if ab else "1.x: recovery OS in slot A", total,
+           total * SECTOR / MIB, a.data_mib,
            us_what if us is not None else "no file, never written"))
     if a.rescue:
         print("rescue: USBCloner writes %s; serve %s from %s; steps in "
@@ -504,7 +527,11 @@ def main(argv=None):
     p.add_argument("--kernel",
                    help="Kiln's 6.6 uImage (/usr/lib/ad5x/kernel66/xImage)")
     p.add_argument("--main", help="the main OS rootfs.squashfs")
-    p.add_argument("--recovery", help="recovery.squashfs")
+    p.add_argument("--layout", choices=("ab", "1x"),
+                   help="ab: the main OS in both slots and /ad5x/ab in "
+                   "userdata (the default); 1x: Kiln OS 1.x's, the recovery "
+                   "OS in slot A (the default with --recovery)")
+    p.add_argument("--recovery", help="recovery.squashfs (--layout 1x)")
     p.add_argument("--data-mib", type=int, default=64,
                    help="userdata's size in the image (MiB, default 64)")
     p.add_argument("--from-update", metavar="ZIP",
@@ -533,6 +560,8 @@ def main(argv=None):
                    help="also the whole image as one file (tests only)")
     p.add_argument("out")
     a = p.parse_args(argv)
+    if not a.layout:
+        a.layout = "1x" if a.recovery else "ab"
     try:
         build(a)
     except (ImageError, ushare.UsershareError, OSError,

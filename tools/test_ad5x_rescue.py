@@ -193,12 +193,22 @@ def main():
                              b"KILN-RESCUE 1\n" + os.urandom(100000))
         z, kern, rb = update_zip("new", new_uboot)
         out4 = os.path.join(td, "set4")
-        rc = img.main(["--from-update", z, "--mac", mac, "--rescue",
-                       "192.168.1.10", out4])
-        check("--from-update --rescue", rc == 0 and
+        rc = img.main(["--from-update", z, "--layout", "1x", "--mac", mac,
+                       "--rescue", "192.168.1.10", out4])
+        check("--from-update --layout 1x --rescue", rc == 0 and
               open(os.path.join(out4, "p1-kernel.img"), "rb").read() == kern
               and open(os.path.join(out4, "p2-rootfs-recovery.img"),
                        "rb").read() == rb)
+        out6 = os.path.join(td, "set6")
+        rc = img.main(["--from-update", z, out6])
+        main6 = open(os.path.join(out6, "p4-rootfs2-main.img"), "rb").read()
+        r6 = subprocess.run(["debugfs", "-c", "-R", "stat /ad5x/ab",
+                             os.path.join(out6, "p7-userdata.img")],
+                            capture_output=True, text=True)
+        check("--from-update, A/B: the main OS in both slots, /ad5x/ab",
+              rc == 0 and open(os.path.join(out6, "p2-rootfs-main.img"),
+                               "rb").read() == main6 and
+              "Type: regular" in r6.stdout)
         old_uboot = t.uimage(b"Kiln U-Boot test", os.urandom(100000))
         z, _, _ = update_zip("old", old_uboot)
         rc = img.main(["--from-update", z, "--mac", mac, "--rescue",
