@@ -48,6 +48,10 @@ starts no Flashforge kernel at all.
 | `patches/0031` | X2600: L1 and L2 cache range operations in U-Boot proper (the generic ones skip the L2: stale SETUP packets after DMA, ums never enumerated) |
 | `patches/0032` | mmc: CMD12 after a failed multi-block read, and the chunk read again (a data CRC error left the card sending and ums dropped the disk) |
 | `patches/0033` | dts: the OTG controller, FIFO sizes within its 3576 words |
+| `patches/0034` | X2600: DMA alignment to the L2's 64-byte lines (`SYS_CACHE_SHIFT_6`; was the L1's 32) |
+| `patches/0035` | net: designware: `virt_to_phys()`/`phys_to_virt()` between CPU and DMA addresses, registers mapped uncached (MIPS KSEG0/KSEG1) |
+| `patches/0036` | net: `dwmac_ingenic`: the X2600 GMAC's pins (PC16-PC24), clock gate, 50 MHz MAC clock from the MPLL, RMII in the CPM; enhanced descriptors |
+| `patches/0037` | AD5X: the MAC and its IP101G in the device tree, the address from usershare `/MAC`, `dhcp`/`ping`/`mii`/`wget`/`hash` |
 | `USB-BOOT.md` | starting the SPL from the boot ROM over J28 (phase 4): wiring, soft entry and K4, the cold-start test; the eMMC as a USB disk (`run-uboot`) |
 | `build.sh` | fetch v2026.10 (sha256-pinned), patch, build, check; `--container` for the laptop |
 | `Containerfile` | the builder's pinned Debian base + Debian's `gcc-mipsel-linux-gnu` |
@@ -391,6 +395,17 @@ jolting's fixes.
   table (p1-p5 start LBAs and names, p7 `userdata`).
 - Recovery kernel: read whole by its uImage header (any size up to 8 MiB),
   header and data CRC checked.
+- Ethernet (patches 0034-0037): the X2600's GMAC, RMII to the IP101G at
+  MDIO address 1, at the prompt only; nothing starts over the network by
+  itself. The address is stock's, the first line of `/MAC` on usershare
+  (p6), read only. Commands: `dhcp`, `ping`, `mii`, `wget` (HTTP; another
+  port with `httpdstp`) and `hash -v sha256` to check what came in, e.g.
+
+  ```
+  setenv autoload no; dhcp
+  setenv httpdstp 8000; wget ${loadaddr} 192.168.1.10:/rootfs.squashfs
+  hash -v sha256 ${loadaddr} ${filesize} <sha256 from SHA256SUMS>
+  ```
 
 ### `ota` layout (p5, 1 MiB)
 
