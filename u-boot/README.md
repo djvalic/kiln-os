@@ -54,6 +54,7 @@ starts no Flashforge kernel at all.
 | `patches/0037` | AD5X: the MAC and its IP101G in the device tree, the address from usershare `/MAC`, `dhcp`/`ping`/`mii`/`wget`/`hash` |
 | `patches/0038` | network rescue: a record in the first MiB's last sector (`ad5x_emmc_image.py --rescue`) makes U-Boot fetch, check and write the rest of the eMMC over HTTP; U-Boot proper ends one sector earlier |
 | `patches/0039` | netconsole: U-Boot's console over UDP 6666 when `/data/ad5x/netconsole` exists (the PC's IP, or empty for the LAN) or `ad5x_nc` is set; always in the network rescue |
+| `patches/0040` | prototype: the main OS in both slots (A/B), safe mode as the last fallback, all of the RAM to Linux (`mem=256M@0x0`, no `rmem=`/`rtos_size=`) |
 | `USB-BOOT.md` | starting the SPL from the boot ROM over J28 (phase 4): wiring, soft entry and K4, the cold-start test; the eMMC as a USB disk (`run-uboot`) |
 | `build.sh` | fetch v2026.10 (sha256-pinned), patch, build, check; `--container` for the laptop |
 | `Containerfile` | the builder's pinned Debian base + Debian's `gcc-mipsel-linux-gnu` |
@@ -62,6 +63,7 @@ starts no Flashforge kernel at all.
 | `tools/spl_stack.py` | worst-case SPL stack from GCC's call graph (`--nm` for merged functions) |
 | `../tools/ad5x_netconsole.py` | PC: U-Boot's netconsole, any OS with Python 3 (UDP 6666; Ctrl-C sends the stop key) |
 | `tools/bootlogic_cli.c` | host driver for the boot rules (tests) |
+| `tools/test_bootlogic_ab.py` | the A/B and safe-mode boot rules through `bootlogic_cli` |
 | `tools/spl_uimage_cli.c` | host driver for the SPL's uImage loader, cut out of `spl.c` (`test_spl_uimage.py`) |
 | `tools/ad5x_start_cli.c` | host driver for the start-up tries and the stop key (`test_ad5x_start.py`) |
 | `tools/ad5x_usbboot.py` | laptop: the X2600 boot ROM's USB protocol, `info` and `run-spl` (pyusb; `--dry-run` without) |

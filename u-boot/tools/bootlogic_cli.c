@@ -43,16 +43,34 @@ static void set(struct ad5x_inputs *in, const char *k, const char *v)
 #define I(name) if (!strcmp(k, #name)) { in->name = n; return; }
 #define S(name, field) if (!strcmp(k, name)) { \
 	snprintf(field, sizeof(field), "%s", v); return; }
+	struct ad5x_slot *sl = &in->slot[AD5X_SLOT_B];
+
+	/* "a_KEY"/"b_KEY": slot A's or B's; plain KEY (older tests): B's */
+	if ((k[0] == 'a' || k[0] == 'b') && k[1] == '_') {
+		sl = &in->slot[k[0] == 'a' ? AD5X_SLOT_A : AD5X_SLOT_B];
+		k += 2;
+	}
+#define SL(name) if (!strcmp(k, #name)) { sl->name = n; return; }
+	/* a slot with a kernel in its rootfs holds the main OS */
+	if (!strcmp(k, "have_66") || !strcmp(k, "have_73"))
+		sl->main_os |= n;
+	SL(main_os) SL(have_66) SL(have_73) SL(wdt_capable)
+	S("rel_66", sl->rel_66) S("rel_73", sl->rel_73)
 	I(flag_b) I(data_ok) I(mainline_wanted) I(after_install)
-	I(have_66) I(have_73) I(slot_a_ok)
-	I(wdt_off) I(wdt_capable)
-	S("rel_66", in->rel_66) S("rel_73", in->rel_73)
+	I(slot_a_ok) I(wdt_off)
 	S("s00_failed", in->s00_failed)
 	S("s00_failed_mainline", in->s00_failed_mainline)
 	S("state_release", in->state.release)
 	S("rec_failed_own", in->rec.failed_own)
 	S("rec_failed_mainline", in->rec.failed_mainline)
+	S("rec_failed_own_a", in->rec.failed_own_a)
+	S("rec_failed_mainline_a", in->rec.failed_mainline_a)
 	if (!strcmp(k, "state_tries")) { in->state.tries = n; return; }
+	if (!strcmp(k, "state_slot")) {
+		in->state.slot = v[0] == 'a' ? AD5X_SLOT_A : AD5X_SLOT_B;
+		return;
+	}
+	if (!strcmp(k, "state_safe")) { in->state.safe = n; return; }
 	if (!strcmp(k, "state_kernel")) {
 		in->state.kernel = kernel_of(v);
 		return;
@@ -66,7 +84,8 @@ static void set(struct ad5x_inputs *in, const char *k, const char *v)
 static const char *target(enum ad5x_target t)
 {
 	return t == AD5X_BOOT_MAIN ? "main" :
-	       t == AD5X_BOOT_RECOVERY ? "recovery" : "prompt";
+	       t == AD5X_BOOT_RECOVERY ? "recovery" :
+	       t == AD5X_BOOT_SAFE ? "safe" : "prompt";
 }
 
 static int decide(void)
@@ -76,6 +95,7 @@ static int decide(void)
 	char line[512], *v, buf[AD5X_REC_SIZE];
 
 	memset(&in, 0, sizeof(in));
+	in.state.slot = AD5X_SLOT_B;
 	while (fgets(line, sizeof(line), stdin)) {
 		line[strcspn(line, "\n")] = '\0';
 		if (!line[0])
@@ -88,15 +108,18 @@ static int decide(void)
 		set(&in, line, v);
 	}
 	ad5x_decide(&in, &d);
+	printf("slot %c\n", d.slot == AD5X_SLOT_A ? 'a' : 'b');
 	printf("target %s\nkernel %s\nwrite_flag %d\nstate_changed %d\n"
 	       "rec_changed %d\nstate_tries %u\nstate_kernel %s\n"
 	       "state_release %s\nrec_failed_own %s\nrec_failed_mainline %s\n"
-	       "rec_fallbacks %u\nrec_reason %s\nmsg %s\nwdt %u\n",
+	       "rec_fallbacks %u\nrec_reason %s\nmsg %s\nwdt %u\n"
+	       "rec_failed_own_a %s\nrec_failed_mainline_a %s\nsafe_fail %d\n",
 	       target(d.target), ad5x_kernel_name(d.kernel), d.write_flag,
 	       d.state_changed, d.rec_changed, d.state.tries,
 	       ad5x_kernel_name(d.state.kernel), d.state.release,
 	       d.rec.failed_own, d.rec.failed_mainline, d.rec.fallbacks,
-	       d.rec.reason, d.msg, ad5x_wdt_seconds(&in, &d, wdt_os));
+	       d.rec.reason, d.msg, ad5x_wdt_seconds(&in, &d, wdt_os),
+	       d.rec.failed_own_a, d.rec.failed_mainline_a, d.safe_fail);
 	ad5x_state_format(&d.state, buf);
 	printf("--state--\n%s--end--\n", buf);
 	ad5x_records_format(&d.rec, buf);

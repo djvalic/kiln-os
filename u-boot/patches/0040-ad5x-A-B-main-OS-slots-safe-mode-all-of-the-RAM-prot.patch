@@ -1,0 +1,826 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Tue, 17 Nov 2026 01:42:14 -0700
+Subject: [PATCH] ad5x: A/B main OS slots, safe mode, all of the RAM
+ (prototype)
+
+U-Boot's boot rules for a main OS in both slots: the flagged slot (7.3,
+then 6.6), the other slot (the flag moved there), Kiln OS 1.x's recovery
+OS in slot A where it still is, then safe mode (ad5x.safe=1, watchdog
+off; twice unfinished: the prompt). A slot holds the main OS when its
+rootfs has Kiln's kernels. State records the slot and safe mode, failure
+records are per slot (1.x's names stay slot B's).
+
+The kernel gets all of the RAM: mem=256M@0x0 (and the X2600H's second
+bank), no rmem=/rtos_size= holes, lpj as the 2025 stock SPL passes it.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ arch/mips/mach-jz47xx/x2600/spl.c |  10 +-
+ board/flashforge/ad5x/ad5x.c      | 145 ++++++++++----
+ board/flashforge/ad5x/bootlogic.c | 313 +++++++++++++++++++-----------
+ board/flashforge/ad5x/bootlogic.h |  42 +++-
+ 4 files changed, 341 insertions(+), 169 deletions(-)
+
+diff --git a/arch/mips/mach-jz47xx/x2600/spl.c b/arch/mips/mach-jz47xx/x2600/spl.c
+index 51bcbca1..49de793f 100644
+--- a/arch/mips/mach-jz47xx/x2600/spl.c
++++ b/arch/mips/mach-jz47xx/x2600/spl.c
+@@ -407,13 +407,13 @@ static ulong spl_load_uimage(u32 lba, ulong max, u8 os)
+ }
+ 
+ /*
+- * the stock SPL's command line (lpj as the stock SPL passes it); without
+- * the second bank on a unit with 256 MiB, as the stock SPL starts it
++ * the kernel's command line: all of the RAM (no rmem=/rtos_size= holes,
++ * which only Flashforge's kernel used), without the second bank on a unit
++ * with 256 MiB; lpj as the 2025 stock SPL passes it
+  */
+-#define AD5X_ARGS	"console=ttyS0,115200n8 loglevel=8 mem=236M@0x0 " \
+-			"rmem=16M@0xec00000 rtos_size=4M@0xfc00000 " \
++#define AD5X_ARGS	"console=ttyS0,115200n8 loglevel=8 mem=256M@0x0 " \
+ 			"mem=256M@0x30000000 init=/linuxrc root=/dev/mmcblk0pX " \
+-			"rootwait rootfstype=squashfs ro lpj=11935744"
++			"rootwait rootfstype=squashfs ro lpj=11476992"
+ #define AD5X_MAX_ARGS	16
+ 
+ static char spl_args[sizeof(AD5X_ARGS)];
+diff --git a/board/flashforge/ad5x/ad5x.c b/board/flashforge/ad5x/ad5x.c
+index 12528126..95cb0d34 100644
+--- a/board/flashforge/ad5x/ad5x.c
++++ b/board/flashforge/ad5x/ad5x.c
+@@ -547,17 +547,25 @@ static int ad5x_read_records(struct ad5x_inputs *in)
+ 	char buf[AD5X_REC_SIZE] __aligned(ARCH_DMA_MINALIGN);
+ 
+ 	if (ad5x_read_sector(AD5X_STATE_LBA, buf) ||
+-	    ad5x_state_parse(buf, &in->state))
++	    ad5x_state_parse(buf, &in->state)) {
+ 		memset(&in->state, 0, sizeof(in->state));
++		in->state.slot = AD5X_SLOT_B;	/* empty: as an older build's */
++	}
+ 	if (ad5x_read_sector(AD5X_RECORDS_LBA, buf) ||
+ 	    ad5x_records_parse(buf, &in->rec))
+ 		memset(&in->rec, 0, sizeof(in->rec));
+ 	return 0;
+ }
+ 
++/* a slot's rootfs partition and root= */
++#define AD5X_ROOT_PART(s)	((s) == AD5X_SLOT_A ? 2 : 4)
++#define AD5X_ROOT_DEV(s)	((s) == AD5X_SLOT_A ? "/dev/mmcblk0p2" : \
++						      "/dev/mmcblk0p4")
++
+ static void ad5x_gather(struct ad5x_inputs *in)
+ {
+ 	const char *slot = ad5x_read_slot();
++	int s;
+ 
+ 	memset(in, 0, sizeof(*in));
+ 	in->flag_b = slot && *slot == 'b';
+@@ -576,14 +584,23 @@ static void ad5x_gather(struct ad5x_inputs *in)
+ 		in->wdt_off = ad5x_exists(7, "/ad5x/watchdog.disable");
+ 	}
+ 
+-	/* rootfs2: p4, SquashFS */
+-	in->have_66 = ad5x_exists(4, "/usr/lib/ad5x/kernel66/xImage");
+-	ad5x_line(4, "/usr/lib/ad5x/kernel66/release", in->rel_66,
+-		  AD5X_REL_LEN);
+-	in->have_73 = ad5x_exists(4, "/usr/lib/ad5x/kernel-mainline/xImage");
+-	ad5x_line(4, "/usr/lib/ad5x/kernel-mainline/release", in->rel_73,
+-		  AD5X_REL_LEN);
+-	in->wdt_capable = ad5x_exists(4, "/usr/lib/ad5x/watchdog.conf");
++	/* each slot's rootfs: p2 (A), p4 (B), SquashFS */
++	for (s = AD5X_SLOT_A; s <= AD5X_SLOT_B; s++) {
++		struct ad5x_slot *sl = &in->slot[s];
++		int part = AD5X_ROOT_PART(s);
++
++		sl->have_66 = ad5x_exists(part,
++					  "/usr/lib/ad5x/kernel66/xImage");
++		ad5x_line(part, "/usr/lib/ad5x/kernel66/release", sl->rel_66,
++			  AD5X_REL_LEN);
++		sl->have_73 = ad5x_exists(part,
++					  "/usr/lib/ad5x/kernel-mainline/xImage");
++		ad5x_line(part, "/usr/lib/ad5x/kernel-mainline/release",
++			  sl->rel_73, AD5X_REL_LEN);
++		sl->wdt_capable = ad5x_exists(part,
++					      "/usr/lib/ad5x/watchdog.conf");
++		sl->main_os = sl->have_66 || sl->have_73;
++	}
+ 
+ 	/* slot A: p1's kernel (loaded to AD5X_LOAD_A) and p2's root */
+ 	ad5x_a_name[0] = '\0';
+@@ -597,26 +614,38 @@ static void ad5x_gather(struct ad5x_inputs *in)
+ 
+ static void ad5x_print(const struct ad5x_inputs *in)
+ {
+-	printf("ad5x: flag %s; state: %u tries, last %s %s; records: own "
+-	       "%s, mainline %s\n", in->flag_b ? "b" : "a", in->state.tries,
++	int s;
++
++	printf("ad5x: flag %s; state: %u tries, last %s %s, slot %c%s; "
++	       "records: B own %s, mainline %s; A own %s, mainline %s\n",
++	       in->flag_b ? "b" : "a", in->state.tries,
+ 	       ad5x_kernel_name(in->state.kernel), in->state.release,
++	       in->state.slot == AD5X_SLOT_A ? 'a' : 'b',
++	       in->state.safe ? " (safe mode)" : "",
+ 	       in->rec.failed_own[0] ? in->rec.failed_own : "-",
+-	       in->rec.failed_mainline[0] ? in->rec.failed_mainline : "-");
++	       in->rec.failed_mainline[0] ? in->rec.failed_mainline : "-",
++	       in->rec.failed_own_a[0] ? in->rec.failed_own_a : "-",
++	       in->rec.failed_mainline_a[0] ? in->rec.failed_mainline_a : "-");
++	for (s = AD5X_SLOT_A; s <= AD5X_SLOT_B; s++)
++		printf("ad5x: slot %c: %s; 6.6 %s %s, 7.3 %s %s\n",
++		       s == AD5X_SLOT_A ? 'A' : 'B',
++		       in->slot[s].main_os ? "main OS" : "no main OS",
++		       in->slot[s].have_66 ? "yes" : "no", in->slot[s].rel_66,
++		       in->slot[s].have_73 ? "yes" : "no", in->slot[s].rel_73);
+ 	printf("ad5x: /data %s (mainline %s, after install %s, S00 failed "
+-	       "%s/%s); rootfs2 6.6 %s %s, 7.3 %s %s; slot A %s, p1 %s%s\n",
++	       "%s/%s); 1.x recovery in slot A %s, p1 %s%s\n",
+ 	       in->data_ok ? "ok" : "unread", in->mainline_wanted ? "on" : "off",
+ 	       in->after_install ? "yes" : "no",
+ 	       in->s00_failed[0] ? in->s00_failed : "-",
+ 	       in->s00_failed_mainline[0] ? in->s00_failed_mainline : "-",
+-	       in->have_66 ? "yes" : "no", in->rel_66,
+-	       in->have_73 ? "yes" : "no", in->rel_73,
+ 	       in->slot_a_ok ? "ok" : "not startable",
+ 	       ad5x_a_name[0] ? ad5x_a_name : "no kernel",
+ 	       !ad5x_a_name[0] || ad5x_slot_a_kernel_ok(ad5x_a_name) ? "" :
+ 	       " (not Kiln's 6.6: never started)");
+-	printf("ad5x: watchdog: wdt_os %lu, rootfs2 %s, /data %s\n",
++	printf("ad5x: watchdog: wdt_os %lu, slot A %s, slot B %s, /data %s\n",
+ 	       env_get_ulong("wdt_os", 10, 0),
+-	       in->wdt_capable ? "feeds it" : "doesn't feed it",
++	       in->slot[AD5X_SLOT_A].wdt_capable ? "feeds it" : "doesn't",
++	       in->slot[AD5X_SLOT_B].wdt_capable ? "feeds it" : "doesn't",
+ 	       in->wdt_off ? "switches it off" : "doesn't switch it off");
+ }
+ 
+@@ -644,19 +673,49 @@ static int ad5x_commit(const struct ad5x_decision *d)
+ 	return ret;
+ }
+ 
++/* drop the words starting with @prefix from @args (in place) */
++static void ad5x_drop_args(char *args, const char *prefix)
++{
++	char *p = args, *e;
++	size_t n = strlen(prefix);
++
++	while (*p) {
++		while (*p == ' ')
++			p++;
++		e = p;
++		while (*e && *e != ' ')
++			e++;
++		if (!strncmp(p, prefix, n)) {
++			while (*e == ' ')
++				e++;
++			memmove(p, e, strlen(e) + 1);
++		} else {
++			p = e;
++		}
++	}
++}
++
+ /*
+  * @own: Kiln's kernel (ad5x.kernel=own panic=10 loglevel=5); @extra: and
+  * /data/ad5x/kernel/cmdline-extra after it, as S00ad5x-kernel adds it (the
+- * main OS only: the recovery OS starts without the owner's test options)
++ * main OS only: the recovery OS and safe mode start without the owner's
++ * test options); @safe: ad5x.safe=1.
++ *
++ * Memory: all of it. Stock's command line keeps the top 20 MiB of the low
++ * 256 MiB from Linux (rmem= for Flashforge's media drivers, rtos_size= for
++ * the RISC-V core) and gives only mem=236M@0x0; neither is used by Kiln's
++ * kernels, which keep their crash log (ramoops, 1 MiB) in their device
++ * trees. So mem=256M@0x0, and the X2600H's second 256 MiB bank. lpj as
++ * the 2025 stock SPL passes it on both variants (the CPU clock is the same).
+  */
+ static void ad5x_bootargs(const char *root, int own, int extra_ok,
+-			  unsigned int wdt)
++			  unsigned int wdt, int safe)
+ {
+ 	char extra[256] = "";
+ 	char *args;
+ 	long len;
+ 
+-	if (own && extra_ok) {
++	if (own && extra_ok && !safe) {
+ 		/* as S00ad5x-kernel adds: cmdline-extra comes last */
+ 		ad5x_small(7, "/ad5x/kernel/cmdline-extra", extra,
+ 			   sizeof(extra));
+@@ -668,23 +727,23 @@ static void ad5x_bootargs(const char *root, int own, int extra_ok,
+ 	args = malloc(CONFIG_SYS_CBSIZE);
+ 	if (!args)
+ 		return;
+-	snprintf(args, CONFIG_SYS_CBSIZE, "%s root=%s%s ad5x.uboot=1",
+-		 env_get("args_spl"), root,
+-		 own ? " ad5x.kernel=own panic=10 loglevel=5" : "");
+-	/* an X2600 with 256 MiB has no second bank (mach/x2600.h) */
+-	if (x2600_ram_mib() < 512) {
+-		char *p = strstr(args, AD5X_ARGS_HIGH);
+-
+-		if (p)
+-			memmove(p, p + strlen(AD5X_ARGS_HIGH),
+-				strlen(p + strlen(AD5X_ARGS_HIGH)) + 1);
+-	}
++	snprintf(args, CONFIG_SYS_CBSIZE, "%s", env_get("args_spl") ?: "");
++	ad5x_drop_args(args, "mem=");
++	ad5x_drop_args(args, "rmem=");
++	ad5x_drop_args(args, "rtos_size=");
++	ad5x_drop_args(args, "lpj=");
++	snprintf(args + strlen(args), CONFIG_SYS_CBSIZE - strlen(args),
++		 " mem=256M@0x0%s lpj=11476992 root=%s%s ad5x.uboot=1%s",
++		 x2600_ram_mib() >= 512 ? AD5X_ARGS_HIGH : "", root,
++		 own ? " ad5x.kernel=own panic=10 loglevel=5" : "",
++		 safe ? " ad5x.safe=1" : "");
+ 	/* the watchdog runs into this kernel: for how long (information) */
+ 	if (wdt)
+ 		snprintf(args + strlen(args), CONFIG_SYS_CBSIZE - strlen(args),
+ 			 " ad5x.wdt=%u", wdt);
+-	snprintf(args + strlen(args), CONFIG_SYS_CBSIZE - strlen(args),
+-		 " %s", extra);
++	if (extra[0])
++		snprintf(args + strlen(args), CONFIG_SYS_CBSIZE - strlen(args),
++			 " %s", extra);
+ 	env_set("bootargs", args);
+ 	free(args);
+ }
+@@ -786,7 +845,7 @@ static int do_ad5x_boot(struct cmd_tbl *cmdtp, int flag, int argc,
+ 
+ 		if (d.target == AD5X_BOOT_RECOVERY) {
+ 			/* p1's Kiln 6.6, loaded and checked by ad5x_gather */
+-			ad5x_bootargs("/dev/mmcblk0p2", 1, 0, 0);
++			ad5x_bootargs("/dev/mmcblk0p2", 1, 0, 0, 0);
+ 			ad5x_ub_what = AD5X_UB_RECOVERY;
+ 			ad5x_ub_tries = 0;
+ 			ad5x_bootm(AD5X_LOAD_A);
+@@ -799,10 +858,13 @@ static int do_ad5x_boot(struct cmd_tbl *cmdtp, int flag, int argc,
+ 				"/usr/lib/ad5x/kernel-mainline/xImage" :
+ 				"/usr/lib/ad5x/kernel66/xImage";
+ 
+-			len = ad5x_load(4, path, AD5X_LOAD_MAIN,
+-					AD5X_KERNEL_MAX);
++			int safe = d.target == AD5X_BOOT_SAFE;
++
++			len = ad5x_load(AD5X_ROOT_PART(d.slot), path,
++					AD5X_LOAD_MAIN, AD5X_KERNEL_MAX);
+ 			if (len > 0) {
+-				ad5x_bootargs("/dev/mmcblk0p4", 1, 1, wdt);
++				ad5x_bootargs(AD5X_ROOT_DEV(d.slot), 1, 1, wdt,
++					      safe);
+ 				ad5x_wdt_s = wdt;
+ 				ad5x_ub_what = d.kernel == AD5X_K_73 ?
+ 					AD5X_UB_MAIN_73 : AD5X_UB_MAIN_66;
+@@ -812,11 +874,14 @@ static int do_ad5x_boot(struct cmd_tbl *cmdtp, int flag, int argc,
+ 				ad5x_ub_tries = 0;
+ 				ad5x_wdt_s = 0;
+ 			}
+-			printf("ad5x: %s didn't start\n", path);
++			printf("ad5x: slot %c's %s didn't start\n",
++			       d.slot == AD5X_SLOT_A ? 'A' : 'B', path);
+ 			if (d.kernel == AD5X_K_73)
+-				in.have_73 = 0;
++				in.slot[d.slot].have_73 = 0;
+ 			else
+-				in.have_66 = 0;
++				in.slot[d.slot].have_66 = 0;
++			in.slot[d.slot].main_os = in.slot[d.slot].have_66 ||
++						  in.slot[d.slot].have_73;
+ 		}
+ 		/* the state written counts this attempt: start from it */
+ 		in.state = d.state;
+diff --git a/board/flashforge/ad5x/bootlogic.c b/board/flashforge/ad5x/bootlogic.c
+index d6350ddd..a225eb43 100644
+--- a/board/flashforge/ad5x/bootlogic.c
++++ b/board/flashforge/ad5x/bootlogic.c
+@@ -39,9 +39,11 @@
+  *   (ad5x_wdt_seconds).
+  */
+ 
++#include <stdarg.h>
+ #include <stdio.h>
+ #ifdef __UBOOT__	/* U-Boot's build; not the host test's */
+ #include <linux/string.h>
++#include <vsprintf.h>
+ #else
+ #include <string.h>
+ #endif
+@@ -138,9 +140,10 @@ void ad5x_state_format(const struct ad5x_state *st, char *buf)
+ 
+ 	memset(buf, 0, AD5X_REC_SIZE);
+ 	n = snprintf(buf, AD5X_REC_SIZE,
+-		     STATE_MAGIC "tries %u\nkernel %s\nrelease %s\n",
+-		     st->tries, ad5x_kernel_name(st->kernel),
+-		     st->release[0] ? st->release : "-");
++		     STATE_MAGIC "tries %u\nkernel %s\nrelease %s\nslot %c\n"
++		     "safe %d\n", st->tries, ad5x_kernel_name(st->kernel),
++		     st->release[0] ? st->release : "-",
++		     st->slot == AD5X_SLOT_A ? 'a' : 'b', st->safe);
+ 	finish(buf, n);
+ }
+ 
+@@ -151,9 +154,12 @@ void ad5x_records_format(const struct ad5x_records *rec, char *buf)
+ 	memset(buf, 0, AD5X_REC_SIZE);
+ 	n = snprintf(buf, AD5X_REC_SIZE,
+ 		     RECORDS_MAGIC "failed-own %s\nfailed-mainline %s\n"
++		     "failed-own-a %s\nfailed-mainline-a %s\n"
+ 		     "fallbacks %u\nreason %s\n",
+ 		     rec->failed_own[0] ? rec->failed_own : "-",
+ 		     rec->failed_mainline[0] ? rec->failed_mainline : "-",
++		     rec->failed_own_a[0] ? rec->failed_own_a : "-",
++		     rec->failed_mainline_a[0] ? rec->failed_mainline_a : "-",
+ 		     rec->fallbacks, rec->reason[0] ? rec->reason : "-");
+ 	finish(buf, n);
+ }
+@@ -221,15 +227,25 @@ static void state_kv(void *obj, const char *key, const char *val)
+ 		st->kernel = kernel_from_name(val);
+ 	else if (!strcmp(key, "release"))
+ 		copy_val(st->release, val, sizeof(st->release));
++	else if (!strcmp(key, "slot"))
++		st->slot = val[0] == 'a' ? AD5X_SLOT_A : AD5X_SLOT_B;
++	else if (!strcmp(key, "safe"))
++		st->safe = parse_uint(val) != 0;
+ }
+ 
+ static void records_kv(void *obj, const char *key, const char *val)
+ {
+ 	struct ad5x_records *rec = obj;
+ 
+-	if (!strcmp(key, "failed-own"))
++	if (!strcmp(key, "failed-own") || !strcmp(key, "failed-own-b"))
+ 		copy_val(rec->failed_own, val, sizeof(rec->failed_own));
+-	else if (!strcmp(key, "failed-mainline"))
++	else if (!strcmp(key, "failed-own-a"))
++		copy_val(rec->failed_own_a, val, sizeof(rec->failed_own_a));
++	else if (!strcmp(key, "failed-mainline-a"))
++		copy_val(rec->failed_mainline_a, val,
++			 sizeof(rec->failed_mainline_a));
++	else if (!strcmp(key, "failed-mainline") ||
++		 !strcmp(key, "failed-mainline-b"))
+ 		copy_val(rec->failed_mainline, val,
+ 			 sizeof(rec->failed_mainline));
+ 	else if (!strcmp(key, "fallbacks"))
+@@ -242,6 +258,7 @@ static void records_kv(void *obj, const char *key, const char *val)
+ int ad5x_state_parse(const char *buf, struct ad5x_state *st)
+ {
+ 	memset(st, 0, sizeof(*st));
++	st->slot = AD5X_SLOT_B;	/* an older build's state: the main OS in B */
+ 	if (parse(buf, STATE_MAGIC, state_kv, st)) {
+ 		memset(st, 0, sizeof(*st));
+ 		return -1;
+@@ -279,83 +296,134 @@ static void set_reason(struct ad5x_decision *out, const char *why)
+ 	out->rec_changed = 1;
+ }
+ 
+-static enum ad5x_kernel pick_kernel(const struct ad5x_inputs *in,
+-				    const struct ad5x_records *rec)
++/* a slot's failure records */
++static char *rec_own(struct ad5x_records *rec, int s)
+ {
+-	if (in->have_73 && in->data_ok && in->mainline_wanted &&
+-	    !in->after_install && !same(in->rel_73, rec->failed_mainline) &&
+-	    !same(in->rel_73, in->s00_failed_mainline))
++	return s == AD5X_SLOT_A ? rec->failed_own_a : rec->failed_own;
++}
++
++static char *rec_main(struct ad5x_records *rec, int s)
++{
++	return s == AD5X_SLOT_A ? rec->failed_mainline_a :
++				  rec->failed_mainline;
++}
++
++/* the kernel a start of slot @s uses: 7.3 if wanted and not failed, else 6.6 */
++static enum ad5x_kernel pick_kernel(const struct ad5x_inputs *in, int s,
++				    struct ad5x_records *rec)
++{
++	const struct ad5x_slot *sl = &in->slot[s];
++
++	if (sl->have_73 && in->data_ok && in->mainline_wanted &&
++	    !in->after_install && !same(sl->rel_73, rec_main(rec, s)) &&
++	    !same(sl->rel_73, in->s00_failed_mainline))
+ 		return AD5X_K_73;
+-	if (in->have_66 && !same(in->rel_66, rec->failed_own) &&
+-	    !same(in->rel_66, in->s00_failed))
++	if (sl->have_66 && !same(sl->rel_66, rec_own(rec, s)) &&
++	    !same(sl->rel_66, in->s00_failed))
+ 		return AD5X_K_66;
+ 	return AD5X_K_NONE;
+ }
+ 
+-/*
+- * Slot A can't take a fallback: the main OS's own kernel whatever the
+- * records say (6.6, the default, else 7.3); none only without either.
+- */
+-static enum ad5x_kernel any_kernel(const struct ad5x_inputs *in)
++/* any kernel of @sl, failed or not (safe mode, last resort): 6.6 first */
++static enum ad5x_kernel any_kernel(const struct ad5x_slot *sl)
+ {
+-	if (in->have_66)
++	if (sl->have_66)
+ 		return AD5X_K_66;
+-	if (in->have_73)
++	if (sl->have_73)
+ 		return AD5X_K_73;
+ 	return AD5X_K_NONE;
+ }
+ 
+-static const char *release_of(const struct ad5x_inputs *in,
+-			      enum ad5x_kernel k)
++static const char *release_of(const struct ad5x_slot *sl, enum ad5x_kernel k)
+ {
+ 	if (k == AD5X_K_73)
+-		return in->rel_73;
++		return sl->rel_73;
+ 	if (k == AD5X_K_66)
+-		return in->rel_66;
++		return sl->rel_66;
+ 	return "";
+ }
+ 
++static char slot_name(int s)
++{
++	return s == AD5X_SLOT_A ? 'A' : 'B';
++}
++
+ static const char *short_name(enum ad5x_kernel k)
+ {
+ 	return k == AD5X_K_73 ? "7.3" : k == AD5X_K_66 ? "6.6" : "none";
+ }
+ 
+ /* append to a reason text, cut at its size */
+-static void add(char *why, const char *fmt, const char *a)
++static void add(char *why, const char *fmt, ...)
+ {
+ 	unsigned int n = strlen(why);
++	va_list ap;
++
++	va_start(ap, fmt);
++	vsnprintf(why + n, AD5X_REASON_LEN - n, fmt, ap);
++	va_end(ap);
++}
++
++/* the decision for a start of the main OS in slot @s with kernel @k */
++static void start_main(const struct ad5x_inputs *in,
++		       struct ad5x_decision *out, int s, enum ad5x_kernel k,
++		       unsigned int tries, int safe)
++{
++	const struct ad5x_slot *sl = &in->slot[s];
+ 
+-	snprintf(why + n, AD5X_REASON_LEN - n, fmt, a);
++	if (k != in->state.kernel || s != in->state.slot ||
++	    safe != in->state.safe)
++		tries = 0;
++	out->state.tries = tries < AD5X_MAX_TRIES ? tries + 1 : AD5X_MAX_TRIES;
++	out->state.kernel = k;
++	out->state.slot = s;
++	out->state.safe = safe;
++	ad5x_release_clean(out->state.release, release_of(sl, k),
++			   AD5X_REL_LEN);
++	out->state_changed = 1;
++	out->target = safe ? AD5X_BOOT_SAFE : AD5X_BOOT_MAIN;
++	out->slot = s;
++	out->kernel = k;
++	snprintf(out->msg, sizeof(out->msg), "%s, slot %c, kernel %s (%s), "
++		 "start %u", safe ? "SAFE MODE" : "main OS", slot_name(s),
++		 ad5x_kernel_name(k), out->state.release, out->state.tries);
+ }
+ 
+ void ad5x_decide(const struct ad5x_inputs *in, struct ad5x_decision *out)
+ {
+ 	const struct ad5x_state *st = &in->state;
+ 	char why[AD5X_REASON_LEN] = "";
++	int f = in->flag_b ? AD5X_SLOT_B : AD5X_SLOT_A, o, s;
+ 	enum ad5x_kernel k;
+-	unsigned int tries;
+-	int to_recovery = 0, failed = 0;
++	unsigned int tries = st->tries;
++	int failed = 0;
+ 
+ 	memset(out, 0, sizeof(*out));
+ 	out->state = *st;
+ 	out->rec = in->rec;
+ 
+-	/* a record of another release than the installed one: an update */
+-	if (out->rec.failed_own[0] &&
+-	    !(in->have_66 && same(out->rec.failed_own, in->rel_66))) {
+-		out->rec.failed_own[0] = '\0';
+-		out->rec_changed = 1;
+-	}
+-	if (out->rec.failed_mainline[0] &&
+-	    !(in->have_73 && same(out->rec.failed_mainline, in->rel_73))) {
+-		out->rec.failed_mainline[0] = '\0';
+-		out->rec_changed = 1;
++	/* a slot's record of a release it no longer holds: an update */
++	for (s = 0; s < 2; s++) {
++		if (rec_own(&out->rec, s)[0] &&
++		    !(in->slot[s].have_66 &&
++		      same(rec_own(&out->rec, s), in->slot[s].rel_66))) {
++			rec_own(&out->rec, s)[0] = '\0';
++			out->rec_changed = 1;
++		}
++		if (rec_main(&out->rec, s)[0] &&
++		    !(in->slot[s].have_73 &&
++		      same(rec_main(&out->rec, s), in->slot[s].rel_73))) {
++			rec_main(&out->rec, s)[0] = '\0';
++			out->rec_changed = 1;
++		}
+ 	}
+ 
+-	if (!in->flag_b) {
++	/* Kiln OS 1.x: the flag on slot A means its recovery OS */
++	if (f == AD5X_SLOT_A && !in->slot[AD5X_SLOT_A].main_os) {
+ 		if (in->slot_a_ok) {
+ 			if (st->tries || st->kernel) {
+ 				memset(&out->state, 0, sizeof(out->state));
++				out->state.slot = AD5X_SLOT_B;
+ 				out->state_changed = 1;
+ 			}
+ 			out->target = AD5X_BOOT_RECOVERY;
+@@ -363,102 +431,117 @@ void ad5x_decide(const struct ad5x_inputs *in, struct ad5x_decision *out)
+ 				 "boot flag on slot A: recovery OS");
+ 			return;
+ 		}
+-		set_reason(out, "slot A (recovery) not startable: kernel or "
+-			   "root check failed; main OS instead");
+-		out->write_flag = -1;	/* the flag to slot B */
++		set_reason(out, "slot A has no main OS and no recovery OS: "
++			   "slot B");
++		out->write_flag = -1;
++		f = AD5X_SLOT_B;
+ 	}
++	o = 1 - f;
+ 
+-	/* the last start of the main OS didn't finish */
+-	tries = st->tries;
+-	if (tries) {
++	/* the last start in the flagged slot didn't finish */
++	if (tries && st->slot == f) {
+ 		const char *rel = st->release[0] ? st->release :
+-				  release_of(in, st->kernel);
++				  release_of(&in->slot[f], st->kernel);
+ 		int limit = in->after_install ? 1 : 2;
+ 
+-		switch (st->kernel) {
+-		case AD5X_K_73:
+-			ad5x_release_clean(out->rec.failed_mainline, rel,
++		if (st->safe) {
++			if (tries >= (unsigned int)limit) {
++				snprintf(out->msg, sizeof(out->msg), "safe mode "
++					 "did not finish starting, %u in a row: "
++					 "stopped", tries);
++				set_reason(out, out->msg);
++				memset(&out->state, 0, sizeof(out->state));
++				out->state.slot = f;
++				out->state_changed = 1;
++				out->safe_fail = 1;
++				out->target = AD5X_BOOT_PROMPT;
++				return;
++			}
++		} else if (st->kernel == AD5X_K_73) {
++			ad5x_release_clean(rec_main(&out->rec, f), rel,
+ 					   AD5X_REL_LEN);
+-			snprintf(why, sizeof(why), "mainline kernel %s did not "
+-				 "finish starting", rel);
++			snprintf(why, sizeof(why), "slot %c: mainline kernel %s "
++				 "did not finish starting", slot_name(f), rel);
+ 			failed = 1;
+ 			tries = 0;
+-			break;
+-		case AD5X_K_66:
+-			if (tries < (unsigned int)limit)
+-				break;
+-			ad5x_release_clean(out->rec.failed_own, rel,
+-					   AD5X_REL_LEN);
+-			snprintf(why, sizeof(why), "own kernel %s did not finish "
+-				 "starting, %u in a row", rel, tries);
++		} else if (tries >= (unsigned int)limit) {
++			if (st->kernel == AD5X_K_66)
++				ad5x_release_clean(rec_own(&out->rec, f), rel,
++						   AD5X_REL_LEN);
++			snprintf(why, sizeof(why), "slot %c: own kernel %s did "
++				 "not finish starting, %u in a row",
++				 slot_name(f), rel, tries);
+ 			failed = 1;
+ 			tries = 0;
+-			break;
+-		default:	/* not known (an older build's "stock") */
+-			if (tries < (unsigned int)limit)
+-				break;
+-			snprintf(why, sizeof(why), "main OS did not finish "
+-				 "starting, %u in a row", tries);
+-			to_recovery = 1;
+-			break;
+ 		}
++	} else if (st->slot != f) {
++		tries = 0;
+ 	}
+ 
+-	k = to_recovery ? AD5X_K_NONE : pick_kernel(in, &out->rec);
+-	if (k == AD5X_K_NONE && !to_recovery) {
+-		if (!failed)
+-			snprintf(why, sizeof(why), "no kernel for the main OS");
+-		to_recovery = 1;
+-	}
+-	if (!to_recovery && failed) {
+-		/* the other kernel of Kiln's: "6.6 until ad5x-kernel retry" */
+-		add(why, "; %s until ad5x-kernel retry", short_name(k));
+-		set_reason(out, why);
+-	}
+-
+-	if (to_recovery) {
+-		add(why, "%s", ": recovery OS");
+-		if (in->flag_b && in->slot_a_ok) {
+-			set_reason(out, why);
+-			memset(&out->state, 0, sizeof(out->state));
+-			out->state_changed = 1;
+-			out->write_flag = 1;
+-			out->target = AD5X_BOOT_RECOVERY;
+-			snprintf(out->msg, sizeof(out->msg), "%s", why);
++	/* a safe-mode start that finished leaves the next one in safe mode
++	 * only while nothing else can start: tried again below */
++
++	/* 1. the flagged slot */
++	if (in->slot[f].main_os && !(st->safe && tries)) {
++		k = pick_kernel(in, f, &out->rec);
++		if (k != AD5X_K_NONE) {
++			if (failed) {
++				add(why, "; slot %c on %s until ad5x-kernel "
++				    "retry", slot_name(f), short_name(k));
++				set_reason(out, why);
++			}
++			start_main(in, out, f, k, tries, 0);
+ 			return;
+ 		}
+-		/*
+-		 * Slot A isn't startable: the main OS again, never a loop on
+-		 * slot A, with its own kernel whatever the records say: a
+-		 * kernel recorded as failed may still start, nothing else can
+-		 */
+-		k = any_kernel(in);
+-		if (k == AD5X_K_NONE) {
+-			set_reason(out, "nothing to start: no kernel for the "
+-				   "main OS, slot A not startable");
+-			out->write_flag = 0;
+-			out->target = AD5X_BOOT_PROMPT;
+-			snprintf(out->msg, sizeof(out->msg), "%s",
+-				 out->rec.reason);
++	}
++	if (!failed && !why[0])
++		snprintf(why, sizeof(why), "slot %c: no kernel left to start",
++			 slot_name(f));
++
++	/* 2. the other slot, which becomes the flagged one */
++	if (in->slot[o].main_os) {
++		k = pick_kernel(in, o, &out->rec);
++		if (k != AD5X_K_NONE) {
++			add(why, ": slot %c (boot flag moved)", slot_name(o));
++			set_reason(out, why);
++			out->write_flag = o == AD5X_SLOT_A ? 1 : -1;
++			start_main(in, out, o, k, 0, 0);
+ 			return;
+ 		}
+-		add(why, "; slot A not startable: main OS again on %s",
+-		    short_name(k));
++	}
++
++	/* 3. Kiln OS 1.x's recovery OS in slot A */
++	if (!in->slot[AD5X_SLOT_A].main_os && in->slot_a_ok) {
++		add(why, "%s", ": recovery OS");
+ 		set_reason(out, why);
++		memset(&out->state, 0, sizeof(out->state));
++		out->state.slot = AD5X_SLOT_B;
++		out->state_changed = 1;
++		out->write_flag = 1;
++		out->target = AD5X_BOOT_RECOVERY;
++		snprintf(out->msg, sizeof(out->msg), "%s", why);
++		return;
+ 	}
+ 
+-	if (k != st->kernel)
+-		tries = 0;
+-	out->state.tries = tries < AD5X_MAX_TRIES ? tries + 1 : AD5X_MAX_TRIES;
+-	out->state.kernel = k;
+-	ad5x_release_clean(out->state.release, release_of(in, k),
+-			   AD5X_REL_LEN);
+-	out->state_changed = 1;
+-	out->target = AD5X_BOOT_MAIN;
+-	out->kernel = k;
+-	snprintf(out->msg, sizeof(out->msg), "main OS, kernel %s (%s), "
+-		 "start %u", ad5x_kernel_name(k), out->state.release,
+-		 out->state.tries);
++	/* 4. safe mode: the flagged slot's kernel (6.6 first), else the other's */
++	s = f;
++	k = in->slot[f].main_os ? any_kernel(&in->slot[f]) : AD5X_K_NONE;
++	if (k == AD5X_K_NONE && in->slot[o].main_os) {
++		s = o;
++		k = any_kernel(&in->slot[o]);
++	}
++	if (k == AD5X_K_NONE) {
++		set_reason(out, "nothing to start: no main OS kernel in either "
++			   "slot");
++		out->target = AD5X_BOOT_PROMPT;
++		snprintf(out->msg, sizeof(out->msg), "%s", out->rec.reason);
++		return;
++	}
++	add(why, ": safe mode, slot %c", slot_name(s));
++	set_reason(out, why);
++	if (s != f)
++		out->write_flag = s == AD5X_SLOT_A ? 1 : -1;
++	start_main(in, out, s, k, st->safe && st->slot == s ? tries : 0, 1);
+ }
+ 
+ unsigned int ad5x_wdt_seconds(const struct ad5x_inputs *in,
+@@ -467,7 +550,7 @@ unsigned int ad5x_wdt_seconds(const struct ad5x_inputs *in,
+ {
+ 	if (!wdt_os || d->target != AD5X_BOOT_MAIN ||
+ 	    (d->kernel != AD5X_K_66 && d->kernel != AD5X_K_73) ||
+-	    !in->wdt_capable || in->wdt_off)
++	    !in->slot[d->slot].wdt_capable || in->wdt_off)
+ 		return 0;
+ 	return wdt_os > AD5X_WDT_MAX_S ? AD5X_WDT_MAX_S : wdt_os;
+ }
+diff --git a/board/flashforge/ad5x/bootlogic.h b/board/flashforge/ad5x/bootlogic.h
+index 98aabf50..4721e747 100644
+--- a/board/flashforge/ad5x/bootlogic.h
++++ b/board/flashforge/ad5x/bootlogic.h
+@@ -45,20 +45,46 @@ enum ad5x_kernel {
+ };
+ 
+ enum ad5x_target {
+-	AD5X_BOOT_MAIN,		/* slot B, root=/dev/mmcblk0p4, kernel below */
++	AD5X_BOOT_MAIN,		/* the main OS in slot .slot, kernel below */
+ 	AD5X_BOOT_RECOVERY,	/* slot A: p1's uImage, root=/dev/mmcblk0p2 */
++	AD5X_BOOT_SAFE,		/* the main OS in slot .slot, safe mode */
+ 	AD5X_BOOT_PROMPT,	/* nothing startable: give up (or the prompt) */
+ };
+ 
++/*
++ * The system slots: A (kernel p1, rootfs p2) and B (kernel2 p3, rootfs2
++ * p4). A slot holds the main OS when its rootfs has Kiln's kernels
++ * (/usr/lib/ad5x/kernel66, kernel-mainline): U-Boot starts them from
++ * there. Kiln OS 1.x keeps its recovery OS in slot A (a rootfs without
++ * kernels, p1's uImage): "legacy recovery", still started as before.
++ */
++#define AD5X_SLOT_A		0
++#define AD5X_SLOT_B		1
++
++struct ad5x_slot {
++	int main_os;		/* rootfs with Kiln's kernels (have_66/73) */
++	int have_66;
++	char rel_66[AD5X_REL_LEN];
++	int have_73;
++	char rel_73[AD5X_REL_LEN];
++	int wdt_capable;	/* /usr/lib/ad5x/watchdog.conf */
++};
++
+ struct ad5x_state {
+ 	unsigned int tries;		/* unconfirmed starts in a row */
+ 	enum ad5x_kernel kernel;	/* kernel of the last of them */
+ 	char release[AD5X_REL_LEN];	/* its release */
++	int slot;			/* their slot (no line: B) */
++	int safe;			/* they were safe-mode starts */
+ };
+ 
+ struct ad5x_records {
++	/* slot B's (the 1.x names, "failed-own", "failed-mainline") */
+ 	char failed_own[AD5X_REL_LEN];		/* 6.6 release that failed */
+ 	char failed_mainline[AD5X_REL_LEN];	/* 7.3 release that failed */
++	/* slot A's ("failed-own-a", "failed-mainline-a") */
++	char failed_own_a[AD5X_REL_LEN];
++	char failed_mainline_a[AD5X_REL_LEN];
+ 	char reason[AD5X_REASON_LEN];		/* why the last fallback */
+ 	unsigned int fallbacks;			/* fallbacks counted */
+ };
+@@ -73,26 +99,24 @@ struct ad5x_inputs {
+ 	int after_install;	/* /data/ad5x/install/recovery.squashfs */
+ 	char s00_failed[AD5X_REL_LEN];		/* line 1 of kernel/failed */
+ 	char s00_failed_mainline[AD5X_REL_LEN];	/* ... failed-mainline */
+-	/* rootfs2 (squashfs p4) */
+-	int have_66;
+-	char rel_66[AD5X_REL_LEN];
+-	int have_73;
+-	char rel_73[AD5X_REL_LEN];
++	/* each slot's rootfs (squashfs p2, p4) */
++	struct ad5x_slot slot[2];
+ 	/*
+ 	 * slot A startable: p1 a Linux uImage for MIPS with good header and
+ 	 * data CRCs that isn't a U-Boot and is Kiln's 6.6
+ 	 * (ad5x_slot_a_kernel_ok), and p2 starting with "hsqs"
+ 	 */
+-	int slot_a_ok;
++	int slot_a_ok;		/* used only when slot A isn't a main OS */
+ 	/* the watchdog (ad5x_wdt_seconds) */
+ 	int wdt_off;		/* /data/ad5x/watchdog.disable exists */
+-	int wdt_capable;	/* rootfs2 has /usr/lib/ad5x/watchdog.conf */
+ };
+ 
+ struct ad5x_decision {
+ 	enum ad5x_target target;
+-	enum ad5x_kernel kernel;	/* for AD5X_BOOT_MAIN */
++	int slot;			/* for AD5X_BOOT_MAIN and _SAFE */
++	enum ad5x_kernel kernel;	/* for AD5X_BOOT_MAIN and _SAFE */
+ 	int write_flag;		/* first: 1 flag to slot A, -1 to B, 0 leave */
++	int safe_fail;		/* safe mode failed too: the prompt */
+ 	struct ad5x_state state;	/* to write before the start */
+ 	struct ad5x_records rec;	/* to write before the start */
+ 	int state_changed, rec_changed;
