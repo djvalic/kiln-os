@@ -54,6 +54,8 @@ starts no Flashforge kernel at all.
 | `patches/0037` | AD5X: the MAC and its IP101G in the device tree, the address from usershare `/MAC`, `dhcp`/`ping`/`mii`/`wget`/`hash` |
 | `patches/0038` | network rescue: a record in the first MiB's last sector (`ad5x_emmc_image.py --rescue`) makes U-Boot fetch, check and write the rest of the eMMC over HTTP; U-Boot proper ends one sector earlier |
 | `patches/0039` | netconsole: U-Boot's console over UDP 6666 when `/data/ad5x/netconsole` exists (the PC's IP, or empty for the LAN) or `ad5x_nc` is set; always in the network rescue |
+| `patches/0040` | cache: invalidating a range writes the partly covered first and last L1/L2 lines back first, as Ingenic's `mips_sc_inv()`, so data sharing those lines isn't lost |
+| `patches/0041` | eMMC by ADMA2, as Ingenic's driver and Linux: PIO reads returned wrong words while the Ethernet DMA ran (netconsole); physical addresses in the descriptors, none across a 128 MiB boundary |
 | `USB-BOOT.md` | starting the SPL from the boot ROM over J28 (phase 4): wiring, soft entry and K4, the cold-start test; the eMMC as a USB disk (`run-uboot`) |
 | `build.sh` | fetch v2026.10 (sha256-pinned), patch, build, check; `--container` for the laptop |
 | `Containerfile` | the builder's pinned Debian base + Debian's `gcc-mipsel-linux-gnu` |

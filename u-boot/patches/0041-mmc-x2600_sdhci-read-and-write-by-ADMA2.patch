@@ -1,0 +1,109 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Tue, 17 Nov 2026 12:17:15 -0700
+Subject: [PATCH] mmc: x2600_sdhci: read and write by ADMA2
+
+PIO reads lose data while the Ethernet MAC's DMA runs. With netconsole
+on, 4 of 20 reads of 5.8 MB came back with one wrong word each: the
+data port's value from four reads later, while the bus CRC passed and
+the read reported success. Netconsole off, 0 of 12. Kiln OS failed to
+start from it: U-Boot's kernel loads were wrong.
+
+Read and write by ADMA2, as Ingenic's SDK driver and Linux do. The
+descriptors need the physical address (dma_map_single() returns the
+CPU's KSEG0 or KSEG1 address on MIPS), and none may cross a 128 MiB
+boundary (the SDK's ingenic_sdhci_adma_write_desc()): such a one is
+split, so the table gets one entry more than the core's.
+
+With netconsole on, 0 of 54 reads wrong, and 32 MiB written three times
+to an unused area read back correct. Speed is unchanged: 32 MiB read in
+1.39 s and written in 1.42 s, the 4-bit bus at 50 MHz.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ configs/ad5x_defconfig    |  1 +
+ drivers/mmc/x2600_sdhci.c | 38 ++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 39 insertions(+)
+
+diff --git a/configs/ad5x_defconfig b/configs/ad5x_defconfig
+index f71cade3..60278b19 100644
+--- a/configs/ad5x_defconfig
++++ b/configs/ad5x_defconfig
+@@ -95,3 +95,4 @@ CONFIG_CMD_WGET=y
+ CONFIG_PROT_TCP_SACK=y
+ CONFIG_NETCONSOLE=y
+ CONFIG_CONSOLE_MUX=y
++CONFIG_MMC_SDHCI_ADMA=y
+diff --git a/drivers/mmc/x2600_sdhci.c b/drivers/mmc/x2600_sdhci.c
+index 0fcab9d9..15bc05d4 100644
+--- a/drivers/mmc/x2600_sdhci.c
++++ b/drivers/mmc/x2600_sdhci.c
+@@ -7,10 +7,13 @@
+  */
+ 
+ #include <dm.h>
++#include <malloc.h>
+ #include <sdhci.h>
++#include <asm/cache.h>
+ #include <asm/io.h>
+ #include <linux/bitops.h>
+ #include <linux/delay.h>
++#include <linux/sizes.h>
+ 
+ #define EMMC_MIN_FREQ		400000
+ 
+@@ -138,9 +141,36 @@ static void x2600_sdhci_set_clock(struct sdhci_host *host, u32 div)
+ 		x2600_msc_set_rate(plat, host->mmc->clock);
+ }
+ 
++#if CONFIG_IS_ENABLED(MMC_SDHCI_ADMA)
++/*
++ * An ADMA2 descriptor. The core hands over the buffer's CPU address
++ * (dma_map_single() returns it as it is): on MIPS that's KSEG0 or KSEG1,
++ * the DMA needs the physical one. And as Ingenic's SDK driver
++ * (ingenic_sdhci_adma_write_desc()), no descriptor may cross a 128 MiB
++ * boundary: one that would is split in two.
++ */
++static void x2600_adma_write_desc(struct sdhci_host *host, void **desc,
++				  dma_addr_t addr, int len, bool end)
++{
++	ulong pa = virt_to_phys((void *)(uintptr_t)addr);
++	ulong first;
++
++	if (len && (pa ^ (pa + len - 1)) & ~(ulong)(SZ_128M - 1)) {
++		first = SZ_128M - (pa & (SZ_128M - 1));
++		sdhci_adma_write_desc(host, desc, pa, first, false);
++		pa += first;
++		len -= first;
++	}
++	sdhci_adma_write_desc(host, desc, pa, len, end);
++}
++#endif
++
+ static const struct sdhci_ops x2600_sdhci_ops = {
+ 	.set_clock	= x2600_sdhci_set_clock,
+ 	.set_ios_post	= x2600_sdhci_set_ios_post,
++#if CONFIG_IS_ENABLED(MMC_SDHCI_ADMA)
++	.adma_write_desc = x2600_adma_write_desc,
++#endif
+ };
+ 
+ #if CONFIG_IS_ENABLED(DM_MMC)
+@@ -161,6 +191,14 @@ static int x2600_sdhci_probe(struct udevice *dev)
+ 	host->mmc->dev = dev;
+ 	upriv->mmc = host->mmc;
+ 	host->ops = &x2600_sdhci_ops;
++#if CONFIG_IS_ENABLED(MMC_SDHCI_ADMA)
++	/* one descriptor more than the core's table: a 128 MiB split */
++	host->adma_desc_table = memalign(ARCH_DMA_MINALIGN,
++					 ADMA_TABLE_SZ + ADMA_DESC_LEN);
++	if (!host->adma_desc_table)
++		return -ENOMEM;
++	host->adma_addr = virt_to_phys(host->adma_desc_table);
++#endif
+ 
+ 	ret = sdhci_setup_cfg(&plat->cfg, host, host->max_clk, EMMC_MIN_FREQ);
+ 	if (ret)
+-- 
+2.43.0
+

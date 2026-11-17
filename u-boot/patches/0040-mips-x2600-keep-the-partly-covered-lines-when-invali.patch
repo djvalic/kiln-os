@@ -1,0 +1,57 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Tue, 17 Nov 2026 12:17:15 -0700
+Subject: [PATCH] mips: x2600: keep the partly covered lines when invalidating
+ a range
+
+invalidate_dcache_range() invalidated every line the range touches. A
+line only partly inside it holds other data too, maybe dirty, and that
+was lost. Write the first and last lines back first when they are
+partial, L1 then L2, as Ingenic's mips_sc_inv() and Linux's
+dma_cache_inv() do. Aligned ranges, all U-Boot's DMA buffers until
+now, are unchanged.
+
+Needed once the MSC reads by DMA: a file system read can target any
+buffer. Checked with reads to buffers 2, 4, 0x20 and 0x3c bytes past a
+line start, a dirty word just before each: the word survives.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ arch/mips/mach-jz47xx/x2600/cache.c | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/arch/mips/mach-jz47xx/x2600/cache.c b/arch/mips/mach-jz47xx/x2600/cache.c
+index 74137ad0..07f55aa9 100644
+--- a/arch/mips/mach-jz47xx/x2600/cache.c
++++ b/arch/mips/mach-jz47xx/x2600/cache.c
+@@ -77,9 +77,27 @@ void flush_dcache_range(ulong start_addr, ulong stop)
+ 	sync();
+ }
+ 
++/*
++ * A line only partly inside [start, stop) holds other data too, maybe
++ * dirty: it is written back first, as Ingenic's mips_sc_inv() and Linux's
++ * dma_cache_inv() do, or that data is lost.
++ */
+ void invalidate_dcache_range(ulong start_addr, ulong stop)
+ {
++	ulong l1 = l1d_line(), l2 = l2_line();
++
++	if (start_addr >= stop)
++		return;
++	if (start_addr & (l1 - 1))
++		mips_cache(HIT_WRITEBACK_INV_D, (void *)(start_addr & ~(l1 - 1)));
++	if (stop & (l1 - 1))
++		mips_cache(HIT_WRITEBACK_INV_D, (void *)(stop & ~(l1 - 1)));
+ 	l2_hit_war();
++	if (l2 && (start_addr & (l2 - 1)))
++		mips_cache(HIT_WRITEBACK_INV_SD,
++			   (void *)(start_addr & ~(l2 - 1)));
++	if (l2 && (stop & (l2 - 1)))
++		mips_cache(HIT_WRITEBACK_INV_SD, (void *)(stop & ~(l2 - 1)));
+ 	range(start_addr, stop, l2_line(), HIT_INVALIDATE_SD);
+ 	range(start_addr, stop, l1d_line(), HIT_INVALIDATE_D);
+ 	sync();
+-- 
+2.43.0
+
