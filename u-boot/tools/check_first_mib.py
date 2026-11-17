@@ -26,13 +26,18 @@ and the candidate's SPL range is a well-formed boot ROM image:
   * it is this build's SPL: with --spl, the same bytes as the build's
     spl-mmc.img (its params copy as the unit's, which first-mib keeps);
     with --spl-sha256, that image's SHA-256;
-  * the board is the one Kiln's SPL was made for: the unit's stock SPL
-    has the DDR3 table "W634GU6QG-11" with the same values as the
-    candidate's (the 188 bytes from the name to remap[], sdram.c), and
+  * the board is one Kiln's SPL was made for: its DDR tables (one per
+    X2600 variant, sdram.c) are matched to the unit's stock SPL's by DDR
+    ID. At least one must be in the stock SPL, and each that is must
+    have the same values from the ID to remap[] (156 bytes; the names
+    differ between stock builds: "W634GU6QG-11" in the Sep 2024 00190
+    one, "X2600H-DDR3L" and the others in the Nov 2025 00437 one), but
+    for auto self-refresh, which the X2600H table keeps off as 00190
+    does and 00437 turns on (a note, not a problem). And the stock SPL
     builds every value of the candidate's "KILNCLK" record (PLLs and
     CPCCR) as an immediate (lui, or lui + addiu/ori). Another board build
-    (the Nov 2025 00437 one, say) is refused until its own dump has been
-    looked at and Kiln's SPL made for it.
+    is refused until its own dump has been looked at and Kiln's SPL made
+    for it.
 With --uboot (u-boot-emmc.img; the candidate is first-mib-uboot.img), it
 may also differ in U-Boot proper's whole sectors from 0xA400, which must
 hold exactly that image (the rest of its last sector the unit's bytes),
@@ -60,9 +65,11 @@ LEN0 = (0x4, 0x8)
 HDR_COUNT = (img.SPL_EMMC_OFF + 4, img.SPL_EMMC_OFF + 8)
 PARAMS = img.SPL_EMMC_OFF + img.PARAMS_OFF
 CODE = img.SPL_EMMC_OFF + img.HEADER_SIZE
-# sdram.c: struct x2600_ddr_params from the name to remap[]
-DDR_NAME = b"W634GU6QG-11\0"
+# sdram.c: struct x2600_ddr_params: name[32], then id, type, freq, ...;
+# compared from the id to the end of remap[]
+DDR_NAME_LEN = 32
 DDR_TABLE_LEN = 188
+DDR_AUTOSR_EN = 96          # u32 ddrc_autosr_en, from the table's start
 # sdram.c: x2600_clk, the values the clock setup writes
 CLK_TAG = b"KILNCLK\0"
 CLK_FIELDS = ("CPCCR (safe dividers)", "CPCCR (dividers)", "CPCCR (sources)",
@@ -103,6 +110,31 @@ def mips_immediates(code):
     return out
 
 
+NOTES = []
+MATCHED = []
+
+
+def ddr_tables(code):
+    """The DDR tables in an SPL's code by DDR ID: {id: (name, the bytes
+    from the id to the end of remap[])}. A table: a 32-byte name (4 or
+    more printable characters, zero padded), then an id below 0x100, the
+    type (0 DDR3, 4 DDR2) and a frequency of 100-1200 MHz."""
+    out = {}
+    for o in range(0, len(code) - DDR_TABLE_LEN + 1):  # packed: any offset
+        name = code[o:o + DDR_NAME_LEN]
+        n = name.find(b"\0")
+        if n < 4 or any(name[n:]) or \
+                not all(0x20 < c < 0x7f for c in name[:n]):
+            continue
+        idv, typ, freq = struct.unpack_from("<3I", code, o + DDR_NAME_LEN)
+        if idv > 0xff or typ not in (0, 4) or \
+                not 100000000 <= freq <= 1200000000:
+            continue
+        out.setdefault(idv, (name[:n].decode(),
+                             code[o + DDR_NAME_LEN:o + DDR_TABLE_LEN]))
+    return out
+
+
 def board_values(cand, unit, loaded_end):
     """Problems with the candidate's DDR table and clock record against
     the unit's stock SPL (Kiln's SPL is made for that board build)."""
@@ -111,25 +143,31 @@ def board_values(cand, unit, loaded_end):
     stock = unit[CODE:min(img.SPL_EMMC_OFF + ucount * img.BLOCK, SPL[1])]
     ours = cand[CODE:loaded_end]
 
-    n_stock, n_ours = stock.count(DDR_NAME), ours.count(DDR_NAME)
-    if n_stock != 1:
-        errs.append("the unit's stock SPL has %s DDR table %s (another "
-                    "board build? make Kiln's SPL from its own dump first)"
-                    % ("no" if not n_stock else "more than one",
-                       DDR_NAME[:-1].decode()))
-    if n_ours != 1:
-        errs.append("the candidate's SPL has %s DDR table %s" %
-                    ("no" if not n_ours else "more than one",
-                     DDR_NAME[:-1].decode()))
-    if n_stock == 1 and n_ours == 1:
-        i, j = stock.index(DDR_NAME), ours.index(DDR_NAME)
-        a, b = stock[i:i + DDR_TABLE_LEN], ours[j:j + DDR_TABLE_LEN]
-        if a != b:
-            k = next((k for k in range(min(len(a), len(b)))
-                      if a[k] != b[k]), min(len(a), len(b)))
-            errs.append("DDR table %s differs from the unit's stock SPL's "
-                        "at byte %d of %d (another board build?)" %
-                        (DDR_NAME[:-1].decode(), k, DDR_TABLE_LEN))
+    st, ou = ddr_tables(stock), ddr_tables(ours)
+    if not ou:
+        errs.append("the candidate's SPL has no DDR table")
+    common = sorted(set(st) & set(ou))
+    if not common:
+        errs.append("the unit's stock SPL has no DDR table with an ID of the "
+                    "candidate's (%s; stock: %s): another board build? make "
+                    "Kiln's SPL from its own dump first" %
+                    (", ".join("0x%02x" % i for i in sorted(ou)) or "none",
+                     ", ".join("%s 0x%02x" % (st[i][0], i) for i in sorted(st))
+                     or "none"))
+    for i in common:
+        (sn, a), (on, b) = st[i], ou[i]
+        MATCHED.append("0x%02x %s" % (i, sn))
+        diff = [k for k in range(len(a)) if a[k] != b[k]]
+        rel = range(DDR_AUTOSR_EN, DDR_AUTOSR_EN + 4)
+        if diff and all(k + DDR_NAME_LEN in rel for k in diff):
+            NOTES.append("DDR table 0x%02x (%s here, %s in stock): auto "
+                         "self-refresh %s here, %s in stock" %
+                         (i, on, sn, "on" if b[rel[0] - DDR_NAME_LEN] else
+                          "off", "on" if a[rel[0] - DDR_NAME_LEN] else "off"))
+        elif diff:
+            errs.append("DDR table 0x%02x (%s here, %s in stock) differs at "
+                        "byte %d of %d (another board build?)" %
+                        (i, on, sn, diff[0] + DDR_NAME_LEN, DDR_TABLE_LEN))
 
     n = ours.count(CLK_TAG)
     if n != 1:
@@ -331,16 +369,18 @@ def main(argv=None):
         return 1
     print("check_first_mib: ok: only the SPL (%d blocks, %d bytes loaded)%s "
           "and the length fields differ from %s%s; the SPL is the build's "
-          "(%s); DDR table %s and clocks as in the unit's stock SPL%s" %
+          "(%s); DDR tables %s and clocks as in the unit's stock SPL%s" %
           (count, count * img.BLOCK,
            ", U-Boot proper at 0xA400 (%d sectors)" %
            ((len(ub) + 511) // 512) if ub is not None else "", a.unit,
            "; outside the GPT also the same as %d other dump(s)" % len(also)
            if also else "", "spl-mmc.img" if a.spl else "SHA-256",
-           DDR_NAME[:-1].decode(),
+           ", ".join(MATCHED) or "none",
            "; U-Boot is the build's u-boot-emmc.img, a uImage Kiln's SPL "
            "starts, ending at 0x%x" % img.uboot_range(ub)[1]
            if ub is not None else ""))
+    for n in NOTES:
+        print("check_first_mib: note: " + n)
     return 0
 
 
