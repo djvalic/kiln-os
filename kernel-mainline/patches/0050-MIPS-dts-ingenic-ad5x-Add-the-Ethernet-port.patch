@@ -14,7 +14,7 @@ diff --git a/arch/mips/boot/dts/ingenic/ad5x.dts b/arch/mips/boot/dts/ingenic/ad
 index 82e638c37..717b941b0 100644
 --- a/arch/mips/boot/dts/ingenic/ad5x.dts
 +++ b/arch/mips/boot/dts/ingenic/ad5x.dts
-@@ -69,6 +69,25 @@ &exclk {
+@@ -68,6 +68,25 @@ &exclk {
  	clock-frequency = <24000000>;
  };
  
@@ -40,7 +40,7 @@ index 82e638c37..717b941b0 100644
  /* eMMC */
  &msc0 {
  	pinctrl-names = "default";
-@@ -98,6 +117,11 @@ &otg_phy {
+@@ -97,6 +116,11 @@ &otg_phy {
  };
  
  &pinctrl {

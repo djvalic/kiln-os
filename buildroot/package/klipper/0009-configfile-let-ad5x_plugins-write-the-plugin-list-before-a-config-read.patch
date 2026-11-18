@@ -1,5 +1,5 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: valix <djvalic.wc@gmail.com>
+From: djvalic <djvalic@users.noreply.github.com>
 Date: Fri, 13 Nov 2026 12:00:00 +0000
 Subject: [PATCH] configfile: let ad5x_plugins write the plugin list before a
  config read

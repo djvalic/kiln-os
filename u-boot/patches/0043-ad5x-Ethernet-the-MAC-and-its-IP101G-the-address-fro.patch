@@ -1,0 +1,149 @@
+From 58fc7be7ad6c0e1fb4480de991e5d0fcade59dc0 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Tue, 17 Nov 2026 07:45:29 -0700
+Subject: [PATCH 43/48] ad5x: Ethernet: the MAC and its IP101G, the address
+ from usershare
+
+The AD5X's Ethernet port: the X2600's MAC, RMII to an ICPlus IP101G at
+MDIO address 1. Its address is the one stock assigns, the first line of
+/MAC on usershare (p6, ext4), read only and only when the environment
+has none; without it a random, locally administered one. Also on a
+start over USB.
+
+dhcp, ping, mii, wget (HTTP, the port from httpdstp) and hash with
+sha256 verification. Nothing starts over the network by itself: the
+boot rules don't use it.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ arch/mips/dts/ad5x.dts       | 22 ++++++++++++++++++++++
+ board/flashforge/ad5x/ad5x.c | 35 +++++++++++++++++++++++++++++++++++
+ configs/ad5x_defconfig       | 10 ++++++++++
+ 3 files changed, 67 insertions(+)
+
+diff --git a/arch/mips/dts/ad5x.dts b/arch/mips/dts/ad5x.dts
+index 349c40a8..d0307641 100644
+--- a/arch/mips/dts/ad5x.dts
++++ b/arch/mips/dts/ad5x.dts
+@@ -12,6 +12,7 @@
+ 	model = "Flashforge Adventurer 5X";
+ 
+ 	aliases {
++		ethernet0 = &mac;
+ 		mmc0 = &msc0;
+ 		serial0 = &uart0;
+ 	};
+@@ -56,6 +57,27 @@
+ 			no-sdio;
+ 		};
+ 
++		/*
++		 * The Ethernet MAC (DesignWare GMAC 3.7), RMII to an ICPlus
++		 * IP101G at MDIO address 1, which gives the 50 MHz reference.
++		 */
++		mac: ethernet@134b0000 {
++			compatible = "ingenic,x2600-mac";
++			reg = <0x134b0000 0x2000>;
++			phy-mode = "rmii";
++			phy-handle = <&ip101g>;
++			max-speed = <100>;
++
++			mdio {
++				#address-cells = <1>;
++				#size-cells = <0>;
++
++				ip101g: ethernet-phy@1 {
++					reg = <1>;
++				};
++			};
++		};
++
+ 		/*
+ 		 * The OTG controller on J28, a DesignWare DWC2. Device mode
+ 		 * only, for ums after a start over USB (the boot ROM's USB
+diff --git a/board/flashforge/ad5x/ad5x.c b/board/flashforge/ad5x/ad5x.c
+index 896ee7d8..392a4997 100644
+--- a/board/flashforge/ad5x/ad5x.c
++++ b/board/flashforge/ad5x/ad5x.c
+@@ -25,6 +25,7 @@
+ #include <malloc.h>
+ #include <mapmem.h>
+ #include <mmc.h>
++#include <net.h>
+ #include <part.h>
+ #include <asm/cache.h>
+ #include <asm/global_data.h>
+@@ -299,6 +300,38 @@ static void ad5x_env_follow_build(void)
+ 		env_save();
+ }
+ 
++/*
++ * The unit's Ethernet address, as stock assigns it: the first line of
++ * /MAC on usershare (p6, the factory data), read only. Not when the
++ * environment already has one; without it the network commands make up
++ * a random, locally administered one.
++ */
++#define AD5X_USERSHARE		6
++static void ad5x_ethaddr(void)
++{
++	struct disk_partition info;
++	struct blk_desc *bd;
++	char line[32];
++	u8 mac[ARP_HLEN];
++
++	if (env_get("ethaddr"))
++		return;
++	bd = ad5x_emmc();
++	if (!bd || part_get_info(bd, AD5X_USERSHARE, &info) ||
++	    strcmp((const char *)info.name, "usershare"))
++		return;
++	ad5x_small(AD5X_USERSHARE, "/MAC", line, sizeof(line));
++	line[strcspn(line, "\r\n")] = '\0';
++	string_to_enetaddr(line, mac);
++	if (!is_valid_ethaddr(mac)) {
++		if (line[0])
++			printf("ad5x: usershare /MAC: \"%s\" is no address\n",
++			       line);
++		return;
++	}
++	eth_env_set_enetaddr("ethaddr", mac);
++}
++
+ int board_late_init(void)
+ {
+ 	/*
+@@ -313,11 +346,13 @@ int board_late_init(void)
+ 		printf("ad5x: started over USB: the eMMC as a USB disk (ums); "
+ 		       "Ctrl-C stops it\n");
+ 		env_set_default(NULL, 0);
++		ad5x_ethaddr();
+ 		env_set("bootcmd", "ums 0 mmc 0");
+ 		env_set("bootdelay", "0");
+ 		return 0;
+ 	}
+ 	ad5x_env_follow_build();
++	ad5x_ethaddr();
+ 	env_set("ad5x_slot", ad5x_read_slot());
+ 	return 0;
+ }
+diff --git a/configs/ad5x_defconfig b/configs/ad5x_defconfig
+index 120248ff..9bdf30b2 100644
+--- a/configs/ad5x_defconfig
++++ b/configs/ad5x_defconfig
+@@ -83,3 +83,13 @@ CONFIG_USB_GADGET_DWC2_OTG=y
+ CONFIG_USB_GADGET_DOWNLOAD=y
+ CONFIG_USB_FUNCTION_MASS_STORAGE=y
+ CONFIG_CMD_USB_MASS_STORAGE=y
++CONFIG_ETH_DESIGNWARE_INGENIC=y
++CONFIG_NET_RANDOM_ETHADDR=y
++CONFIG_CMD_DHCP=y
++CONFIG_CMD_PING=y
++CONFIG_CMD_MII=y
++CONFIG_CMD_HASH=y
++CONFIG_SHA256=y
++CONFIG_HASH_VERIFY=y
++CONFIG_CMD_WGET=y
++CONFIG_PROT_TCP_SACK=y
+-- 
+2.56.0
+

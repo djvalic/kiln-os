@@ -643,6 +643,102 @@ the 30 s pass (the guard then ends by itself).
 `--drill clear --yes` zeroes a drill's state again if you change your
 mind before the reboot.
 
+**Drill 5: nothing started, the boot ROM's USB mode (patch 0028).** When
+its four attempts found nothing to start, Kiln's SPL asks the boot ROM
+for its USB mode (CPM_SLPC = 0x42575302, a watchdog reset) instead of
+stopping; a power cycle tries the eMMC again (`u-boot/README.md`,
+"Tries"). Laptop-checked (`test_ad5x_start.py`); this drill checks the
+part only the chip can tell: that the ROM takes the request after the
+SPL's own watchdog reset, and that a power cycle from there starts
+normally.
+
+Needs: an SPL with patch 0028 on the printer. The SPL from steps 3-5 is
+older (it stops). Putting a new build on is "Going back" to Flashforge's
+SPL (below), then steps 3 and 4 with the new build's `first-mib.img` and
+`first-mib-uboot.img`, 10 cold starts after each. Check:
+`ssh root@$P 'dd if=/dev/mmcblk0 bs=512 skip=34 count=48 2>/dev/null | grep -c "boot ROM USB mode"'`
+says `1`. Also J28 wired to the laptop (Contingency, step 1; the udev
+rule from `u-boot/USB-BOOT.md`), the console logged (`tio -L`), the smart
+plug reachable, the printer idle on the main OS with start-up finished.
+
+5a. **The request, nothing written.** The drill puts into CPSPR what
+the fourth failed attempt leaves there and lets the watchdog reset the
+board (a `reboot` wouldn't do: Linux's restart writes 0x3535 to CPSPR
+first):
+
+1. Checks as drill 2, step 1 (`ad5x.wdt=30`, no `watchdog.disable`, a
+   feeder pid); on the laptop `lsusb -d a108:eaef` shows nothing.
+2. `0x4b53` = attempt 3 (the fourth), phase 5 (loading the slot), slot
+   A; CPSPR needs its unlock word in CPSPPR (`0x10000038`) around the
+   write:
+
+   ```
+   ssh root@$P 'devmem 0x10000038 32 0x5a5a; devmem 0x10000034 32 0x4b53; devmem 0x10000038 32 0; devmem 0x10000034 32'
+   ```
+
+   It must read back `0x00004B53`; if not, stop (nothing else changed;
+   the next start is a fresh one).
+3. `ssh root@$P 'kill -9 $(cat /run/ad5x-watchdog.pid)'`; note the time.
+4. Expected about 120 s later, on the console: `U-Boot SPL 2026.10
+   (...)`, `SPL: boot ROM`, `SPL: nothing started after 4 attempts (last
+   0x4b53): boot ROM USB mode (J28); power-cycle to try the eMMC again`,
+   then nothing more. On the laptop within a few seconds: `lsusb -d
+   a108:eaef`, and `u-boot/tools/ad5x_usbboot.py info` answers (log its
+   output). The printer is off the network.
+   - If instead, right after it, a second banner and `SPL: the boot
+     ROM started the eMMC, not its USB mode (0x4c53, SLPC cleared):
+     stopped, power cycle to retry`: the ROM ignored the request after
+     this reset. Note it, then step 5; patch 0028 then only adds one
+     reset before the old stop.
+   - Stop and power-cycle if nothing happens within 180 s (the feeder
+     isn't what drill 2 found).
+5. **Power cycle** (plug off 10 s, on). Expected: a normal start through
+   SPL and U-Boot, no `started over USB`, no `attempt` line (the marker
+   `0x4c53` without the request is a fresh start); in the main OS CPSPR
+   `0x00005511`, `ad5x.uboot=1`, the same kernel, `ad5x-kernel` without
+   "U-Boot failed".
+
+5b. **A start over USB from there.** Steps 1-4 of 5a again, then from
+the USB mode, with this build's `spl-usb.bin`:
+`u-boot/tools/ad5x_usbboot.py run-spl $D/spl-usb.bin`. Expected:
+`SPL: started over USB (soft entry, SLPC cleared); scratch pad 0x4c53
+not counted: a fresh start` (without "(soft entry ...)" if the ROM
+clears CPM_SLPC itself: note which, `USB-BOOT.md` asks), the DDR test
+good, then the main OS as after a cold start. One power cycle after it,
+to finish on a normal start.
+
+5c. **Optional, really nothing to start** (destructive; only with the
+USBCloner restore of the Contingency ready, and after 5a passed). Under
+Kiln's SPL and U-Boot, zeroed kernel slots alone are not "nothing": U-Boot
+starts the main OS from rootfs2, and alexshev86's test 4 (#68) applies to
+the SPL's own fallback to the slots. So: save, then zero, the sector of
+U-Boot's uImage header (82, 0xA400: the SPL then says "no U-Boot at
+0xA400" and boots the slots itself) and the first sector of each kernel
+slot (p1, LBA 0x800; p3, LBA 0x36800):
+
+```
+ssh root@$P 'cd /data/ad5x/bench && dd if=/dev/mmcblk0 bs=1M count=1 of=first-mib-now.img && for l in 2048 223232; do dd if=/dev/mmcblk0 bs=512 skip=$l count=1 of=sector-$l.bin; done; sha256sum first-mib-now.img sector-*.bin'
+scp -O "root@$P:/data/ad5x/bench/first-mib-now.img" "root@$P:/data/ad5x/bench/sector-*.bin" $BK/
+sha256sum $BK/first-mib-now.img $BK/sector-*.bin    # the same as on the printer
+# then, idle, and only then:
+ssh root@$P 'sync; for l in 82 2048 223232; do dd if=/dev/zero of=/dev/mmcblk0 bs=512 seek=$l count=1 conv=fsync,notrunc; done; reboot'
+```
+
+Expected on the console: `no U-Boot at 0xA400: the slot, as the stock
+SPL`, then four attempts (slot B, slot A forced, slot B, slot A: each
+`SPL: no good uImage in the slot; attempt N of 4 failed`), then the USB
+mode line as in 5a, `a108:eaef` on the laptop within about a minute. A power cycle gives the same again (the eMMC tried from attempt
+0, still nothing). Restore over J28 only (no system starts): USBCloner
+(Contingency, step 3) with three entries: `first-mib-now.img` (this
+printer's first MiB from just before the drill) at `0x0`, the saved
+`sector-2048.bin` at `0x100000` and `sector-223232.bin` at `0x6D00000`
+(writes at those offsets with USBCloner are untried; the first MiB at 0x0
+is proven), then a power cycle: a normal start, and `ad5x-uboot-flash
+--status` as after step 4.
+Without that restore ready, don't run 5c: 5a and 5b check the same SPL
+code (the decision depends only on what CPSPR and CPM_SLPC hold as the
+SPL starts) without writing anything.
+
 ### Going back
 
 - **To step 3's state** (Kiln's SPL, Flashforge's U-Boot at 0xA400):
@@ -840,9 +936,12 @@ help (bench recovery, not a gate; `docs/boot-slots.md` "J28" and
 2. Power the printer off and on fully (a reboot isn't enough) and check
    whether `a108:eaef` appears: with no valid SPL header (a write cut
    short while sector 34 was zero) the boot ROM is in USB mode by itself
-   (alexshev86, #68). If it doesn't appear (an SPL that starts and then
-   hangs), close K4 (boot_sel 101 -> 111) so that the boot ROM goes to USB
-   mode at power-on even with an SPL on the eMMC.
+   (alexshev86, #68). With an SPL that has patch 0028 and finds nothing
+   to start, it appears after the SPL's four attempts (drill 5; up to
+   about three minutes when something hangs). If it doesn't appear (an
+   SPL that starts and then hangs, or an older SPL that stops), close K4
+   (boot_sel 101 -> 111) so that the boot ROM goes to USB mode at
+   power-on even with an SPL on the eMMC.
 3. Proven path (alexshev86, #66): Ingenic USBCloner 2.5.36.1 with
    `x2600_mmc0_ddr3_linux.cfg` (2.5.48 or later with
    `x2600h_mmc0_ddr3l_linux.cfg` for large reads), one POLICY entry:

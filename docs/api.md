@@ -43,7 +43,10 @@ Every endpoint has an HTTP form and a JSON-RPC method name. Moonraker
 builds the method name from the path: `/machine/kiln_os/info` is
 `machine.kiln_os.info`. Endpoints that Klipper provides (`/printer/...`)
 take GET or POST alike; their method is the path with dots,
-`printer.ad5x_setup.control`.
+`printer.ad5x_setup.control`. An endpoint with both GET and POST gets
+one method for each, `get_` or `post_` before the last part:
+`/machine/kiln_os/memory` is `machine.kiln_os.get_memory` and
+`machine.kiln_os.post_memory`.
 
 ### Replies
 
@@ -106,9 +109,9 @@ inside Moonraker's `result`; their replies keep that inner `result`
 
 | Reason | Status | When | Endpoints |
 |---|---|---|---|
-| `bad_parameter` | 400 | A parameter is missing, unknown or out of range | `channel`, service actions, `ad5x_setup/control`, upload `plate` |
+| `bad_parameter` | 400 | A parameter is missing, unknown or out of range | `channel`, `memory`, `ifs_firmware`, service actions, `ad5x_setup/control`, upload `plate` |
 | `bad_3mf` | 400 | The uploaded `.3mf` can't be printed (no sliced plate, not a zip, encrypted, damaged, too large) | upload |
-| `printing` | 409 | A print is running or paused | `kernel_retry`, `boot_recovery`, service actions, reboot and shutdown, Kiln OS and package updates, `ad5x_setup/control` |
+| `printing` | 409 | A print is running or paused | `kernel_retry`, `boot_recovery`, `ifs_firmware`, service actions, reboot and shutdown, Kiln OS and package updates, `ad5x_setup/control` |
 | `print_state_unknown` | 409 | The agent couldn't tell whether a print is running (Klipper or Moonraker didn't say); try again | as `printing`, not `ad5x_setup/control` |
 | `starting_up` | 409 | Start-up hasn't finished (the boot flag still points elsewhere, or `S99ad5x-booted` hasn't marked this boot's start-up finished); try again in a minute | `kernel_retry`, `boot_recovery`, Kiln OS update, reboot and shutdown (only in the first 10 minutes after boot) |
 | `recovery_updating` | 409 | The recovery OS is being written into slot A; try again in a few minutes | `boot_recovery`, Kiln OS update, reboot and shutdown |
@@ -116,18 +119,22 @@ inside Moonraker's `result`; their replies keep that inner `result`
 | `refused` | 409 | Another refusal of the agent (the message says why) | `boot_recovery` |
 | `nothing_to_retry` | 409 | Kiln's kernel runs and nothing is recorded as failed | `kernel_retry` |
 | `no_own_kernel` | 409 | This image has no kernel of its own | `kernel_retry` |
+| `not_available` | 409 | Extended memory needs a printer with 512 MiB (this one has 256 MiB, or its size is unknown); the image has no Klipper firmware for the IFS | `memory` (POST), `ifs_firmware` (POST) |
+| `not_enabled` | 409 | The owner hasn't turned the IFS firmware switch on (`/data/ad5x/ifs-switch.enable`) | `ifs_firmware` (POST, `klipper`) |
+| `ifs_switching` | 409 | The IFS firmware is being switched (Klipper is stopped); try again in a few minutes | `ifs_firmware` (POST), `kernel_retry`, `boot_recovery`, `return_stock`, service actions, reboot and shutdown, Kiln OS and package updates |
+| `printer_busy` | 409 | Klipper is running a command (`idle_timeout` `Printing`, such as a filament load from the console) | `ifs_firmware` (POST) |
 | `step_running` | 409 | Another setup step is running or waiting (abort it first) | `ad5x_setup/control` |
 | `not_waiting` | 409 | `adjust`/`accept` while no step waits for it | `ad5x_setup/control` |
 | `restart_needed` | 409 | An aborted PID test left a heater off: restart Klipper first | `ad5x_setup/control` |
-| `agent_failed` | 500 | The root agent's action failed (`ad5x-kernel retry`, an init script, `ad5x-update`, the boot flag) | `kernel_retry`, `boot_recovery`, service actions, updates |
+| `agent_failed` | 500 | The root agent's action failed (`ad5x-kernel retry`, an init script, `ad5x-update`, the boot flag, `ad5x-memory`) | `kernel_retry`, `boot_recovery`, `memory` (POST), `ifs_firmware` (POST), service actions, updates |
 | `kernel_records_unreadable` | 500 | The kernel fallback's records can't be read | `kernel`, `kernel_retry` |
 | `unpack_failed` | 500 | Writing the G-code of a `.3mf` failed | upload |
 | `failed` | 500 (400 through Moonraker) | Another failure in a Kiln Klipper module (the message says what) | `ad5x_setup/control` |
 | `internal_error` | 500 (400 through Moonraker) | An unexpected error in a Kiln Klipper module (a bug: please report it) | `ad5x_setup/control` |
 | `download_failed` | 502 | The update download failed or doesn't match `SHA256SUMS` | Kiln OS and package updates |
-| `agent_unavailable` | 503 | The root update agent's request folder isn't there (`S68ad5x-update-agent` never started) | `kernel_retry`, `boot_recovery`, service actions, reboot and shutdown, updates |
-| `agent_timeout` | 503 | The root update agent didn't answer in time | `kernel_retry`, `boot_recovery`, service actions, reboot and shutdown, updates |
-| `database_unavailable` | 503 | Moonraker's database isn't loaded | `channel` |
+| `agent_unavailable` | 503 | The root update agent's request folder isn't there (`S68ad5x-update-agent` never started) | `kernel_retry`, `boot_recovery`, `memory` (POST), service actions, reboot and shutdown, updates |
+| `agent_timeout` | 503 | The root update agent didn't answer in time | `kernel_retry`, `boot_recovery`, `memory` (POST), service actions, reboot and shutdown, updates |
+| `database_unavailable` | 503 | Moonraker's database isn't loaded | `channel`, `memory_notice_seen` |
 | `no_space` | 507 | Not enough free space for the G-code of a `.3mf` | upload |
 
 The statuses in brackets: `ad5x_setup/control` is a Klipper endpoint, and
@@ -169,6 +176,8 @@ manager's `Kiln OS` entry (`version`) there.
 | `print_error` | Upload replies carry `print_error` when a requested print didn't start |
 | `updates` | The update manager has the `Kiln OS` entry (present unless `[kiln_os]` lost its `[update_manager]`) |
 | `lane_data` | The `lane_data` database namespace is kept up to date (`[kiln_lanes]` loaded) |
+| `memory_mode` | This printer has 512 MiB and can use Extended memory mode: `/machine/kiln_os/memory`, `KILN_MEMORY_MODE`. Absent on 256 MiB printers |
+| `ifs_firmware` | `GET`/`POST /machine/kiln_os/ifs_firmware`, the IFS firmware switch. Whether it can be offered on this printer is its `available` |
 
 A feature is listed when Moonraker's side of it is there. The Klipper
 objects behind `ifs`, `soak`, `setup_wizard` and `plugins` exist once
@@ -184,10 +193,13 @@ Klipper has started (`printer.objects.list`).
 | `POST /machine/kiln_os/boot_recovery` | `machine.kiln_os.boot_recovery` | v0.0.55 |
 | `POST /machine/kiln_os/return_stock` | `machine.kiln_os.return_stock` | v1.0.0 |
 | `POST /machine/kiln_os/channel` | `machine.kiln_os.channel` | v0.1.0-rc1 |
+| `GET\|POST /machine/kiln_os/memory` | `machine.kiln_os.get_memory`, `machine.kiln_os.post_memory` | v1.0.0 |
+| `POST /machine/kiln_os/memory_notice_seen` | `machine.kiln_os.memory_notice_seen` | v1.0.0 |
+| `GET\|POST /machine/kiln_os/ifs_firmware` | `machine.kiln_os.get_ifs_firmware`, `machine.kiln_os.post_ifs_firmware` | (next release) |
 | `GET\|POST /printer/ad5x_setup/control` | `printer.ad5x_setup.control` | v0.0.1 |
 | `GET\|POST /printer/ad5x_soak/abort` | `printer.ad5x_soak.abort` | v0.0.10 |
 
-The first six are Moonraker's `kiln_os` component
+The first nine are Moonraker's `kiln_os` component
 (`moonraker/components/kiln_os.py`); the last two come from Klipper
 (`klipper/extras/ad5x_setup.py`, `ad5x_soak.py`) and Moonraker passes them
 on.
@@ -404,6 +416,184 @@ curl -X POST http://PRINTER/machine/kiln_os/return_stock
 ```
 
 Since v1.0.0.
+
+### GET /machine/kiln_os/memory
+
+Extended memory mode (`docs/memory.md`). Every printer starts in
+**standard** mode: Kiln OS uses 256 MiB, the same on every AD5X. A printer
+with 512 MiB (X2600H) can switch **Extended memory** on, which gives the
+kernel all 512 MiB from the next start. The switch is kept in `/data`
+(`/data/ad5x/kernel/extended-memory`), so it survives restarts and
+updates. A start in extended mode that doesn't finish turns it off by
+itself: the next start is standard and `failed` says why. No parameters.
+Never fails while Moonraker runs.
+
+```sh
+curl http://PRINTER/machine/kiln_os/memory
+```
+
+```json
+{"result": {
+  "available": true,
+  "enabled": false,
+  "active": "standard",
+  "restart_needed": false,
+  "failed": null,
+  "notice_pending": true,
+  "bootloader_update_needed": false,
+  "hw_mem_mib": 512,
+  "mem_kb": 243012
+}}
+```
+
+| Field | Type | |
+|---|---|---|
+| `available` | boolean | The printer has 512 MiB, so Extended memory can be switched on. False on 256 MiB, and when the size is unknown (an OS whose `/run/ad5x-memory.conf` has no `HW_MEM_MIB`) |
+| `enabled` | boolean | The switch is on and no failed start turned it off: the next start uses Extended memory |
+| `active` | string | What this start got: `standard` or `extended` |
+| `restart_needed` | boolean | `available` and `enabled` differ from `active`: the change takes effect at the next start. False when `bootloader_update_needed` (a restart wouldn't change it) |
+| `failed` | string or null | Why Extended memory was turned off (the first line of `/data/ad5x/kernel/extended-memory-failed`: the reason and date); null when nothing failed. Switching it on again clears it. Show "Extended memory was turned off: the printer didn't finish starting with it." |
+| `notice_pending` | boolean | Show the one-time notice "Extended memory available": `available`, this start standard, the switch off, the notice not seen yet ([POST /machine/kiln_os/memory_notice_seen](#post-machinekiln_osmemory_notice_seen)), and no `bootloader_update_needed` |
+| `bootloader_update_needed` | boolean | `available`, and this start came from an older Kiln U-Boot (from before the memory mode, such as the rc3 opt-in boot loader) that can't choose the mode: it passes the board's memory as it always did, so only a boot loader update makes the switch count. Show "Needs a boot loader update to take effect." and don't offer a restart. `/run/ad5x-memory.conf` `MEM_MODE_FIXED=1` |
+| `hw_mem_mib` | integer or null | The board's memory, 256 or 512, whatever mode this start got; null when unknown |
+| `mem_kb` | integer or null | `MemTotal` of this start in kB (`/run/ad5x-memory.conf`); null when unknown |
+
+Since v1.0.0. The feature name `memory_mode` is in
+[`/machine/kiln_os/info`](#get-machinekiln_osinfo) on printers with
+512 MiB.
+
+### POST /machine/kiln_os/memory
+
+Switches Extended memory on or off from the next start. Parameter
+`enable`: `true` or `false` (also `1`/`0`, `on`/`off`; a JSON boolean over
+the websocket). The root update agent runs `ad5x-memory extended on|off`,
+which only writes or removes the switch (`on` also clears `failed`).
+Nothing restarts and the running start doesn't change, so it is allowed
+while printing. Restart the printer (`/machine/reboot`) to use it; the
+touch screen offers that. Marks the notice seen. The reply is the same
+object as `GET` after the change (`restart_needed` true until the
+restart). With `bootloader_update_needed` the switch is still written; it
+counts once the boot loader is updated (`restart_needed` stays false).
+Waits up to 30 s for the agent.
+
+```sh
+curl -X POST 'http://PRINTER/machine/kiln_os/memory?enable=true'
+```
+
+```json
+{"result": {
+  "available": true, "enabled": true, "active": "standard",
+  "restart_needed": true, "failed": null, "notice_pending": false,
+  "bootloader_update_needed": false, "hw_mem_mib": 512, "mem_kb": 243012
+}}
+```
+
+Errors:
+
+| Status | Reason | When |
+|---|---|---|
+| 400 | `bad_parameter` | No `enable`, or not true or false |
+| 409 | `not_available` | The printer has 256 MiB (or its size is unknown): `Extended memory needs 512 MiB of memory; this printer has 256 MiB` |
+| 500 | `agent_failed` | `ad5x-memory` failed (the message has its output) |
+| 503 | `agent_timeout`, `agent_unavailable` | As `kernel_retry` |
+
+Since v1.0.0.
+
+### POST /machine/kiln_os/memory_notice_seen
+
+The one-time notice "Extended memory available" was seen: kept in
+Moonraker's database (namespace `kiln_os`, key `memory_notice_seen`,
+`true`; survives updates), so `notice_pending` stays false from now on.
+The touch screen calls it when its bell shows the notice. The same notice
+is a Moonraker announcement for Fluidd and Mainsail (see
+[Announcement](#announcement-extended-memory-available)); this endpoint
+dismisses it there too, and dismissing it there counts as seen. No
+parameters; the reply is the `GET` object.
+
+```sh
+curl -X POST http://PRINTER/machine/kiln_os/memory_notice_seen
+```
+
+Errors: 503 `database_unavailable` when Moonraker's database is not
+loaded.
+
+Since v1.0.0.
+
+### GET /machine/kiln_os/ifs_firmware
+
+The IFS firmware switch (`docs/mcu-flashing.md`, "IFS firmware switch";
+from PR #41 by Hunter Laux): which firmware the IFS runs, whether the
+switch can be offered, and the last switch. No parameters. Never fails
+while Moonraker runs, also while Klipper is stopped for a switch.
+
+```sh
+curl http://PRINTER/machine/kiln_os/ifs_firmware
+```
+
+```json
+{"result": {
+  "available": true,
+  "enabled": true,
+  "firmware": "stock",
+  "state": "done",
+  "target": "stock",
+  "phase": null,
+  "reason": null,
+  "message": null,
+  "version": "3.0.7",
+  "klipper_version": "v0.13.0-806"
+}}
+```
+
+| Field | Type | |
+|---|---|---|
+| `available` | boolean | Offer the switch: `enabled`, and this image has Klipper firmware for the IFS (`/usr/share/ad5x/mcu/ifs.hex`). The touch screen shows Settings > Devices > IFS firmware only then |
+| `enabled` | boolean | The owner turned the switch on: `/data/ad5x/ifs-switch.enable` or `/data/ad5x/ifs-klipper.enable` exists (root's folder: no client can create it) |
+| `firmware` | string | What the IFS runs: `klipper` (it answered as Klipper at Klipper's last start, or `printer.ifs.version` says Klipper), `stock` (`printer.ifs.version` is Flashforge's, such as `3.0.7`), else what the last finished switch put on; `unknown` while a switch runs or when nothing says |
+| `state` | string | The last switch: `idle` (none on record), `running`, `done` or `failed` |
+| `target` | string or null | What the last switch put on: `stock` or `klipper` |
+| `phase` | string or null | While `running`: `stopping` (Klipper), `writing`, `replug` (the IFS's bootloader doesn't answer: unplug the IFS cable and plug it back in; the write carries on), `verifying`, `starting` (Klipper) |
+| `reason` | string or null | When `failed`: `bad_image`, `no_stock_firmware` (no usable Flashforge `ifs.hex` on this printer), `no_bootloader`, `flash_failed`, `no_answer` (written, the firmware doesn't answer), `interrupted` (the printer restarted during the switch), `failed` |
+| `message` | string or null | When `failed`: one line saying what went wrong |
+| `version` | string or null | When `done`: what the IFS answered (`3.0.7`, `v0.13.0-806`) |
+| `klipper_version` | string or null | The version of the Klipper firmware for the IFS in this image |
+
+Fields may be added; ignore the ones you don't know.
+
+### POST /machine/kiln_os/ifs_firmware
+
+Switches the IFS to Flashforge's firmware or Klipper's. Parameter
+`target`: `stock` or `klipper`. `klipper` only when `enabled` (the
+owner's opt-in); `stock` for everyone. The root update agent checks
+again, answers at once and switches in the background: Klipper stops,
+the firmware is written and checked (Flashforge's `ifs.hex` from this
+printer's own usershare backup, or Kiln's), Klipper starts again. That
+takes 1 to 4 minutes; follow it with `GET` until `state` is no longer
+`running`, then wait for Klipper. The reply is the `GET` object with
+`state` `running`. There is no G-code command for it.
+
+```sh
+curl -X POST 'http://PRINTER/machine/kiln_os/ifs_firmware?target=klipper'
+```
+
+Errors:
+
+| Status | Reason | When |
+|---|---|---|
+| 400 | `bad_parameter` | No `target`, or not `stock` or `klipper` |
+| 409 | `not_enabled` | `klipper` without the owner's opt-in |
+| 409 | `not_available` | `klipper`, and the image has no Klipper firmware for the IFS |
+| 409 | `ifs_switching` | A switch runs |
+| 409 | `printing`, `print_state_unknown` | A print is running or paused, or the agent couldn't tell |
+| 409 | `printer_busy` | Klipper is running a command (`idle_timeout` `Printing`) |
+| 500 | `agent_failed` | The agent rejected the request |
+| 503 | `agent_timeout`, `agent_unavailable` | As `kernel_retry` |
+
+While a switch runs, the agent refuses reboot, shutdown, service actions,
+updates, `kernel_retry`, `boot_recovery` and `return_stock` with 409
+`ifs_switching`.
+
+Since the next release (API 1.8).
 
 ### /printer/ad5x_setup/control
 
@@ -757,6 +947,20 @@ Moonraker doesn't send the ID). Fluidd and Kiln's touch screen show them.
 The kernel warning is set when Moonraker starts and removed by a
 successful `kernel_retry`.
 
+### Announcement "Extended memory available"
+
+On a printer with 512 MiB that starts in standard mode and hasn't seen
+the notice (`notice_pending`), Kiln adds a Moonraker announcement
+(`/server/announcements/list`, feed `kiln_os`, priority `normal`, title
+`Extended memory available`, the notice text as its description). Fluidd
+and Mainsail show it. Dismissing it there (`/server/announcements/dismiss`
+without `wake_time`) marks the notice seen, as
+`POST /machine/kiln_os/memory_notice_seen` does; a dismiss with a
+`wake_time` (snooze) doesn't. Kiln removes the announcement once the
+notice is seen or no longer applies (Extended memory switched on). Its
+`entry_id` changes each time it is added: find it by feed and title.
+Since v1.0.0.
+
 ### G-code output (`notify_gcode_response`)
 
 Lines Kiln sends that a client may act on:
@@ -765,6 +969,7 @@ Lines Kiln sends that a client may act on:
 |---|---|---|
 | `// action:ad5x_setup_wizard` | Someone asked for the setup wizard (`SETUP_WIZARD`); the touch screen opens it | v0.0.1 |
 | `!! Upload <file>: print not started: <reason>` | An upload's print didn't start (see `print_error`) | v0.0.45 |
+| `// Extended memory: on\|off (this start: standard\|extended)`, `// Extended memory: not available (...)`, `// Needs a boot loader update to take effect: ...`, `!! KILN_MEMORY_MODE: [reason] ...` | `KILN_MEMORY_MODE`'s answer (Moonraker sends it, so only clients see it, not `klippy.log`) | v1.0.0 |
 | `// IFS: ...`, `// Bed heat soak: ...`, ... | Information for people; not an API | |
 
 Kiln adds no websocket notification methods of its own; status changes
@@ -917,6 +1122,7 @@ are not API and may change in any release. Commands from plugins
 | `BED_SOAK_ENABLE` | `[ENABLE=0\|1]` | Soak on/off for every print | v0.0.8 |
 | `RESUME_INTERRUPTED`, `CLEAR_INTERRUPTED` | `CONFIRM=1` | Continue / forget a print a power cut ended | v0.0.5 |
 | `LOAD_FILAMENT`, `UNLOAD_FILAMENT`, `CLEAR_NOZZLE`, `AUTO_FULL_BED_LEVEL` | | Quick actions | v0.0.1 |
+| `BED_LEVEL_SCREWS_TUNE`, `SCREWS_TILT_CALCULATE` | `BED_TEMP=` `EXTRUDER_TEMP=` `DIRECTION=CW\|CCW` / upstream's | Bed screw levelling (zMod's name): heat, home, probe at each screw, show the turns; `SCREWS_TILT_CALCULATE` alone tares over the first screw, makes one uncounted touch there, and doesn't heat (issue #69) | (next release) |
 | `WEIGHT_TARE`, `LOAD_CELL_TARE` | | Zero the bed strain gauges | v0.0.1 |
 | `Z_OFFSET_ESTIMATE` | `[X= Y=] [SAVE=1]` | Z offset from the load cells (`printer.ad5x_zestimate`) | v0.0.17 |
 | `SET_NOZZLE_SIZE` | `SIZE=` `[RESTART=0]` | Nozzle size; Klipper restarts | v0.0.10 |
@@ -963,6 +1169,7 @@ clients.
 | `CONFIG_BACKUPS` | `[ACK=1]` | Macro files an update replaced | v0.0.1 |
 | `LOG_MODE` | `[MODE=short\|extended] [HOURS=]` | How much `klippy.log` keeps | v0.0.53 |
 | `M300`, `PLAY_MIDI`, `PLAY_SOUND`, `SOUND_STOP`, `SOUND_SETUP` | | Speaker | v0.0.7 |
+| `KILN_MEMORY_MODE` | `[ENABLE=0\|1]` | Extended memory from the next start, as `POST /machine/kiln_os/memory`; without `ENABLE` the mode. A macro (macros/ `system.cfg`) calling Moonraker's remote method `kiln_memory_mode`; the answer comes in the console | v1.0.0 |
 
 `PLUGINS_LIST`, `PLUGIN_ENABLE`, `PLUGIN_DISABLE`, `IFS_TUNE_RUN`,
 `IFS_TUNE_CLEAR`, `IFS_INFO` and `CONFIG_BACKUPS_SHOW` are buttons for

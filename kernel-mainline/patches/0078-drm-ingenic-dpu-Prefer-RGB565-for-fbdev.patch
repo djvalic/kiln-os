@@ -1,5 +1,5 @@
 From 5de2122a01a1b0b8a1ebb5189d37da21a3ad9402 Mon Sep 17 00:00:00 2001
-From: valix <djvalic.wc@gmail.com>
+From: djvalic <djvalic@users.noreply.github.com>
 Date: Wed, 11 Nov 2026 21:40:43 -0500
 Subject: [PATCH] drm/ingenic: dpu: Prefer RGB565 for fbdev
 

@@ -69,9 +69,26 @@ start)
 		esac
 	fi
 	[ -n "$V" ] && echo "moonraker: verbose (log mode extended)"
-	HOME=/home/klipper start-stop-daemon -S -b -m -p $PID -c klipper \
+	# Moonraker's temporary files on the data partition, not in /tmp (RAM,
+	# 24 MiB: S04ad5x-memory): an upload is written to the temp folder
+	# whole before it is moved into gcodes (a rename on the same
+	# partition), as are update downloads and its components' temp files.
+	# Left over from an upload cut short: removed at each start.
+	MTMP=/data/ad5x/moonraker-tmp
+	rm -rf $MTMP
+	mkdir -p $MTMP && chown klipper:klipper $MTMP && chmod 700 $MTMP
+	# MALLOC_ARENA_MAX=2: glibc gives threads that allocate malloc arenas
+	# of their own (up to a multiple of the CPU count), each keeping its
+	# freed memory; Moonraker's worker threads made 6 extra ones, about
+	# 3.5 MiB (docs/memory.md). Two: the main one and one shared.
+	HOME=/home/klipper TMPDIR=$MTMP MALLOC_ARENA_MAX=2 \
+		start-stop-daemon -S -b -m -p $PID -c klipper \
 		-x /usr/bin/python3 -- $MROOT/moonraker/moonraker.py \
 		-d $PD -c $TOP $V
+	# The OOM killer takes the camera and the screen first, then
+	# Moonraker, Klipper last (docs/memory.md)
+	p=$(cat $PID 2>/dev/null) && [ -n "$p" ] &&
+		echo -200 > /proc/$p/oom_score_adj 2>/dev/null
 	;;
 stop)
 	start-stop-daemon -K -p $PID -s INT

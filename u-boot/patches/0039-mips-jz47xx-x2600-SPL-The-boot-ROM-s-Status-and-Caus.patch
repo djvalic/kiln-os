@@ -1,0 +1,119 @@
+From 46e6f687a08ac7e94890200a42ce72916b218cc6 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 14:54:08 -0500
+Subject: [PATCH 39/48] mips: jz47xx: x2600: SPL: The boot ROM's Status and
+ Cause saved first
+
+ad5x_return_to_rom() (the "KILNUSB2" stage-1 start of the previous
+patches) puts back what the boot ROM handed over, but start.S saved
+Status and Cause after it had already written the SPL's own values
+(0x0040FC04, 0x00800000), so the ROM got those back instead of its own.
+It worked because the ROM runs with BEV=ERL=1 and IE=0 too. The save now
+comes first in _start, before anything changes a register but t0 and t1.
+It costs every start, eMMC too, 14 stores and 2 mfc0s.
+
+ad5x_start.h lists 0x5a2b (AD5X_USB_STAGE2) with the other values Kiln
+writes to CPSPR outside 0x4b00-0x4cff: only the boot ROM's USB mode gets
+there, an eMMC start's SPL always writes its own value first, and the
+SPL reads it as a fresh start.
+---
+ .../mach-jz47xx/include/mach/ad5x_start.h     | 12 +++++
+ arch/mips/mach-jz47xx/start.S                 | 52 +++++++++++--------
+ 2 files changed, 41 insertions(+), 23 deletions(-)
+
+diff --git a/arch/mips/mach-jz47xx/include/mach/ad5x_start.h b/arch/mips/mach-jz47xx/include/mach/ad5x_start.h
+index b71a033d..32e8dad0 100644
+--- a/arch/mips/mach-jz47xx/include/mach/ad5x_start.h
++++ b/arch/mips/mach-jz47xx/include/mach/ad5x_start.h
+@@ -19,6 +19,18 @@
+  * 0x4f5441/0x41544f; anything not 0x4b00-0x4bff (or 0x4c00-0x4cff with the
+  * USB request still pending, below) is a fresh start.
+  *
++ * The other values Kiln's SPL and U-Boot proper write, each outside
++ * 0x4b00-0x4cff, so the SPL's next start is a fresh one:
++ *   0x55NK   U-Boot proper as it jumps to a kernel (AD5X_UB_MAGIC below)
++ *   0x5a2b   the SPL started over USB as stage 1 only ("KILNUSB2", spl-
++ *            usb2.bin): DDR is up and the boot ROM takes U-Boot proper over
++ *            USB as stage 2; U-Boot proper, finding it at its start, runs
++ *            ums with the watchdog off and writes 0 (AD5X_USB_STAGE2
++ *            below). An SPL started from the eMMC always writes its own
++ *            value before U-Boot proper runs, so only the boot ROM's USB
++ *            mode (J28) gets there. Not a 0x4b/0x4c/0x55 value, nor
++ *            Linux's or Ingenic's.
++ *
+  * 0x4c00 | the last attempt's low byte: the attempts ran out and the SPL
+  * asked the boot ROM for its USB mode (CPM_SLPC = "SWB" << 8 | 2, then a
+  * watchdog reset, as Ingenic's softburn and Linux's reboot do it), so a
+diff --git a/arch/mips/mach-jz47xx/start.S b/arch/mips/mach-jz47xx/start.S
+index b309843e..52ce05dd 100644
+--- a/arch/mips/mach-jz47xx/start.S
++++ b/arch/mips/mach-jz47xx/start.S
+@@ -20,6 +20,35 @@
+ _start:
+ #ifdef CONFIG_XPL_BUILD
+ 
++#ifdef CONFIG_SOC_X2600
++	/*
++	 * What the boot ROM handed over, for ad5x_return_to_rom() (a start
++	 * over USB that only sets up DDR, then lets the ROM take stage 2, as
++	 * Ingenic's cloner and the stock SPL do): first of all, before the
++	 * Status and Cause writes below, so that the ROM gets its own values
++	 * back. It uses t0 and t1 only, which the ROM's call to stage 1
++	 * doesn't keep. On every start, eMMC too: 14 stores and 2 mfc0s
++	 * (56 bytes of .data), well under a microsecond.
++	 */
++	la	t0, ad5x_rom_ctx
++	sw	ra, 0(t0)
++	sw	sp, 4(t0)
++	sw	gp, 8(t0)
++	sw	s0, 12(t0)
++	sw	s1, 16(t0)
++	sw	s2, 20(t0)
++	sw	s3, 24(t0)
++	sw	s4, 28(t0)
++	sw	s5, 32(t0)
++	sw	s6, 36(t0)
++	sw	s7, 40(t0)
++	sw	fp, 44(t0)
++	mfc0	t1, CP0_STATUS
++	sw	t1, 48(t0)
++	mfc0	t1, CP0_CAUSE
++	sw	t1, 52(t0)
++#endif
++
+ #ifndef CONFIG_SOC_X2600
+ 	/* magic value ("MSPL") */
+ 	.word 0x4d53504c
+@@ -54,29 +83,6 @@ _start:
+ #endif
+ 
+ #ifdef CONFIG_SOC_X2600
+-	/*
+-	 * What the boot ROM handed over, for ad5x_return_to_rom() (a start
+-	 * over USB that only sets up DDR, then lets the ROM take stage 2, as
+-	 * Ingenic's cloner and the stock SPL do): before anything changes it.
+-	 */
+-	la	t0, ad5x_rom_ctx
+-	sw	ra, 0(t0)
+-	sw	sp, 4(t0)
+-	sw	gp, 8(t0)
+-	sw	s0, 12(t0)
+-	sw	s1, 16(t0)
+-	sw	s2, 20(t0)
+-	sw	s3, 24(t0)
+-	sw	s4, 28(t0)
+-	sw	s5, 32(t0)
+-	sw	s6, 36(t0)
+-	sw	s7, 40(t0)
+-	sw	fp, 44(t0)
+-	mfc0	t1, CP0_STATUS
+-	sw	t1, 48(t0)
+-	mfc0	t1, CP0_CAUSE
+-	sw	t1, 52(t0)
+-
+ 	/*
+ 	 * The boot ROM leaves the watchdog running (0x13630000): stop it as
+ 	 * the stock SPL does, with the stop bit in TSSR and TCER cleared.
+-- 
+2.56.0
+

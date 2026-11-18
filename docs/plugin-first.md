@@ -79,7 +79,10 @@ modules, components, sections and macros starting with `kiln_` or `ad5x_`
 `root/` folder packed as the printer sends it to root: no links, FIFOs or
 devices, at most 8 MB), plus unknown `plugin.json` keys, command names
 Klipper refuses and Python syntax, then runs the
-plugin's tests (`test_*.py` and `tests/test_*.py`). An error is
+plugin's tests (`test_*.py` and `tests/test_*.py`). Each one is run on its
+own with no arguments, so a test that needs more (a Klipper tree, an
+emulator, a printer) belongs under another name, such as `tests/emu_*.py`
+(suggested by DIEHARDave, issue #48). An error is
 something that stops the plugin on the printer; a warning is worth a
 look. The exit status is 1 when there is an error.
 

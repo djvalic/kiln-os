@@ -1,0 +1,271 @@
+From f8d0a140576ac99c6f9b2e8141c689bd9a395bd2 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 09:00:00 -0500
+Subject: [PATCH 31/31] ad5x: Kiln's kernels get the low 252 MiB
+
+The stock SPL starts its kernel with mem=236M@0x0 and keeps the 16 MiB
+above it (rmem=16M@0xec00000) for Flashforge's media drivers, which
+neither of Kiln's kernels has: the camera's MJPEG comes from the camera.
+Give that RAM to Kiln's kernels. x2600_args_kiln_low() turns the stock
+command line's mem=236M@0x0 into mem=252M@0x0 and takes rmem= off, as
+S00ad5x-kernel now does for a chainload; the RISC-V core's 4 MiB at
+0x0FC00000 stay where they were, reserved by the kernels' device trees,
+which also move their crash log (ramoops) to the top of the window,
+0x0FBC0000-0x0FBFFFFF.
+
+U-Boot proper applies it to every kernel it starts (only Kiln's). The
+SPL applies it when the slot's uImage is Kiln's 6.6 ("Linux-6.6-ad5x",
+as U-Boot proper's ad5x_slot_a_kernel_ok checks), so that Flashforge's
+5.10, still in a slot on the way to Kiln's boot loader, starts with the
+stock SPL's command line.
+
+U-Boot itself keeps to the 236 MiB at 0 (dram_init) and below
+0x0EB00000, the old crash log of the kernels (board_get_usable_ram_top,
+the SPL's uImage window): it needs no more, and an older kernel's crash
+log there survives too.
+---
+ .../mips/mach-jz47xx/include/mach/x2600_ram.h | 72 ++++++++++++++++---
+ arch/mips/mach-jz47xx/x2600/spl.c             | 25 +++++--
+ board/flashforge/ad5x/ad5x.c                  | 27 ++++---
+ 3 files changed, 97 insertions(+), 27 deletions(-)
+
+diff --git a/arch/mips/mach-jz47xx/include/mach/x2600_ram.h b/arch/mips/mach-jz47xx/include/mach/x2600_ram.h
+index 76a2b716..3de48fb5 100644
+--- a/arch/mips/mach-jz47xx/include/mach/x2600_ram.h
++++ b/arch/mips/mach-jz47xx/include/mach/x2600_ram.h
+@@ -25,8 +25,9 @@
+  * doesn't list all give 512 MiB, the X2600H's table, as every Kiln SPL
+  * before this one did. Another known variant with a DDR Kiln has no table
+  * for (128 MiB and less, DDR2) gives 0: the SPL stops before the DDR
+- * setup, since the kernels' memory layout (mem=236M, rmem at 0x0ec00000,
+- * the RISC-V core's 4 MiB at 0x0fc00000) needs the low 256 MiB.
++ * setup, since the kernels' memory layout (mem=236M as the stock SPL
++ * passes it, 252M for Kiln's kernels; the RISC-V core's 4 MiB at
++ * 0x0fc00000) needs the low 256 MiB.
+  */
+ #ifndef __MACH_X2600_RAM_H__
+ #define __MACH_X2600_RAM_H__
+@@ -81,6 +82,25 @@ static inline unsigned int x2600_ram_mib(int socid)
+ 	return 0;
+ }
+ 
++/*
++ * Take word @w (ending at @e) off command line @s, in place, with the
++ * spaces after it (before it when it is the last word). Returns where the
++ * next word starts (or the end of @s).
++ */
++static inline char *x2600_args_cut(char *s, char *w, char *e)
++{
++	char *d;
++
++	while (*e == ' ')
++		e++;
++	if (!*e)
++		while (w > s && w[-1] == ' ')
++			w--;
++	for (d = w; (*d = *e); d++, e++)
++		;
++	return w;
++}
++
+ /*
+  * Take the X2600H's second bank off kernel command line @s, in place:
+  * every word "mem=<size>@0x30000000", with the spaces after it (before it
+@@ -90,7 +110,7 @@ static inline void x2600_args_drop_high_bank(char *s)
+ {
+ 	static const char at[] = "@0x30000000";
+ 	const int n = sizeof(at) - 1;
+-	char *w = s, *e, *d;
++	char *w = s, *e;
+ 	int i, hit;
+ 
+ 	while (*w) {
+@@ -104,17 +124,47 @@ static inline void x2600_args_drop_high_bank(char *s)
+ 		      w[2] == 'm' && w[3] == '=';
+ 		for (i = 0; hit && i < n; i++)
+ 			hit = e[i - n] == at[i];	/* the word's last n */
+-		if (!hit) {
+-			w = e;
++		w = hit ? x2600_args_cut(s, w, e) : e;
++	}
++}
++
++/*
++ * The low window Kiln's kernels get, on the stock SPL's command line @s,
++ * in place: "mem=236M@0x0" becomes "mem=252M@0x0" (0x0 to 0x0FC00000,
++ * where the RISC-V core's 4 MiB begin, which the kernels' device trees
++ * keep), and every "rmem=..." word goes, with the spaces after it (before
++ * it when it is the last word): the 16 MiB at 0x0EC00000 the stock
++ * firmware keeps for its media drivers, which Kiln's kernels don't have,
++ * are RAM for them. Any other word stays. S00ad5x-kernel does the same to
++ * the stock kernel's command line when it chainloads Kiln's kernel.
++ */
++static inline void x2600_args_kiln_low(char *s)
++{
++	static const char stock[] = "mem=236M@0x0";
++	const int n = sizeof(stock) - 1;
++	char *w = s, *e;
++	int i, hit;
++
++	while (*w) {
++		if (*w == ' ') {
++			w++;
+ 			continue;
+ 		}
+-		while (*e == ' ')
+-			e++;
+-		if (!*e)
+-			while (w > s && w[-1] == ' ')
+-				w--;
+-		for (d = w; (*d = *e); d++, e++)
++		for (e = w; *e && *e != ' '; e++)
+ 			;
++		if (e - w >= 5 && w[0] == 'r' && w[1] == 'm' && w[2] == 'e' &&
++		    w[3] == 'm' && w[4] == '=') {
++			w = x2600_args_cut(s, w, e);
++			continue;
++		}
++		hit = e - w == n;
++		for (i = 0; hit && i < n; i++)
++			hit = w[i] == stock[i];
++		if (hit) {
++			w[5] = '5';	/* 236 -> 252, the same length */
++			w[6] = '2';
++		}
++		w = e;
+ 	}
+ }
+ 
+diff --git a/arch/mips/mach-jz47xx/x2600/spl.c b/arch/mips/mach-jz47xx/x2600/spl.c
+index ab344381..53a4eef5 100644
+--- a/arch/mips/mach-jz47xx/x2600/spl.c
++++ b/arch/mips/mach-jz47xx/x2600/spl.c
+@@ -243,7 +243,8 @@ static void spl_usb_check(void)
+  * which KSEG1 maps; the upper 256 MiB at 0x30000000 needs the kernel's
+  * mappings); 16 MiB from 0x01000000 with each word's address, then its
+  * inverse. Physical 0x00100000-0x0C100000 only: not the first MiB (the
+- * SRAM window), not ramoops at 0x0EB00000.
++ * SRAM window), not the kernels' crash logs (ramoops: 0x0EB00000 in
++ * older builds, 0x0FBC0000).
+  */
+ #define DDR_T_BASE		0xa4100000	/* physical bits 20 and 26 */
+ #define DDR_T_FILL		0xa1000000
+@@ -393,25 +394,28 @@ static u32 spl_crc32(u32 crc, const u8 *p, u32 len)
+ static u8 spl_sector[512] __aligned(4);
+ /* spl_load_uimage() returned 0 because the eMMC read failed */
+ static bool spl_read_bad;
++/* the name of the last uImage spl_load_uimage() took */
++static char spl_name[IH_NMLEN + 1];
+ 
+ /* a uImage's whole blocks, header included, go between these */
+ #define SPL_LOAD_LOW		0x80008000	/* above the SRAM window */
+-#define SPL_LOAD_END		0x8eb00000	/* ramoops, 0x0EB00000 */
++#define SPL_LOAD_END		0x8eb00000	/* U-Boot proper's top of RAM */
+ 
+ /*
+  * Load the uImage at @lba (at most @max bytes with its header) to its load
+  * address; return its entry point, 0 if it isn't good. Accepted: MIPS,
+  * ih_os @os (a U-Boot wrapped for a kernel slot is ih_os Linux too),
+  * header and data CRCs right, its blocks (header from load - 64, rounded
+- * up to 512 bytes) between the SRAM window and the ramoops region, entry
+- * point inside the image. The limits are compared so that nothing wraps.
+- * spl_read_bad tells a read error from an image that isn't good.
++ * up to 512 bytes) between the SRAM window and 0x0EB00000 (where U-Boot
++ * proper's RAM ends: older kernels' crash log), entry point inside the
++ * image; its name in spl_name. The limits are compared so that nothing
++ * wraps. spl_read_bad tells a read error from an image that isn't good.
+  */
+ static ulong spl_load_uimage(u32 lba, ulong max, u8 os)
+ {
+ 	struct legacy_img_hdr *hdr = (void *)spl_sector, h;
+ 	ulong size, load, ep, blocks;
+-	char name[IH_NMLEN + 1];
++	char *name = spl_name;
+ 
+ 	spl_read_bad = ad5x_emmc_read(lba, 1, spl_sector) != 0;
+ 	if (spl_read_bad || image_get_magic(hdr) != IH_MAGIC)
+@@ -453,6 +457,13 @@ static ulong spl_load_uimage(u32 lba, ulong max, u8 os)
+ 			"mem=256M@0x30000000 init=/linuxrc root=/dev/mmcblk0pX " \
+ 			"rootwait rootfstype=squashfs ro lpj=11935744"
+ #define AD5X_MAX_ARGS	16
++/*
++ * Kiln's 6.6 in the slot, by its uImage name (kernel-ingenic66/build.sh,
++ * U-Boot proper's ad5x_slot_a_kernel_ok): it gets Kiln's kernels' low
++ * window (x2600_args_kiln_low: mem=252M@0x0, no rmem=). Any other kernel
++ * (Flashforge's 5.10) gets the stock SPL's.
++ */
++#define AD5X_KILN66	"Linux-6.6-ad5x"
+ 
+ static char spl_args[sizeof(AD5X_ARGS)];
+ static char *spl_argv[AD5X_MAX_ARGS + 1];
+@@ -469,6 +480,8 @@ static int ad5x_build_argv(char root)
+ 	/* 256 MiB (an X2600E): no second bank, as its stock SPL starts it */
+ 	if (spl_ram_mib < 512)
+ 		x2600_args_drop_high_bank(spl_args);
++	if (!strncmp(spl_name, AD5X_KILN66, sizeof(AD5X_KILN66) - 1))
++		x2600_args_kiln_low(spl_args);
+ 
+ 	spl_argv[argc++] = "spl";
+ 	for (p = spl_args; *p && argc < AD5X_MAX_ARGS; ) {
+diff --git a/board/flashforge/ad5x/ad5x.c b/board/flashforge/ad5x/ad5x.c
+index 0051f90e..681a1dbf 100644
+--- a/board/flashforge/ad5x/ad5x.c
++++ b/board/flashforge/ad5x/ad5x.c
+@@ -41,7 +41,7 @@ DECLARE_GLOBAL_DATA_PTR;
+ 
+ /* U-Boot itself may take this long (the prompt: "ad5x_wdt off") */
+ #define AD5X_UBOOT_WDT_MS	120000
+-/* the crash log the kernels keep (ramoops), not to be touched */
++/* U-Boot's top of RAM: older kernels' crash log (ramoops) above it */
+ #define AD5X_RAMOOPS		0x0eb00000
+ #define AD5X_STATE_LBA		(AD5X_OTA_LBA + 0x90000 / 512)
+ #define AD5X_RECORDS_LBA	(AD5X_STATE_LBA + 1)
+@@ -67,11 +67,14 @@ int board_early_init_f(void)
+ 
+ /*
+  * 512 MiB in two banks (an X2600H; an X2600E has only the low 256 MiB,
+- * mach/x2600_ram.h): 236 MiB at 0 (lowmem, the only part KSEG0 reaches
+- * below the rmem and rtos regions) and 256 MiB at 0x30000000. Above 236 MiB
+- * the low bank holds rmem (16 MiB at 0x0ec00000) and the RISC-V
+- * co-processor's 4 MiB (0x0fc00000), which the SPL may have started: U-Boot
+- * keeps to the 236 MiB below them.
++ * mach/x2600_ram.h): 256 MiB at 0 (lowmem, the only part KSEG0 reaches)
++ * and 256 MiB at 0x30000000. U-Boot keeps to the 236 MiB at 0 the stock
++ * SPL gives the stock kernel (mem=236M@0x0), which is plenty for it.
++ * Kiln's kernels get 252 MiB (x2600_args_kiln_low): above 236 MiB that
++ * is the 16 MiB the stock firmware keeps for its media drivers (rmem at
++ * 0x0EC00000), whose last 256 KiB hold the kernels' crash log (ramoops,
++ * 0x0FBC0000-0x0FBFFFFF), never touched by U-Boot. Above it the RISC-V
++ * co-processor's 4 MiB (0x0FC00000), which the SPL may have started.
+  */
+ int dram_init(void)
+ {
+@@ -80,10 +83,11 @@ int dram_init(void)
+ }
+ 
+ /*
+- * The last MiB of those 236 holds the kernels' crash log (ramoops,
+- * 0x0EB00000-0x0EBFFFFF, kernel-ingenic66/ad5x.dts): U-Boot relocates
+- * itself, its heap and its stack below it, so a crash log survives into
+- * the next start.
++ * The last MiB of those 236 held the kernels' crash log (ramoops,
++ * 0x0EB00000-0x0EBFFFFF) until it moved to 0x0FBC0000, and still does for
++ * an older kernel (a rollback, an older recovery OS): U-Boot relocates
++ * itself, its heap and its stack below it, so such a crash log survives
++ * into the next start too.
+  */
+ phys_addr_t board_get_usable_ram_top(phys_size_t total_size)
+ {
+@@ -457,6 +461,9 @@ static void ad5x_bootargs(const char *root, int own, int extra_ok,
+ 	snprintf(args, CONFIG_SYS_CBSIZE, "%s root=%s%s ad5x.uboot=1",
+ 		 env_get("args_spl"), root,
+ 		 own ? " ad5x.kernel=own panic=10 loglevel=5" : "");
++	/* Kiln's kernel: the low window it gets (mach/x2600_ram.h) */
++	if (own)
++		x2600_args_kiln_low(args);
+ 	/* the watchdog runs into this kernel: for how long (information) */
+ 	if (wdt)
+ 		snprintf(args + strlen(args), CONFIG_SYS_CBSIZE - strlen(args),
+-- 
+2.56.0
+

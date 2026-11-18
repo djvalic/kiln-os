@@ -1,5 +1,5 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: valix <djvalic.wc@gmail.com>
+From: djvalic <djvalic@users.noreply.github.com>
 Date: Mon, 16 Nov 2026 12:00:00 -0500
 Subject: [PATCH 26/26] ad5x: No stock-kernel rung; the recovery OS on p1's
  kernel; what was started in CPSPR

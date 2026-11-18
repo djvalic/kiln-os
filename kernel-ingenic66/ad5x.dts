@@ -45,6 +45,9 @@
 	 * rtos_size=4M@0xfc00000 from /proc/cmdline); this 6.6 kernel parses
 	 * neither rmem= nor rtos_size=. Keep the RTOS's 4 MiB out of Linux'
 	 * hands. Harmless if the SPL's mem= already excludes it.
+	 * This kernel gets mem=252M@0x0 (S00ad5x-kernel, Kiln's U-Boot and
+	 * SPL turn stock's mem=236M@0x0 into it and drop rmem=): the 16 MiB
+	 * at 0x0ec00000 stock keeps for its media drivers are RAM here.
 	 */
 	reserved-memory {
 		#address-cells = <1>;
@@ -57,16 +60,20 @@
 		};
 
 		/*
-		 * Crash log (issue #29): the last 1 MiB of System RAM (the SPL's
-		 * mem=236M ends at 0x0ebfffff), kept out of Linux' hands. A panic
-		 * writes its log here; pstore reads it back after the next boot.
+		 * Crash log (issue #29): the last 256 KiB of System RAM
+		 * (mem=252M ends at 0x0fbfffff), kept out of Linux' hands. It
+		 * is above the 236 MiB that Kiln's U-Boot uses and that the
+		 * stock kernel, which runs before this one on the stock SPL's
+		 * chain, has as System RAM. A panic writes its log here (two
+		 * 64 KiB records, 128 KiB of console); pstore reads it back
+		 * after the next boot.
 		 */
-		ramoops@eb00000 {
+		ramoops@fbc0000 {
 			compatible = "ramoops";
-			reg = <0x0eb00000 0x00100000>;
+			reg = <0x0fbc0000 0x00040000>;
 			no-map;
 			record-size = <0x10000>;
-			console-size = <0x40000>;
+			console-size = <0x20000>;
 		};
 	};
 

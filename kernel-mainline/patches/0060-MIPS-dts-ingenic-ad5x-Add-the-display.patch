@@ -14,8 +14,8 @@ diff --git a/arch/mips/boot/dts/ingenic/ad5x.dts b/arch/mips/boot/dts/ingenic/ad
 index 05b3b4d15..9d468111e 100644
 --- a/arch/mips/boot/dts/ingenic/ad5x.dts
 +++ b/arch/mips/boot/dts/ingenic/ad5x.dts
-@@ -27,6 +27,38 @@ memory@0 {
- 		      <0x30000000 0x10000000>;
+@@ -26,6 +26,38 @@ memory@0 {
+ 		reg = <0x00000000 0x10000000>;
  	};
  
 +	backlight: backlight {
@@ -53,7 +53,7 @@ index 05b3b4d15..9d468111e 100644
  	reserved-memory {
  		#address-cells = <1>;
  		#size-cells = <1>;
-@@ -66,6 +98,31 @@ regulator-wifi {
+@@ -65,6 +97,31 @@ regulator-wifi {
  	};
  };
  
@@ -85,7 +85,7 @@ index 05b3b4d15..9d468111e 100644
  &exclk {
  	clock-frequency = <24000000>;
  };
-@@ -118,6 +175,7 @@ &otg_phy {
+@@ -117,6 +174,7 @@ &otg_phy {
  };
  
  &pinctrl {

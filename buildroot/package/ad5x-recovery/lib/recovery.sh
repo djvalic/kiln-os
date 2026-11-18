@@ -230,6 +230,14 @@ rc_uboot_fresh() {
 	if [ -d "$rcu_k" ]; then
 		[ -n "$rcu_r" ] && [ "$rcu_r" != - ] &&
 			echo "recovery OS: U-Boot's last fallback was: $rcu_r; records cleared ($1)" >> "$rcu_k/history"
+		# a failed start in extended memory: keep it in /data before
+		# the records go, so the next main OS start stays standard
+		rcu_m=$(dd if="$rcu_o" bs=512 skip=1153 count=1 2>/dev/null | tr '\000' '\n' |
+			sed -n 's/^failed-mem //p' | head -n 1)
+		if [ -n "$rcu_m" ] && [ "$rcu_m" != - ] && [ ! -f "$rcu_k/extended-memory-failed" ]; then
+			echo "$rcu_m, $(date '+%Y-%m-%d %H:%M' 2>/dev/null)" > "$rcu_k/extended-memory-failed"
+			echo "recovery OS: U-Boot's failed-mem ($rcu_m) kept in extended-memory-failed ($1)" >> "$rcu_k/history"
+		fi
 		for rcu_f in failed failed-mainline; do
 			[ -f "$rcu_k/$rcu_f" ] || continue
 			echo "recovery OS: record $rcu_f ($(sed -n 1p "$rcu_k/$rcu_f")) cleared ($1)" >> "$rcu_k/history"
@@ -285,4 +293,34 @@ rc_uimage_len() {
 RC_USB=$AD5X_RUN/usb
 rc_usb_mounts() {
 	awk -v p="$RC_USB/" 'index($2, p) == 1 { print $2 }' "$AD5X_MOUNTS"
+}
+
+# rc_swu_tmpdir [NAME]: the folder SWUpdate unpacks a .swu into (its
+# TMPDIR). Every artifact is unpacked and checked before anything is
+# written: up to ~100 MiB (the root filesystem image), too much for /tmp
+# (RAM) on a 256 MiB board. $AD5X_DATA/ad5x/NAME when the data partition is
+# ext4, mounted read-write, with RC_SWU_TMP_FREE KiB free; otherwise /tmp,
+# as before. SWUpdate removes what it unpacked after each install; a power
+# cut or a crash leaves it, so the folder is emptied here. NAME: the
+# daemon's swupdate-tmp (S70swupdate; emptied only while no SWUpdate runs,
+# with what runs of ad5x-swu-apply left), or swupdate-apply.PID for a
+# run of its own (ad5x-swu-apply, which removes it after).
+RC_SWU_TMP_FREE=262144
+rc_swu_tmpdir() {
+	sn=${1:-swupdate-tmp}
+	st=$AD5X_DATA/ad5x/$sn
+	so=$(awk -v m="$AD5X_DATA" '$2 == m && $3 == "ext4" { print $4; exit }' "$AD5X_MOUNTS")
+	case ",$so," in *,rw,*) ;; *) echo /tmp; return 0 ;; esac
+	if [ "$sn" != swupdate-tmp ]; then
+		rm -rf "$st"
+	elif ! pidof swupdate >/dev/null 2>&1; then
+		rm -rf "$st" "$AD5X_DATA"/ad5x/swupdate-apply.*
+	fi
+	sa=$(df -Pk "$AD5X_DATA" 2>/dev/null | awk 'NR == 2 { print $4 }')
+	case "$sa" in ''|*[!0-9]*) sa=0 ;; esac
+	if [ "$sa" -ge $RC_SWU_TMP_FREE ] && mkdir -p "$st" && chmod 700 "$st"; then
+		echo "$st"
+	else
+		echo /tmp
+	fi
 }

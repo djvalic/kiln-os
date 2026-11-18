@@ -48,16 +48,22 @@
 #                                      request (nothing is sent when the
 #                                      bootloader already waits; refused
 #                                      while Klipper runs)
-#        ad5x-mcu flash-ifs [HEX]      flash the IFS now: this version, or
-#                                      HEX (refused while Klipper runs; Klipper
+#        ad5x-mcu flash-ifs [HEX|stock] flash the IFS now: this version, HEX,
+#                                      or "stock": Flashforge's ifs.hex from
+#                                      this printer's usershare backup
+#                                      (refused while Klipper runs; Klipper
 #                                      only with ifs-klipper.enable). If its
 #                                      bootloader doesn't answer, it keeps
 #                                      trying for 2 minutes: unplug the IFS
 #                                      cable and plug it back in. HEX with
-#                                      Flashforge's firmware (stock ifs.hex):
-#                                      no enable file needed, checked with
-#                                      F19, not as Klipper, and
+#                                      Flashforge's firmware (stock ifs.hex),
+#                                      or "stock": no enable file needed,
+#                                      checked with F19, not as Klipper, and
 #                                      ifs-klipper.enable is removed
+#        ad5x-mcu ifs-status KEY=VALUE...
+#                                      change lines of $IFS_FW_STATUS (the
+#                                      root update agent's IFS firmware
+#                                      switch writes it this way)
 #        ad5x-mcu arm-stock            arm stock's own board update
 #        ad5x-mcu tools                check the flashing tools are installed
 # /data/ad5x/mcu.disable: "boot" only starts the eboard, flashes nothing.
@@ -69,6 +75,10 @@
 # AD5X_USERSHARE (a directory holding stock's PROGRAM/ instead of mounting
 # the usershare partition), AD5X_SCREENS (/usr/share/ad5x/screens),
 # AD5X_KERNEL (stock|own), AD5X_BOOTED (/etc/init.d/S99ad5x-booted).
+# IFS_FW_STATUS: set by the update agent's IFS firmware switch
+# (S68ad5x-update-agent): flash-ifs writes its progress there (phase) and,
+# when it fails, why (reason: bad_image, no_stock_firmware, no_bootloader,
+# flash_failed, no_answer).
 : "${AD5X_DATA:=/data}" "${AD5X_SYS:=/sys}" "${AD5X_DEV:=/dev}" "${AD5X_RUN:=/run/ad5x}"
 : "${AD5X_MCU_FW:=/usr/share/ad5x/mcu}" "${AD5X_SCREENS:=/usr/share/ad5x/screens}"
 ST=$AD5X_DATA/ad5x/mcu
@@ -302,37 +312,151 @@ if "version:" in r:
 EOF
 }
 
+ifs_status() {	# KEY=VALUE...: change those lines of $IFS_FW_STATUS, replace it atomically
+	for k in target state phase reason message version; do
+		eval "st_$k=\$(sed -n \"s/^$k=//p\" \"\$IFS_FW_STATUS\" 2>/dev/null)"
+	done
+	for kv; do
+		case $kv in
+		target=*) st_target=${kv#*=} ;;
+		state=*) st_state=${kv#*=} ;;
+		phase=*) st_phase=${kv#*=} ;;
+		reason=*) st_reason=${kv#*=} ;;
+		message=*) st_message=${kv#*=} ;;
+		version=*) st_version=${kv#*=} ;;
+		esac
+	done
+	mkdir -p "${IFS_FW_STATUS%/*}"
+	printf 'target=%s\nstate=%s\nphase=%s\nreason=%s\nmessage=%s\nversion=%s\n' \
+		"$st_target" "$st_state" "$st_phase" "$st_reason" "$st_message" "$st_version" \
+		> "$IFS_FW_STATUS.tmp" && mv "$IFS_FW_STATUS.tmp" "$IFS_FW_STATUS"
+}
+ifs_progress() {	# PHASE: only while the agent's switch runs (IFS_FW_STATUS)
+	[ -z "$IFS_FW_STATUS" ] || ifs_status phase="$1"
+}
+ifs_fail() {	# REASON: why the switch failed, for the agent (IFS_FW_STATUS)
+	[ -z "$IFS_FW_STATUS" ] || ifs_status reason="$1"
+}
+
+# ifs_hex_ok HEX: HEX is an image the IFS bootloader can take, checked
+# before anything is sent (F37 already erases the bootloader's flag page):
+# every record well formed with a right checksum, one end-of-file record
+# at the end, the data from 0x08010000 (where the bootloader puts the
+# first block; ad5x-flash-ifs sends no address) to below 0x08080000
+# (512 KiB of flash), a stack pointer the bootloader accepts
+# ((SP & 0x2FFE0000) == 0x20000000; it starts no other application) and a
+# reset vector in the image (Thumb). Prints why not.
+ifs_hex_ok() {
+	python3 - "$1" <<'EOF'
+import sys
+START, END = 0x08010000, 0x08080000
+def bad(why):
+    print(why)
+    sys.exit(1)
+try:
+    lines = [l.strip() for l in open(sys.argv[1], errors="replace")]
+except OSError as e:
+    bad("can't read it: %s" % e.strerror)
+lines = [l for l in lines if l]
+if not lines:
+    bad("empty")
+data, base, eof = {}, 0, False
+for n, l in enumerate(lines, 1):
+    if eof:
+        bad("data after the end-of-file record (line %d)" % n)
+    if not l.startswith(":") or len(l) < 11:
+        bad("not an Intel hex record (line %d)" % n)
+    try:
+        b = bytes.fromhex(l[1:])
+    except ValueError:
+        bad("not an Intel hex record (line %d)" % n)
+    if len(b) != b[0] + 5 or sum(b) & 0xff:
+        bad("bad length or checksum (line %d)" % n)
+    kind, addr, payload = b[3], (b[1] << 8) | b[2], b[4:-1]
+    if kind == 0:
+        for i, v in enumerate(payload):
+            a = base + addr + i
+            if a in data:
+                bad("address 0x%08X written twice (line %d)" % (a, n))
+            data[a] = v
+    elif kind == 1:
+        eof = True
+    elif kind == 2 and len(payload) == 2:
+        base = ((payload[0] << 8) | payload[1]) << 4
+    elif kind == 4 and len(payload) == 2:
+        base = ((payload[0] << 8) | payload[1]) << 16
+    elif kind in (3, 5) and len(payload) == 4:
+        pass
+    else:
+        bad("unknown record type %d (line %d)" % (kind, n))
+if not eof:
+    bad("no end-of-file record")
+if not data:
+    bad("no data")
+lo, hi = min(data), max(data)
+if lo != START:
+    bad("starts at 0x%08X, not 0x%08X" % (lo, START))
+if hi >= END:
+    bad("ends at 0x%08X, past the IFS's flash" % hi)
+if any(START + i not in data for i in range(8)):
+    bad("no vector table at 0x%08X" % START)
+word = lambda a: sum(data[a + i] << (8 * i) for i in range(4))
+sp, reset = word(START), word(START + 4)
+if sp & 0x2FFE0000 != 0x20000000:
+    bad("stack pointer 0x%08X: the IFS bootloader would not start it" % sp)
+if not reset & 1 or not START <= reset & ~1 <= hi:
+    bad("reset vector 0x%08X is not in the image" % reset)
+EOF
+}
+
 flash_ifs() {	# HEX WHAT: write HEX to the IFS (WHAT for the log)
-	command -v ad5x-flash-ifs >/dev/null 2>&1 || { say "ifs: ad5x-flash-ifs missing (reinstall the image)"; return 1; }
+	command -v ad5x-flash-ifs >/dev/null 2>&1 || { say "ifs: ad5x-flash-ifs missing (reinstall the image)"; ifs_fail flash_failed; return 1; }
+	if ! why=$(ifs_hex_ok "$1" 2>&1); then
+		say "ifs: $1 is not an IFS image (${why:-python3 failed}): nothing sent to the IFS"
+		ifs_fail bad_image; return 1
+	fi
 	say "ifs: flashing $2 (ad5x-flash-ifs)"
-	end=$(( $(secs) + ${IFS_WAIT:-0} )) told= f37_arg="--f37"
+	ifs_progress writing
+	end=$(( $(secs) + ${IFS_WAIT:-0} )) told=
 	while :; do
 		# ad5x-flash-ifs (= ad5x-flash-iap) sends F37 itself, then writes the IFS.
+		# F37 on every try: after the cable is plugged back in, the IFS may run
+		# its application again (an F37 that got lost), and only F37 gets it
+		# into the bootloader; a bootloader that already waits ignores it.
 		# Nothing after EOT (--no-start): the IFS bootloader starts the application
 		# itself, as with stock IFSCommand; an 'A' there left the application erased
-		ad5x-flash-ifs $f37_arg --no-start -p "$IFS_PORT" -w 20 "$1" > "$ST/ifs.log" 2>&1
+		ad5x-flash-ifs --f37 --no-start -p "$IFS_PORT" -w 20 "$1" > "$ST/ifs.log" 2>&1
 		rc=$?
-		f37_arg="--no-f37"
 		if [ $rc = 0 ] && grep -q "STM32Write: success" "$ST/ifs.log" && ! grep -q "HD" "$ST/ifs.log"; then
 			# written; flash_ifs_klipper checks the version the IFS then reports
 			return 0
 		fi
 		if grep -q "Can not connect" "$ST/ifs.log" && [ "$(secs)" -lt $end ]; then
-			[ -n "$told" ] || say "ifs: no bootloader answers: unplug the IFS cable and plug it back in"
+			if [ -z "$told" ]; then
+				say "ifs: no bootloader answers: unplug the IFS cable and plug it back in"
+				ifs_progress replug
+			fi
 			told=1; continue
 		fi
-		say "ifs: flashing failed (exit $rc, $ST/ifs.log)"
+		if grep -q "Can not connect" "$ST/ifs.log"; then
+			say "ifs: no bootloader answered (exit $rc, $ST/ifs.log)"
+			ifs_fail no_bootloader
+		else
+			say "ifs: flashing failed (exit $rc, $ST/ifs.log)"
+			ifs_fail flash_failed
+		fi
 		return 1
 	done
 }
 
 flash_ifs_klipper() {	# HEX [WANT]: Klipper firmware; WANT empty: any version
-	[ -f "$1" ] || { say "ifs: no $1"; return 1; }
+	[ -f "$1" ] || { say "ifs: no $1"; ifs_fail bad_image; return 1; }
 	flash_ifs "$1" "${2:-$1}" || return 1
+	ifs_progress verifying
 	sleep 2
 	v=$(ifs_ver 3)
 	if [ -z "$v" ] || { [ -n "$2" ] && [ "$v" != "$2" ]; }; then
-		say "ifs: flashed, but it reports '${v:-nothing}'"; rm -f "$ST/ifs"; return 1
+		say "ifs: flashed, but it reports '${v:-nothing}'"; rm -f "$ST/ifs"; ifs_fail no_answer; return 1
 	fi
 	echo "$v" > "$ST/ifs"
 	say "ifs: $v"
@@ -361,9 +485,34 @@ sys.exit(0 if b"F19 ok." in d else 1)
 EOF
 }
 
+stock_check() {	# stock's ifs.hex in $SH, its md5 checked; mounted. Else STOCK_ERR, unmounted
+	SH=
+	us_mount ro || { STOCK_ERR="can't read the usershare partition"; return 1; }
+	c=$(control_dir)
+	if [ -z "$c" ]; then
+		STOCK_ERR="no control directory on the usershare partition"
+		us_umount; return 1
+	fi
+	want=$(sed -n 's|^\([0-9a-fA-F]*\)[ *]*\(\./\)\{0,1\}ifs\.hex$|\1|p' "$c/md5sum.list" 2>/dev/null | head -1)
+	if [ -z "$want" ] || [ ! -f "$c/ifs.hex" ]; then
+		STOCK_ERR="stock ${c##*/} has no ifs.hex with an md5sum.list entry"
+		us_umount; return 1
+	fi
+	if [ "$(md5sum < "$c/ifs.hex" | cut -d' ' -f1)" != "$want" ]; then
+		STOCK_ERR="stock ${c##*/}: ifs.hex doesn't match md5sum.list"
+		us_umount; return 1
+	fi
+	if ! ifs_hex_stock "$c/ifs.hex"; then
+		STOCK_ERR="stock ${c##*/}: ifs.hex is not Flashforge's IFS firmware"
+		us_umount; return 1
+	fi
+	SH=$c/ifs.hex
+}
+
 flash_ifs_stock() {	# HEX: Flashforge's firmware back on the IFS; 0 when it answers F19
-	[ -f "$1" ] || { say "ifs: no $1"; return 1; }
+	[ -f "$1" ] || { say "ifs: no $1"; ifs_fail no_stock_firmware; return 1; }
 	flash_ifs "$1" "$1 (Flashforge's firmware)" || return 1
+	ifs_progress verifying
 	rm -f "$ST/ifs"
 	# Klipper is gone from the IFS: "boot" must not write it back, and
 	# S61klipper leaves the IFS to ifs.py's serial link
@@ -381,6 +530,7 @@ flash_ifs_stock() {	# HEX: Flashforge's firmware back on the IFS; 0 when it answ
 	done
 	if [ -z "$v" ]; then
 		say "ifs: Flashforge's firmware written, but it doesn't answer F19 (switch the printer off and on; $ST/ifs.log)"
+		ifs_fail no_answer
 		return 1
 	fi
 	echo "flashforge $v" > "$ST/ifs"
@@ -548,20 +698,36 @@ flash-eboard)
 flash-ifs)
 	# Flashforge's image (the way back to stock) needs no enable file: it is
 	# the IFS's default firmware. Klipper on the IFS is the opt-in.
+	# "stock": Flashforge's own ifs.hex from this printer's usershare
+	# backup (stock's newest control directory, checked against its
+	# md5sum.list); nothing from Flashforge is in the image.
 	stock=
-	[ -n "$2" ] && ifs_hex_stock "$2" && stock=1
+	if [ "$2" = stock ]; then
+		stock=1
+	elif [ -n "$2" ] && ifs_hex_stock "$2"; then
+		stock=1
+	fi
 	[ -n "$stock" ] || [ -f "$AD5X_DATA/ad5x/ifs-klipper.enable" ] || {
 		echo "ad5x-mcu: no Klipper on the IFS without $AD5X_DATA/ad5x/ifs-klipper.enable (Flashforge's ifs.hex needs none)" >&2; exit 1; }
 	klippy_running && { echo "ad5x-mcu: Klipper runs: /etc/init.d/S61klipper stop first" >&2; exit 1; }
 	mkdir -p "$ST"; arm_stock
 	export IFS_WAIT=120
-	if [ -n "$stock" ]; then
+	if [ "$2" = stock ]; then
+		stock_check || { say "ifs: $STOCK_ERR"; ifs_fail no_stock_firmware; exit 1; }
+		flash_ifs_stock "$SH"
+		rc=$?
+		us_umount
+		exit $rc
+	elif [ -n "$stock" ]; then
 		flash_ifs_stock "$2"
 	elif [ -z "$2" ]; then
 		[ -n "$IFS_WANT" ] && flash_ifs_klipper "$AD5X_MCU_FW/ifs.hex" "$IFS_WANT"
 	else
 		flash_ifs_klipper "$2"	# another Klipper build
 	fi ;;
+ifs-status)
+	[ -n "$IFS_FW_STATUS" ] || { echo "ad5x-mcu: ifs-status needs IFS_FW_STATUS" >&2; exit 2; }
+	shift; ifs_status "$@" ;;
 arm-stock) mkdir -p "$ST"; arm_stock ;;
 tools) mkdir -p "$ST"; tools ;;
 *) sed -n '2,/^# Log:/p' "$0"; exit 2 ;;

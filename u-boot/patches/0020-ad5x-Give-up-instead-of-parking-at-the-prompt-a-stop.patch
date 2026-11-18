@@ -1,5 +1,5 @@
 From 87dcd29e3be15fff03d1bd1ad392660d512f5ac6 Mon Sep 17 00:00:00 2001
-From: valix <djvalic.wc@gmail.com>
+From: djvalic <djvalic@users.noreply.github.com>
 Date: Sun, 15 Nov 2026 12:42:47 -0500
 Subject: [PATCH 20/23] ad5x: Give up instead of parking at the prompt; a stop
  key for it

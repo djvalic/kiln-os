@@ -1,5 +1,5 @@
 From 0216cea34d3cd5fb73c1dca876244b9f39924ea7 Mon Sep 17 00:00:00 2001
-From: valix <djvalic.wc@gmail.com>
+From: djvalic <djvalic@users.noreply.github.com>
 Date: Sun, 15 Nov 2026 11:47:47 -0500
 Subject: [PATCH 14/16] ad5x: Keep U-Boot below the kernels' crash log
 

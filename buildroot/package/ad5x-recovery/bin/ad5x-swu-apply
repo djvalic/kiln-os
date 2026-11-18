@@ -11,21 +11,25 @@
 # Goes through the running SWUpdate daemon (S70swupdate) when its control
 # socket exists, so progress shows on /tmp/swupdateprog (UI, web page);
 # otherwise runs swupdate itself. The .swu's script checks the written slot
-# and points the boot flag at slot B. Exit status 0 on success; the last
+# and points the boot flag at slot B. A run of its own (--check, or no
+# daemon) unpacks into /data/ad5x/swupdate-apply.PID, removed after, when
+# the data partition has room (rc_swu_tmpdir in lib/recovery.sh); the
+# daemon has its own folder (S70swupdate). Exit status 0 on success; the last
 # line is "swu-apply: OK", "swu-apply: CHECK OK" or "swu-apply: FAILED ...".
 KEY=/etc/swupdate/public.pem
+. ${AD5X_RECOVERY_LIB:-/usr/lib/ad5x-recovery}/recovery.sh
 check= reboot_after=
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--check) check=1 ;;
 	--reboot) reboot_after=1 ;;
-	-h|--help) sed -n '2,17p' "$0"; exit 0 ;;
-	-*) sed -n '2,17p' "$0" >&2; exit 2 ;;
+	-h|--help) sed -n '2,18p' "$0"; exit 0 ;;
+	-*) sed -n '2,18p' "$0" >&2; exit 2 ;;
 	*) break ;;
 	esac
 	shift
 done
-[ $# -eq 1 ] || { sed -n '2,17p' "$0" >&2; exit 2; }
+[ $# -eq 1 ] || { sed -n '2,18p' "$0" >&2; exit 2; }
 SWU=$1
 [ -f "$SWU" ] || { echo "swu-apply: FAILED no file $SWU"; exit 1; }
 if [ "$(head -c 4 "$SWU" | od -An -t x1 | tr -d ' \n')" = 504b0304 ]; then
@@ -35,6 +39,12 @@ if [ "$(head -c 4 "$SWU" | od -An -t x1 | tr -d ' \n')" = 504b0304 ]; then
 	ad5x-zip-to-swu "$SWU" "$TMPSWU" || { echo "swu-apply: FAILED zip"; exit 1; }
 	SWU=$TMPSWU
 fi
+# own_tmpdir: TMPDIR for a run of swupdate itself, removed on exit
+own_tmpdir() {
+	TMPDIR=$(rc_swu_tmpdir swupdate-apply.$$)
+	export TMPDIR
+	[ "$TMPDIR" = /tmp ] || trap 'rm -rf "$TMPDIR"${TMPSWU:+ "$TMPSWU"}' EXIT
+}
 # Open mode: no key, unsigned .swu (sha256 per artifact). Signed builds
 # carry the key and pass it on.
 KEYARG=
@@ -43,6 +53,7 @@ echo "swu-apply: $SWU ($(wc -c < "$SWU" | tr -d ' ') bytes)"
 
 if [ -n "$check" ]; then
 	# -c: check the image only (runs no scripts, writes nothing)
+	own_tmpdir
 	if swupdate -c $KEYARG -i "$SWU"; then
 		echo "swu-apply: CHECK OK"; exit 0
 	fi
@@ -52,6 +63,7 @@ fi
 if [ -S /tmp/sockinstctrl ] && pidof swupdate >/dev/null; then
 	swupdate-client -v "$SWU"; rc=$?
 else
+	own_tmpdir
 	swupdate -v $KEYARG -i "$SWU"; rc=$?
 fi
 if [ $rc -ne 0 ]; then

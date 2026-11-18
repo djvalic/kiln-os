@@ -1,0 +1,182 @@
+#!/bin/sh
+# Extended memory mode's one-time test of the high DRAM bank (512 MiB
+# boards, docs/memory.md). The SPL's DDR test covers the low window only
+# and the kernel's memtest= doesn't reach highmem on MIPS, so
+# ad5x-memtest-high tests the bank's pages from userspace, here, while it
+# is nearly all free (a few seconds; 60 s at most). Runs after
+# S05ad5x-data (/data) and before S05ad5x-watchdog: until then the kernel
+# feeds a watchdog Kiln's U-Boot left running (up to 300 s).
+#
+# Only when /run/ad5x-memory.conf (S04ad5x-memory) has MEM_MODE=extended,
+# /data is the data partition (not a tmpfs, not USB test mode) and
+# /data/ad5x/kernel has neither extended-memory-tested nor
+# extended-memory-failed. Files in /data/ad5x/kernel (docs/data-layout.md):
+#   extended-memory-testing  written and synced before the test, removed
+#                            after it. Still there at the start: the last
+#                            test never finished (a hang or reset in it):
+#                            extended-memory-failed "memtest: start did
+#                            not finish, DATE", and a reboot if this start
+#                            is extended (the boot paths then start
+#                            standard)
+#   extended-memory-tested   passed: "memtest: N/65536 high-bank pages
+#                            tested, 4 passes, T ms, DATE"; never tested
+#                            again. The time limit without a fault counts
+#                            as passed (its own line).
+#   extended-memory-failed   a fault: "memtest: 0x3xxxxxxx reads X, Y
+#                            written, DATE", synced, then a reboot: the
+#                            boot paths start standard until
+#                            "ad5x-memory extended on" removes it (the
+#                            test then runs again)
+# Not run (no HighMem zone, no pagemap, pages moved, the program killed):
+# logged, nothing recorded, tried again at the next extended start.
+# Main OS only (package ad5x-memtest; the recovery OS never starts
+# extended under Kiln's boot loader).
+#
+# DATE: lib/memory.sh's mem_when (UTC, or "after ... (last saved clock)"
+# while the clock isn't set yet), as S00ad5x-kernel's records.
+#
+# Test overrides (tools/test_ad5x_memtest.sh): AD5X_LIB (/usr/lib/ad5x),
+# AD5X_DATA (/data),
+# AD5X_MEMORY_CONF (/run/ad5x-memory.conf), AD5X_BOOT_LOG
+# (/run/ad5x-boot.log), AD5X_MEMTEST_PROC (/proc: mounts, uptime),
+# AD5X_MEMTEST_BIN (/usr/sbin/ad5x-memtest-high), AD5X_MEMTEST_REBOOT
+# (reboot, without the reboot -f fallback), AD5X_RECOVERY_MARK
+# (/etc/ad5x-recovery).
+
+# Files this creates are readable by klipper and www-data, whoever started
+# it (a root SSH session may run with umask 077; issue #31)
+umask 022
+
+LIB=${AD5X_LIB:-/usr/lib/ad5x}
+DATA=${AD5X_DATA:-/data}
+CONF=${AD5X_MEMORY_CONF:-/run/ad5x-memory.conf}
+LOG=${AD5X_BOOT_LOG:-/run/ad5x-boot.log}
+PROC=${AD5X_MEMTEST_PROC:-/proc}
+BIN=${AD5X_MEMTEST_BIN:-/usr/sbin/ad5x-memtest-high}
+RECOVERY=${AD5X_RECOVERY_MARK:-/etc/ad5x-recovery}
+K=$DATA/ad5x/kernel
+TESTING=$K/extended-memory-testing
+TESTED=$K/extended-memory-tested
+FAILED=$K/extended-memory-failed
+
+# shellcheck source=/dev/null
+[ -r "$LIB/memory.sh" ] && . "$LIB/memory.sh"
+
+# when: the date for a record
+when() {
+	if command -v mem_when >/dev/null 2>&1; then
+		mem_when "$DATA/ad5x/clock"
+	else
+		date -u '+%Y-%m-%d %H:%M UTC'
+	fi
+}
+
+# say LINE: on the console and in the boot log (S04ad5x-memory's style)
+say() {
+	echo "$1"
+	echo "$(cut -d' ' -f1 "$PROC/uptime" 2>/dev/null)   $1" >> "$LOG" 2>/dev/null
+}
+
+# say_kept LINE: also in the boot trace that survives a reset
+# (ad5x-bootlog: the ota partition)
+say_kept() {
+	echo "$1"
+	if command -v ad5x-bootlog >/dev/null 2>&1; then
+		ad5x-bootlog "  $1" 2>/dev/null
+	else
+		echo "$(cut -d' ' -f1 "$PROC/uptime" 2>/dev/null)   $1" >> "$LOG" 2>/dev/null
+	fi
+}
+
+# record FILE LINE: one line, replaced whole
+record() {
+	mkdir -p "$K"
+	printf '%s\n' "$2" > "$1.tmp" && mv -f "$1.tmp" "$1"
+}
+
+reboot_now() {
+	sync
+	if [ -n "${AD5X_MEMTEST_REBOOT:-}" ]; then
+		$AD5X_MEMTEST_REBOOT
+		return
+	fi
+	reboot
+	# init normally takes it from here; if it waits for rcS, force it
+	# (the records are synced)
+	sleep 30
+	reboot -f
+}
+
+start() {
+	[ -e "$RECOVERY" ] && return 0
+	[ -n "${AD5X_USB:-}" ] && return 0
+	# the data partition, or the records would not be kept
+	awk '$2 == "/data" { t = $3 } END { exit !(t != "" && t != "tmpfs") }' \
+		"$PROC/mounts" 2>/dev/null || return 0
+	mode=$(sed -n 's/^MEM_MODE=//p' "$CONF" 2>/dev/null | head -n 1)
+	now=$(when)
+	if [ -e "$TESTING" ]; then
+		if [ -e "$TESTED" ]; then
+			# cut off between the two writes after a pass
+			rm -f "$TESTING"
+			sync
+		else
+			record "$FAILED" "memtest: start did not finish, $now"
+			rm -f "$TESTING"
+			sync
+			say_kept "memtest: the last high-bank test didn't finish: extended memory off (extended-memory-failed)"
+			if [ "$mode" = extended ]; then
+				say_kept "memtest: rebooting to start in standard mode"
+				reboot_now
+			fi
+			return 0
+		fi
+	fi
+	[ "$mode" = extended ] || return 0
+	[ -e "$TESTED" ] && return 0
+	[ -e "$FAILED" ] && return 0
+	if [ ! -x "$BIN" ]; then
+		say "memtest: no $BIN; high bank not tested"
+		return 0
+	fi
+	mkdir -p "$K"
+	: > "$TESTING"
+	sync
+	say "memtest: testing the high memory bank once (extended memory, first start)"
+	out=$("$BIN" 2>&1)
+	rc=$?
+	[ -n "$out" ] && printf '%s\n' "$out"
+	line=$(printf '%s\n' "$out" | sed -n '$p')
+	case "$line" in memtest:*) ;; *) line="memtest: not run: exit $rc" ;; esac
+	now=$(when)
+	case $rc in
+	0|3)
+		record "$TESTED" "$line, $now"
+		rm -f "$TESTING"
+		sync
+		say "$line"
+		;;
+	1)
+		record "$FAILED" "$line, $now"
+		rm -f "$TESTING"
+		sync
+		say_kept "$line"
+		say_kept "memtest: high bank fault: extended memory off (extended-memory-failed), rebooting to start in standard mode"
+		reboot_now
+		;;
+	*)
+		[ $rc = 2 ] || line="memtest: not run: exit $rc"
+		rm -f "$TESTING"
+		sync
+		say "$line"
+		;;
+	esac
+	return 0
+}
+
+case "$1" in
+start)
+	start
+	;;
+esac
+exit 0

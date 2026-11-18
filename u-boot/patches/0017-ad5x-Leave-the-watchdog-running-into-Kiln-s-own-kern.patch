@@ -1,5 +1,5 @@
 From 3487841ea533f8d845ecf64dd9191206b975a085 Mon Sep 17 00:00:00 2001
-From: valix <djvalic.wc@gmail.com>
+From: djvalic <djvalic@users.noreply.github.com>
 Date: Sun, 15 Nov 2026 12:16:03 -0500
 Subject: [PATCH 17/17] ad5x: Leave the watchdog running into Kiln's own kernels
 

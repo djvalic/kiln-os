@@ -65,10 +65,23 @@ start)
 	if [ -w $WQ ]; then
 		echo -10 > $WQ 2>/dev/null
 	fi
+	# Klippy locks its memory (klipper/extras/ad5x_mlock.py, docs/memory.md):
+	# pages it touches stay in RAM, so page reclaim and the 256 MiB
+	# board's zram swap can't stall it mid-print. The kernel counts a
+	# locked mapping's whole size, not what is used, so a bounded limit
+	# would make klippy's allocations fail once its mappings pass it:
+	# unlimited, for klippy only (raised here as root, kept when
+	# start-stop-daemon drops to user klipper). Klipper starts without it.
+	ulimit -l unlimited 2>/dev/null || echo "klipper: memory lock limit not raised"
 	HOME=/home/klipper start-stop-daemon -S -b -m -p $PID -c klipper -N -10 \
 		-x /usr/bin/python3 -- $KROOT/klippy/klippy.py \
 		$PD/config/printer.cfg -l $PD/logs/klippy.log \
 		-a $PD/comms/klippy.sock
+	# The OOM killer's last choice after the watchdog feeder: a killed
+	# Klipper ends the print (docs/memory.md). start-stop-daemon returns
+	# once the pid file is written and python3 runs.
+	p=$(cat $PID 2>/dev/null) && [ -n "$p" ] &&
+		echo -900 > /proc/$p/oom_score_adj 2>/dev/null
 	;;
 stop)
 	start-stop-daemon -K -p $PID -s INT

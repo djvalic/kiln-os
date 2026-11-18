@@ -1,5 +1,5 @@
 From 03d546b56ac827e8401c02e7687ebf71016fd83f Mon Sep 17 00:00:00 2001
-From: valix <djvalic.wc@gmail.com>
+From: djvalic <djvalic@users.noreply.github.com>
 Date: Sun, 15 Nov 2026 12:45:11 -0500
 Subject: [PATCH 22/23] mips: jz47xx: x2600: SPL: uImage limits without wrap,
  CMD6 status, no power write

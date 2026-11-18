@@ -22,7 +22,7 @@ index 9d468111e..a4b69a950 100644
  
  / {
  	compatible = "flashforge,ad5x", "ingenic,x2600";
-@@ -127,6 +128,28 @@ &exclk {
+@@ -126,6 +127,28 @@ &exclk {
  	clock-frequency = <24000000>;
  };
  
@@ -51,7 +51,7 @@ index 9d468111e..a4b69a950 100644
  &mac {
  	pinctrl-names = "default";
  	pinctrl-0 = <&pins_mac>;
-@@ -175,6 +198,10 @@ &otg_phy {
+@@ -174,6 +197,10 @@ &otg_phy {
  };
  
  &pinctrl {

@@ -1,0 +1,472 @@
+From 819a9ca9adfd833ab67fcc676eff0a7dc810cd2b Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Mon, 16 Nov 2026 22:30:00 -0700
+Subject: [PATCH 30/30] mips: jz47xx: x2600: SPL: eMMC data at the middle of
+ the sample window
+
+The SPL reads the eMMC at 25 MHz with the sample point the boot ROM
+leaves in MSC0CDR, RX phase 0. On an X2600E unit with an A31M8C eMMC
+every data read then fails with a data CRC error, while commands and
+reads at 400 kHz work. Swept on that unit, reads are correct from RX
+phase 1 to 5 (2 to 5 with the TX phase at 270 degrees).
+
+Set RX phase 3 with tuning off, as Ingenic's soc_mmc_set_rx_phase()
+does for its working clock.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+[Kiln OS: not tied to the SoC variant, it follows the eMMC part.
+ Started from the eMMC, the SPL first reads at the phase the boot ROM
+ left, so a board whose eMMC works there (the X2600H boards so far) is
+ read exactly as before, with no phase write. Any data read that fails
+ (a data CRC error, or another step: the line before says which) sets
+ RX phase 3 with tuning off, logs one line and is read again; later
+ reads keep that phase. Started over USB, the ROM never set the eMMC
+ up, so MSC0CDR gets the ROM's eMMC value (as in the chainload test
+ build) and then RX phase 3, before the first read. A read that still
+ fails is tried once more from CMD0 at 400 kHz and 1 bit; if that
+ works, booting goes on that way (slowly: 64 KiB reads, the phase's
+ watchdog restarted before each). Each failed read logs the step
+ (command busy, timeout or error; a data block or the transfer's end,
+ timeout or error) with SD_INT_STATUS, SD_PRESENT_STATE and MSC0CDR,
+ and spl_load_uimage() tells a read error from no image
+ (djvalic/kiln-os#68).]
+---
+ arch/mips/mach-jz47xx/x2600/spl.c      |  21 ++-
+ arch/mips/mach-jz47xx/x2600/spl.h      |   4 +-
+ arch/mips/mach-jz47xx/x2600/spl_emmc.c | 209 ++++++++++++++++++++++---
+ 3 files changed, 200 insertions(+), 34 deletions(-)
+
+diff --git a/arch/mips/mach-jz47xx/x2600/spl.c b/arch/mips/mach-jz47xx/x2600/spl.c
+index a0af3f27..ab344381 100644
+--- a/arch/mips/mach-jz47xx/x2600/spl.c
++++ b/arch/mips/mach-jz47xx/x2600/spl.c
+@@ -59,7 +59,7 @@
+ DECLARE_GLOBAL_DATA_PTR;
+ gd_t gdata __section(".bss");
+ 
+-#define AD5X_SPL_WDT_MS		10000	/* each SPL phase */
++/* AD5X_SPL_WDT_MS, each SPL phase: spl.h */
+ #define AD5X_UBOOT_WDT_MS	30000	/* U-Boot proper to come up */
+ 
+ #ifdef CONFIG_AD5X_SPL_CHAINLOAD
+@@ -391,6 +391,8 @@ static u32 spl_crc32(u32 crc, const u8 *p, u32 len)
+ }
+ 
+ static u8 spl_sector[512] __aligned(4);
++/* spl_load_uimage() returned 0 because the eMMC read failed */
++static bool spl_read_bad;
+ 
+ /* a uImage's whole blocks, header included, go between these */
+ #define SPL_LOAD_LOW		0x80008000	/* above the SRAM window */
+@@ -403,6 +405,7 @@ static u8 spl_sector[512] __aligned(4);
+  * header and data CRCs right, its blocks (header from load - 64, rounded
+  * up to 512 bytes) between the SRAM window and the ramoops region, entry
+  * point inside the image. The limits are compared so that nothing wraps.
++ * spl_read_bad tells a read error from an image that isn't good.
+  */
+ static ulong spl_load_uimage(u32 lba, ulong max, u8 os)
+ {
+@@ -410,8 +413,8 @@ static ulong spl_load_uimage(u32 lba, ulong max, u8 os)
+ 	ulong size, load, ep, blocks;
+ 	char name[IH_NMLEN + 1];
+ 
+-	if (ad5x_emmc_read(lba, 1, spl_sector) ||
+-	    image_get_magic(hdr) != IH_MAGIC)
++	spl_read_bad = ad5x_emmc_read(lba, 1, spl_sector) != 0;
++	if (spl_read_bad || image_get_magic(hdr) != IH_MAGIC)
+ 		return 0;
+ 	h = *hdr;
+ 	h.ih_hcrc = 0;
+@@ -432,7 +435,9 @@ static ulong spl_load_uimage(u32 lba, ulong max, u8 os)
+ 	name[IH_NMLEN] = '\0';
+ 	printf("SPL: %s, %lu bytes at 0x%lx\n", name, size, load);
+ 	blocks = (size + sizeof(h) + 511) / 512;
+-	if (ad5x_emmc_read(lba, blocks, (void *)(load - sizeof(h))))
++	spl_read_bad = ad5x_emmc_read(lba, blocks, (void *)(load - sizeof(h)))
++		       != 0;
++	if (spl_read_bad)
+ 		return 0;
+ 	if (spl_crc32(0, (u8 *)load, size) != image_get_dcrc(&h)) {
+ 		puts("SPL: data CRC wrong\n");
+@@ -485,7 +490,7 @@ static void __noreturn ad5x_boot(void)
+ 	int slot_b, argc;
+ 
+ 	spl_phase(AD5X_PH_EMMC, plan.slot_b);
+-	if (ad5x_emmc_init())
++	if (ad5x_emmc_init(spl_usb))
+ 		spl_fail(AD5X_PH_EMMC, plan.slot_b, "eMMC init failed");
+ 
+ 	if (plan.skip_uboot) {
+@@ -500,7 +505,8 @@ static void __noreturn ad5x_boot(void)
+ 			puts("SPL: starting U-Boot proper\n");
+ 			((entry_t)ep)(0, NULL, NULL, 0);
+ 		}
+-		puts("SPL: no U-Boot at 0xA400: the slot, as the stock SPL\n");
++		puts(spl_read_bad ? "SPL: can't read 0xA400: the slot\n" :
++		     "SPL: no U-Boot at 0xA400: the slot, as the stock SPL\n");
+ 	}
+ 
+ 	spl_phase(AD5X_PH_EMMC, plan.slot_b);
+@@ -518,7 +524,8 @@ static void __noreturn ad5x_boot(void)
+ 	ep = spl_load_uimage(slot_b ? AD5X_KERNEL_B_LBA : AD5X_KERNEL_A_LBA,
+ 			     AD5X_KERNEL_SECTORS * 512, IH_OS_LINUX);
+ 	if (!ep)
+-		spl_fail(AD5X_PH_SLOT, slot_b, "no good uImage in the slot");
++		spl_fail(AD5X_PH_SLOT, slot_b, spl_read_bad ?
++			 "can't read the slot" : "no good uImage in the slot");
+ 
+ 	/*
+ 	 * As the stock SPL hands over: watchdog stopped. KERNEL is a fresh
+diff --git a/arch/mips/mach-jz47xx/x2600/spl.h b/arch/mips/mach-jz47xx/x2600/spl.h
+index 6b081911..10168588 100644
+--- a/arch/mips/mach-jz47xx/x2600/spl.h
++++ b/arch/mips/mach-jz47xx/x2600/spl.h
+@@ -5,7 +5,9 @@
+ 
+ #include <linux/types.h>
+ 
+-int ad5x_emmc_init(void);
++#define AD5X_SPL_WDT_MS		10000	/* the watchdog, each SPL phase */
++
++int ad5x_emmc_init(bool usb);
+ int ad5x_emmc_read(u32 lba, u32 cnt, void *dst);
+ 
+ void x2600_spl_clocks_init(void);
+diff --git a/arch/mips/mach-jz47xx/x2600/spl_emmc.c b/arch/mips/mach-jz47xx/x2600/spl_emmc.c
+index 98ed2353..0ecec727 100644
+--- a/arch/mips/mach-jz47xx/x2600/spl_emmc.c
++++ b/arch/mips/mach-jz47xx/x2600/spl_emmc.c
+@@ -3,7 +3,14 @@
+  * Ingenic X2600 SPL: reading the eMMC on MSC0, a Synopsys DWC MSHC
+  * (SDHCI), by PIO. eMMC only: CMD0, CMD1, CMD2, CMD3, CMD7, 4-bit bus
+  * through CMD6, then CMD17/CMD18 with auto CMD12, at 25 MHz without the
+- * high-speed timing switch.
++ * high-speed timing switch. Data is sampled at the RX phase the boot ROM
++ * left, or at phase 3 with tuning off, the middle of the window
++ * (emmc_rx_phase_data()), when the SPL came over USB (the ROM never set
++ * the eMMC up then) or a read failed. A read that fails is logged (which
++ * step, the controller's status) and tried again: at phase 3 if it wasn't
++ * yet, then once more from CMD0 at 400 kHz and 1 bit, the setup the
++ * identification commands use (emmc_go_slow()). Each step is taken once and
++ * kept for every later read.
+  *
+  * The sequence follows the eMMC part of Ingenic's SPL driver for this SoC
+  * (U-Boot 2013.07 xburst2, common/spl/spl_jzsdhci.c), which Flashforge's
+@@ -19,6 +26,8 @@
+ #include <linux/delay.h>
+ #include <linux/errno.h>
+ #include <linux/types.h>
++#include <stdio.h>
++#include <mach/x2600.h>
+ #include "spl.h"
+ 
+ #define MSC0			((void __iomem *)0xb3450000)
+@@ -59,6 +68,7 @@
+ #define  INT_XFER_DONE		BIT(1)
+ #define  INT_BUF_RD		BIT(5)
+ #define  INT_ERROR		BIT(15)
++#define  INT_DATA_CRC		BIT(21)	/* error status: data CRC */
+ #define SD_INT_ENABLE		0x34
+ #define SD_SIGNAL_ENABLE	0x38
+ 
+@@ -73,6 +83,10 @@
+ #define CDR_BUSY		BIT(28)
+ #define CDR_STOP		BIT(27)
+ #define CDR_EXCK_E		BIT(21)	/* SDK MSCCDR_EXCK_E, in MSC0CDR */
++#define CDR_TUNING_OFF		BIT(20)	/* set: the fixed phases below */
++#define CDR_RX_PHASE_SHIFT	17	/* 19:17, the data sample point */
++#define CDR_RX_PHASE_MASK	(7 << CDR_RX_PHASE_SHIFT)
++#define CDR_RX_PHASE_DATA	3
+ #define CDR_DIV_MASK		0xff
+ /* what the boot ROM's cpm_desc leaves (ad5x_spl_image.py): APLL / 16 */
+ #define MSC0CDR_BOOT_ROM	0x20108003
+@@ -83,7 +97,15 @@
+ #define OCR_HCS			BIT(30)
+ #define R1_SWITCH_ERROR		BIT(7)	/* card status: CMD6 refused */
+ 
++/* the slow setup's reads: 64 KiB, about 1.3 s each */
++#define EMMC_SLOW_CHUNK		128
++
+ static int emmc_sector_mode;
++static bool emmc_phase3;	/* RX phase 3 set: kept */
++static bool emmc_slow;		/* 400 kHz, 1 bit: kept */
++static bool emmc_slow_ok;	/* a read worked that way (logged) */
++/* SD_INT_STATUS and SD_PRESENT_STATE when a command or read failed */
++static u32 emmc_bad_st, emmc_bad_ps;
+ 
+ /*
+  * 0 when (register & mask) == want within usec. 8- and 16-bit registers
+@@ -114,6 +136,12 @@ static u32 wait_int(u32 mask, u32 usec)
+ 	return st;
+ }
+ 
++static void emmc_note(void)
++{
++	emmc_bad_st = readl(MSC0 + SD_INT_STATUS);
++	emmc_bad_ps = readl(MSC0 + SD_PRESENT_STATE);
++}
++
+ static int emmc_reset(u8 mask)
+ {
+ 	writeb(mask, MSC0 + SD_SOFTWARE_RESET);
+@@ -148,15 +176,22 @@ static void emmc_set_clock(bool fast)
+ 	wait_reg(SD_CLOCK_CONTROL, CLK_INT_STABLE, CLK_INT_STABLE, 20000);
+ }
+ 
+-/* one command; *resp gets the short response */
++/*
++ * One command; *resp gets the short response. -EBUSY: the controller
++ * never got ready for it; -ETIMEDOUT: no answer; -EIO: an error. The
++ * status is in emmc_bad_st and emmc_bad_ps then.
++ */
+ static int emmc_cmd(u32 idx, u32 arg, u32 flags, u32 *resp)
+ {
+ 	u32 inhibit = PS_CMD_INHIBIT, st;
+ 
+ 	if ((flags & CMD_DATA) || (flags & 3) == CMD_RESP_BUSY)
+ 		inhibit |= PS_DAT_INHIBIT;
+-	if (wait_reg(SD_PRESENT_STATE, inhibit, 0, 100000))
++	if (wait_reg(SD_PRESENT_STATE, inhibit, 0, 100000)) {
++		emmc_note();
++		emmc_reset(RESET_CMD | RESET_DATA);
+ 		return -EBUSY;
++	}
+ 
+ 	writel(~0U, MSC0 + SD_INT_STATUS);
+ 	writel(arg, MSC0 + SD_ARGUMENT);
+@@ -177,8 +212,9 @@ static int emmc_cmd(u32 idx, u32 arg, u32 flags, u32 *resp)
+ 	}
+ 	return 0;
+ err:
++	emmc_note();
+ 	emmc_reset(RESET_CMD | RESET_DATA);
+-	return -EIO;
++	return st ? -EIO : -ETIMEDOUT;
+ }
+ 
+ #define R1	(CMD_RESP_SHORT | CMD_CRC | CMD_INDEX)
+@@ -201,23 +237,41 @@ static int emmc_wait_ready(u32 *st)
+ 	return -ETIMEDOUT;
+ }
+ 
+-int ad5x_emmc_init(void)
++static void emmc_cdr_wait(void)
+ {
+-	u32 st, ocr = 0, t;
++	u32 t;
+ 
+-#ifdef CONFIG_AD5X_SPL_CHAINLOAD
+-	/* from Linux: MSC0's clock as after the boot ROM, as at a cold start */
+-	writel(MSC0CDR_BOOT_ROM, CPM_MSC0CDR);
+ 	for (t = 0; (readl(CPM_MSC0CDR) & CDR_BUSY) && t < 10000; t++)
+ 		udelay(1);
+-#endif
+-	/*
+-	 * The controller's clock before its first register access: the boot
+-	 * ROM opens it only when it boots from the eMMC; started over USB
+-	 * the gate may still be closed. The stock SPL's clk_init() opens it
+-	 * before the reset too.
+-	 */
+-	clrbits_le32(CPM_CLKGR0, CLKGR0_MSC0);
++}
++
++/*
++ * The RX sample point for the 25 MHz data clock, tuning off, as Ingenic's
++ * soc_mmc_set_rx_phase() and soc_mmc_enable_tuning(0) write it. The boot
++ * ROM leaves phase 0, which works on the X2600H boards' eMMCs; on an
++ * X2600E board's (A31M8C) every data read at 0 fails its CRC while
++ * commands work, and a sweep read correctly from 1 (2 with the TX phase at
++ * 270 degrees) to 5 (djvalic/kiln-os#74): 3, the middle.
++ */
++static void emmc_rx_phase_data(void)
++{
++	u32 val = readl(CPM_MSC0CDR);
++
++	val &= ~(CDR_RX_PHASE_MASK | CDR_STOP | CDR_BUSY);
++	writel(val | CDR_TUNING_OFF | CDR_RX_PHASE_DATA << CDR_RX_PHASE_SHIFT,
++	       CPM_MSC0CDR);
++	emmc_cdr_wait();
++	emmc_phase3 = true;
++}
++
++/*
++ * From reset to the transfer state: 1 bit at 400 kHz for identification;
++ * then, unless @slow, 4 bits (if the card takes it) at 25 MHz.
++ */
++static int emmc_start(bool slow)
++{
++	u32 st, ocr = 0, t;
++
+ 	if (emmc_reset(RESET_ALL))
+ 		return -EIO;
+ 	writel(~0U, MSC0 + SD_INT_ENABLE);	/* latch every status bit */
+@@ -243,6 +297,8 @@ int ad5x_emmc_init(void)
+ 	    emmc_cmd(3, EMMC_RCA << 16, R1, NULL) ||
+ 	    emmc_cmd(7, EMMC_RCA << 16, R1, NULL))
+ 		return -EIO;
++	if (slow)
++		return 0;
+ 
+ 	/*
+ 	 * 4-bit bus: EXT_CSD[183] BUS_WIDTH = 1. A card that refuses it
+@@ -257,20 +313,64 @@ int ad5x_emmc_init(void)
+ 	return 0;
+ }
+ 
++/*
++ * @usb: the SPL came over USB, so the boot ROM never set the eMMC up and
++ * MSC0CDR holds what the hardware starts with, not the ROM's phase. It
++ * gets what the ROM writes before it loads an SPL from the eMMC (as the
++ * chainload test build does, coming from Linux), then RX phase 3.
++ */
++int ad5x_emmc_init(bool usb)
++{
++	u32 was = readl(CPM_MSC0CDR);
++
++	/*
++	 * The controller's clock before its first register access: the boot
++	 * ROM opens it only when it boots from the eMMC; started over USB
++	 * the gate may still be closed. The stock SPL's clk_init() opens it
++	 * before the reset too.
++	 */
++	clrbits_le32(CPM_CLKGR0, CLKGR0_MSC0);
++	if (IS_ENABLED(CONFIG_AD5X_SPL_CHAINLOAD) || usb) {
++		/* MSC0's clock as after the boot ROM, as at a cold start */
++		writel(MSC0CDR_BOOT_ROM, CPM_MSC0CDR);
++		emmc_cdr_wait();
++	}
++	if (usb) {
++		emmc_rx_phase_data();
++		printf("SPL: eMMC over USB: MSC0CDR 0x%x, now 0x%x: RX phase 3, "
++		       "tuning off\n", was, readl(CPM_MSC0CDR));
++	}
++	return emmc_start(false);
++}
++
++/*
++ * Read cnt sectors from lba (cnt < 65536) in one command. A failure is
++ * logged with the step (the command, a data block, the end of the
++ * transfer), timeout or error, and the controller's status; -EILSEQ when
++ * it was a data CRC error.
++ */
+ static int emmc_read_chunk(u32 lba, u32 cnt, u32 *dst)
+ {
+-	u32 st, i;
++	u32 cmd = cnt > 1 ? 18 : 17, blk, st, i;
++	const char *step = "command", *why;
++	int ret;
+ 
+ 	writew(512, MSC0 + SD_BLOCKSIZE);
+ 	writew(cnt, MSC0 + SD_BLOCKCOUNT);
+ 	writew(XFER_BLKCNT_EN | XFER_READ |
+ 	       (cnt > 1 ? XFER_MULTI | XFER_AUTO_CMD12 : 0),
+ 	       MSC0 + SD_XFER_MODE);
+-	if (emmc_cmd(cnt > 1 ? 18 : 17, emmc_sector_mode ? lba : lba * 512,
+-		     R1 | CMD_DATA, NULL))
+-		return -EIO;
++	ret = emmc_cmd(cmd, emmc_sector_mode ? lba : lba * 512, R1 | CMD_DATA,
++		       NULL);
++	if (ret) {
++		why = ret == -EBUSY ? "busy" : ret == -ETIMEDOUT ? "timeout" :
++		      "error";
++		blk = 0;
++		goto out;
++	}
+ 
+-	while (cnt--) {
++	step = "data";
++	for (blk = 0; blk < cnt; blk++) {
+ 		st = wait_int(INT_BUF_RD | INT_ERROR, 500000);
+ 		if (!(st & INT_BUF_RD) || (st & INT_ERROR))
+ 			goto err;
+@@ -278,26 +378,83 @@ static int emmc_read_chunk(u32 lba, u32 cnt, u32 *dst)
+ 		for (i = 0; i < 128; i++)
+ 			*dst++ = readl(MSC0 + SD_BUFFER);
+ 	}
++	step = "end";
+ 	st = wait_int(INT_XFER_DONE | INT_ERROR, 500000);
+ 	if ((st & INT_XFER_DONE) && !(st & INT_ERROR)) {
+ 		writel(INT_XFER_DONE, MSC0 + SD_INT_STATUS);
+ 		return 0;
+ 	}
+ err:
+-	emmc_reset(RESET_CMD | RESET_DATA);
+-	emmc_cmd(12, 0, R1B, NULL);
++	why = st ? "error" : "timeout";
++	emmc_note();
++out:
++	printf("SPL: eMMC CMD%u at 0x%x block %u: %s %s; status 0x%x, "
++	       "present 0x%x, MSC0CDR 0x%x\n", cmd, lba, blk, step, why,
++	       emmc_bad_st, emmc_bad_ps, readl(CPM_MSC0CDR));
++	ret = emmc_bad_st & INT_DATA_CRC ? -EILSEQ : -EIO;
++	if (*step != 'c') {
++		/* the data part failed: stop the card sending */
++		emmc_reset(RESET_CMD | RESET_DATA);
++		emmc_cmd(12, 0, R1B, NULL);
++	}
++	return ret;
++}
++
++/*
++ * The last try for a read that failed at RX phase 3 too: the eMMC again
++ * from CMD0, left at the identification clock, 400 kHz and 1 bit. If
++ * reads work so, the reader is fine and the 4-bit, 25 MHz setup is what
++ * this eMMC dislikes. Booting goes on that way: about 50 KB/s, so a
++ * 5.7 MB kernel takes 2 minutes; ad5x_emmc_read() reads 64 KiB at a time
++ * then and restarts the phase's watchdog before each.
++ */
++static int emmc_go_slow(void)
++{
++	emmc_slow = true;
++	puts("SPL: eMMC: again from CMD0 at 400 kHz, 1 bit\n");
++	if (!emmc_start(true))
++		return 0;
++	puts("SPL: eMMC: no start at 400 kHz either\n");
+ 	return -EIO;
+ }
+ 
+-/* cnt sectors from lba to dst (word aligned) */
++/*
++ * cnt sectors from lba to dst (word aligned). A read that fails is tried
++ * again: at RX phase 3 if it wasn't yet (emmc_rx_phase_data), then at
++ * 400 kHz and 1 bit (emmc_go_slow); either is kept for every later read.
++ */
+ int ad5x_emmc_read(u32 lba, u32 cnt, void *dst)
+ {
+ 	u32 n;
++	int ret;
+ 
+ 	while (cnt) {
+ 		n = cnt > 2048 ? 2048 : cnt;
+-		if (emmc_read_chunk(lba, n, dst))
++		if (emmc_slow) {
++			n = n > EMMC_SLOW_CHUNK ? EMMC_SLOW_CHUNK : n;
++			x2600_wdt_start(AD5X_SPL_WDT_MS);
++		}
++		ret = emmc_read_chunk(lba, n, dst);
++		if (ret && !emmc_phase3) {
++			printf("SPL: eMMC %s (MSC0CDR 0x%x): RX phase 3, "
++			       "tuning off, again\n", ret == -EILSEQ ?
++			       "data CRC error" : "read failed",
++			       readl(CPM_MSC0CDR));
++			emmc_rx_phase_data();
++			continue;	/* the same chunk again */
++		}
++		if (ret && !emmc_slow) {
++			if (emmc_go_slow())
++				return -EIO;
++			continue;
++		}
++		if (ret)
+ 			return -EIO;
++		if (emmc_slow && !emmc_slow_ok) {
++			emmc_slow_ok = true;
++			puts("SPL: eMMC reads at 400 kHz, 1 bit: going on "
++			     "slowly\n");
++		}
+ 		lba += n;
+ 		cnt -= n;
+ 		dst += n * 512;
+-- 
+2.56.0
+

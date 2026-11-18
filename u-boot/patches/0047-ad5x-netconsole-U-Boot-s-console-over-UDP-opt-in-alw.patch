@@ -1,0 +1,115 @@
+From 60861983a30df7a8815798d113f69f61cc4e2453 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Tue, 17 Nov 2026 08:56:31 -0700
+Subject: [PATCH 47/48] ad5x: netconsole: U-Boot's console over UDP, opt-in;
+ always in the rescue
+
+For a printer without a serial cable. When /data/ad5x/netconsole exists
+(its first line: the PC's IP, empty for the whole LAN) or the environment
+has ad5x_nc (an IP or "on"), the boot command first gets an address by
+DHCP (at most 10 s; without one the start goes on as before) and adds nc
+to stdin, stdout and stderr: the boot rules' lines go to UDP port 6666
+and the stop key works from the PC. Off, nothing changes. The network
+rescue always sends its console to the PC that serves it.
+
+Broadcast output (no IP) is lossy where the PC is on Wi-Fi: access
+points pass broadcast frames slowly and drop bursts, and every echoed key
+is a packet. Unicast to the PC's IP arrived complete.
+
+[djvalic: the rescue's part rebased onto Kiln's try limit (ncip from the
+ parsed record)]
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ board/flashforge/ad5x/ad5x.c | 48 ++++++++++++++++++++++++++++++++++++
+ configs/ad5x_defconfig       |  2 ++
+ 2 files changed, 50 insertions(+)
+
+diff --git a/board/flashforge/ad5x/ad5x.c b/board/flashforge/ad5x/ad5x.c
+index 1fb637a1..b11e39b8 100644
+--- a/board/flashforge/ad5x/ad5x.c
++++ b/board/flashforge/ad5x/ad5x.c
+@@ -338,6 +338,44 @@ static void ad5x_ethaddr(void)
+ 	eth_env_set_enetaddr("ethaddr", mac);
+ }
+ 
++/* ---- netconsole ---- */
++
++/*
++ * U-Boot's console over UDP as well as UART0, for a printer without a
++ * serial cable (docs/emmc-repair.md, "Netconsole"): output goes to port
++ * 6666 of ncip, or to the whole LAN without one; input (the stop key
++ * too) comes back to port 6666. On when /data/ad5x/netconsole exists (its
++ * first line: the PC's IP, empty for the LAN) or the environment has
++ * ad5x_nc (an IP or "on"); then a DHCP of at most 10 s comes before the
++ * boot rules and, without an address, the start goes on as without it.
++ * Always on in the network rescue. Off: nothing changes.
++ */
++static const char ad5x_nc_up[] =
++	"setenv autoload no; setenv bootpretryperiod 10000; "
++	"if dhcp; then setenv stdin serial,nc; setenv stdout serial,nc; "
++	"setenv stderr serial,nc; echo ad5x: netconsole on (UDP 6666); "
++	"else echo ad5x: netconsole: no address, serial only; fi";
++
++static int ad5x_netconsole(void)
++{
++	char ip[32] = "";
++	const char *v = env_get("ad5x_nc");
++
++	if (v)
++		strlcpy(ip, strcmp(v, "on") ? v : "", sizeof(ip));
++	else if (ad5x_exists(7, "/ad5x/netconsole"))
++		ad5x_small(7, "/ad5x/netconsole", ip, sizeof(ip));
++	else
++		return 0;
++	ip[strcspn(ip, " \t\r\n")] = '\0';
++	if (ip[0])
++		env_set("ncip", ip);
++	else
++		env_set("ncip", NULL);	/* the LAN's broadcast */
++	env_set("ad5x_nc_up", ad5x_nc_up);
++	return 1;
++}
++
+ /* ---- network rescue ---- */
+ 
+ /*
+@@ -435,8 +473,11 @@ static int ad5x_rescue(void)
+ 		"run kr_fail; mmc write ${kr_la} ${blk} ${cnt} && "
+ 		"mmc read ${kr_rb} ${blk} ${cnt} && "
+ 		"hash -v sha256 ${kr_rb} ${sz} ${sum} || run kr_fail");
++	env_set("ncip", r.server);	/* the console to the PC that serves */
+ 	env_set("kr_start", "ad5x_wdt " AD5X_RESCUE_WDT_S "; mmc dev 0; "
+ 		"run kr_net || run kr_fail; "
++		"setenv stdin serial,nc; setenv stdout serial,nc; "
++		"setenv stderr serial,nc; "
+ 		"wget ${kr_sa} ${kr_srv}:/rescue/rescue.scr || run kr_fail; "
+ 		"hash -v sha256 ${kr_sa} ${filesize} ${kr_sha} || run kr_fail; "
+ 		"source ${kr_sa} || run kr_fail");
+@@ -471,6 +512,13 @@ int board_late_init(void)
+ 		return 0;
+ 	ad5x_env_follow_build();
+ 	env_set("ad5x_slot", ad5x_read_slot());
++	if (ad5x_netconsole()) {
++		const char *b = env_get("bootcmd");
++		char cmd[256];
++
++		snprintf(cmd, sizeof(cmd), "run ad5x_nc_up; %s", b ? b : "");
++		env_set("bootcmd", cmd);
++	}
+ 	return 0;
+ }
+ 
+diff --git a/configs/ad5x_defconfig b/configs/ad5x_defconfig
+index d8bdff74..825d400a 100644
+--- a/configs/ad5x_defconfig
++++ b/configs/ad5x_defconfig
+@@ -94,3 +94,5 @@ CONFIG_SHA256=y
+ CONFIG_HASH_VERIFY=y
+ CONFIG_CMD_WGET=y
+ CONFIG_PROT_TCP_SACK=y
++CONFIG_NETCONSOLE=y
++CONFIG_CONSOLE_MUX=y
+-- 
+2.56.0
+

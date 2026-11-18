@@ -1,0 +1,184 @@
+From f2b27b1175ea47932b7f77bdbfb4c18f92110445 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Tue, 17 Nov 2026 08:19:09 -0700
+Subject: [PATCH 45/48] ad5x: network rescue from a record in the first MiB's
+ last sector
+
+A first MiB written by USBCloner after the rest of the eMMC was lost
+(Kiln's ad5x_emmc_image.py --rescue) carries a record in its last sector:
+the PC that serves the rest, its HTTP port, the sha256 of the rescue
+script, and optionally the Ethernet address and a static address. U-Boot
+proper finds it before anything else, stops the watchdog, takes this
+build's default environment in RAM, gets an address (DHCP or the
+record's), fetches the script, checks its sha256 and sources it.
+
+The script sets each piece's path (or zeros), size, place and sha256 and
+runs kr_piece: fetch (three tries) and check, write, read back and check.
+Any failure resets after 10 s and the rescue starts again from the record;
+the normal first MiB, written last, clears it. U-Boot proper ends one
+sector earlier to leave the record its sector.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ arch/mips/mach-jz47xx/include/mach/x2600.h |   8 +-
+ board/flashforge/ad5x/ad5x.c               | 112 +++++++++++++++++++++
+ 2 files changed, 119 insertions(+), 1 deletion(-)
+
+diff --git a/arch/mips/mach-jz47xx/include/mach/x2600.h b/arch/mips/mach-jz47xx/include/mach/x2600.h
+index 2931a468..01ad70db 100644
+--- a/arch/mips/mach-jz47xx/include/mach/x2600.h
++++ b/arch/mips/mach-jz47xx/include/mach/x2600.h
+@@ -50,6 +50,12 @@ int x2600_socid(void);
+  * byte 0xA400, up to the end of the first MiB.
+  */
+ #define AD5X_UBOOT_LBA		(0xa400 / 512)
+-#define AD5X_UBOOT_MAX		(0x100000 - 0xa400)
++/*
++ * The first MiB's last sector holds a network rescue record when the first
++ * MiB comes from ad5x_emmc_image.py --rescue (board/flashforge/ad5x): U-Boot
++ * ends before it.
++ */
++#define AD5X_RESCUE_LBA		(0x100000 / 512 - 1)
++#define AD5X_UBOOT_MAX		(0x100000 - 512 - 0xa400)
+ 
+ #endif
+diff --git a/board/flashforge/ad5x/ad5x.c b/board/flashforge/ad5x/ad5x.c
+index a08afe1b..bb5a32a7 100644
+--- a/board/flashforge/ad5x/ad5x.c
++++ b/board/flashforge/ad5x/ad5x.c
+@@ -31,6 +31,7 @@
+ #include <asm/global_data.h>
+ #include <mach/ad5x_start.h>
+ #include <mach/x2600.h>
++#include <linux/ctype.h>
+ #include <linux/delay.h>
+ #include <linux/string.h>
+ #include <vsprintf.h>
+@@ -338,6 +339,115 @@ static void ad5x_ethaddr(void)
+ 	eth_env_set_enetaddr("ethaddr", mac);
+ }
+ 
++/* ---- network rescue ---- */
++
++/*
++ * A first MiB written by USBCloner after the rest of the eMMC was lost
++ * (ad5x_emmc_image.py --rescue, docs/emmc-repair.md) carries a record in
++ * its last sector, text "key=value" lines after the magic line:
++ *
++ *   KILN-RESCUE 1
++ *   server=192.168.1.10        the PC that serves the image's rescue/
++ *   port=8000                  its HTTP port
++ *   sha256=<64 hex>            rescue/rescue.scr's
++ *   mac=24:A1:0D:B8:5A:58      optional: the address to use meanwhile
++ *   ip=192.168.1.50            optional, with netmask=: no DHCP
++ *   netmask=255.255.255.0
++ *
++ * U-Boot then fetches rescue.scr over HTTP, checks its sha256 against the
++ * record and runs it. The script fetches every piece of the eMMC, checks
++ * each one's sha256, writes it and checks what reads back; the normal first
++ * MiB comes last and clears the record. Any failure: a reset, and the
++ * rescue starts again from the record. The watchdog stays off.
++ */
++#define AD5X_RESCUE_MAGIC	"KILN-RESCUE 1\n"
++
++static const char *ad5x_rescue_val(const char *rec, const char *key,
++				   char *out, size_t n)
++{
++	size_t kl = strlen(key);
++	const char *p = rec;
++
++	while ((p = strstr(p, key))) {
++		if ((p == rec || p[-1] == '\n') && p[kl] == '=') {
++			size_t l = strcspn(p + kl + 1, "\n");
++
++			if (l >= n)
++				return NULL;
++			memcpy(out, p + kl + 1, l);
++			out[l] = '\0';
++			return out;
++		}
++		p += kl;
++	}
++	return NULL;
++}
++
++static int ad5x_rescue(void)
++{
++	char rec[576] __aligned(ARCH_DMA_MINALIGN);
++	char srv[32], port[8], sha[72], mac[24], ip[32], mask[32];
++	const char *c;
++
++	if (ad5x_read_sector(AD5X_RESCUE_LBA, rec))
++		return 0;
++	rec[512] = '\0';
++	if (strncmp(rec, AD5X_RESCUE_MAGIC, strlen(AD5X_RESCUE_MAGIC)))
++		return 0;
++	if (!ad5x_rescue_val(rec, "server", srv, sizeof(srv)) ||
++	    !ad5x_rescue_val(rec, "port", port, sizeof(port)) ||
++	    !ad5x_rescue_val(rec, "sha256", sha, sizeof(sha)) ||
++	    strlen(sha) != 64) {
++		printf("ad5x: rescue record without server, port or sha256: "
++		       "ignored\n");
++		return 0;
++	}
++	for (c = sha; *c; c++)
++		if (!isxdigit(*c))
++			return 0;
++	x2600_wdt_stop();
++	x2600_cpspr_write(0);
++	env_set_default(NULL, 0);
++	if (ad5x_rescue_val(rec, "mac", mac, sizeof(mac)))
++		env_set("ethaddr", mac);
++	else
++		ad5x_ethaddr();
++	if (ad5x_rescue_val(rec, "ip", ip, sizeof(ip))) {
++		env_set("ipaddr", ip);
++		env_set("netmask", ad5x_rescue_val(rec, "netmask", mask,
++						   sizeof(mask)) ?
++			mask : "255.255.255.0");
++		env_set("kr_net", "true");
++	} else {
++		env_set("kr_net", "setenv autoload no; dhcp");
++	}
++	env_set("kr_srv", srv);
++	env_set("httpdstp", port);
++	env_set("kr_sha", sha);
++	env_set("kr_sa", "0x81000000");		/* the script */
++	env_set("kr_la", "0x82000000");		/* a piece, up to 32 MiB */
++	env_set("kr_rb", "0x84000000");		/* its read-back */
++	env_set("kr_fail", "echo ad5x rescue: failed, again in 10 s; sleep 10; "
++		"reset");
++	/* the script sets f (path, or - for zeros), sz, blk, cnt, sum */
++	env_set("kr_get", "if test \"${f}\" = -; then mw.b ${kr_la} 0 ${sz}; "
++		"else wget ${kr_la} ${kr_srv}:${f}; fi && "
++		"hash -v sha256 ${kr_la} ${sz} ${sum}");
++	env_set("kr_piece", "run kr_get || run kr_get || run kr_get || "
++		"run kr_fail; mmc write ${kr_la} ${blk} ${cnt} && "
++		"mmc read ${kr_rb} ${blk} ${cnt} && "
++		"hash -v sha256 ${kr_rb} ${sz} ${sum} || run kr_fail");
++	env_set("kr_start", "mmc dev 0; run kr_net || run kr_fail; "
++		"wget ${kr_sa} ${kr_srv}:/rescue/rescue.scr || run kr_fail; "
++		"hash -v sha256 ${kr_sa} ${filesize} ${kr_sha} || run kr_fail; "
++		"source ${kr_sa} || run kr_fail");
++	env_set("bootcmd", "run kr_start");
++	env_set("bootdelay", "0");
++	printf("ad5x: network rescue from %s:%s (the first MiB's record): "
++	       "watchdog off\n", srv, port);
++	return 1;
++}
++
+ int board_late_init(void)
+ {
+ 	/*
+@@ -357,6 +467,8 @@ int board_late_init(void)
+ 		env_set("bootdelay", "0");
+ 		return 0;
+ 	}
++	if (ad5x_rescue())
++		return 0;
+ 	ad5x_env_follow_build();
+ 	env_set("ad5x_slot", ad5x_read_slot());
+ 	return 0;
+-- 
+2.56.0
+

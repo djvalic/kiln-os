@@ -1,5 +1,5 @@
 From 22f6f8d390e62569a80353180ae1e596a40363a8 Mon Sep 17 00:00:00 2001
-From: valix <djvalic.wc@gmail.com>
+From: djvalic <djvalic@users.noreply.github.com>
 Date: Sun, 15 Nov 2026 12:44:07 -0500
 Subject: [PATCH 21/23] mips: jz47xx: x2600: eMMC identification clock as the
  stock SPL sets it

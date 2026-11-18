@@ -1,0 +1,137 @@
+From 2e67b65604c7278a605b9fe6d14ec4433fb573e5 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Tue, 17 Nov 2026 07:35:53 -0700
+Subject: [PATCH 41/48] net: designware: CPU and DMA addresses apart, registers
+ uncached
+
+The driver handed the DMA engine CPU pointers as they are and used the
+addresses in the descriptors as CPU pointers, and mapped the registers
+with phys_to_virt(). On MIPS a CPU pointer is a KSEG0 address
+(0x8xxxxxxx), not the physical address the DMA needs, and phys_to_virt()
+gives a cached mapping. Go through virt_to_phys() and phys_to_virt()
+for buffers and descriptors, and map the registers with map_physmem()
+and MAP_NOCACHE. All three are the identity where U-Boot runs with a
+flat mapping, as on ARM and RISC-V.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ drivers/net/designware.c | 33 +++++++++++++++++++--------------
+ 1 file changed, 19 insertions(+), 14 deletions(-)
+
+diff --git a/drivers/net/designware.c b/drivers/net/designware.c
+index 6ed9c6d5..eaa39f75 100644
+--- a/drivers/net/designware.c
++++ b/drivers/net/designware.c
+@@ -377,9 +377,9 @@ static void tx_descs_init(struct dw_eth_dev *priv)
+ 	for (idx = 0; idx < CFG_TX_DESCR_NUM; idx++) {
+ 		desc_p = &desc_table_p[idx];
+ 		desc_p->dmamac_addr = dev_phys_to_bus(priv->dev,
+-				(ulong)&txbuffs[idx * CFG_ETH_BUFSIZE]);
++				virt_to_phys(&txbuffs[idx * CFG_ETH_BUFSIZE]));
+ 		desc_p->dmamac_next = dev_phys_to_bus(priv->dev,
+-				(ulong)&desc_table_p[idx + 1]);
++				virt_to_phys(&desc_table_p[idx + 1]));
+ 
+ #if defined(CONFIG_DW_ALTDESCRIPTOR)
+ 		desc_p->txrx_status &= ~(DESC_TXSTS_TXINT | DESC_TXSTS_TXLAST |
+@@ -397,14 +397,15 @@ static void tx_descs_init(struct dw_eth_dev *priv)
+ 	}
+ 
+ 	/* Correcting the last pointer of the chain */
+-	desc_p->dmamac_next = dev_phys_to_bus(priv->dev, (ulong)&desc_table_p[0]);
++	desc_p->dmamac_next = dev_phys_to_bus(priv->dev,
++					      virt_to_phys(&desc_table_p[0]));
+ 
+ 	/* Flush all Tx buffer descriptors at once */
+ 	flush_dcache_range((ulong)priv->tx_mac_descrtable,
+ 			   (ulong)priv->tx_mac_descrtable +
+ 			   sizeof(priv->tx_mac_descrtable));
+ 
+-	writel(dev_phys_to_bus(priv->dev, (ulong)&desc_table_p[0]),
++	writel(dev_phys_to_bus(priv->dev, virt_to_phys(&desc_table_p[0])),
+ 			&dma_p->txdesclistaddr);
+ 	priv->tx_currdescnum = 0;
+ }
+@@ -428,9 +429,9 @@ static void rx_descs_init(struct dw_eth_dev *priv)
+ 	for (idx = 0; idx < CFG_RX_DESCR_NUM; idx++) {
+ 		desc_p = &desc_table_p[idx];
+ 		desc_p->dmamac_addr = dev_phys_to_bus(priv->dev,
+-				(ulong)&rxbuffs[idx * CFG_ETH_BUFSIZE]);
++				virt_to_phys(&rxbuffs[idx * CFG_ETH_BUFSIZE]));
+ 		desc_p->dmamac_next = dev_phys_to_bus(priv->dev,
+-				(ulong)&desc_table_p[idx + 1]);
++				virt_to_phys(&desc_table_p[idx + 1]));
+ 
+ 		desc_p->dmamac_cntl =
+ 			(MAC_MAX_FRAME_SZ & DESC_RXCTRL_SIZE1MASK) |
+@@ -440,14 +441,15 @@ static void rx_descs_init(struct dw_eth_dev *priv)
+ 	}
+ 
+ 	/* Correcting the last pointer of the chain */
+-	desc_p->dmamac_next = dev_phys_to_bus(priv->dev, (ulong)&desc_table_p[0]);
++	desc_p->dmamac_next = dev_phys_to_bus(priv->dev,
++					      virt_to_phys(&desc_table_p[0]));
+ 
+ 	/* Flush all Rx buffer descriptors at once */
+ 	flush_dcache_range((ulong)priv->rx_mac_descrtable,
+ 			   (ulong)priv->rx_mac_descrtable +
+ 			   sizeof(priv->rx_mac_descrtable));
+ 
+-	writel(dev_phys_to_bus(priv->dev, (ulong)&desc_table_p[0]),
++	writel(dev_phys_to_bus(priv->dev, virt_to_phys(&desc_table_p[0])),
+ 			&dma_p->rxdesclistaddr);
+ 	priv->rx_currdescnum = 0;
+ }
+@@ -628,7 +630,8 @@ static int _dw_eth_send(struct dw_eth_dev *priv, void *packet, int length)
+ 	ulong desc_start = (ulong)desc_p;
+ 	ulong desc_end = desc_start +
+ 		roundup(sizeof(*desc_p), ARCH_DMA_MINALIGN);
+-	ulong data_start = dev_bus_to_phys(priv->dev, desc_p->dmamac_addr);
++	ulong data_start = (ulong)phys_to_virt(dev_bus_to_phys(priv->dev,
++						desc_p->dmamac_addr));
+ 	ulong data_end = data_start + roundup(length, ARCH_DMA_MINALIGN);
+ 	/*
+ 	 * Strictly we only need to invalidate the "txrx_status" field
+@@ -695,7 +698,8 @@ static int _dw_eth_recv(struct dw_eth_dev *priv, uchar **packetp)
+ 	ulong desc_start = (ulong)desc_p;
+ 	ulong desc_end = desc_start +
+ 		roundup(sizeof(*desc_p), ARCH_DMA_MINALIGN);
+-	ulong data_start = dev_bus_to_phys(priv->dev, desc_p->dmamac_addr);
++	ulong data_start = (ulong)phys_to_virt(dev_bus_to_phys(priv->dev,
++						desc_p->dmamac_addr));
+ 	ulong data_end;
+ 
+ 	/* Invalidate entire buffer descriptor */
+@@ -712,8 +716,8 @@ static int _dw_eth_recv(struct dw_eth_dev *priv, uchar **packetp)
+ 		/* Invalidate received data */
+ 		data_end = data_start + roundup(length, ARCH_DMA_MINALIGN);
+ 		invalidate_dcache_range(data_start, data_end);
+-		*packetp = (uchar *)(ulong)dev_bus_to_phys(priv->dev,
+-				desc_p->dmamac_addr);
++		*packetp = (uchar *)phys_to_virt(dev_bus_to_phys(priv->dev,
++				desc_p->dmamac_addr));
+ 	}
+ 
+ 	return length;
+@@ -726,7 +730,8 @@ static int _dw_free_pkt(struct dw_eth_dev *priv)
+ 	ulong desc_start = (ulong)desc_p;
+ 	ulong desc_end = desc_start +
+ 		roundup(sizeof(*desc_p), ARCH_DMA_MINALIGN);
+-	ulong data_start = dev_bus_to_phys(priv->dev, desc_p->dmamac_addr);
++	ulong data_start = (ulong)phys_to_virt(dev_bus_to_phys(priv->dev,
++						desc_p->dmamac_addr));
+ 	ulong data_end = data_start + roundup(CFG_ETH_BUFSIZE, ARCH_DMA_MINALIGN);
+ 
+ 	/* Invalidate the descriptor buffer data */
+@@ -946,7 +951,7 @@ int designware_eth_probe(struct udevice *dev)
+ 	}
+ 
+ 	debug("%s, iobase=%pa, priv=%p\n", __func__, &iobase, priv);
+-	ioaddr = phys_to_virt(iobase);
++	ioaddr = map_physmem(iobase, 0, MAP_NOCACHE);
+ 	priv->mac_regs_p = (struct eth_mac_regs *)ioaddr;
+ 	priv->dma_regs_p = (struct eth_dma_regs *)(ioaddr + DW_DMA_BASE_OFFSET);
+ 	priv->interface = pdata->phy_interface;
+-- 
+2.56.0
+

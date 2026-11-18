@@ -1,5 +1,5 @@
 From 3ca3af6ee19ce823fd9fc179333e2b4b7827c488 Mon Sep 17 00:00:00 2001
-From: valix <djvalic.wc@gmail.com>
+From: djvalic <djvalic@users.noreply.github.com>
 Date: Sun, 15 Nov 2026 11:47:24 -0500
 Subject: [PATCH 13/16] mips: jz47xx: x2600: SPL in the boot ROM's SRAM window,
  with a second try

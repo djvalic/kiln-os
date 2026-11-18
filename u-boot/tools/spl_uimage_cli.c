@@ -12,8 +12,10 @@
  * reaches past its end or covers FAIL_LBA (an eMMC read error). The
  * loader's RAM (its load addresses, 0x80008000-0x8EB00000) is mapped at
  * the same addresses. Prints "ep 0x..." (0 when the loader refuses the
- * image) and exits 0; a loader that doesn't return is killed by the test.
+ * image) and "read_bad 0|1" (spl_read_bad: it was an eMMC read error),
+ * and exits 0; a loader that doesn't return is killed by the test.
  */
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -101,6 +103,6 @@ int main(int argc, char **argv)
 	ep = spl_load_uimage(strtoul(argv[2], NULL, 0),
 			     strtoul(argv[3], NULL, 0),
 			     strtoul(argv[4], NULL, 0));
-	printf("\nep 0x%lx\n", ep);
+	printf("\nep 0x%lx\nread_bad %d\n", ep, spl_read_bad);
 	return 0;
 }

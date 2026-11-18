@@ -1,5 +1,5 @@
 From 280e1477fa16ca80c04ab96dd6cf8d32b1df80cb Mon Sep 17 00:00:00 2001
-From: valix <djvalic.wc@gmail.com>
+From: djvalic <djvalic@users.noreply.github.com>
 Date: Wed, 11 Nov 2026 18:39:58 -0500
 Subject: [PATCH] MIPS: dts: ingenic: ad5x: Add a ramoops region
 
@@ -15,7 +15,7 @@ diff --git a/arch/mips/boot/dts/ingenic/ad5x.dts b/arch/mips/boot/dts/ingenic/ad
 index fd981e0d5..efd466b59 100644
 --- a/arch/mips/boot/dts/ingenic/ad5x.dts
 +++ b/arch/mips/boot/dts/ingenic/ad5x.dts
-@@ -65,6 +65,19 @@ reserved-memory {
+@@ -64,6 +64,19 @@ reserved-memory {
  		#size-cells = <1>;
  		ranges;
  

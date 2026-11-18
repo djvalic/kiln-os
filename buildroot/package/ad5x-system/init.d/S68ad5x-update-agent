@@ -38,6 +38,20 @@
 # Also: "reboot" and "shutdown" (Moonraker's /machine/reboot and
 # /machine/shutdown through the same provider: Fluidd's and the touch
 # screen's Reboot and Shutdown): see power_request.
+# Also: "memory-mode" (POST /machine/kiln_os/memory, the KILN_MEMORY_MODE
+# macro; docs/memory.md): "on" or "off", runs "ad5x-memory extended on|off",
+# see memory_request. Allowed while printing: it only writes the switch.
+# Also: "ifs-firmware" (POST /machine/kiln_os/ifs_firmware; docs/
+# mcu-flashing.md, "IFS firmware switch"): "stock" or "klipper". Checked
+# here (owner opt-in for klipper, not while a print may run or the
+# printer is busy, one switch at a time), answered "done: switching ..."
+# at once, then run as a background job ("ifs-job": Klipper stopped,
+# ad5x-mcu flash-ifs, Klipper started again whatever came out), so this
+# loop keeps answering. Its progress and result are in $IFS_STATUS
+# (root's folder, read by Moonraker). While it runs, requests that would
+# restart Klipper, reboot or power off the printer, install an update or
+# run a plugin's root script are refused at once ("the IFS firmware is
+# being switched"); memory-mode still goes through.
 # A Kiln OS update is also refused before start-up has finished: the
 # reboot would leave our kernel's start marker behind, which counts as an
 # unfinished start of it (issue #47). And while the recovery OS is being
@@ -79,6 +93,17 @@ STAGE=${AD5X_DATA:-/data}/ad5x/kiln-stage
 . ${AD5X_LIB:-/usr/lib/ad5x}/slot.sh
 # The plugins' root scripts (plugin_request, pr_setup)
 [ -f ${AD5X_LIB:-/usr/lib/ad5x}/plugin-root.sh ] && . ${AD5X_LIB:-/usr/lib/ad5x}/plugin-root.sh
+# The IFS firmware switch (ifs_request, ifs_job): its status in a folder of
+# root's that klipper can only read (Moonraker serves it), the running
+# job's pid, the owner's opt-in (/data/ad5x is root's: no client can make
+# it), Klipper's init script and the image's IFS firmware
+IFSD=${AD5X_DATA:-/data}/ad5x/kiln-status
+IFS_STATUS=$IFSD/ifs-firmware
+IFS_PID=${AD5X_IFS_PID:-/run/ad5x-ifs-switch.pid}
+IFS_OPTIN=${AD5X_DATA:-/data}/ad5x/ifs-switch.enable
+IFS_KLIPPER=${AD5X_DATA:-/data}/ad5x/ifs-klipper.enable
+KINIT=${AD5X_INITD:-/etc/init.d}/S61klipper
+IFS_HEX=${AD5X_MCU_FW:-/usr/share/ad5x/mcu}/ifs.hex
 
 log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >> $LOG; }
 
@@ -125,6 +150,14 @@ print_state() {
 }
 
 printing() { case "$(print_state)" in printing|paused) return 0 ;; esac; return 1; }
+
+# Klipper's idle_timeout state (Idle, Ready, Printing) through Moonraker;
+# empty without an answer. Printing also while a command typed in the
+# console runs (a filament load), not only during a print.
+idle_state() {
+	wget -q -T 5 -O- 'http://127.0.0.1:7125/printer/objects/query?idle_timeout=state' \
+		2>/dev/null | sed -n 's/.*"state": *"\([A-Za-z_]*\)".*/\1/p' | head -n 1
+}
 
 # Moonraker's klippy_state (ready, startup, shutdown, error, disconnected);
 # empty when Moonraker gives no answer
@@ -309,6 +342,182 @@ service_request() {
 	esac
 }
 
+# memory_request: Moonraker's "memory-mode", one line "on" or "off": runs
+# "ad5x-memory extended on|off", which writes or removes the switch
+# /data/ad5x/kernel/extended-memory (the next start uses it; "on" also
+# removes the failure record). No print check: nothing stops or restarts.
+# Answers the CLI's "done: extended memory on|off, ..." line, "refused:
+# this printer has 256 MiB" (reason not_available in Moonraker; it checks
+# first too) or "failed: ...".
+memory_request() {
+	local req r out why d
+	if ! req=$(stage memory-mode); then
+		log "ignored a memory mode request that is not a plain file"
+		say "failed: bad request"; return
+	fi
+	r=$(head -c 64 "$req" | head -n 1)
+	unstage "$req"
+	case $r in
+	on|off) ;;
+	*)
+		log "ignored a memory mode request without on or off"
+		say "failed: bad request"; return ;;
+	esac
+	if out=$(ad5x-memory extended $r 2>&1 < /dev/null); then
+		log "extended memory $r: $out"
+		# The CLI's own "done:" line says when it takes effect (the next
+		# start, or only after a boot loader update).
+		d=$(printf '%s\n' "$out" | sed -n 's/^done: //p' | tail -n 1)
+		say "done: ${d:-extended memory $r, takes effect at the next start}"
+		return
+	fi
+	# One line of printable ASCII for the log and the answer
+	out=$(printf '%s\n' "$out" | head -c 2000 | tr -c ' -~' ' ' | tr -s ' ' |
+		head -c 300 | sed 's/^ //; s/ $//')
+	log "extended memory $r failed: ${out:-no output}"
+	case $out in
+	*"refused: this printer has 256 MiB"*)
+		say "refused: this printer has 256 MiB" ;;
+	*"refused: "*)
+		why=${out##*refused: }
+		say "refused: $why" ;;
+	*)
+		say "failed: ad5x-memory extended $r: ${out:-no output}" ;;
+	esac
+}
+
+# The IFS firmware switch's job runs
+ifs_switching() { [ -f $IFS_PID ] && kill -0 "$(cat $IFS_PID 2>/dev/null)" 2>/dev/null; }
+
+# The owner turned the switch on: ifs-switch.enable, or ifs-klipper.enable
+# (Klipper on the IFS, turned on over SSH before the switch existed)
+ifs_opted_in() { [ -f $IFS_OPTIN ] || [ -f $IFS_KLIPPER ]; }
+
+# One line of printable ASCII for the status file and the log
+one_line() {
+	printf '%s\n' "$*" | head -c 2000 | tr -c ' -~' ' ' | tr -s ' ' |
+		head -c 300 | sed 's/^ //; s/ $//'
+}
+
+# ifs_request: Moonraker's "ifs-firmware", one line "stock" or "klipper".
+# The switch to Klipper only with the owner's opt-in; the way back to
+# stock for everyone (Flashforge's firmware is the IFS's default). Not
+# while a print may run (busy) or a command runs (idle_timeout Printing),
+# not while a switch runs. Then the status says running and the answer
+# comes at once ("done: switching ..."); the job does the rest.
+ifs_request() {
+	local req t is
+	if ! req=$(stage ifs-firmware); then
+		log "ignored an IFS firmware request that is not a plain file"
+		say "failed: bad request"; return
+	fi
+	t=$(head -c 64 "$req" | head -n 1)
+	unstage "$req"
+	case $t in
+	stock|klipper) ;;
+	*)
+		log "ignored an IFS firmware request without stock or klipper"
+		say "failed: bad request"; return ;;
+	esac
+	if ifs_switching; then
+		log "IFS firmware $t refused: a switch is running"
+		say "refused: the IFS firmware is being switched, try again in a few minutes"
+		return
+	fi
+	if [ $t = klipper ] && ! ifs_opted_in; then
+		log "IFS firmware klipper refused: the owner hasn't turned the switch on"
+		say "refused: the IFS firmware switch is off (the owner turns it on over SSH: touch $IFS_OPTIN)"
+		return
+	fi
+	if [ $t = klipper ] && [ ! -f $IFS_HEX ]; then
+		log "IFS firmware klipper refused: no $IFS_HEX"
+		say "refused: this image has no Klipper firmware for the IFS"
+		return
+	fi
+	busy "IFS firmware $t" && return
+	is=$(idle_state)
+	if [ "$is" = Printing ]; then
+		log "IFS firmware $t refused: the printer is busy (idle_timeout Printing)"
+		say "refused: the printer is busy, try again when it is idle"
+		return
+	fi
+	mkdir -p $IFSD && chmod 755 $IFSD
+	IFS_FW_STATUS=$IFS_STATUS ad5x-mcu ifs-status target=$t state=running phase=stopping \
+		reason= message= version= >> $LOG 2>&1
+	log "IFS firmware: switching to $t"
+	say "done: switching the IFS to $t firmware"
+	# A process of its own, so its pid is its own; not killed when this
+	# loop stops
+	sh $0 ifs-job $t < /dev/null >> $LOG 2>&1 &
+	echo $! > $IFS_PID
+}
+
+# ifs_job stock|klipper: the switch itself (S68ad5x-update-agent ifs-job,
+# started by ifs_request). Klipper is stopped (it holds the IFS's port),
+# ad5x-mcu flash-ifs writes the firmware and checks what answers, then
+# Klipper is started again, also after a failure. To Klipper:
+# ifs-klipper.enable first, so a power cut during the write is finished
+# by the next start (ad5x-mcu boot writes Klipper's firmware when the IFS
+# doesn't answer with it). To stock: ad5x-mcu removes ifs-klipper.enable
+# only once Flashforge's firmware is written, so after a power cut the
+# next start writes Klipper's back, a firmware that works. An owner who
+# had turned Klipper on the IFS on keeps the switch (ifs-switch.enable).
+# A plugin that drives the IFS is skipped while the IFS isn't on Klipper
+# (ad5x_plugins.py), so Klipper starts either way.
+ifs_job() {
+	local t=$1 rc out v why msg
+	echo $$ > $IFS_PID
+	export IFS_FW_STATUS=$IFS_STATUS
+	log "IFS firmware $t: stopping Klipper"
+	$KINIT stop < /dev/null >> $LOG 2>&1
+	if [ $t = klipper ]; then
+		: > $IFS_KLIPPER
+		set -- flash-ifs
+	else
+		[ -f $IFS_KLIPPER ] && : > $IFS_OPTIN
+		set -- flash-ifs stock
+	fi
+	out=$(ad5x-mcu "$@" < /dev/null 2>&1)
+	rc=$?
+	printf '%s\n' "$out" >> $LOG
+	ad5x-mcu ifs-status phase=starting >> $LOG 2>&1
+	log "IFS firmware $t: starting Klipper"
+	$KINIT start < /dev/null >> $LOG 2>&1
+	if [ $rc = 0 ]; then
+		# "flashforge 3.0.7" or Klipper's version (ad5x-mcu's record)
+		v=$(head -c 64 ${AD5X_DATA:-/data}/ad5x/mcu/ifs 2>/dev/null | head -n 1)
+		v=$(one_line "${v#flashforge }")
+		log "IFS firmware: on $t firmware ($v)"
+		ad5x-mcu ifs-status state=done phase= reason= message= version="$v" >> $LOG 2>&1
+	else
+		why=$(sed -n 's/^reason=//p' $IFS_STATUS 2>/dev/null)
+		msg=$(printf '%s\n' "$out" | sed -n 's/^ad5x-mcu: //p' | tail -n 1)
+		msg=$(one_line "${msg#ifs: }")
+		log "IFS firmware $t failed (${why:-failed}): $msg"
+		ad5x-mcu ifs-status state=failed phase= reason="${why:-failed}" \
+			message="${msg:-ad5x-mcu flash-ifs failed, see $LOG}" version= >> $LOG 2>&1
+	fi
+	[ "$(cat $IFS_PID 2>/dev/null)" != $$ ] || rm -f $IFS_PID
+}
+
+# ifs_refuse_others: while the switch runs, the requests that would cut
+# it short or restart Klipper under it are answered at once
+ifs_refuse_others() {
+	local r
+	for r in kernel-retry boot-recovery return-stock reboot shutdown service install; do
+		if [ -e $D/$r ] || [ -L $D/$r ]; then
+			rm -f $D/$r
+			log "$r refused: the IFS firmware is being switched"
+			say "refused: the IFS firmware is being switched, try again in a few minutes"
+		fi
+	done
+	if [ -e $D/plugin-request ] || [ -L $D/plugin-request ]; then
+		rm -f $D/plugin-request
+		log "plugin request refused: the IFS firmware is being switched"
+		( ANSWER=plugin-status; say "refused: the IFS firmware is being switched, try again in a few minutes" )
+	fi
+}
+
 # power_request reboot|shutdown: Moonraker's /machine/reboot and
 # /machine/shutdown (and its reboot_machine, shutdown_machine remote
 # methods) through the kiln_agent provider (components/kiln_os.py; the
@@ -342,6 +551,17 @@ power_request() {
 }
 
 agent_once() {
+	if [ -e $D/ifs-firmware ] || [ -L $D/ifs-firmware ]; then
+		ifs_request
+	fi
+	if ifs_switching; then
+		ifs_refuse_others
+	elif grep -qx 'state=running' $IFS_STATUS 2>/dev/null; then
+		# The job ended without its result (killed): not running any more
+		log "IFS firmware: the switch stopped without a result"
+		IFS_FW_STATUS=$IFS_STATUS ad5x-mcu ifs-status state=failed phase= reason=failed \
+			message="the switch stopped without a result, see $LOG" >> $LOG 2>&1
+	fi
 	if [ -f $D/restart-moonraker ]; then
 		rm -f $D/restart-moonraker
 		if printing; then
@@ -407,6 +627,11 @@ agent_once() {
 			log "return to Flashforge firmware refused: $out"
 			say "refused: ${out#ad5x-boot-recovery: }"
 		fi
+	fi
+	# Before a reboot or shutdown asked at the same time: the switch is
+	# written first
+	if [ -e $D/memory-mode ] || [ -L $D/memory-mode ]; then
+		memory_request
 	fi
 	for p in reboot shutdown; do
 		if [ -e $D/$p ] || [ -L $D/$p ]; then
@@ -522,8 +747,16 @@ start)
 	[ -f /data/ad5x/kiln-os.token ] &&
 		chown root:klipper /data/ad5x/kiln-os.token &&
 		chmod 640 /data/ad5x/kiln-os.token
-	rm -f $D/install $D/kernel-retry $D/boot-recovery $D/service $D/reboot \
-		$D/shutdown $D/status
+	rm -f $D/install $D/kernel-retry $D/boot-recovery $D/return-stock \
+		$D/service $D/reboot $D/shutdown $D/memory-mode $D/ifs-firmware $D/status
+	# The IFS firmware switch's status folder; a switch that was running
+	# when the printer went off (power cut, reset) is reported as such
+	mkdir -p $IFSD && chown root:root $IFSD && chmod 755 $IFSD
+	if ! ifs_switching && grep -qx 'state=running' $IFS_STATUS 2>/dev/null; then
+		log "IFS firmware: the switch was cut short by a restart"
+		IFS_FW_STATUS=$IFS_STATUS ad5x-mcu ifs-status state=failed phase= reason=interrupted \
+			message="the printer restarted during the switch; try again" >> $LOG 2>&1
+	fi
 	# Staged files a reboot left behind (root's own; a folder klipper
 	# swapped in stays)
 	mkdir -p $STAGE && chown root:root $STAGE && chmod 700 $STAGE
@@ -539,6 +772,9 @@ run)
 	;;
 once)
 	agent_once
+	;;
+ifs-job)
+	ifs_job "$2"
 	;;
 stop)
 	start-stop-daemon -K -p $PID

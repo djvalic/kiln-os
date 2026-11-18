@@ -96,6 +96,9 @@ BR2_PACKAGE_FLUIDD=y
 # /data/ad5x/helixscreen.disable keeps it off)
 BR2_PACKAGE_HELIXSCREEN=y
 BR2_PACKAGE_AD5X_SYSTEM=y
+# Extended memory mode: the high bank tested once on its first start
+# (S05ad5x-memtest; main OS only)
+BR2_PACKAGE_AD5X_MEMTEST=y
 
 # Images: squashfs with LZO (what the stock kernel reads), plus a tarball
 BR2_TARGET_ROOTFS_SQUASHFS=y

@@ -1,0 +1,57 @@
+From 491651439cb761ad51cd4727263bc8da0129b8f0 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 09:00:00 -0500
+Subject: [PATCH] MIPS: dts: ingenic: ad5x: Use the stock media area as RAM
+
+The stock firmware keeps the 16 MiB at 0x0ec00000 for its media
+drivers (its boot loader passes rmem=16M@0xec00000 beside
+mem=236M@0x0). This kernel has none of them, and Kiln's boot loaders
+now start it with mem=252M@0x0 and without rmem=, so stop reserving
+that area: it is RAM for this kernel.
+
+Move the ramoops region to the top of the 252 MiB, below the RISC-V
+core's area, as Kiln's 6.6 device tree has it, and make it 256 KiB
+(two 64 KiB records, 128 KiB of console) instead of 1 MiB. The 236 MiB
+that Kiln's U-Boot uses, and that the stock kernel has as System RAM
+before it chainloads this one, end below it.
+---
+ arch/mips/boot/dts/ingenic/ad5x.dts | 19 +++++++------------
+ 1 file changed, 7 insertions(+), 12 deletions(-)
+
+diff --git a/arch/mips/boot/dts/ingenic/ad5x.dts b/arch/mips/boot/dts/ingenic/ad5x.dts
+index d3b7422f8..dceef7399 100644
+--- a/arch/mips/boot/dts/ingenic/ad5x.dts
++++ b/arch/mips/boot/dts/ingenic/ad5x.dts
+@@ -65,22 +65,17 @@ reserved-memory {
+ 		ranges;
+ 
+ 		/*
+-		 * The kernel log of a crash, kept over the reboot in RAM the
+-		 * stock firmware leaves unused (below "rmem"), as Kiln's 6.6
+-		 * device tree has it: pstore reads it back after the next boot.
++		 * The kernel log of a crash, kept over the reboot at the top of
++		 * the 252 MiB the boot loader gives this kernel (mem=252M@0x0),
++		 * as Kiln's 6.6 device tree has it: pstore reads it back after
++		 * the next boot. Two 64 KiB records and 128 KiB of console.
+ 		 */
+-		ramoops@eb00000 {
++		ramoops@fbc0000 {
+ 			compatible = "ramoops";
+-			reg = <0x0eb00000 0x00100000>;
++			reg = <0x0fbc0000 0x00040000>;
+ 			no-map;
+ 			record-size = <0x10000>;
+-			console-size = <0x40000>;
+-		};
+-
+-		/* Kept by the stock firmware for its media drivers ("rmem") */
+-		media@ec00000 {
+-			reg = <0x0ec00000 0x01000000>;
+-			no-map;
++			console-size = <0x20000>;
+ 		};
+ 
+ 		/* Firmware of the SoC's RISC-V core ("rtos_size") */
+-- 
+2.56.0
+

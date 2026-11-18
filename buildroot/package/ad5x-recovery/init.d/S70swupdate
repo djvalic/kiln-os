@@ -4,23 +4,29 @@
 # swupdate-client / ad5x-swu-apply and from the touch UI, over the control
 # socket /tmp/sockinstctrl; progress on /tmp/swupdateprog. Log:
 # /run/ad5x/swupdate.log. "Restart" on the web page (postupdate) runs
-# /usr/lib/ad5x-recovery/swu-postupdate, which reboots.
+# /usr/lib/ad5x-recovery/swu-postupdate, which reboots. A .swu is unpacked
+# into /data/ad5x/swupdate-tmp (TMPDIR), not /tmp (RAM), when the data
+# partition has room (rc_swu_tmpdir in lib/recovery.sh); the sockets stay
+# in /tmp (compiled into SWUpdate: swupdate.config).
 # Replaces Buildroot's S80swupdate (removed by post-build.sh).
 PIDFILE=/var/run/swupdate.pid
 KEY=/etc/swupdate/public.pem
+. /usr/lib/ad5x-recovery/recovery.sh
 case "$1" in
 start)
 	keyarg=
 	[ -f $KEY ] && keyarg="-k $KEY"
 	mkdir -p /run/ad5x
-	start-stop-daemon -S -b -m -p $PIDFILE -x /bin/sh -- -c \
+	tmp=$(rc_swu_tmpdir)
+	echo "$(date) S70swupdate: unpacking into $tmp" >> /run/ad5x/swupdate.log
+	TMPDIR=$tmp start-stop-daemon -S -b -m -p $PIDFILE -x /bin/sh -- -c \
 		"exec /usr/bin/swupdate -v $keyarg \
 		-p /usr/lib/ad5x-recovery/swu-postupdate \
 		-w '-r /var/www/swupdate -p 8080' >> /run/ad5x/swupdate.log 2>&1"
 	# Wait for the control socket (clients started right after need it)
 	n=0
 	while [ ! -S /tmp/sockinstctrl ] && [ $n -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
-	echo "swupdate: started (web upload on port 8080)"
+	echo "swupdate: started (web upload on port 8080; unpacks into $tmp)"
 	;;
 stop)
 	start-stop-daemon -K -p $PIDFILE && rm -f $PIDFILE

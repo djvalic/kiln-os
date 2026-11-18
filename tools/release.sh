@@ -30,6 +30,10 @@
 #   kiln-os-VERSION-update.zip     main OS update (Fluidd, ad5x-update, or a
 #                                  stick in the recovery OS)
 #   kiln-os-VERSION-update.swu     the same as .swu (recovery web page)
+#   kiln-os-VERSION-rescue.zip     a PC's tools to check, back up and repair
+#                                  the eMMC when nothing starts, with the
+#                                  files that start Kiln's U-Boot over USB
+#                                  (tools/make_rescue_kit.sh)
 #   SHA256SUMS, RELEASE_NOTES.md
 # The main OS carries the recovery OS too: after an update, a printer
 # rewrites its slot A when that recovery OS differs (S99ad5x-update-recovery).
@@ -130,6 +134,13 @@ if [ -n "$PUBLIC" ]; then
 	tools/check_vendor_free.sh "$MAIN" || die "main image contains Flashforge files"
 	tools/check_vendor_free.sh "$REC" || die "recovery image contains Flashforge files"
 fi
+# The rescue kit (below) takes the USB start files from the recovery OS's
+# boot loader build: checked here, before the artifacts, so a build
+# without them stops the release early (make_rescue_kit.sh checks them again)
+BLDIST=buildroot/output-recovery/images/bootloader
+for f in spl-usb2.bin u-boot.bin; do
+	[ -f "$BLDIST/$f" ] || die "$BLDIST/$f missing: the boot loader build has no USB stage 2 (u-boot/build.sh); the rescue kit needs it"
+done
 
 # --- Artifacts -------------------------------------------------------------
 NAME=kiln-os-$VERSION
@@ -144,6 +155,15 @@ tools/make_install_stick.sh -r "$REC" -m "$DIST/$NAME-update.zip" -V "$VERSION" 
 	"${SOPT[@]}" -o "$DIST/install" --zip "$DIST/$NAME-install.zip" \
 	> "$DIST/install-stick.log" 2>&1 || die "make_install_stick.sh failed, see $DIST/install-stick.log"
 rm -rf "$DIST/install"
+# The rescue kit: the PC tools and the files that start Kiln's U-Boot over
+# USB, from the recovery OS's boot loader build (docs/emmc-repair.md)
+tools/make_rescue_kit.sh -b "$BLDIST" \
+	-V "$VERSION" -o "$DIST/$NAME-rescue.zip" >/dev/null ||
+	die "make_rescue_kit.sh failed"
+if [ -n "$PUBLIC" ]; then
+	tools/check_vendor_free.sh -q "$DIST/$NAME-rescue.zip" ||
+		die "the rescue kit contains Flashforge files"
+fi
 
 # --- Notes -----------------------------------------------------------------
 if [ -n "$NOTES" ]; then
@@ -170,6 +190,10 @@ else
 		echo "\`ad5x-update --reboot FILE\`, or put it on a USB stick with an empty"
 		echo "\`ad5x-autoupdate\` file and start the recovery OS (docs/updates.md,"
 		echo "\"From a USB stick\")."
+		echo
+		echo "A printer that doesn't start at all: \`$NAME-rescue.zip\` has the"
+		echo "PC tools to check, back up and repair its eMMC over USB, or with"
+		echo "USBCloner and the network (docs/emmc-repair.md)."
 		echo
 		# What's new: the release's CHANGELOG.md section
 		new=$(tools/changelog_section.sh "$VERSION")

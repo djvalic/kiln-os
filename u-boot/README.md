@@ -20,7 +20,27 @@ boot ROM's USB mode for the bench (`USB-BOOT.md`), and 0026 takes
 Flashforge's 5.10 out of the fallback order (7.3 -> 6.6 -> the recovery
 OS, which runs on Kiln's 6.6 from p1) and leaves what it started in
 CPSPR, and 0027 starts the recovery OS only from Kiln's 6.6: this U-Boot
-starts no Flashforge kernel at all.
+starts no Flashforge kernel at all. 0028 sends a board on which nothing
+starts into the boot ROM's USB mode instead of stopping, so it can be
+restored over J28 without K4 (alexshev86's tests 1 and 4 in #68).
+0029-0030 are jolting's again (PR #74, reworked in review): one image for
+both chip variants, the DDR table chosen at boot from the SoC ID in the
+eFuse, and an eMMC sample phase fallback (below, "Chip variants").
+0031 gives Kiln's kernels the low 252 MiB, and 0032 makes standard
+memory (that low window alone, as on a 256 MiB board) the default on
+every AD5X, with extended memory (the X2600H's second bank too) as the
+owner's opt-in (below, "Memory mode"). 0034-0048 are jolting's again,
+from PRs #75, #77, #78 and #79, each followed by the fixes their review
+asked for: the whole eMMC as a USB disk over J28 after a start over USB
+(`USB-BOOT.md`, "The eMMC as a USB disk"; 0034-0040), Ethernet in U-Boot
+proper, touched only when something uses it (0041-0044), the network
+rescue from a record in the first MiB's last sector, three tries at most
+(0045-0046), and netconsole, off unless switched on, output only unless
+keys are asked for from one address (0047-0048; below, "U-Boot
+proper"). 0049 sets the MSC pads to 1.8 V on every start, in the SPL and
+in U-Boot proper (jolting's finding in #68), and 0050, from jolting's PR
+#81, moves U-Boot proper's eMMC data by ADMA2 instead of PIO. A normal start from the eMMC does what it did before but for a
+few small reads (below, "What a normal start does more").
 
 ## Layout
 
@@ -28,7 +48,7 @@ starts no Flashforge kernel at all.
 |---|---|
 | `patches/0001-0012` | jolting: X2600 + AD5X U-Boot proper, the X2600 SDHCI driver, SquashFS boot, environment, `ad5x_flag`, the SPL with the stock SPL's clock and DDR3 setup, watchdog and `ad5x_wdt` |
 | `patches/0013` | the SPL inside the boot ROM's SRAM window, own eMMC reader, pins, clock parents, DDR and lpj as stock, second try, U-Boot proper from 0xA400, chainload-test build |
-| `patches/0014` | U-Boot proper below the kernels' crash log (ramoops) |
+| `patches/0014` | U-Boot proper below the kernels' crash log (ramoops; there until 0031, which moves it to 0x0FBC0000, above U-Boot's RAM) |
 | `patches/0015` | the environment in the `ota` partition |
 | `patches/0016` | the boot rules (`ad5x_boot`, `bootlogic.c`): state in `ota`, 6.6 / 7.3 / stock kernel, checked recovery fallback, watchdog rules |
 | `patches/0017` | the watchdog left running into Kiln's 6.6 and 7.3 (`ad5x_wdt_seconds`, `wdt_os=30`), stopped for the stock kernel and the recovery OS |
@@ -42,16 +62,40 @@ starts no Flashforge kernel at all.
 | `patches/0025` | SPL started over USB: the `KILNUSB1` tag or CPM_SLPC's soft request seen and cleared, a fresh start, a DDR test |
 | `patches/0027` | slot A startable only with Kiln's 6.6 in p1 (`ad5x_slot_a_kernel_ok`, uImage name `Linux-6.6-ad5x`): a Flashforge 5.10 there is never started |
 | `patches/0026` | no stock-kernel rung: 7.3 -> 6.6 -> the recovery OS; slot A broken: the main OS again on its own kernel; a Kiln 6.6 in p1 gets Kiln's command line; `0x55NK` in CPSPR before the jump (`ad5x_start_uboot_kernel`) |
-| `USB-BOOT.md` | starting the SPL from the boot ROM over J28 (phase 4): wiring, soft entry and K4, the cold-start test |
+| `patches/0028` | SPL: the attempts used up, the boot ROM's USB mode (CPM_SLPC's soft request, a watchdog reset) instead of the stop; `0x4c00 \| low byte` in CPSPR; the stop only when the ROM started the eMMC again with the request still there |
+| `patches/0029` | jolting: the DDR table by the SoC ID in the eFuse (Ingenic's `check_socid()`, eFuse powered down after): the X2600H's as before (also for a blank eFuse, a read timeout, bad check bits or an unknown variant), the X2600E's 256 MiB as the 2025 stock SPL; any other DDR stops the attempt before DDR setup. One decision for the SPL and U-Boot proper (`mach/x2600_ram.h`); with 256 MiB no `mem=...@0x30000000` word on the kernel command line (SPL and U-Boot proper) |
+| `patches/0030` | jolting: SPL: the eMMC sample phase. From the eMMC, reads start at the boot ROM's phase; over USB, MSC0CDR gets the ROM's eMMC value and RX phase 3 with tuning off (MSC0CDR 19:17, bit 20) before the first read. Any read that fails: RX phase 3 and the read again; failing at phase 3 too: once more from CMD0 at 400 kHz, 1 bit, and on that way (slow). Each step is kept and logged once; each failed read is logged with its step and the controller's status; `spl_load_uimage()` tells a read error from no image |
+| `patches/0031` | Kiln's kernels get the low 252 MiB (`x2600_args_kiln_low`, `mach/x2600_ram.h`): `mem=236M@0x0` becomes `mem=252M@0x0` and `rmem=` goes, in U-Boot proper for every kernel it starts and in the SPL when the slot's uImage is Kiln's 6.6 (`Linux-6.6-ad5x`), not for Flashforge's 5.10; U-Boot itself stays at 236 MiB below 0x0EB00000 |
+| `patches/0032` | the memory mode (`x2600_args_memory`, `x2600_args_spl`, `mach/x2600_ram.h`; the boot rules): standard by default, no `mem=...@0x30000000` word; extended only when the owner switched it on (`/data/ad5x/kernel/extended-memory`) on 512 MiB, for a plain start of the main OS on Kiln's kernel; `ad5x.ram=` and `ad5x.memmode=` on every Kiln kernel's line; the recovery OS and the SPL's own start of Kiln's 6.6 always standard; `mem ext\|std` in the state, `failed-mem` in the records |
+| `patches/0033` | lpj by the variant (`x2600_args_lpj`, `mach/x2600_ram.h`): on 256 MiB (an X2600E) `lpj=11935744` becomes `lpj=11476992`, in the SPL for every kernel it starts and in U-Boot proper before `cmdline-extra`; an X2600H keeps 11935744 |
+| `patches/0034` | jolting (PR #75): U-Boot proper over USB as stage 2: the `KILNUSB2` SPL sets up DDR and goes back to the boot ROM, U-Boot runs `ums 0 mmc 0` (the eMMC as a USB disk) with the watchdog off and this build's environment in RAM only; the MSC pads at 1.8 V on a start over USB; the DWC2 gadget driver on MIPS; `0x5a2b` in CPSPR |
+| `patches/0035` | jolting (PR #75): X2600 L1 and L2 cache range operations in U-Boot proper (the generic ones skip the L2: stale SETUP packets after DMA, ums never enumerated) |
+| `patches/0036` | jolting (PR #77, here with 0035): DMA alignment to the L2's 64-byte lines (`SYS_CACHE_SHIFT_6`; was the L1's 32) |
+| `patches/0037` | jolting (PR #75): mmc: CMD12 after a failed multi-block read, and the chunk read again (a data CRC error left the card sending and ums dropped the disk) |
+| `patches/0038` | jolting (PR #75): dts: the OTG controller, FIFO sizes within its 3576 words |
+| `patches/0039` | review of 0034: the SPL saves the boot ROM's Status and Cause first in `_start`, before writing its own, so `ad5x_return_to_rom()` gives the ROM its own back; `0x5a2b` (`AD5X_USB_STAGE2`) listed in `mach/ad5x_start.h` with Kiln's other CPSPR values |
+| `patches/0040` | review of 0035: `invalidate_dcache_range()` writes back and invalidates a range's partial first and last lines (by the L2's 64 bytes) instead of dropping their neighbours' data, as Linux and the vendor kernel do |
+| `patches/0041` | jolting (PR #77): net: designware: `virt_to_phys()`/`phys_to_virt()` between CPU and DMA addresses, registers mapped uncached (MIPS KSEG0/KSEG1) |
+| `patches/0042` | jolting (PR #77): net: `dwmac_ingenic`: the X2600 GMAC's pins (PC16-PC24), clock gate, 50 MHz MAC clock from the MPLL, RMII in the CPM; enhanced descriptors |
+| `patches/0043` | jolting (PR #77): AD5X: the MAC and its IP101G in the device tree, the address from usershare `/MAC`, `dhcp`/`ping`/`mii`/`wget`/`hash` |
+| `patches/0044` | review of 0041-0043: Ethernet only when used. `NET_LAZY_INIT` (no `initr_net`: the first network command probes the device), `eth_halt()` no longer probes a device to stop it (bootm with `NETCONSOLE`), usershare `/MAC` read only for a start over USB, the rescue, netconsole or the prompt: a normal start touches neither the MAC and its PHY nor usershare; the MAC PHY control register's interface field RMII (4), as the SDK and Kiln's 6.6 write it |
+| `patches/0045` | jolting (PR #78): network rescue: a record in the first MiB's last sector (`ad5x_emmc_image.py --rescue`) makes U-Boot fetch, check and write the rest of the eMMC over HTTP; U-Boot proper ends one sector earlier |
+| `patches/0046` | review of 0045: three tries, each counted in the record (`tries=`) before it starts, then a normal start with the record kept ("given up"); the record parsed and checked in `bootlogic.c`; the watchdog restarted (900 s) before the network setup and each piece; `ad5x_rescue` / `ad5x_rescue clear`; the read-back buffer at 0x86000000, apart from `AD5X_SCRATCH` |
+| `patches/0047` | jolting (PR #79): netconsole: U-Boot's console over UDP 6666 when `/data/ad5x/netconsole` exists (the PC's IP, or empty for the LAN) or `ad5x_nc` is set; always in the network rescue |
+| `patches/0048` | review of 0047: output only (keys from the network only with `/data/ad5x/netconsole-input` too, and only from the one unicast address on the file's first line); a prompt reached that way resets after 300 s idle (`BOOT_RETRY`, `RESET_TO_RETRY`); `bootcmd` never changed, the console devices serial and `ncip`/`bootretry` dropped at every start (`overwrite_console()`, `SYS_CONSOLE_ENV_OVERWRITE`): a `saveenv` keeps nothing of it; no `ad5x_nc` switch; the rescue's console output only; the switch decided in `bootlogic.c` (`ad5x_nc_decide`) |
+| `patches/0049` | the MSC pads (and GPIO port E) at 1.8 V on every start: EXCLK_DS.POC (CPM 0xE0, bit 31; `x2600_msc_pads_1v8()`, `mach/x2600.h`), set in the SPL at the top of `ad5x_emmc_init()` before the controller reset and in U-Boot proper in `board_early_init_r()` before the eMMC is probed; each logs `MSC pads at 3.3 V (EXCLK_DS 0x...): now 1.8 V` when it was clear (the boot ROM sets it only on an eMMC start; jolting found 3.3 V pads behind the USB-path read failures, #68). Was: set only in the SPL's USB branch (0034) |
+| `patches/0050` | jolting (PR #81): eMMC by ADMA2 in U-Boot proper (`MMC_SDHCI_ADMA`), as Ingenic's driver and Linux: PIO reads returned wrong words while the Ethernet DMA ran (netconsole on: 4 of 20 reads of p1 wrong on printer 2, 0 of 54 by ADMA); physical addresses in the descriptors, none across a 128 MiB boundary (one spare table entry for the split). Partly covered cache lines: 0040 (the PR's own 0040 not taken) |
+| `USB-BOOT.md` | starting the SPL from the boot ROM over J28 (phase 4): wiring, soft entry and K4, the cold-start test; the eMMC as a USB disk (`run-uboot`) |
 | `build.sh` | fetch v2026.10 (sha256-pinned), patch, build, check; `--container` for the laptop |
 | `Containerfile` | the builder's pinned Debian base + Debian's `gcc-mipsel-linux-gnu` |
 | `tools/ad5x_spl_image.py` | boot ROM header + INGE params generator; the SPL's memory-map check; a first-MiB candidate from a unit's dump; its write plan |
 | `tools/check_first_mib.py` | offline check of a candidate first MiB against stock dumps, the build's `spl-mmc.img` and the unit's stock DDR table and clocks |
 | `tools/spl_stack.py` | worst-case SPL stack from GCC's call graph (`--nm` for merged functions) |
+| `../tools/ad5x_netconsole.py` | PC: U-Boot's netconsole, any OS with Python 3 (UDP 6666; Ctrl-C sends the stop key) |
 | `tools/bootlogic_cli.c` | host driver for the boot rules (tests) |
 | `tools/spl_uimage_cli.c` | host driver for the SPL's uImage loader, cut out of `spl.c` (`test_spl_uimage.py`) |
-| `tools/ad5x_start_cli.c` | host driver for the start-up tries and the stop key (`test_ad5x_start.py`) |
-| `tools/ad5x_usbboot.py` | laptop: the X2600 boot ROM's USB protocol, `info` and `run-spl` (pyusb; `--dry-run` without) |
+| `tools/ad5x_start_cli.c` | host driver for the start-up tries, the stop key and the chip variant decision (`test_ad5x_start.py`) |
+| `tools/ad5x_usbboot.py` | laptop: the X2600 boot ROM's USB protocol, `info`, `run-spl` and `run-uboot` (pyusb; `--dry-run` without) |
 | `../tools/bench/ad5x-usbboot-mode` | printer (bench only, copied over SSH): the soft entry into USB boot, with checks |
 | `../tools/bench/ad5x-uboot-chainload` | recovery OS on 5.10 (bench only): U-Boot proper started from RAM with `chainload_uboot.ko`, nothing written (`tools/bench/README.md`, step 2) |
 | `../tools/bench/ad5x-spl-flash` | main OS (bench only): the SPL written from `first-mib.img`, only 0x4-0x7 and 0x4400-0xA3FF, read back; `--restore` (`tools/bench/README.md`, step 3) |
@@ -115,6 +159,11 @@ Results 2026-11-15 (Debian gcc 14.2.0, laptop container, patches
 | spl-usb.bin | 13,824 bytes to 0x80001000 (of the 0x7000 the ROM takes over USB); differs from spl-mmc.img only in the 8-byte tag |
 | chainload-test SPL | 8,512 bytes |
 | U-Boot proper | 351,580 bytes (343 KiB); uImage 351,644 of the 1,006,592 bytes from 0xA400 to 1 MiB. With 0026-0027 (2026-11-16): 351,812 bytes, uImage 351,876 (sectors 82-769); the SPL and `first-mib.img` byte for byte the same (built with step 3's `SOURCE_DATE_EPOCH`) |
+| with 0028 (2026-11-16) | SPL 11,912 bytes (0x80001800-0x80004688), 28 blocks with the header; BSS 944 bytes to 0x80004A40; 7,616 bytes free in the window; worst-case stack 512 bytes (the same path); spl-usb.bin 14,336 bytes; U-Boot proper the same size; first-MiB check and write plan pass for both dumps. A first MiB built with 0028 differs from step 3's in the SPL range |
+| with 0029-0030 (2026-11-17) | SPL 13,456 bytes (0x80001800-0x80004C90), 31 blocks with the header; BSS 952 bytes to 0x80005048; 6,072 bytes free in the window; worst-case stack 576 bytes of 2,048 (the same path, `ad5x_emmc_read` 64 bytes); spl-usb.bin 15,872 bytes; chainload-test SPL 10,032 bytes; U-Boot proper 352,468 bytes, uImage 352,532 (sectors 82-770); first-MiB check and write plan pass for both dumps (the image still has exactly one `W634GU6QG-11` table) |
+| with 0031-0032 (2026-11-17) | 0031 alone: SPL 13,864 bytes, BSS 988, 5,620 bytes free, worst-case stack 536 bytes, U-Boot proper 352,820 bytes. With 0032: SPL 14,200 bytes (0x80001800-0x80004F78; +336, `x2600_args_spl` and the memory words in `board_init_f`), 32 blocks with the header as before; BSS 1,024 bytes to 0x80005380 (`spl_args` +36); 5,248 bytes free in the window; worst-case stack 552 bytes of 2,048 (the same path, `board_init_f` 88); spl-usb.bin 16,384 bytes; chainload-test SPL 10,768 bytes; U-Boot proper 355,052 bytes, uImage 355,116 (sectors 82-775); first-MiB check and write plan pass for both dumps |
+| with 0030 reworked and 0033 (2026-11-17, #68) | SPL 15,576 bytes (0x80001800-0x800054D8; +1,376: the read steps and their log lines, the 400 kHz retry, `x2600_args_lpj`), 35 blocks with the header; BSS 1,036 bytes to 0x800058EC; 3,860 bytes free in the window; worst-case stack 584 bytes of 2,048 (the same path, `ad5x_emmc_read` 88); spl-usb.bin 17,920 bytes; chainload-test SPL 12,096 bytes; U-Boot proper 355,268 bytes, uImage 355,332 (sectors 82-776); first-MiB check (DDR tables by ID: `0x84 W634GU6QG-11`) and write plan pass for both dumps |
+| with 0034-0048, then 0049-0050 (2026-11-17, #68, PR #81) | 0034-0048: SPL 16,072 bytes (0x80001800-0x800056C8), 36 blocks with the header; BSS 1,040 bytes to 0x80005AE0; 3,360 bytes free in the window; worst-case stack 584 bytes of 2,048; U-Boot proper 461,444 bytes. With 0049-0050: SPL 16,184 bytes (0x80001800-0x80005738; +112, the pad check and its log line), still 36 blocks; BSS 1,040 bytes, 0x80005740-0x80005B50; 3,248 bytes free in the window; worst-case stack 584 bytes (the same path); spl-usb.bin and spl-usb2.bin 18,432 bytes; chainload-test SPL 12,480 bytes; U-Boot proper 462,948 bytes (+1,504: ADMA2 and `board_early_init_r`), uImage 463,012 (sectors 82-986); first-MiB check and write plan pass for both dumps, with U-Boot at 0xA400 too |
 | first MiB | both stock dumps: candidate passes the check (only the SPL range and the length fields differ; the SPL is `spl-mmc.img`'s; DDR table and clocks as the unit's stock SPL); the write plan gives the same first MiB |
 
 jolting's SPL, for comparison: 22,400 bytes of code with BSS at
@@ -220,8 +269,9 @@ sector 82 and returns 0 (not usable) when the magic isn't there (line
 eMMC read fails (369, 391); and when the data CRC over `ih_size` bytes
 is wrong (393-396), which covers a body cut short or partly old: it reads
 the blocks the header names whatever they hold. `ad5x_boot()` (448-456)
-then prints "no U-Boot at 0xA400: the slot, as the stock SPL" and goes on
-to the flag and the slot with the same tries as without U-Boot. Every
+then prints "no U-Boot at 0xA400: the slot, as the stock SPL" ("can't
+read 0xA400: the slot" when the eMMC read failed, `spl_read_bad`) and goes
+on to the flag and the slot with the same tries as without U-Boot. Every
 read is bounded (`spl_emmc.c`: 500 ms per block and for the end of the
 transfer, then an error), and phase 2 (`AD5X_PH_UBOOT`) is armed with
 the 10 s watchdog before the read (line 448), so even a read that hung
@@ -244,6 +294,169 @@ Flashforge's header sector back first, so the magic goes before anything
 else changes. The 4 KiB page that holds sector 82 also holds 0xA000-0xA3FF
 (the SPL range's 0xFF fill, which the boot ROM doesn't load: 27 blocks end
 at 0x7A00) and sectors 83-87, rewritten with the bytes they already hold.
+
+## Chip variants
+
+One SPL and U-Boot proper for both chips the AD5X has been seen with
+(djvalic/kiln-os#68, #74). The SPL reads the SoC info from the eFuse
+after its clock setup (`x2600_socid()`, as Ingenic's `check_socid()`:
+words 0x1a-0x1b, 20 bits and the same 20 again as check bits, the eFuse
+powered down after), and `x2600_ram_mib()` in `mach/x2600_ram.h` decides;
+U-Boot proper reads it again and takes the same decision from the same
+header, so the two can't disagree.
+
+| Chip | RAM | eFuse SoC info | DDR ID | DDR table | Kernel command line |
+|---|---|---|---|---|---|
+| X2600H | 512 MiB DDR3L | 0x38200 (variant 3) | 0x84 | `W634GU6QG-11` (stock, as rc3) | `mem=236M@0x0 ... mem=256M@0x30000000` (Kiln's kernels: `mem=252M@0x0`, no `rmem=`, 0031; the second bank only in extended memory, 0032) |
+| X2600E | 256 MiB DDR3 | 0x18000 (variant 1) | 0x80 | `X2600E-DDR3` (the 2025 stock SPL's) | without the `mem=...@0x30000000` word |
+
+- Fail-safe: variant 3, a blank eFuse, a read that doesn't finish, check
+  bits that differ, or a variant Ingenic doesn't list (7-15) give the
+  X2600H's table and rc3's behaviour. Only a good SoC ID that isn't an
+  X2600H and decodes to DDR3 with 256 MiB picks the X2600E's (512 MiB
+  DDR3 on another variant: the X2600H's). Anything else (DDR2, 128 MiB
+  and less, other sizes) fails the attempt before DDR setup
+  (`spl_fail`, "no DDR table for this X2600"), and after the last one the
+  SPL asks for the boot ROM's USB mode (0028): the memory map (mem=236M
+  for the stock kernel and mem=252M for Kiln's, rmem at 0x0EC00000, the
+  kernels' ramoops at 0x0FBC0000, the RISC-V core at 0x0FC00000) needs the
+  low 256 MiB. The 128 MiB X2600N's table in PR #74
+  was dropped for that reason.
+- The X2600E's table is `static const` and copied over the X2600H's only
+  on an X2600E, so the DDR code reads one table as before.
+- Log lines that show the choice: `SPL: SoC ID 38200 (variant 3), DDR ID
+  84` (or `SPL: SoC ID: <why>: as an X2600H`), then `SPL: X2600H DDR table
+  W634GU6QG-11, 512 MiB`. U-Boot proper says `ad5x: 256 MiB, standard
+  memory: no second bank for the kernel` when it drops the word (on an
+  X2600H in standard memory `512 MiB, standard memory`, in extended
+  memory `512 MiB, extended memory: the second bank for the kernel`).
+- The second bank is dropped as any word `mem=<size>@0x30000000`, wherever
+  it is: `args_spl` from a saved environment and `cmdline-extra` too.
+  `test_ad5x_start.py` checks the decision and the word removal.
+- eMMC (0030): every AD5X so far has had another eMMC part. The X2600E's
+  `A31M8C` fails every data read at the boot ROM's RX phase 0 and reads
+  at 1-5; the X2600H boards' parts work at 0. It follows the eMMC, not the
+  chip variant. U-Boot proper's `x2600_sdhci` doesn't set a phase of its
+  own. With the MSC pads at 1.8 V (0049) jolting's sweep on the A31M8C
+  read cleanly at all 8 phases; at 3.3 V, as a start over USB left them
+  before, only at 2-5 (#68), so phase 3 stays a safe choice. The SPL's
+  steps, each taken once and kept for every later read:
+  1. Started from the eMMC: reads at the ROM's phase. An X2600H whose
+     reads work gets no phase write at all.
+  2. Started over USB: the ROM never set the eMMC up, so MSC0CDR holds
+     its reset value. It gets the value the ROM writes before it loads an
+     SPL from the eMMC (`MSC0CDR_BOOT_ROM`, 0x20108003, as the chainload
+     test build does), then RX phase 3, before the first read:
+     `SPL: eMMC over USB: MSC0CDR 0x..., now 0x...: RX phase 3, tuning off`.
+  3. Any read that fails (a data CRC error or any other step), at the
+     ROM's phase: RX phase 3 with tuning off, and the read again:
+     `SPL: eMMC data CRC error (MSC0CDR 0x...): RX phase 3, tuning off,
+     again` (`eMMC read failed` when it wasn't a CRC error).
+  4. A read that fails at phase 3: once more from CMD0 at the
+     identification clock, 400 kHz and 1 bit (`SPL: eMMC: again from CMD0
+     at 400 kHz, 1 bit`). If it reads so, the reader works and this eMMC
+     dislikes the 4-bit, 25 MHz setup; booting goes on that way
+     (`SPL: eMMC reads at 400 kHz, 1 bit: going on slowly`): about 50 KB/s,
+     a 5.7 MB kernel in about 2 minutes, read 64 KiB at a time with the
+     phase's 10 s watchdog restarted before each. The data is checked as
+     always (the bus CRC, the uImage's CRCs). If that fails too, the read
+     fails as before (`spl_fail`, the next attempt).
+
+  Each failed read prints one line first, for example
+  `SPL: eMMC CMD17 at 0x6c800 block 0: data error; status 0x208000,
+  present 0x..., MSC0CDR 0x...`: the command (CMD17 one block, CMD18
+  more), the LBA, the block it stopped at, the step (`command`: CMD17 or
+  CMD18 itself; `data`: waiting for a block, `INT_BUF_RD`; `end`: waiting
+  for the end of the transfer, `INT_XFER_DONE`) and what went wrong there
+  (`busy`: the controller never got ready for the command, `-EBUSY`;
+  `timeout`; `error`: `INT_ERROR`), then `SD_INT_STATUS`,
+  `SD_PRESENT_STATE` and MSC0CDR. In the status, bit 15 is the error
+  summary and bits 16-31 the SDHCI error bits: bit 21 data CRC, bit 20
+  data timeout, bit 22 data end bit, bit 16 command timeout, bit 17
+  command CRC.
+- lpj (0033): the stock SPL's line has `lpj=11935744`, the 2024 stock
+  SPL's value, which suits the X2600H. On 256 MiB (an X2600E) the SPL
+  and U-Boot proper pass `lpj=11476992`, what jolting measured there and
+  what the 2025 stock SPL passes (`x2600_args_lpj`). U-Boot proper does
+  it on `args_spl` before `cmdline-extra`, so an owner's `lpj=` there
+  stays. A chainload (`S00ad5x-kernel`) passes the stock kernel's own
+  line, so it gets the stock SPL's value either way.
+- **The opt-in installer takes an X2600E only with `--unsupported-board`**
+  (over SSH, with the typed confirmation; never offered on the touch
+  screen) until Kiln's SPL has run from the eMMC on one. A board it can't
+  tell is an X2600H or an X2600E (from MemTotal and the `mem=` bank) is
+  refused even with the override. jolting's X2600E test ran over USB (J28)
+  with nothing written, and its stock SPL (the 00437 build) isn't one
+  `check_first_mib.py` accepts yet. The checker matches Kiln's DDR tables
+  to the stock SPL's by DDR ID (0x84, 0x80), not by name, as jolting's
+  #74 change does, but still refuses the 00437 build by its banner and its
+  per-chip tables.
+
+## Memory mode (0032)
+
+Every AD5X starts in **standard memory** by default: Kiln's kernels get
+the low window alone (`mem=252M@0x0`, 0031), the same on an X2600H and an
+X2600E. On 512 MiB the owner can switch **extended memory** on (Kiln OS's
+`ad5x-memory extended on`, which writes `/data/ad5x/kernel/extended-memory`);
+the kernel then also gets the second bank, `mem=256M@0x30000000`.
+
+| Start | Second bank | Words for Linux userspace |
+|---|---|---|
+| U-Boot proper, main OS, extended (the boot rules decided it) | kept (512 MiB only) | `ad5x.ram=512 ad5x.memmode=extended` |
+| U-Boot proper, main OS, standard | dropped | `ad5x.ram=512\|256 ad5x.memmode=standard` |
+| U-Boot proper, recovery OS (Kiln's 6.6 from p1) | dropped, always | `ad5x.ram=512\|256 ad5x.memmode=standard` |
+| Kiln's SPL alone, Kiln's 6.6 in the slot | dropped, always (no /data there; a fallback) | `ad5x.ram=512\|256 ad5x.memmode=standard` |
+| Kiln's SPL alone, Flashforge's 5.10 in the slot | the stock SPL's line, unchanged (dropped on 256 MiB, as before) | none |
+
+`x2600_args_memory()` (U-Boot proper: the last change to the line, after
+`cmdline-extra`) drops every `mem=<size>@0x30000000` word unless the start
+is extended on 512 MiB, also one in `cmdline-extra`; it drops any
+`ad5x.ram=`/`ad5x.memmode=` words already there and appends its own, after
+the last word, when they fit (`CONFIG_SYS_CBSIZE` 1024; the SPL's buffer
+has room for them). The SPL's choice is `x2600_args_spl()`, one rule for
+the slot's uImage name. `ad5x.ram=` is the board's RAM whatever the mode
+(from the SoC ID, `x2600_ram_mib()`, read once in U-Boot proper), so that
+Kiln OS knows an X2600H in standard memory is one.
+
+The boot rules decide the mode for the main OS (`ad5x_decide()`, `mem_ext`):
+extended only when all of these hold, else standard:
+
+- /data read, `ad5x/kernel/extended-memory` there and
+  `ad5x/kernel/extended-memory-failed` (Kiln OS's failure record) not;
+- 512 MiB;
+- a start of the main OS on Kiln's 6.6 or 7.3 from the flag on slot B (the
+  starts that get `cmdline-extra`), not a fallback (the recovery OS, or the
+  main OS again on a failed kernel because slot A is broken), not the first
+  start after an install;
+- no unconfirmed start: the state is empty. A retry is never extended.
+
+Each start of the main OS writes `mem ext` or `mem std` into the state. When
+U-Boot finds the state unconfirmed and `mem ext`, the extended start didn't
+finish: it counts as one of the tries as before (6.6 twice, 7.3 once), the
+next start is standard, and the records get `failed-mem <reason>` (and
+`reason`, unless a kernel fallback explains it). Kiln OS copies that record
+to `/data/ad5x/kernel/extended-memory-failed` in the start that follows
+(`uboot_mem_mirror` in `lib/uboot.sh`, from S00ad5x-kernel and
+S99ad5x-booted). Once a later start has been confirmed (U-Boot finds the
+state empty) U-Boot drops `failed-mem` from its records: from then on the
+copy on /data is the one that counts, and `ad5x-memory extended on`, which
+removes it, switches the mode on again (it also takes `failed-mem` out of
+the records itself, `uboot_drop`; U-Boot doesn't need that, as a retry is
+never extended). A kernel that couldn't even be loaded (decided again in the
+same `ad5x_boot`) never ran: its `mem ext` isn't counted. Every failing
+sequence still ends in the recovery OS within three unconfirmed starts
+(`test_bootlogic.py`, Simulation: extended 6.6, standard 6.6, the recovery
+OS; extended 7.3, standard 6.6 twice, the recovery OS), and an extended
+mode that never finishes on a board where standard does costs one start
+(`test_bad_second_bank_ends_in_standard`).
+
+What Kiln OS must do for this (not in U-Boot): copy `failed-mem` (when it
+isn't `-` and the /data file isn't there) in the start that follows the
+failure, before U-Boot runs again; without the copy each confirmed start
+would be followed by one more extended try (bounded: never the recovery
+OS, `test_no_copy_on_data_is_bounded`).
+The recovery OS's `rc_uboot_fresh` zeroes the records, `failed-mem` with
+them: copying it first keeps the account.
 
 ## SPL memory (finding B)
 
@@ -285,10 +498,12 @@ jolting's fixes.
   DDR (2 = MPLL), MACPHY, LCD, MSC0, MSC1, SSI, SFC from the MPLL, PWM from
   the APLL.
 - DDR3: jolting's port of Ingenic's code with the stock values;
-  `DDRC_AUTOSR_EN` now 0, as in the stock SPL's table. The table is the
+  `DDRC_AUTOSR_EN` now 0, as in the stock SPL's table. An X2600E gets the
+  2025 stock SPL's table instead ("Chip variants"). The table is the
   stock one, `W634GU6QG-11`, byte for byte from the name to `remap[]`
-  (`check_first_mib.py` compares it with each unit's); the clock values
-  are one record, `KILNCLK`, that the checker reads.
+  (`check_first_mib.py` finds the tables by DDR ID and compares each from
+  the ID to `remap[]` with the unit's); the clock values are one record,
+  `KILNCLK`, that the checker reads.
 - eMMC clock as the stock SPL's `clk_set_rate()`: controller clocks on,
   for identification MSC0CDR bit 21 (`MSCCDR_EXCK_E`) and parent 3
   (EXCLK) / 60 = 400 kHz, for data the MPLL / 72 = 25 MHz; change enable,
@@ -296,8 +511,17 @@ jolting's fixes.
   write (neither the stock SPL nor the SDK's driver has one). CMD6 to 4
   bits is checked with CMD13 for SWITCH_ERROR (status bit 7): a card that
   refuses stays at 1 bit, and the host with it.
-- `lpj=11935744`, as the stock SPL passes it (the SDK board config's
-  11476992 is not what Flashforge ships).
+- MSC pads at 1.8 V (0049): EXCLK_DS.POC, bit 31 of CPM 0xE0, the I/O
+  voltage of the MSC pads and GPIO port E (the vendor kernel's
+  `ingenic,gpe_msc_voltage`). The eMMC's I/O rail is 1.8 V; the boot ROM
+  sets the bit when it boots from the eMMC, not in its USB mode. The SPL
+  sets it at the top of `ad5x_emmc_init()` on every start, before the
+  controller reset, and prints `SPL: MSC pads at 3.3 V (EXCLK_DS 0x...):
+  now 1.8 V` only when it was clear; U-Boot proper does the same in
+  `board_early_init_r()` (`ad5x: MSC pads at 3.3 V ...`), so a U-Boot
+  started after anything that left 3.3 V reads at 50 MHz too.
+- `lpj=11935744`, as the 2024 stock SPL passes it; on an X2600E
+  `lpj=11476992`, as the 2025 one does there (0033, "Chip variants").
 - Chainload tests: `CONFIG_AD5X_SPL_CHAINLOAD=y` builds an SPL without the
   clock and DDR setup (`spl-chainload.bin`); it carries a marker the image
   tools and the checker refuse. No runtime guess any more. It writes the
@@ -321,22 +545,57 @@ jolting's fixes.
   | 0, 1 | the same plan again |
   | 2, 3, 4 | without U-Boot proper (the skip bit stays for this start) |
   | 5, 7 | the other slot, forced |
-  | attempt 3 and any of these | stop, watchdog off (power-cycle to retry) |
+  | attempt 3 and any of these | the boot ROM's USB mode (patch 0028): `0x4c00 \| the low byte` in CPSPR, CPM_SLPC = 0x42575302, watchdog reset; the board waits on J28 as `a108:eaef` |
+  | `0x4c__` and CPM_SLPC still 0x42575302 (the ROM started the eMMC anyway) | stop, watchdog off (power-cycle to retry) |
+  | `0x4c__` without that (a power cycle clears CPM_SLPC) | fresh |
 
   So within four attempts the board starts a kernel, or the next start
-  stops; a failed slot is never loaded again before the other one: U-Boot proper hanging
-  and the flagged slot not loading gives U-Boot, slot B, slot A.
+  asks for the boot ROM's USB mode; a failed slot is never loaded again
+  before the other one: U-Boot proper hanging and the flagged slot not
+  loading gives U-Boot, slot B, slot A. The request needs neither the DDR
+  nor the eMMC, so a DDR or eMMC setup that fails at attempt 3 ends the
+  same way. It logs `SPL: nothing started after 4 attempts (last
+  0x4b..): boot ROM USB mode (J28); power-cycle to try the eMMC again`.
+  The reset is a watchdog reset, the one the SPL uses for every failed
+  try, and the kind the soft entry is known to work with: Ingenic's
+  `softburn` (SDK `common/cmd_softburn.c`: CPM_SLPC, then `do_reset()`,
+  a watchdog reset on XBurst2) and Linux's reboot after `devmem` in #68
+  (`jz_wdt_restart`, a 4 ms watchdog reset). CPSPR and CPM_SLPC are
+  written before the console and the watchdog armed (10 s), so a hang
+  from there on resets into the ROM too.
+
+  The loop guard: if the ROM ignores the request and starts the eMMC SPL
+  again, that SPL finds the marker with the request still in CPM_SLPC,
+  clears CPM_SLPC, writes 0 to CPSPR and stops with the watchdog off, as
+  before 0028: one request, never a reset loop. A power cycle clears
+  CPM_SLPC (#68), so after one the marker is a fresh start and the eMMC
+  is tried again from attempt 0, whether CPSPR keeps its value over a
+  power-off or not (not known; the model tests both); on a board where
+  still nothing starts, that ends in the USB mode again. The one case the
+  SPL can't tell from a power cycle is a ROM that clears CPM_SLPC and
+  still starts the eMMC: each round of attempts would then ask again (a
+  reset loop of four attempts, like a power cycle after each request);
+  the ROM in #68 takes the request, so that is not expected.
+  A start over USB with spl-usb.bin's tag is fresh whatever CPSPR holds
+  (below), so a restore over J28 runs the normal plan; if it still finds
+  nothing, its attempts (the first over USB, the rest from the eMMC,
+  CPM_SLPC cleared) end in the USB mode again.
   `test_ad5x_start.py` builds the header on the laptop and walks every
   combination (DDR/eMMC ok, failing once or always; U-Boot at 0xA400 none,
   booting, hanging before or after it starts, giving up, its read hanging;
   each slot a kernel, a bad or a hanging uImage, or a U-Boot proper that
   boots, hangs or gives up; either flag) from a fresh start and from every
-  value the scratch pad can hold: each ends in a started kernel or the
-  stop within five starts, and something bootable always boots as long as
-  at most one DDR/eMMC failure is transient.
+  value the scratch pad can hold, with CPM_SLPC clear or holding the
+  request, and a boot ROM that takes the request or ignores it: each ends
+  in a started kernel or the USB mode within five starts (with a ROM that
+  ignores it, the stop at the sixth), and something bootable always boots
+  as long as at most one DDR/eMMC failure is transient. It also walks a
+  power cycle from the USB mode (CPSPR kept or not: the eMMC again from
+  attempt 0) and a start over USB from it (fresh).
 - Started over USB (patch 0025, `USB-BOOT.md`): the tag `KILNUSB1` at
-  0x800017F0 (spl-usb.bin) or CPM_SLPC = 0x42575302 (the soft entry) says
-  so; the SPL clears both (so the next reset boots from the eMMC), logs
+  0x800017F0 (spl-usb.bin) or CPM_SLPC = 0x42575302 (the soft entry,
+  unless CPSPR holds 0028's `0x4c__`: then it is the ROM ignoring the
+  SPL's own request, above) says so; the SPL clears both (so the next reset boots from the eMMC), logs
   "started over USB", plans a fresh start whatever CPSPR holds (it prints
   the value), and after the DDR setup runs a DDR test: data lines,
   address lines 2-27 around 0x04100000, 16 MiB from 0x01000000 with
@@ -370,8 +629,12 @@ jolting's fixes.
 
 ## U-Boot proper (finding D)
 
-- RAM: `board_get_usable_ram_top()` = 0x8EB00000: relocation, the 16 MiB
-  heap and the stack stay below ramoops (0x0EB00000-0x0EBFFFFF).
+- RAM: `dram_init` 236 MiB, `board_get_usable_ram_top()` = 0x8EB00000:
+  relocation, the 16 MiB heap and the stack stay below 0x0EB00000, where
+  the kernels' crash log was until 0031 (an older kernel's still is), and
+  far from today's ramoops at 0x0FBC0000-0x0FBFFFFF, which U-Boot never
+  touches. U-Boot needs no more RAM than that; the kernels get 252 MiB
+  from the command line (`x2600_args_kiln_low`, 0031).
 - Environment: `ota` (p5) at 512 KiB and 544 KiB (eMMC 0xD980000 and
   0xD988000, 32 KiB each, redundant). Settings only: `bootcmd=ad5x_boot`,
   `ad5x_delay` (2 s for the stop key, Ctrl-C or `kiln`: prompt, watchdog
@@ -385,6 +648,92 @@ jolting's fixes.
   table (p1-p5 start LBAs and names, p7 `userdata`).
 - Recovery kernel: read whole by its uImage header (any size up to 8 MiB),
   header and data CRC checked.
+- Ethernet (patches 0041-0044): the X2600's GMAC, RMII to the IP101G at
+  MDIO address 1. Nothing starts over the network by itself, and a normal
+  start leaves the hardware alone: the device is probed (pins, clocks,
+  MDIO and the PHY) by the first network command, and the address, stock's
+  first line of `/MAC` on usershare (p6, read only), is read only for a
+  start over USB, the network rescue, netconsole and the prompt (the stop
+  key). Without `/MAC` a random, locally administered address. Commands: `dhcp`, `ping`, `mii`, `wget` (HTTP; another
+  port with `httpdstp`) and `hash -v sha256` to check what came in, e.g.
+
+  ```
+  setenv autoload no; dhcp
+  setenv httpdstp 8000; wget ${loadaddr} 192.168.1.10:/rootfs.squashfs
+  hash -v sha256 ${loadaddr} ${filesize} <sha256 from SHA256SUMS>
+  ```
+- Network rescue (patches 0045-0046): a record in the first MiB's last
+  sector (LBA 2047; `tools/ad5x_emmc_image.py --rescue` writes it into
+  the one file USBCloner writes) makes U-Boot proper, before anything
+  else, fetch `rescue/rescue.scr` from the PC it names over HTTP, check
+  its sha256 against the record, and run it: every piece of the eMMC
+  fetched, checked, written and read back, the normal first MiB last
+  (which ends the record). The record is text (`bootlogic.h`: `server=`,
+  `port=`, `sha256=`, optional `mac=`, `ip=`/`netmask=`; a record that
+  doesn't check is ignored). Each start of the rescue is counted in it
+  first (`tries=`); after 3 U-Boot starts as without it and leaves the
+  record, so `ad5x_rescue` at the prompt and `ad5x-bootloader-install
+  --status` show what happened. `ad5x_rescue clear` zeroes it; an install
+  or upgrade with `ad5x-bootloader-install` writes the saved `boot.img`'s
+  sector over it first. The watchdog restarts at 900 s before the network
+  setup and before each piece, so a hang is a reset and a try too. U-Boot
+  proper ends before that sector (`AD5X_UBOOT_MAX`, `build.sh`'s
+  `UBOOT_EMMC_MAX`, `ad5x_spl_image.py`'s `UBOOT_MAX_END`, the
+  installer's `BL_UB_MAX`; `test_ad5x_spl_image.py` checks they agree).
+  A normal start reads that one sector and does nothing more.
+- Netconsole (patches 0047-0048): U-Boot's console over UDP port 6666 as
+  well as UART0, for a printer without a serial cable. Off unless the
+  owner switches it on in Kiln OS, as root:
+  `echo 192.168.1.10 > /data/ad5x/netconsole` (the PC's IPv4 address on
+  the first line; empty: the LAN's broadcast address, lossy to a PC on
+  Wi-Fi). Then `ad5x_boot` gets an address by DHCP before its key window
+  (at most 10 s; without one, serial only) and sends the console there,
+  output only. Keys from the network (the stop key, the prompt) need
+  `/data/ad5x/netconsole-input` as well and come only from that one
+  unicast address: never with an empty line, a broadcast (the subnet's,
+  once DHCP gave the netmask), multicast, loopback or 0.x address; a first
+  line that is no such address leaves netconsole off. A prompt reached
+  with keys from the network resets the printer after 300 s idle
+  (`bootretry`, only for that start), so a stopped start goes on by
+  itself. Nothing is kept: `bootcmd` is never changed, and the console
+  devices (serial), `ncip`, `ncinport`, `ncoutport` and `bootretry` are
+  this build's at every start whatever a `saveenv` stored. The network
+  rescue sends its console to the PC that serves it, output only. The PC
+  side: `tools/ad5x_netconsole.py` (or `nc -u -l -p 6666`). A start with
+  it off reads whether `/data/ad5x/netconsole` exists, nothing more.
+  Anyone on the LAN can read the output; the source address of keys can be
+  spoofed by anyone on the same network, so `netconsole-input` is for a
+  network you trust, and best switched off again afterwards.
+
+### What a normal start does more (0034-0050)
+
+A start from the eMMC with no USB tag, no rescue record and netconsole
+off, against 0033 (estimates from the code; the A/B timing on the
+printer is in the test plan):
+
+- SPL: 14 stores and 2 `mfc0` in `_start` (0039), one more tag compare;
+  its image is 496 bytes larger (36 of 48 blocks: one more block for the
+  boot ROM to read). The 1.8 V pad check (0049) reads EXCLK_DS once and
+  finds the bit set on an eMMC start (112 bytes more, still 36 blocks);
+  the eMMC path, the tries and the stack (584 bytes) are as before.
+- The SPL loads a U-Boot proper of 461 KB instead of 355 KB and checks
+  its CRC: about 10-15 ms more eMMC read and CRC.
+- U-Boot proper binds two more devices from the device tree (the MAC,
+  the OTG controller), probes neither, and no longer prints `Net:`
+  (no `initr_net`, about 2 ms less on the UART). It reads LBA 2047 once
+  (0045: under 1 ms) and asks /data whether `ad5x/netconsole` exists
+  (0048: one more ext4 lookup on p7, a few ms; the boot rules make about
+  ten of those already). It neither touches the MAC, its PHY or their
+  pins and clocks nor reads usershare (0044).
+- bootm's cache flush over the kernel now also writes back and
+  invalidates the L2 (0035): about 90 000 more line operations for a
+  5.7 MB kernel, a few ms.
+- U-Boot proper reads the eMMC by ADMA2 instead of PIO (0050): the same
+  speed (the 4-bit bus at 50 MHz is the limit, about 23 MiB/s), plus an
+  L1/L2 invalidate over each buffer before and after the transfer.
+
+So about 15-25 ms in all, on a start of several seconds; nothing new on
+the console.
 
 ### `ota` layout (p5, 1 MiB)
 
@@ -404,10 +753,17 @@ State and records are text, `key value` lines ending in `crc32 XXXXXXXX`
 kiln-uboot-state 1           kiln-uboot-records 1
 tries 2                      failed-own 6.6.66-kiln
 kernel 66                    failed-mainline -
-release 6.6.66-kiln          fallbacks 1
+release 6.6.66-kiln          failed-mem 6.6 6.6.66-kiln did not finish starting with extended memory
+mem std                      fallbacks 1
 crc32 1a2b3c4d               reason own kernel 6.6.66-kiln did not finish starting, 2 in a row; ...
                              crc32 ...
 ```
+
+`mem ext|std` and `failed-mem` (0032; `-` when none, at most 95 characters)
+are new: a sector from an older build reads as standard with no
+`failed-mem`, and an older build ignores both keys. With every field at its
+longest the records sector is at most 479 of 512 bytes (each line under
+the parsers' 192 bytes; `test_longest_records_fit_a_sector`).
 
 A sector that doesn't parse, has a bad CRC (an old `ota` backup restored)
 or is all zeros counts as empty: a fresh start, never a fallback.
@@ -418,7 +774,9 @@ Inputs, read only: the flag; state and records; /data (ext4 p7):
 `ad5x/kernel/mainline` (the 7.3 choice, read each start: the one source),
 `ad5x/kernel/failed`, `ad5x/kernel/failed-mainline` (S00's records),
 `ad5x/install/recovery.squashfs` (first start after an install),
-`ad5x/kernel/cmdline-extra`; rootfs2 (SquashFS p4):
+`ad5x/kernel/cmdline-extra`, `ad5x/kernel/extended-memory` and
+`ad5x/kernel/extended-memory-failed` (the memory mode, 0032); the board's
+RAM (`x2600_ram_mib()`); rootfs2 (SquashFS p4):
 `/usr/lib/ad5x/kernel66/{xImage,release}`,
 `/usr/lib/ad5x/kernel-mainline/{xImage,release}`; slot A: p1 a Linux uImage
 for MIPS that isn't a U-Boot (load address 0x80100000), header and data CRCs
@@ -469,13 +827,15 @@ still starts whatever it is given.
    `ad5x.uboot=1`; for 6.6/7.3 also `ad5x.kernel=own panic=10 loglevel=5`
    and `cmdline-extra`, as S00 adds them; for the recovery OS on Kiln's
    6.6 `ad5x.kernel=own panic=10 loglevel=5` without `cmdline-extra`.
+   Then the memory mode (above, "Memory mode"): the second bank only for
+   an extended start, `ad5x.ram=` and `ad5x.memmode=` last.
    Never `ad5x.noslot`.
 4. `ad5x_boot -n` prints the inputs and the decision without writing or
    booting.
 
 Every failing sequence ends in the recovery OS within three unconfirmed
-starts (7.3 once, 6.6 twice), or stays on the main OS when slot A is
-broken (`test_bootlogic.py`, Simulation).
+starts (7.3 once, 6.6 twice; an extended start is one of them), or stays
+on the main OS when slot A is broken (`test_bootlogic.py`, Simulation).
 
 ## Watchdog (findings D and the audit)
 
@@ -619,11 +979,16 @@ most are done (branches v1-step4 and v1-step5):
   slot that doesn't hold a 5.10 before Flashforge's SPL.
 - **Kiln's SPL alone** (U-Boot proper missing, failed, or removed with
   `ad5x-uboot-flash --restore`): it starts Kiln's 6.6 directly from the
-  flagged slot with the stock command line (`console=ttyS0,115200n8
-  loglevel=8 mem=236M@0x0 rmem=16M@0xec00000 rtos_size=4M@0xfc00000
-  mem=256M@0x30000000 init=/linuxrc root=/dev/mmcblk0p4 rootwait
-  rootfstype=squashfs ro lpj=11935744`, p2 for slot A; no `ad5x.uboot=1`,
-  no `ad5x.kernel=own`, no `panic=10`) and the watchdog stopped.
+  flagged slot with the stock command line and Kiln's low window
+  (`console=ttyS0,115200n8 loglevel=8 mem=252M@0x0
+  rtos_size=4M@0xfc00000 init=/linuxrc root=/dev/mmcblk0p4 rootwait
+  rootfstype=squashfs ro lpj=11935744 ad5x.ram=512
+  ad5x.memmode=standard`, p2 for slot A; no `ad5x.uboot=1`, no
+  `ad5x.kernel=own`, no `panic=10`; always standard memory, the second
+  bank off on both boards, 0032; 0031: a uImage that isn't Kiln's 6.6,
+  such as Flashforge's 5.10, gets the stock SPL's line instead, `mem=236M@0x0
+  rmem=16M@0xec00000` and the second bank on 512 MiB) and the watchdog
+  stopped.
   `S00ad5x-kernel` takes it as a direct start (a chain's pending marker
   dropped), `S01ad5x-tryboot` points the flag at slot A for the start-up
   as on the chain (nothing else counts the start), `S05ad5x-watchdog`
@@ -742,6 +1107,14 @@ against a fake device and the bench helper with stubs
   booting the slot after it; the stop key over the DEBUG header.
 - U-Boot's ext4 read of /data after an unclean shutdown ignores the journal:
   are the small files read right?
+- The chip variants (0029-0030, 0033): on an X2600H from the eMMC, the
+  SoC ID line (0x38200, variant 3, DDR ID 84), the X2600H table and no RX
+  phase line; then everything as rc3. On the X2600E: U-Boot proper's
+  command line without the second bank (built, not run), `lpj=11476992`,
+  the RX phase step from the eMMC rather than over USB, and the other
+  eMMC parts at phase 3 should one ever need it. Not run on any board yet:
+  the USB path's MSC0CDR reset and phase 3, the debug lines, the
+  400 kHz 1-bit step (alexshev86's MMC8GB, #68).
 - Behaviour on the Nov 2025 board build (00437): its SPL and GPT differ;
   `check_first_mib.py` refuses it until its stock SPL's DDR table and
   clock immediates match Kiln's (or Kiln's SPL is made for its values);
@@ -751,6 +1124,12 @@ against a fake device and the bench helper with stubs
   before PROG_START1, the SPL's clocks/DDR/eMMC from the ROM's USB state,
   whether the ROM clears CPM_SLPC itself. The SPL boots the slot; it
   doesn't return to the ROM (the SDK's `RUN_FIRMWARE_VIA_USB_BOOT`).
+- The USB mode when nothing starts (0028; `tools/bench/README.md`,
+  drill 5): the ROM taking CPM_SLPC after the SPL's own watchdog reset
+  (the same reset kind as Linux's reboot in #68, from another code path;
+  the SPL's watchdog runs from EXCLK/512 like Linux's), and a power cycle
+  from there starting the eMMC again. If the ROM ignored it, the console
+  would show the stop line one start later.
 - The watchdog into Linux (0017 and the kernel patches): both kernels log
   `running at boot` and don't reset while booting with `wdt_os=30`; a
   `kill -9` of the feeder resets after 120 s; HelixScreen's and the

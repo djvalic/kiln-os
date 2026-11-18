@@ -1,0 +1,407 @@
+From 4d3047c5bb35c3549b8d96b4530a6f5e1ca3ad5f Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Tue, 17 Nov 2026 02:40:07 -0700
+Subject: [PATCH 34/48] ad5x: U-Boot proper over USB as stage 2: the eMMC as a
+ USB disk (ums)
+
+An SPL tagged KILNUSB2 sets up DDR (and the eMMC as for a normal start)
+and goes back to the boot ROM (start.S keeps what the ROM handed over),
+which then takes U-Boot proper over USB as stage 2 (PROG_START2) and
+starts it; U-Boot proper sees AD5X_USB_STAGE2 in CPSPR, keeps the
+watchdog off and runs "ums 0 mmc 0", so a PC on J28 sees the whole eMMC
+as a USB disk. The SPL sets the MSC pads to 1.8 V (EXCLK_DS.POC), which
+the ROM does only on an eMMC start: without it U-Boot's high-speed eMMC
+modes fail ("unable to select a mode: -70").
+
+The DWC2 gadget driver builds for MIPS (DMA addresses through
+virt_to_phys, no ARM mach-types.h; MIPS global_data.h no longer pulls
+regdef.h's register names into C). The gadget enumerates with the cache
+range operations of the next patch.
+
+[djvalic: rebased onto Kiln's 0028 and 0030: "KILNUSB2" also sets
+ spl_usb_tag (a fresh, uncounted start with the DDR test), the stage-2
+ eMMC setup is ad5x_emmc_init(true), and the pads' 1.8 V (POC) is set
+ only in its USB branch, so an eMMC start is unchanged]
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ arch/mips/dts/ad5x.dts                        | 11 ++++
+ arch/mips/include/asm/global_data.h           |  3 +-
+ .../mach-jz47xx/include/mach/ad5x_start.h     |  8 +++
+ arch/mips/mach-jz47xx/start.S                 | 64 +++++++++++++++++++
+ arch/mips/mach-jz47xx/x2600/spl.c             | 27 +++++++-
+ arch/mips/mach-jz47xx/x2600/spl_emmc.c        | 12 ++++
+ board/flashforge/ad5x/ad5x.c                  | 21 ++++++
+ configs/ad5x_defconfig                        | 10 +++
+ drivers/usb/gadget/Kconfig                    |  2 +-
+ drivers/usb/gadget/dwc2_udc_otg.c             |  2 +
+ drivers/usb/gadget/dwc2_udc_otg_xfer_dma.c    | 12 ++--
+ 11 files changed, 163 insertions(+), 9 deletions(-)
+
+diff --git a/arch/mips/dts/ad5x.dts b/arch/mips/dts/ad5x.dts
+index bb0a3ca7..ebe16a80 100644
+--- a/arch/mips/dts/ad5x.dts
++++ b/arch/mips/dts/ad5x.dts
+@@ -55,5 +55,16 @@
+ 			no-sd;
+ 			no-sdio;
+ 		};
++
++		/*
++		 * The OTG controller on J28, a DesignWare DWC2. Device mode
++		 * only, for ums after a start over USB (the boot ROM's USB
++		 * mode has its clock and PHY on then).
++		 */
++		otg: usb@13500000 {
++			compatible = "snps,dwc2";
++			reg = <0x13500000 0x40000>;
++			dr_mode = "peripheral";
++		};
+ 	};
+ };
+diff --git a/arch/mips/include/asm/global_data.h b/arch/mips/include/asm/global_data.h
+index 265dd2a3..32765a44 100644
+--- a/arch/mips/include/asm/global_data.h
++++ b/arch/mips/include/asm/global_data.h
+@@ -8,7 +8,8 @@
+ #define __ASM_GBL_DATA_H
+ 
+ #include <linux/types.h>
+-#include <asm/regdef.h>
++/* no <asm/regdef.h>: its register names ("zero", "a0", ...) clash with C
++ * identifiers (struct usb_request.zero); gd names its register as a string */
+ #include <asm/u-boot.h>
+ 
+ struct octeon_eeprom_mac_addr {
+diff --git a/arch/mips/mach-jz47xx/include/mach/ad5x_start.h b/arch/mips/mach-jz47xx/include/mach/ad5x_start.h
+index 2200c71a..b71a033d 100644
+--- a/arch/mips/mach-jz47xx/include/mach/ad5x_start.h
++++ b/arch/mips/mach-jz47xx/include/mach/ad5x_start.h
+@@ -226,6 +226,14 @@ static inline unsigned int ad5x_start_uboot_gave_up(unsigned int cur)
+  */
+ #define AD5X_UB_MAGIC		0x5500u
+ 
++/*
++ * Left in CPSPR by an SPL started over USB as stage 1 only ("KILNUSB2"):
++ * DDR is up, the boot ROM takes U-Boot proper over USB as stage 2, and
++ * U-Boot proper, seeing this, offers the eMMC over USB (ums) instead of
++ * starting a system.
++ */
++#define AD5X_USB_STAGE2		0x5a2bu
++
+ enum ad5x_ub_start {
+ 	AD5X_UB_BOOTM,		/* a bootm typed at the prompt */
+ 	AD5X_UB_MAIN_66,	/* the main OS on Kiln's 6.6 */
+diff --git a/arch/mips/mach-jz47xx/start.S b/arch/mips/mach-jz47xx/start.S
+index 2a743e01..b309843e 100644
+--- a/arch/mips/mach-jz47xx/start.S
++++ b/arch/mips/mach-jz47xx/start.S
+@@ -54,6 +54,29 @@ _start:
+ #endif
+ 
+ #ifdef CONFIG_SOC_X2600
++	/*
++	 * What the boot ROM handed over, for ad5x_return_to_rom() (a start
++	 * over USB that only sets up DDR, then lets the ROM take stage 2, as
++	 * Ingenic's cloner and the stock SPL do): before anything changes it.
++	 */
++	la	t0, ad5x_rom_ctx
++	sw	ra, 0(t0)
++	sw	sp, 4(t0)
++	sw	gp, 8(t0)
++	sw	s0, 12(t0)
++	sw	s1, 16(t0)
++	sw	s2, 20(t0)
++	sw	s3, 24(t0)
++	sw	s4, 28(t0)
++	sw	s5, 32(t0)
++	sw	s6, 36(t0)
++	sw	s7, 40(t0)
++	sw	fp, 44(t0)
++	mfc0	t1, CP0_STATUS
++	sw	t1, 48(t0)
++	mfc0	t1, CP0_CAUSE
++	sw	t1, 52(t0)
++
+ 	/*
+ 	 * The boot ROM leaves the watchdog running (0x13630000): stop it as
+ 	 * the stock SPL does, with the stop bit in TSSR and TCER cleared.
+@@ -123,3 +146,44 @@ enable_caches:
+ 
+ #endif /* CONFIG_SOC_JZ4780 */
+ #endif /* !CONFIG_XPL_BUILD */
++
++#if defined(CONFIG_XPL_BUILD) && defined(CONFIG_SOC_X2600)
++	/* the boot ROM's registers at the SPL's entry (see _start) */
++	.data
++	.align	2
++	.globl	ad5x_rom_ctx
++ad5x_rom_ctx:
++	.space	56
++
++	/*
++	 * void ad5x_return_to_rom(void): back to the boot ROM with what it
++	 * handed over, v0 = 0 ("stage 1 done"), as the stock SPL returns in USB
++	 * mode; the ROM then takes stage 2 over USB.
++	 */
++	.text
++	.globl	ad5x_return_to_rom
++	.ent	ad5x_return_to_rom
++ad5x_return_to_rom:
++	la	t0, ad5x_rom_ctx
++	lw	t1, 48(t0)
++	mtc0	t1, CP0_STATUS
++	lw	t1, 52(t0)
++	mtc0	t1, CP0_CAUSE
++	ehb
++	lw	ra, 0(t0)
++	lw	sp, 4(t0)
++	lw	gp, 8(t0)
++	lw	s0, 12(t0)
++	lw	s1, 16(t0)
++	lw	s2, 20(t0)
++	lw	s3, 24(t0)
++	lw	s4, 28(t0)
++	lw	s5, 32(t0)
++	lw	s6, 36(t0)
++	lw	s7, 40(t0)
++	lw	fp, 44(t0)
++	move	v0, zero
++	jr	ra
++	 nop
++	.end	ad5x_return_to_rom
++#endif
+diff --git a/arch/mips/mach-jz47xx/x2600/spl.c b/arch/mips/mach-jz47xx/x2600/spl.c
+index b6279035..5c68db19 100644
+--- a/arch/mips/mach-jz47xx/x2600/spl.c
++++ b/arch/mips/mach-jz47xx/x2600/spl.c
+@@ -203,6 +203,7 @@ struct serial_device *default_serial_console(void)
+ #define AD5X_USB_TAG		((volatile u32 *)0x800017f0)
+ #define AD5X_USB_TAG0		0x4e4c494b	/* "KILN" */
+ #define AD5X_USB_TAG1		0x31425355	/* "USB1" */
++#define AD5X_USB_TAG1_STAGE2	0x32425355	/* "USB2": stage 1 only */
+ /*
+  * The soft way into the boot ROM's USB mode (djvalic/kiln-os#68): Linux
+  * writes "SWB" << 8 | 2 to CPM_SLPC and reboots (the SDK's
+@@ -218,14 +219,22 @@ struct serial_device *default_serial_console(void)
+ static bool spl_usb;		/* loaded by the boot ROM over USB */
+ static bool spl_usb_tag;	/* spl-usb.bin's tag seen (and cleared) */
+ static bool spl_usb_soft;	/* SLPC held the soft entry: cleared */
++static bool spl_usb_stage2;	/* "KILNUSB2": DDR, then back to the ROM */
++void ad5x_return_to_rom(void);
+ 
+ /* nothing here can hang: SRAM and the CPM only */
+ static void spl_usb_check(void)
+ {
+ 	volatile u32 *tag = AD5X_USB_TAG;
+ 
+-	if (tag[0] == AD5X_USB_TAG0 && tag[1] == AD5X_USB_TAG1) {
++	/*
++	 * Either tag: a fresh start over USB, not counted, with the DDR
++	 * test; "KILNUSB2" then goes back to the ROM after DDR (stage 2).
++	 */
++	if (tag[0] == AD5X_USB_TAG0 && (tag[1] == AD5X_USB_TAG1 ||
++					   tag[1] == AD5X_USB_TAG1_STAGE2)) {
+ 		spl_usb_tag = true;
++		spl_usb_stage2 = tag[1] == AD5X_USB_TAG1_STAGE2;
+ 		tag[0] = 0;	/* not again after a reset without a reload */
+ 		tag[1] = 0;
+ 	}
+@@ -626,6 +635,22 @@ void board_init_f(ulong dummy)
+ 		if (spl_ddr_test())
+ 			spl_fail(AD5X_PH_DDR, plan.slot_b, "DDR test failed");
+ 	}
++	if (spl_usb_stage2) {
++		/*
++		 * stage 1 only: the boot ROM loads U-Boot proper over USB.
++		 * The eMMC set up as for a start over USB (clock gate, the
++		 * ROM's CGU divider, RX phase 3, the pads at 1.8 V, card
++		 * identified): the ROM's USB mode leaves MSC0 off, and U-Boot
++		 * proper's driver starts from what the SPL leaves.
++		 */
++		if (ad5x_emmc_init(true))
++			puts("SPL: eMMC init failed: U-Boot won't see it\n");
++		x2600_wdt_stop();
++		x2600_cpspr_write(AD5X_USB_STAGE2);
++		flush_cache(CONFIG_SPL_TEXT_BASE, 0x6000);
++		puts("SPL: DDR up; back to the boot ROM for stage 2 over USB\n");
++		ad5x_return_to_rom();
++	}
+ #else
+ 	puts("SPL: chainload test build: clocks and DDR as Linux left them\n");
+ #endif
+diff --git a/arch/mips/mach-jz47xx/x2600/spl_emmc.c b/arch/mips/mach-jz47xx/x2600/spl_emmc.c
+index 0ecec727..fa074a23 100644
+--- a/arch/mips/mach-jz47xx/x2600/spl_emmc.c
++++ b/arch/mips/mach-jz47xx/x2600/spl_emmc.c
+@@ -76,6 +76,8 @@
+ #define CPM_CLKGR0		((void __iomem *)0xb0000020)
+ #define CLKGR0_MSC0		BIT(2)
+ #define CPM_MSC0CDR		((void __iomem *)0xb0000068)
++#define CPM_EXCLK_DS		((void __iomem *)0xb00000e0)
++#define EXCLK_DS_POC_SD		BIT(31)	/* 1: the SD/MSC pads at 1.8 V */
+ #define CDR_PARENT_SHIFT	30
+ #define CDR_PARENT_MPLL		1
+ #define CDR_PARENT_EXCLK	3	/* with CDR_EXCK_E (SDK MSCCDR_MPCS_EXCLK) */
+@@ -336,6 +338,16 @@ int ad5x_emmc_init(bool usb)
+ 		emmc_cdr_wait();
+ 	}
+ 	if (usb) {
++		/*
++		 * The MSC pads at 1.8 V, the eMMC's I/O voltage (boot_sel
++		 * 101, "MSC0 1.8 V"): EXCLK_DS.POC (X2600 PM, CPM 0xE0, bit
++		 * 31; the SDK's CPM_EXCLK_DS), as Kiln's 6.6 device tree has
++		 * the port E/MSC0 domain. Over USB the ROM leaves it at 3.3 V:
++		 * the card answers, but U-Boot's high-speed transfers fail
++		 * ("unable to select a mode: -70"). An eMMC start leaves it
++		 * as the boot ROM set it.
++		 */
++		setbits_le32(CPM_EXCLK_DS, EXCLK_DS_POC_SD);
+ 		emmc_rx_phase_data();
+ 		printf("SPL: eMMC over USB: MSC0CDR 0x%x, now 0x%x: RX phase 3, "
+ 		       "tuning off\n", was, readl(CPM_MSC0CDR));
+diff --git a/board/flashforge/ad5x/ad5x.c b/board/flashforge/ad5x/ad5x.c
+index 8b915422..896ee7d8 100644
+--- a/board/flashforge/ad5x/ad5x.c
++++ b/board/flashforge/ad5x/ad5x.c
+@@ -55,6 +55,11 @@ DECLARE_GLOBAL_DATA_PTR;
+ int board_early_init_f(void)
+ {
+ 	x2600_uart0_plain_baud();
++	/* loaded by the boot ROM over USB as stage 2: ums, no watchdog */
++	if (x2600_cpspr_read() == AD5X_USB_STAGE2) {
++		x2600_wdt_stop();
++		return 0;
++	}
+ 	/*
+ 	 * A hang in U-Boot resets the board. The SPL then sees U-Boot proper
+ 	 * up (started from 0xA400: it boots the slot itself next) or a U-Boot
+@@ -296,6 +301,22 @@ static void ad5x_env_follow_build(void)
+ 
+ int board_late_init(void)
+ {
++	/*
++	 * Loaded by the boot ROM over USB after Kiln's SPL set up DDR as stage
++	 * 1 only (kiln-usbboot run-uboot): offer the eMMC as a USB disk on
++	 * J28 (the host writes the image, docs: ad5x_emmc_image.py). This
++	 * build's default environment in RAM only: the start writes nothing
++	 * to the eMMC, whichever build's environment is there.
++	 */
++	if (x2600_cpspr_read() == AD5X_USB_STAGE2) {
++		x2600_cpspr_write(0);
++		printf("ad5x: started over USB: the eMMC as a USB disk (ums); "
++		       "Ctrl-C stops it\n");
++		env_set_default(NULL, 0);
++		env_set("bootcmd", "ums 0 mmc 0");
++		env_set("bootdelay", "0");
++		return 0;
++	}
+ 	ad5x_env_follow_build();
+ 	env_set("ad5x_slot", ad5x_read_slot());
+ 	return 0;
+diff --git a/configs/ad5x_defconfig b/configs/ad5x_defconfig
+index 1abaa139..120248ff 100644
+--- a/configs/ad5x_defconfig
++++ b/configs/ad5x_defconfig
+@@ -73,3 +73,13 @@ CONFIG_SPL_MAX_FOOTPRINT=0x5000
+ # CONFIG_SPL_CRC32 is not set
+ # CONFIG_SPL_SHA1 is not set
+ # CONFIG_SPL_LEGACY_HASHING_AND_CRYPTO is not set
++CONFIG_USB=y
++CONFIG_DM_USB_GADGET=y
++CONFIG_USB_GADGET=y
++CONFIG_USB_GADGET_MANUFACTURER="Kiln OS"
++CONFIG_USB_GADGET_VENDOR_NUM=0x1d6b
++CONFIG_USB_GADGET_PRODUCT_NUM=0x0104
++CONFIG_USB_GADGET_DWC2_OTG=y
++CONFIG_USB_GADGET_DOWNLOAD=y
++CONFIG_USB_FUNCTION_MASS_STORAGE=y
++CONFIG_CMD_USB_MASS_STORAGE=y
+diff --git a/drivers/usb/gadget/Kconfig b/drivers/usb/gadget/Kconfig
+index e42d5a43..f50e879c 100644
+--- a/drivers/usb/gadget/Kconfig
++++ b/drivers/usb/gadget/Kconfig
+@@ -109,7 +109,7 @@ config USB_GADGET_AT91
+ 
+ config USB_GADGET_DWC2_OTG
+ 	bool "DesignWare USB2.0 HS OTG controller (gadget mode)"
+-	depends on ARM
++	depends on ARM || MIPS
+ 	select USB_GADGET_DUALSPEED
+ 	help
+ 	  The Designware USB2.0 high-speed gadget controller
+diff --git a/drivers/usb/gadget/dwc2_udc_otg.c b/drivers/usb/gadget/dwc2_udc_otg.c
+index 570fed34..9bab43b6 100644
+--- a/drivers/usb/gadget/dwc2_udc_otg.c
++++ b/drivers/usb/gadget/dwc2_udc_otg.c
+@@ -42,7 +42,9 @@
+ #include <asm/unaligned.h>
+ #include <asm/io.h>
+ 
++#ifdef CONFIG_ARM
+ #include <asm/mach-types.h>
++#endif
+ 
+ #include <power/regulator.h>
+ 
+diff --git a/drivers/usb/gadget/dwc2_udc_otg_xfer_dma.c b/drivers/usb/gadget/dwc2_udc_otg_xfer_dma.c
+index 5a7f50eb..5bfaae5e 100644
+--- a/drivers/usb/gadget/dwc2_udc_otg_xfer_dma.c
++++ b/drivers/usb/gadget/dwc2_udc_otg_xfer_dma.c
+@@ -31,7 +31,7 @@ int clear_feature_flag;
+ 
+ static inline void dwc2_udc_ep0_zlp(struct dwc2_udc *dev)
+ {
+-	writel(phys_to_bus((unsigned long)usb_ctrl_dma_addr),
++	writel(phys_to_bus(virt_to_phys((void *)(usb_ctrl_dma_addr))),
+ 	       &reg->device_regs.in_endp[EP0_CON].diepdma);
+ 	writel(FIELD_PREP(DXEPTSIZ_PKTCNT_MASK, 1), &reg->device_regs.in_endp[EP0_CON].dieptsiz);
+ 
+@@ -49,7 +49,7 @@ static void dwc2_udc_pre_setup(void)
+ 
+ 	writel(FIELD_PREP(DXEPTSIZ_PKTCNT_MASK, 1) | sizeof(struct usb_ctrlrequest),
+ 	       &reg->device_regs.out_endp[EP0_CON].doeptsiz);
+-	writel(phys_to_bus((unsigned long)usb_ctrl_dma_addr),
++	writel(phys_to_bus(virt_to_phys((void *)(usb_ctrl_dma_addr))),
+ 	       &reg->device_regs.out_endp[EP0_CON].doepdma);
+ 
+ 	setbits_le32(&reg->device_regs.out_endp[EP0_CON].doepctl, DXEPCTL_EPENA);
+@@ -72,7 +72,7 @@ static inline void dwc2_ep0_complete_out(void)
+ 
+ 	writel(FIELD_PREP(DXEPTSIZ_PKTCNT_MASK, 1) | sizeof(struct usb_ctrlrequest),
+ 	       &reg->device_regs.out_endp[EP0_CON].doeptsiz);
+-	writel(phys_to_bus((unsigned long)usb_ctrl_dma_addr),
++	writel(phys_to_bus(virt_to_phys((void *)(usb_ctrl_dma_addr))),
+ 	       &reg->device_regs.out_endp[EP0_CON].doepdma);
+ 
+ 	setbits_le32(&reg->device_regs.out_endp[EP0_CON].doepctl, DXEPCTL_EPENA | DXEPCTL_CNAK);
+@@ -107,7 +107,7 @@ static int setdma_rx(struct dwc2_ep *ep, struct dwc2_request *req)
+ 				(unsigned long) ep->dma_buf +
+ 				ROUND(ep->len, CONFIG_SYS_CACHELINE_SIZE));
+ 
+-	writel(phys_to_bus((unsigned long)ep->dma_buf), &reg->device_regs.out_endp[ep_num].doepdma);
++	writel(phys_to_bus(virt_to_phys((void *)(ep->dma_buf))), &reg->device_regs.out_endp[ep_num].doepdma);
+ 	writel(FIELD_PREP(DXEPTSIZ_PKTCNT_MASK, pktcnt) |
+ 	       FIELD_PREP(DXEPTSIZ_XFERSIZE_MASK, length),
+ 	       &reg->device_regs.out_endp[ep_num].doeptsiz);
+@@ -152,7 +152,7 @@ static int setdma_tx(struct dwc2_ep *ep, struct dwc2_request *req)
+ 	/* Flush the endpoint's Tx FIFO */
+ 	dwc2_flush_tx_fifo(reg, ep->fifo_num);
+ 
+-	writel(phys_to_bus((unsigned long)ep->dma_buf), &reg->device_regs.in_endp[ep_num].diepdma);
++	writel(phys_to_bus(virt_to_phys((void *)(ep->dma_buf))), &reg->device_regs.in_endp[ep_num].diepdma);
+ 	writel(FIELD_PREP(DXEPTSIZ_PKTCNT_MASK, pktcnt) |
+ 	       FIELD_PREP(DXEPTSIZ_XFERSIZE_MASK, length),
+ 	       &reg->device_regs.in_endp[ep_num].dieptsiz);
+@@ -913,7 +913,7 @@ static int dwc2_udc_get_status(struct dwc2_udc *dev,
+ 			   (unsigned long) usb_ctrl +
+ 			   ROUND(sizeof(g_status), CONFIG_SYS_CACHELINE_SIZE));
+ 
+-	writel(phys_to_bus(usb_ctrl_dma_addr), &reg->device_regs.in_endp[EP0_CON].diepdma);
++	writel(phys_to_bus(virt_to_phys((void *)usb_ctrl_dma_addr)), &reg->device_regs.in_endp[EP0_CON].diepdma);
+ 	writel(FIELD_PREP(DXEPTSIZ_PKTCNT_MASK, 1) | FIELD_PREP(DXEPTSIZ_XFERSIZE_MASK, 2),
+ 	       &reg->device_regs.in_endp[EP0_CON].dieptsiz);
+ 
+-- 
+2.56.0
+

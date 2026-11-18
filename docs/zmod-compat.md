@@ -47,7 +47,7 @@ exists and does what is described below.
 | `G17` (and `G2`/`G3`) | 3,527 | Klipper `[gcode_arcs]` | core |
 | `SET_VELOCITY_LIMIT`, `M204`, `M220`, `M106`, `SET_FAN_SPEED FAN=fanM106`, `G92`, `M104`/`M109`/`M190`, `M400`, `G4`, `M73`, `RESPOND`, `SAVE_VARIABLE`, `EXCLUDE_OBJECT_*`, `SET_PRESSURE_ADVANCE` | | Klipper's own, or `ad5x.cfg` (M106 P2 is ignored: no chamber fan) | core |
 | `ENABLE_PLUGIN NAME=`, `DISABLE_PLUGIN NAME=` | | plugin manager (`docs/plugins.md`), plus `LIST_PLUGINS` | core |
-| `CLEAR_NOZZLE`, `LOAD_FILAMENT`, `UNLOAD_FILAMENT`, `AUTO_FULL_BED_LEVEL` | | the printer's `macros/quick_actions.cfg` (screen quick actions, `docs/config-layout.md`) | core |
+| `CLEAR_NOZZLE`, `LOAD_FILAMENT`, `UNLOAD_FILAMENT`, `AUTO_FULL_BED_LEVEL`, `BED_LEVEL_SCREWS_TUNE` | | the printer's `macros/quick_actions.cfg` (screen quick actions, `docs/config-layout.md`) | core |
 | `LOAD_CELL_TARE` | | `ad5x.cfg` (strain-gauge tare) | core |
 
 `TOOL=` rule (issue #12, same check as `PRINT_START`): a whole number

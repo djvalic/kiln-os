@@ -1,5 +1,5 @@
 From 1376250fd48173195c67dec472499f05630faf57 Mon Sep 17 00:00:00 2001
-From: valix <djvalic.wc@gmail.com>
+From: djvalic <djvalic@users.noreply.github.com>
 Date: Sun, 15 Nov 2026 12:19:00 -0500
 Subject: [PATCH] watchdog: jz4740: Keep a watchdog the boot loader started
 

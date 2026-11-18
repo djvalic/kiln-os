@@ -41,6 +41,10 @@ define AD5X_SYSTEM_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/usr/lib/ad5x/kernel.sh
 	$(INSTALL) -D -m 0644 $(@D)/lib/apps.sh \
 		$(TARGET_DIR)/usr/lib/ad5x/apps.sh
+	# The board's RAM and the memory mode (S00ad5x-kernel, S04ad5x-memory,
+	# ad5x-memory; bootloader.sh's bl_variant): also in the recovery OS
+	$(INSTALL) -D -m 0644 $(@D)/lib/memory.sh \
+		$(TARGET_DIR)/usr/lib/ad5x/memory.sh
 	# Kiln's U-Boot's state and records in ota (S99ad5x-booted,
 	# ad5x-kernel); main image only, ad5x-recovery.mk doesn't install it
 	$(INSTALL) -D -m 0644 $(@D)/lib/uboot.sh \
@@ -66,6 +70,9 @@ define AD5X_SYSTEM_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/usr/bin/ad5x-touch-units
 	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-kernel \
 		$(TARGET_DIR)/usr/bin/ad5x-kernel
+	# Extended memory on 512 MiB boards (root's; S68ad5x-update-agent)
+	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-memory \
+		$(TARGET_DIR)/usr/sbin/ad5x-memory
 	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-sound \
 		$(TARGET_DIR)/usr/bin/ad5x-sound
 	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-update \

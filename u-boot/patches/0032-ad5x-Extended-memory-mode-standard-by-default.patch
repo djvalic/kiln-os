@@ -1,0 +1,570 @@
+From c0a3f5eab0a134fea912cff8ea9a72a28b063c59 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 13:00:00 -0500
+Subject: [PATCH 32/32] ad5x: Extended memory mode, standard by default
+
+Every AD5X now starts in the same standard memory mode: Kiln's kernels get
+the low window alone, without the X2600H's second bank
+(mem=256M@0x30000000). On a board with 512 MiB the owner can switch
+extended memory on (/data/ad5x/kernel/extended-memory, written by Kiln
+OS's ad5x-memory); the bank then stays on the command line.
+
+x2600_args_memory() takes the bank off unless the start is extended on
+512 MiB, and appends ad5x.ram=256|512 and ad5x.memmode=standard|extended
+for Linux userspace, so that it knows the board's RAM whatever the mode.
+U-Boot proper reads the board's RAM once and applies it to every kernel
+it starts: the recovery OS is always standard. The SPL's own start of
+Kiln's 6.6 from a slot (U-Boot proper missing or failed) is always
+standard too, as it can't read the owner's choice and is a fallback;
+x2600_args_spl() holds that decision. Flashforge's 5.10 in a slot keeps
+the stock SPL's line.
+
+The boot rules decide the mode: extended only for a plain start of the
+main OS on Kiln's 6.6 or 7.3 (the starts that get cmdline-extra) that the
+owner switched on, on 512 MiB, with no failure recorded on /data
+(kernel/extended-memory-failed), not on the first start after an install,
+not on a fallback, and only when no start is unconfirmed. The state
+sector records "mem ext|std" for each start. An extended start that
+doesn't finish is one of the existing tries; the next start is standard
+and the records get "failed-mem <reason>" for the main OS to copy to
+/data. U-Boot drops that record once a later start has been confirmed:
+the copy on /data counts from then on, so the owner switches the mode on
+again by removing it. Every failing sequence still ends in the recovery
+OS within three unconfirmed starts.
+
+A state or records sector from an older build (no "mem", no
+"failed-mem") reads as standard and no record; an older build ignores
+both keys.
+---
+ .../mips/mach-jz47xx/include/mach/x2600_ram.h | 118 ++++++++++++++++++
+ arch/mips/mach-jz47xx/x2600/spl.c             |  23 ++--
+ board/flashforge/ad5x/ad5x.c                  |  61 +++++++--
+ board/flashforge/ad5x/bootlogic.c             |  70 ++++++++++-
+ board/flashforge/ad5x/bootlogic.h             |  20 ++-
+ 5 files changed, 256 insertions(+), 36 deletions(-)
+
+diff --git a/arch/mips/mach-jz47xx/include/mach/x2600_ram.h b/arch/mips/mach-jz47xx/include/mach/x2600_ram.h
+index 3de48fb5..4fad2fa0 100644
+--- a/arch/mips/mach-jz47xx/include/mach/x2600_ram.h
++++ b/arch/mips/mach-jz47xx/include/mach/x2600_ram.h
+@@ -168,4 +168,122 @@ static inline void x2600_args_kiln_low(char *s)
+ 	}
+ }
+ 
++/*
++ * Take every word that begins with @key (NUL-terminated) off command line
++ * @s, in place, the same way.
++ */
++static inline void x2600_args_drop_key(char *s, const char *key)
++{
++	char *w = s, *e;
++	int i;
++
++	while (*w) {
++		if (*w == ' ') {
++			w++;
++			continue;
++		}
++		for (e = w; *e && *e != ' '; e++)
++			;
++		for (i = 0; key[i] && w + i < e && w[i] == key[i]; i++)
++			;
++		w = key[i] ? e : x2600_args_cut(s, w, e);
++	}
++}
++
++/* the longest memory words x2600_args_memory_words() appends */
++#define X2600_ARGS_MEMORY_MAX	sizeof(" ad5x.ram=512 ad5x.memmode=extended")
++
++/*
++ * For Linux userspace, after the last word of command line @s (@size bytes
++ * with its NUL), in place: the board's RAM, "ad5x.ram=<mib>", and the mode
++ * this start got, "ad5x.memmode=standard|extended" (@extended). Trailing
++ * spaces go first; the words are left off when they don't fit @size.
++ */
++static inline void x2600_args_memory_words(char *s, unsigned int size,
++					   unsigned int mib, int extended)
++{
++	static const char ram[] = " ad5x.ram=";
++	static const char mode[] = " ad5x.memmode=";
++	const char *m = extended ? "extended" : "standard";
++	char num[12], *e;
++	unsigned int v = mib, n = 0, i, need;
++
++	for (e = s; *e; e++)
++		;
++	while (e > s && e[-1] == ' ')
++		e--;
++	*e = '\0';
++	do {
++		num[n++] = '0' + v % 10;
++		v /= 10;
++	} while (v && n < sizeof(num));
++	/* the line, both words (the mode is 8 letters either way), NUL */
++	need = (unsigned int)(e - s) + sizeof(ram) - 1 + n + sizeof(mode) - 1 +
++	       8 + 1;
++	if (need > size)
++		return;
++	for (i = 0; ram[i]; i++)
++		*e++ = ram[i];
++	while (n)
++		*e++ = num[--n];
++	for (i = 0; mode[i]; i++)
++		*e++ = mode[i];
++	for (i = 0; m[i]; i++)
++		*e++ = m[i];
++	*e = '\0';
++}
++
++/*
++ * Extended memory mode (Kiln OS): the memory a kernel gets on a board with
++ * @mib MiB (x2600_ram_mib()), on command line @s (@size bytes with its
++ * NUL), in place. Extended only when @extended asks for it and the board
++ * has 512 MiB: the X2600H's second bank (mem=256M@0x30000000) stays.
++ * Standard otherwise: every word "mem=<size>@0x30000000" goes, the low
++ * window alone, as on a 256 MiB board. Any "ad5x.ram=" and
++ * "ad5x.memmode=" words already there (cmdline-extra) go, and
++ * x2600_args_memory_words() says what this start got. Returns 1 when it
++ * is extended, else 0.
++ */
++static inline int x2600_args_memory(char *s, unsigned int size,
++				    unsigned int mib, int extended)
++{
++	extended = extended && mib == 512;
++	if (!extended)
++		x2600_args_drop_high_bank(s);
++	x2600_args_drop_key(s, "ad5x.ram=");
++	x2600_args_drop_key(s, "ad5x.memmode=");
++	x2600_args_memory_words(s, size, mib, extended);
++	return extended;
++}
++
++/* Kiln's 6.6, by the start of its uImage name (kernel-ingenic66/build.sh) */
++#define X2600_KILN66_NAME	"Linux-6.6-ad5x"
++
++/*
++ * The SPL's own start of a kernel slot (no U-Boot proper): command line
++ * @s, the stock SPL's with root= set (@size bytes with its NUL), for the
++ * board's @mib MiB and the slot's uImage named @name, in place. Kiln's
++ * 6.6 gets Kiln's low window (x2600_args_kiln_low) and always the
++ * standard memory mode, the second bank off, with the words that say so
++ * (x2600_args_memory_words): the SPL can't read the owner's choice on
++ * /data, and this start is a fallback. Any other kernel (Flashforge's
++ * 5.10) gets the stock SPL's line as it starts it: without the second
++ * bank on 256 MiB. (The stock line has no ad5x.* words to drop.)
++ */
++static inline void x2600_args_spl(char *s, unsigned int size,
++				  unsigned int mib, const char *name)
++{
++	static const char kiln[] = X2600_KILN66_NAME;
++	unsigned int i;
++
++	for (i = 0; kiln[i] && name[i] == kiln[i]; i++)
++		;
++	if (!kiln[i])
++		x2600_args_kiln_low(s);
++	if (!kiln[i] || mib < 512)
++		x2600_args_drop_high_bank(s);
++	if (!kiln[i])
++		x2600_args_memory_words(s, size, mib, 0);
++}
++
+ #endif
+diff --git a/arch/mips/mach-jz47xx/x2600/spl.c b/arch/mips/mach-jz47xx/x2600/spl.c
+index 53a4eef5..fc0ceba7 100644
+--- a/arch/mips/mach-jz47xx/x2600/spl.c
++++ b/arch/mips/mach-jz47xx/x2600/spl.c
+@@ -457,15 +457,9 @@ static ulong spl_load_uimage(u32 lba, ulong max, u8 os)
+ 			"mem=256M@0x30000000 init=/linuxrc root=/dev/mmcblk0pX " \
+ 			"rootwait rootfstype=squashfs ro lpj=11935744"
+ #define AD5X_MAX_ARGS	16
+-/*
+- * Kiln's 6.6 in the slot, by its uImage name (kernel-ingenic66/build.sh,
+- * U-Boot proper's ad5x_slot_a_kernel_ok): it gets Kiln's kernels' low
+- * window (x2600_args_kiln_low: mem=252M@0x0, no rmem=). Any other kernel
+- * (Flashforge's 5.10) gets the stock SPL's.
+- */
+-#define AD5X_KILN66	"Linux-6.6-ad5x"
+ 
+-static char spl_args[sizeof(AD5X_ARGS)];
++/* with room for the memory words Kiln's 6.6 gets (x2600_args_memory) */
++static char spl_args[sizeof(AD5X_ARGS) + X2600_ARGS_MEMORY_MAX];
+ static char *spl_argv[AD5X_MAX_ARGS + 1];
+ 
+ /* split spl_args in place into spl_argv[1..], argv[0] being "spl" */
+@@ -477,11 +471,14 @@ static int ad5x_build_argv(char root)
+ 	strcpy(spl_args, AD5X_ARGS);
+ 	p = strstr(spl_args, "mmcblk0pX");
+ 	p[8] = root;
+-	/* 256 MiB (an X2600E): no second bank, as its stock SPL starts it */
+-	if (spl_ram_mib < 512)
+-		x2600_args_drop_high_bank(spl_args);
+-	if (!strncmp(spl_name, AD5X_KILN66, sizeof(AD5X_KILN66) - 1))
+-		x2600_args_kiln_low(spl_args);
++	/*
++	 * Kiln's 6.6 in the slot, by its uImage name (U-Boot proper's
++	 * ad5x_slot_a_kernel_ok): Kiln's low window and the standard memory
++	 * mode, the second bank off, with ad5x.ram= and ad5x.memmode=. Any
++	 * other kernel (Flashforge's 5.10): the stock SPL's line, without the
++	 * second bank on 256 MiB (an X2600E), as its stock SPL starts it.
++	 */
++	x2600_args_spl(spl_args, sizeof(spl_args), spl_ram_mib, spl_name);
+ 
+ 	spl_argv[argc++] = "spl";
+ 	for (p = spl_args; *p && argc < AD5X_MAX_ARGS; ) {
+diff --git a/board/flashforge/ad5x/ad5x.c b/board/flashforge/ad5x/ad5x.c
+index 681a1dbf..86951334 100644
+--- a/board/flashforge/ad5x/ad5x.c
++++ b/board/flashforge/ad5x/ad5x.c
+@@ -344,6 +344,19 @@ static int ad5x_read_records(struct ad5x_inputs *in)
+ 	return 0;
+ }
+ 
++/*
++ * The board's RAM (mach/x2600_ram.h), as the SPL decided it from the SoC
++ * ID in the eFuse: read once
++ */
++static unsigned int ad5x_ram_mib(void)
++{
++	static int mib = -1;
++
++	if (mib < 0)
++		mib = x2600_ram_mib(x2600_socid());
++	return mib;
++}
++
+ static void ad5x_gather(struct ad5x_inputs *in)
+ {
+ 	const char *slot = ad5x_read_slot();
+@@ -351,6 +364,7 @@ static void ad5x_gather(struct ad5x_inputs *in)
+ 	memset(in, 0, sizeof(*in));
+ 	in->flag_b = slot && *slot == 'b';
+ 	ad5x_read_records(in);
++	in->ram_mib = ad5x_ram_mib();
+ 
+ 	/* /data: p7, ext4 */
+ 	in->data_ok = !fs_set_blk_dev("mmc", "0:7", FS_TYPE_EXT);
+@@ -363,6 +377,10 @@ static void ad5x_gather(struct ad5x_inputs *in)
+ 		ad5x_line(7, "/ad5x/kernel/failed-mainline",
+ 			  in->s00_failed_mainline, AD5X_REL_LEN);
+ 		in->wdt_off = ad5x_exists(7, "/ad5x/watchdog.disable");
++		/* extended memory mode: the owner's switch, the OS's record */
++		in->ext_wanted = ad5x_exists(7, "/ad5x/kernel/extended-memory");
++		in->ext_failed =
++			ad5x_exists(7, "/ad5x/kernel/extended-memory-failed");
+ 	}
+ 
+ 	/* rootfs2: p4, SquashFS */
+@@ -407,6 +425,13 @@ static void ad5x_print(const struct ad5x_inputs *in)
+ 	       env_get_ulong("wdt_os", 10, 0),
+ 	       in->wdt_capable ? "feeds it" : "doesn't feed it",
+ 	       in->wdt_off ? "switches it off" : "doesn't switch it off");
++	printf("ad5x: memory: %u MiB; extended memory %s%s; unconfirmed "
++	       "start %s; failed-mem %s\n", in->ram_mib,
++	       in->ext_wanted ? "on" : "off",
++	       in->ext_failed ? " (failed, on /data)" : "",
++	       !in->state.tries ? "none" :
++	       in->state.mem_ext ? "extended" : "standard",
++	       in->rec.failed_mem[0] ? in->rec.failed_mem : "-");
+ }
+ 
+ static int ad5x_commit(const struct ad5x_decision *d)
+@@ -436,15 +461,17 @@ static int ad5x_commit(const struct ad5x_decision *d)
+ /*
+  * @own: Kiln's kernel (ad5x.kernel=own panic=10 loglevel=5); @extra: and
+  * /data/ad5x/kernel/cmdline-extra after it, as S00ad5x-kernel adds it (the
+- * main OS only: the recovery OS starts without the owner's test options)
++ * main OS only: the recovery OS starts without the owner's test options);
++ * @mem_ext: extended memory, the second bank kept (ad5x_decide() decided
++ * it for the main OS; the recovery OS: 0, always standard)
+  */
+ static void ad5x_bootargs(const char *root, int own, int extra_ok,
+-			  unsigned int wdt)
++			  unsigned int wdt, int mem_ext)
+ {
+ 	char extra[256] = "";
+ 	char *args;
+ 	long len;
+-	unsigned int mib;
++	unsigned int mib = ad5x_ram_mib();
+ 
+ 	if (own && extra_ok) {
+ 		/* as S00ad5x-kernel adds: cmdline-extra comes last */
+@@ -471,14 +498,17 @@ static void ad5x_bootargs(const char *root, int own, int extra_ok,
+ 	snprintf(args + strlen(args), CONFIG_SYS_CBSIZE - strlen(args),
+ 		 " %s", extra);
+ 	/*
+-	 * 256 MiB (an X2600E, mach/x2600_ram.h, as the SPL decided): no
+-	 * second bank, from args_spl or cmdline-extra alike
++	 * The second bank only for extended memory on 512 MiB: standard
++	 * memory and 256 MiB (an X2600E, mach/x2600_ram.h, as the SPL
++	 * decided) drop it, from args_spl or cmdline-extra alike; then
++	 * ad5x.ram= and ad5x.memmode= for Linux userspace
+ 	 */
+-	mib = x2600_ram_mib(x2600_socid());
+-	if (mib < 512) {
+-		x2600_args_drop_high_bank(args);
+-		printf("ad5x: %u MiB: no second bank for the kernel\n", mib);
+-	}
++	if (x2600_args_memory(args, CONFIG_SYS_CBSIZE, mib, mem_ext))
++		printf("ad5x: %u MiB, extended memory: the second bank for "
++		       "the kernel\n", mib);
++	else
++		printf("ad5x: %u MiB, standard memory: no second bank for the "
++		       "kernel\n", mib);
+ 	env_set("bootargs", args);
+ 	free(args);
+ }
+@@ -580,7 +610,7 @@ static int do_ad5x_boot(struct cmd_tbl *cmdtp, int flag, int argc,
+ 
+ 		if (d.target == AD5X_BOOT_RECOVERY) {
+ 			/* p1's Kiln 6.6, loaded and checked by ad5x_gather */
+-			ad5x_bootargs("/dev/mmcblk0p2", 1, 0, 0);
++			ad5x_bootargs("/dev/mmcblk0p2", 1, 0, 0, 0);
+ 			ad5x_ub_what = AD5X_UB_RECOVERY;
+ 			ad5x_ub_tries = 0;
+ 			ad5x_bootm(AD5X_LOAD_A);
+@@ -596,7 +626,8 @@ static int do_ad5x_boot(struct cmd_tbl *cmdtp, int flag, int argc,
+ 			len = ad5x_load(4, path, AD5X_LOAD_MAIN,
+ 					AD5X_KERNEL_MAX);
+ 			if (len > 0) {
+-				ad5x_bootargs("/dev/mmcblk0p4", 1, 1, wdt);
++				ad5x_bootargs("/dev/mmcblk0p4", 1, 1, wdt,
++					      d.mem_ext);
+ 				ad5x_wdt_s = wdt;
+ 				ad5x_ub_what = d.kernel == AD5X_K_73 ?
+ 					AD5X_UB_MAIN_73 : AD5X_UB_MAIN_66;
+@@ -612,8 +643,12 @@ static int do_ad5x_boot(struct cmd_tbl *cmdtp, int flag, int argc,
+ 			else
+ 				in.have_66 = 0;
+ 		}
+-		/* the state written counts this attempt: start from it */
++		/*
++		 * the state written counts this attempt: start from it; the
++		 * kernel never ran, so it says nothing about the memory
++		 */
+ 		in.state = d.state;
++		in.state.mem_ext = 0;
+ 		in.rec = d.rec;
+ 		in.flag_b = d.write_flag ? d.write_flag < 0 : in.flag_b;
+ 	}
+diff --git a/board/flashforge/ad5x/bootlogic.c b/board/flashforge/ad5x/bootlogic.c
+index d6350ddd..be1c38c5 100644
+--- a/board/flashforge/ad5x/bootlogic.c
++++ b/board/flashforge/ad5x/bootlogic.c
+@@ -33,6 +33,17 @@
+  *   (and the state) when it installs the main OS or "Boot main OS" runs.
+  * - Counts saturate at AD5X_MAX_TRIES; a record that doesn't parse or has
+  *   a bad CRC32 counts as empty: never a reason to fall back.
++ * - Extended memory (Kiln OS: the X2600H's second bank for the kernel):
++ *   only for a start of the main OS on Kiln's own kernel that the owner
++ *   switched on (/data/ad5x/kernel/extended-memory) on a 512 MiB board,
++ *   not after a failure (kernel/extended-memory-failed), not on the first
++ *   start after an install, not on a fallback, and only when no start is
++ *   unconfirmed (state empty). The state says "mem ext" for such a start;
++ *   one that doesn't finish is one of the tries above, and the next start
++ *   is standard, with "failed-mem" in the records for the main OS to copy
++ *   to /data. That record goes once a later start has been confirmed
++ *   (state empty again): the copy on /data counts from then on, and the
++ *   owner switches the mode on again by removing it (ad5x-memory).
+  * - The watchdog stays running (wdt_os seconds) only into Kiln's own
+  *   kernels, from a rootfs2 that has watchdog.conf, and not with
+  *   watchdog.disable on /data; it is stopped for the recovery OS
+@@ -138,9 +149,10 @@ void ad5x_state_format(const struct ad5x_state *st, char *buf)
+ 
+ 	memset(buf, 0, AD5X_REC_SIZE);
+ 	n = snprintf(buf, AD5X_REC_SIZE,
+-		     STATE_MAGIC "tries %u\nkernel %s\nrelease %s\n",
++		     STATE_MAGIC "tries %u\nkernel %s\nrelease %s\nmem %s\n",
+ 		     st->tries, ad5x_kernel_name(st->kernel),
+-		     st->release[0] ? st->release : "-");
++		     st->release[0] ? st->release : "-",
++		     st->mem_ext ? "ext" : "std");
+ 	finish(buf, n);
+ }
+ 
+@@ -151,9 +163,10 @@ void ad5x_records_format(const struct ad5x_records *rec, char *buf)
+ 	memset(buf, 0, AD5X_REC_SIZE);
+ 	n = snprintf(buf, AD5X_REC_SIZE,
+ 		     RECORDS_MAGIC "failed-own %s\nfailed-mainline %s\n"
+-		     "fallbacks %u\nreason %s\n",
++		     "failed-mem %s\nfallbacks %u\nreason %s\n",
+ 		     rec->failed_own[0] ? rec->failed_own : "-",
+ 		     rec->failed_mainline[0] ? rec->failed_mainline : "-",
++		     rec->failed_mem[0] ? rec->failed_mem : "-",
+ 		     rec->fallbacks, rec->reason[0] ? rec->reason : "-");
+ 	finish(buf, n);
+ }
+@@ -221,6 +234,8 @@ static void state_kv(void *obj, const char *key, const char *val)
+ 		st->kernel = kernel_from_name(val);
+ 	else if (!strcmp(key, "release"))
+ 		copy_val(st->release, val, sizeof(st->release));
++	else if (!strcmp(key, "mem"))
++		st->mem_ext = !strcmp(val, "ext");	/* else standard */
+ }
+ 
+ static void records_kv(void *obj, const char *key, const char *val)
+@@ -232,6 +247,9 @@ static void records_kv(void *obj, const char *key, const char *val)
+ 	else if (!strcmp(key, "failed-mainline"))
+ 		copy_val(rec->failed_mainline, val,
+ 			 sizeof(rec->failed_mainline));
++	else if (!strcmp(key, "failed-mem"))
++		text_clean(rec->failed_mem, strcmp(val, "-") ? val : "",
++			   sizeof(rec->failed_mem));
+ 	else if (!strcmp(key, "fallbacks"))
+ 		rec->fallbacks = parse_uint(val);
+ 	else if (!strcmp(key, "reason"))
+@@ -334,7 +352,7 @@ void ad5x_decide(const struct ad5x_inputs *in, struct ad5x_decision *out)
+ 	char why[AD5X_REASON_LEN] = "";
+ 	enum ad5x_kernel k;
+ 	unsigned int tries;
+-	int to_recovery = 0, failed = 0;
++	int to_recovery = 0, failed = 0, mem_failed = 0;
+ 
+ 	memset(out, 0, sizeof(*out));
+ 	out->state = *st;
+@@ -368,6 +386,29 @@ void ad5x_decide(const struct ad5x_inputs *in, struct ad5x_decision *out)
+ 		out->write_flag = -1;	/* the flag to slot B */
+ 	}
+ 
++	/*
++	 * Extended memory: a "failed-mem" record is for the main OS to copy
++	 * to /data (kernel/extended-memory-failed) as it starts. Once a later
++	 * start has been confirmed (the state is empty) the copy counts, and
++	 * removing it (ad5x-memory extended on) switches the mode on again.
++	 */
++	if (!st->tries && out->rec.failed_mem[0]) {
++		out->rec.failed_mem[0] = '\0';
++		out->rec_changed = 1;
++	}
++	/* the last start had the second bank and didn't finish: standard */
++	if (st->tries && st->mem_ext) {
++		char mem[AD5X_REASON_LEN];
++
++		snprintf(mem, sizeof(mem), "%s %s did not finish starting with "
++			 "extended memory", short_name(st->kernel),
++			 st->release[0] ? st->release :
++			 release_of(in, st->kernel));
++		text_clean(out->rec.failed_mem, mem, sizeof(out->rec.failed_mem));
++		out->rec_changed = 1;
++		mem_failed = 1;
++	}
++
+ 	/* the last start of the main OS didn't finish */
+ 	tries = st->tries;
+ 	if (tries) {
+@@ -414,6 +455,11 @@ void ad5x_decide(const struct ad5x_inputs *in, struct ad5x_decision *out)
+ 		/* the other kernel of Kiln's: "6.6 until ad5x-kernel retry" */
+ 		add(why, "; %s until ad5x-kernel retry", short_name(k));
+ 		set_reason(out, why);
++	} else if (!to_recovery && mem_failed) {
++		/* the same kernel again, with standard memory */
++		snprintf(why, sizeof(why), "%s: standard memory until "
++			 "ad5x-memory extended on", out->rec.failed_mem);
++		set_reason(out, why);
+ 	}
+ 
+ 	if (to_recovery) {
+@@ -447,18 +493,30 @@ void ad5x_decide(const struct ad5x_inputs *in, struct ad5x_decision *out)
+ 		set_reason(out, why);
+ 	}
+ 
++	/*
++	 * Extended memory: asked for, not failed, 512 MiB, and only on a
++	 * plain start of the main OS on Kiln's own kernel (it gets
++	 * cmdline-extra too) with no start unconfirmed: never on a retry, a
++	 * fallback, the first start after an install or a flag on slot A.
++	 */
++	out->mem_ext = in->data_ok && in->ext_wanted && !in->ext_failed &&
++		       in->ram_mib == 512 && in->flag_b && !st->tries &&
++		       !in->after_install && !to_recovery &&
++		       (k == AD5X_K_66 || k == AD5X_K_73);
++
+ 	if (k != st->kernel)
+ 		tries = 0;
+ 	out->state.tries = tries < AD5X_MAX_TRIES ? tries + 1 : AD5X_MAX_TRIES;
+ 	out->state.kernel = k;
+ 	ad5x_release_clean(out->state.release, release_of(in, k),
+ 			   AD5X_REL_LEN);
++	out->state.mem_ext = out->mem_ext;
+ 	out->state_changed = 1;
+ 	out->target = AD5X_BOOT_MAIN;
+ 	out->kernel = k;
+ 	snprintf(out->msg, sizeof(out->msg), "main OS, kernel %s (%s), "
+-		 "start %u", ad5x_kernel_name(k), out->state.release,
+-		 out->state.tries);
++		 "start %u, %s memory", ad5x_kernel_name(k), out->state.release,
++		 out->state.tries, out->mem_ext ? "extended" : "standard");
+ }
+ 
+ unsigned int ad5x_wdt_seconds(const struct ad5x_inputs *in,
+diff --git a/board/flashforge/ad5x/bootlogic.h b/board/flashforge/ad5x/bootlogic.h
+index 98aabf50..e2819e7d 100644
+--- a/board/flashforge/ad5x/bootlogic.h
++++ b/board/flashforge/ad5x/bootlogic.h
+@@ -12,13 +12,17 @@
+  * whose CRC32 is wrong counts as empty (all zeros = empty too):
+  *
+  *   0x90000  state    unconfirmed starts of the main OS: written by U-Boot
+- *                     before each start of the main OS; userspace clears it
+- *                     (writes zeros) once a start has finished, and to give
+- *                     the main OS fresh tries (recovery's "Boot main OS",
+- *                     a finished install).
++ *                     before each start of the main OS (with the memory
++ *                     mode it got); userspace clears it (writes zeros) once
++ *                     a start has finished, and to give the main OS fresh
++ *                     tries (recovery's "Boot main OS", a finished install).
+  *   0x90200  records  U-Boot's failure records and the reason for the last
+  *                     fallback. Cleared by userspace with "ad5x-kernel retry"
+  *                     (zeros), like S00ad5x-kernel's failed/failed-mainline.
++ *                     "failed-mem" (an extended memory start that didn't
++ *                     finish) is for the main OS to copy to /data
++ *                     (kernel/extended-memory-failed); U-Boot drops it
++ *                     itself once a start after it has been confirmed.
+  *
+  * Bytes 0-11 (boot flag), 64-72 KiB (boot trace) and the environment
+  * (512 KiB and 544 KiB, 32 KiB each) are elsewhere in the partition.
+@@ -30,6 +34,7 @@
+ #define AD5X_REC_SIZE		512
+ #define AD5X_REL_LEN		64	/* release strings, NUL included */
+ #define AD5X_REASON_LEN		160
++#define AD5X_MEM_LEN		96	/* failed-mem's reason, NUL included */
+ #define AD5X_MAX_TRIES		250	/* saturates: never wraps to 0 */
+ #define AD5X_WDT_MAX_S		1431	/* the watchdog's longest timeout */
+ 
+@@ -54,11 +59,13 @@ struct ad5x_state {
+ 	unsigned int tries;		/* unconfirmed starts in a row */
+ 	enum ad5x_kernel kernel;	/* kernel of the last of them */
+ 	char release[AD5X_REL_LEN];	/* its release */
++	int mem_ext;			/* it had extended memory ("mem ext") */
+ };
+ 
+ struct ad5x_records {
+ 	char failed_own[AD5X_REL_LEN];		/* 6.6 release that failed */
+ 	char failed_mainline[AD5X_REL_LEN];	/* 7.3 release that failed */
++	char failed_mem[AD5X_MEM_LEN];		/* extended memory failed: why */
+ 	char reason[AD5X_REASON_LEN];		/* why the last fallback */
+ 	unsigned int fallbacks;			/* fallbacks counted */
+ };
+@@ -87,6 +94,10 @@ struct ad5x_inputs {
+ 	/* the watchdog (ad5x_wdt_seconds) */
+ 	int wdt_off;		/* /data/ad5x/watchdog.disable exists */
+ 	int wdt_capable;	/* rootfs2 has /usr/lib/ad5x/watchdog.conf */
++	/* extended memory mode (Kiln OS; README "Boot rules") */
++	unsigned int ram_mib;	/* the board's: x2600_ram_mib() */
++	int ext_wanted;		/* /data/ad5x/kernel/extended-memory exists */
++	int ext_failed;		/* ... extended-memory-failed exists */
+ };
+ 
+ struct ad5x_decision {
+@@ -96,6 +107,7 @@ struct ad5x_decision {
+ 	struct ad5x_state state;	/* to write before the start */
+ 	struct ad5x_records rec;	/* to write before the start */
+ 	int state_changed, rec_changed;
++	int mem_ext;	/* AD5X_BOOT_MAIN with the second bank (= state's) */
+ 	char msg[AD5X_REASON_LEN];	/* what was decided and why */
+ };
+ 
+-- 
+2.56.0
+

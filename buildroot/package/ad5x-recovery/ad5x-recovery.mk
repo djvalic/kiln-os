@@ -50,9 +50,12 @@ define AD5X_RECOVERY_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/usr/lib/ad5x/network.sh
 	$(INSTALL) -D -m 0644 $(AD5X_RECOVERY_MAIN)/lib/kernel.sh \
 		$(TARGET_DIR)/usr/lib/ad5x/kernel.sh
-	# Kiln's own boot loader (ad5x-bootloader-install, ad5x-return-stock)
+	# Kiln's own boot loader (ad5x-bootloader-install, ad5x-return-stock);
+	# memory.sh: the board's RAM for its bl_variant (ad5x.ram=)
 	$(INSTALL) -D -m 0644 $(AD5X_RECOVERY_MAIN)/lib/bootloader.sh \
 		$(TARGET_DIR)/usr/lib/ad5x/bootloader.sh
+	$(INSTALL) -D -m 0644 $(AD5X_RECOVERY_MAIN)/lib/memory.sh \
+		$(TARGET_DIR)/usr/lib/ad5x/memory.sh
 	$(INSTALL) -D -m 0644 $(AD5X_RECOVERY_MAIN)/lib/watchdog.conf \
 		$(TARGET_DIR)/usr/lib/ad5x/watchdog.conf
 	$(AD5X_SYSTEM_INSTALL_VENDOR_SUPPORT)

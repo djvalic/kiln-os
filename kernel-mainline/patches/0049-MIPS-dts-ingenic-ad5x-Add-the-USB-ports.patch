@@ -20,7 +20,7 @@ diff --git a/arch/mips/boot/dts/ingenic/ad5x.dts b/arch/mips/boot/dts/ingenic/ad
 index 3720da1ae..82e638c37 100644
 --- a/arch/mips/boot/dts/ingenic/ad5x.dts
 +++ b/arch/mips/boot/dts/ingenic/ad5x.dts
-@@ -43,6 +43,26 @@ rtos@fc00000 {
+@@ -42,6 +42,26 @@ rtos@fc00000 {
  			no-map;
  		};
  	};
@@ -47,7 +47,7 @@ index 3720da1ae..82e638c37 100644
  };
  
  &exclk {
-@@ -63,6 +83,20 @@ &msc0 {
+@@ -62,6 +82,20 @@ &msc0 {
  	status = "okay";
  };
  
@@ -68,7 +68,7 @@ index 3720da1ae..82e638c37 100644
  &pinctrl {
  	pins_mmc0: mmc0 {
  		function = "mmc0";
-@@ -130,3 +164,17 @@ &uart5 {
+@@ -129,3 +163,17 @@ &uart5 {
  
  	status = "okay";
  };

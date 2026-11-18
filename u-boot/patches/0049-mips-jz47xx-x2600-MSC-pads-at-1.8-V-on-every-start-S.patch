@@ -1,0 +1,188 @@
+From 4a9bf30bca08f2f082e32290d78089b712854b8b Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 19:48:07 -0500
+Subject: [PATCH 49/50] mips: jz47xx: x2600: MSC pads at 1.8 V on every start,
+ SPL and U-Boot proper
+
+The eMMC's I/O rail is 1.8 V. EXCLK_DS.POC (CPM 0xE0, bit 31) sets the
+MSC and GPIO port E pads to it; the boot ROM sets it when it boots from
+the eMMC, but not in its USB mode. The SPL set it only on its own USB
+start (ad5x_emmc_init(true), from the stage-2 patch). jolting's sweep on
+an A31M8C (djvalic/kiln-os#68): at 3.3 V only RX phases 2-5 read at
+25 MHz and U-Boot proper's 50 MHz fails; at 1.8 V all 8 phases read.
+
+x2600_msc_pads_1v8() sets the bit if it is clear and returns EXCLK_DS as
+it was. The SPL calls it at the top of ad5x_emmc_init() on every start,
+before the controller's reset, and U-Boot proper in board_early_init_r(),
+before the eMMC is probed, so a U-Boot started after anything that left
+3.3 V reads too. Each logs the change:
+
+  SPL: MSC pads at 3.3 V (EXCLK_DS 0x...): now 1.8 V
+  ad5x: MSC pads at 3.3 V (EXCLK_DS 0x...): now 1.8 V
+
+An eMMC start finds the bit set and prints nothing. The RX phase 3 of the
+USB path and the phase 3 fallback stay: with 1.8 V pads phase 3 reads as
+well as any other.
+
+Signed-off-by: djvalic <djvalic@users.noreply.github.com>
+---
+ arch/mips/mach-jz47xx/include/mach/x2600.h | 10 +++++++++
+ arch/mips/mach-jz47xx/x2600/spl_emmc.c     | 26 +++++++++++-----------
+ arch/mips/mach-jz47xx/x2600/x2600.c        | 22 ++++++++++++++++--
+ board/flashforge/ad5x/ad5x.c               | 15 +++++++++++++
+ configs/ad5x_defconfig                     |  1 +
+ 5 files changed, 59 insertions(+), 15 deletions(-)
+
+diff --git a/arch/mips/mach-jz47xx/include/mach/x2600.h b/arch/mips/mach-jz47xx/include/mach/x2600.h
+index 01ad70db..7da9178a 100644
+--- a/arch/mips/mach-jz47xx/include/mach/x2600.h
++++ b/arch/mips/mach-jz47xx/include/mach/x2600.h
+@@ -16,6 +16,16 @@ void x2600_uart0_plain_baud(void);
+ void x2600_wdt_start(unsigned int ms);
+ void x2600_wdt_stop(void);
+ 
++/*
++ * The MSC pads (and GPIO port E) at 1.8 V, the eMMC's I/O voltage:
++ * EXCLK_DS.POC set if it was clear. Returns EXCLK_DS as it was, so a
++ * caller can log the change. At 3.3 V the card still answers, but data
++ * reads are marginal (on an A31M8C only RX phases 2-5 of 8 at 25 MHz) and
++ * U-Boot proper's 50 MHz fails (djvalic/kiln-os#68).
++ */
++#define X2600_EXCLK_DS_POC	0x80000000U	/* EXCLK_DS bit 31 */
++u32 x2600_msc_pads_1v8(void);
++
+ /*
+  * CPM scratch pad (CPSPR, 0x10000034): kept over a watchdog reset, written
+  * only after the unlock word in CPSPPR. Kiln's values and how the SPL and
+diff --git a/arch/mips/mach-jz47xx/x2600/spl_emmc.c b/arch/mips/mach-jz47xx/x2600/spl_emmc.c
+index fa074a23..793c7440 100644
+--- a/arch/mips/mach-jz47xx/x2600/spl_emmc.c
++++ b/arch/mips/mach-jz47xx/x2600/spl_emmc.c
+@@ -76,8 +76,6 @@
+ #define CPM_CLKGR0		((void __iomem *)0xb0000020)
+ #define CLKGR0_MSC0		BIT(2)
+ #define CPM_MSC0CDR		((void __iomem *)0xb0000068)
+-#define CPM_EXCLK_DS		((void __iomem *)0xb00000e0)
+-#define EXCLK_DS_POC_SD		BIT(31)	/* 1: the SD/MSC pads at 1.8 V */
+ #define CDR_PARENT_SHIFT	30
+ #define CDR_PARENT_MPLL		1
+ #define CDR_PARENT_EXCLK	3	/* with CDR_EXCK_E (SDK MSCCDR_MPCS_EXCLK) */
+@@ -323,7 +321,19 @@ static int emmc_start(bool slow)
+  */
+ int ad5x_emmc_init(bool usb)
+ {
+-	u32 was = readl(CPM_MSC0CDR);
++	u32 was = readl(CPM_MSC0CDR), ds;
++
++	/*
++	 * The MSC pads at 1.8 V, the eMMC's I/O voltage, on every start and
++	 * before the controller's reset (mach/x2600.h). The boot ROM sets
++	 * them so only when it boots from the eMMC: over USB they were at
++	 * 3.3 V, where an A31M8C reads at 25 MHz with RX phases 2-5 only and
++	 * U-Boot proper's 50 MHz fails; at 1.8 V all 8 phases read
++	 * (djvalic/kiln-os#68). An eMMC start finds the bit set already.
++	 */
++	ds = x2600_msc_pads_1v8();
++	if (!(ds & X2600_EXCLK_DS_POC))
++		printf("SPL: MSC pads at 3.3 V (EXCLK_DS 0x%x): now 1.8 V\n", ds);
+ 
+ 	/*
+ 	 * The controller's clock before its first register access: the boot
+@@ -338,16 +348,6 @@ int ad5x_emmc_init(bool usb)
+ 		emmc_cdr_wait();
+ 	}
+ 	if (usb) {
+-		/*
+-		 * The MSC pads at 1.8 V, the eMMC's I/O voltage (boot_sel
+-		 * 101, "MSC0 1.8 V"): EXCLK_DS.POC (X2600 PM, CPM 0xE0, bit
+-		 * 31; the SDK's CPM_EXCLK_DS), as Kiln's 6.6 device tree has
+-		 * the port E/MSC0 domain. Over USB the ROM leaves it at 3.3 V:
+-		 * the card answers, but U-Boot's high-speed transfers fail
+-		 * ("unable to select a mode: -70"). An eMMC start leaves it
+-		 * as the boot ROM set it.
+-		 */
+-		setbits_le32(CPM_EXCLK_DS, EXCLK_DS_POC_SD);
+ 		emmc_rx_phase_data();
+ 		printf("SPL: eMMC over USB: MSC0CDR 0x%x, now 0x%x: RX phase 3, "
+ 		       "tuning off\n", was, readl(CPM_MSC0CDR));
+diff --git a/arch/mips/mach-jz47xx/x2600/x2600.c b/arch/mips/mach-jz47xx/x2600/x2600.c
+index 0a79eaef..624f2dfd 100644
+--- a/arch/mips/mach-jz47xx/x2600/x2600.c
++++ b/arch/mips/mach-jz47xx/x2600/x2600.c
+@@ -1,8 +1,8 @@
+ // SPDX-License-Identifier: GPL-2.0+
+ /*
+  * Ingenic X2600 SoC: what the SPL and U-Boot proper share (console
+- * registers, the OST timer, the watchdog, the CPM scratch pad, the SoC
+- * info in the eFuse).
++ * registers, the OST timer, the watchdog, the MSC pads' voltage, the CPM
++ * scratch pad, the SoC info in the eFuse).
+  */
+ 
+ #include <init.h>
+@@ -146,6 +146,24 @@ void x2600_wdt_stop(void)
+ 	writel(TSCR_WDT, X2600_WDT + WDT_TSSR);
+ }
+ 
++/*
++ * EXCLK_DS (CPM 0xE0) bit 31, POC: the I/O voltage of GPIO port E and the
++ * MSC pads, 1 = 1.8 V (the SDK's pinctrl "ingenic,gpe_msc_voltage" and its
++ * SDHCI driver's 1.8 V signalling set it). The AD5X's eMMC I/O rail is
++ * 1.8 V (boot_sel 101, "MSC0 1.8 V"). The boot ROM sets the bit when it
++ * boots from the eMMC, but not in its USB mode.
++ */
++#define X2600_CPM_EXCLK_DS	((void __iomem *)0xb00000e0)
++
++u32 x2600_msc_pads_1v8(void)
++{
++	u32 was = readl(X2600_CPM_EXCLK_DS);
++
++	if (!(was & X2600_EXCLK_DS_POC))
++		writel(was | X2600_EXCLK_DS_POC, X2600_CPM_EXCLK_DS);
++	return was;
++}
++
+ /* CPSPR: kept over a watchdog reset; mach/x2600.h has Kiln's values */
+ #define X2600_CPM_CPSPR		((void __iomem *)0xb0000034)
+ #define X2600_CPM_CPSPPR	((void __iomem *)0xb0000038)
+diff --git a/board/flashforge/ad5x/ad5x.c b/board/flashforge/ad5x/ad5x.c
+index 20a56931..c13dedf8 100644
+--- a/board/flashforge/ad5x/ad5x.c
++++ b/board/flashforge/ad5x/ad5x.c
+@@ -71,6 +71,21 @@ int board_early_init_f(void)
+ 	return 0;
+ }
+ 
++/*
++ * The MSC pads at 1.8 V before the eMMC is probed (mach/x2600.h). Kiln's
++ * SPL sets them; this covers a U-Boot started after anything that left
++ * them at 3.3 V, where the card answers but 50 MHz transfers fail.
++ */
++int board_early_init_r(void)
++{
++	u32 ds = x2600_msc_pads_1v8();
++
++	if (!(ds & X2600_EXCLK_DS_POC))
++		printf("ad5x: MSC pads at 3.3 V (EXCLK_DS 0x%x): now 1.8 V\n",
++		       ds);
++	return 0;
++}
++
+ /*
+  * 512 MiB in two banks (an X2600H; an X2600E has only the low 256 MiB,
+  * mach/x2600_ram.h): 256 MiB at 0 (lowmem, the only part KSEG0 reaches)
+diff --git a/configs/ad5x_defconfig b/configs/ad5x_defconfig
+index 188961ed..b24c7ff3 100644
+--- a/configs/ad5x_defconfig
++++ b/configs/ad5x_defconfig
+@@ -11,6 +11,7 @@ CONFIG_TARGET_AD5X=y
+ CONFIG_SYS_MIPS_TIMER_FREQ=24000000
+ CONFIG_DISPLAY_CPUINFO=y
+ CONFIG_BOARD_EARLY_INIT_F=y
++CONFIG_BOARD_EARLY_INIT_R=y
+ CONFIG_HUSH_PARSER=y
+ CONFIG_SYS_PROMPT="ad5x# "
+ CONFIG_BOOTDELAY=-2
+-- 
+2.56.0
+

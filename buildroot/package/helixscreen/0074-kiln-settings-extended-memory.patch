@@ -1,0 +1,1516 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 03:52:52 -0500
+Subject: [PATCH] settings: Extended memory on Kiln OS
+
+Settings > System gets "Extended memory" under Return to Flashforge
+firmware: on an AD5X with 512 MiB it gives Linux the whole memory from
+the next start (Kiln OS uses 256 MiB by default, the same on every
+AD5X). The state comes from Moonraker's kiln_os component
+(machine.kiln_os.get_memory, GET /machine/kiln_os/memory), fetched in the
+discovery sequence, so on every connect and Klipper restart; the row
+shows only when the board has 512 MiB. Its switch posts the change
+(machine.kiln_os.post_memory, POST /machine/kiln_os/memory with enable;
+Kiln's update agent writes the switch) and is greyed while a job holds
+the machine (kiln_power_locked). Moonraker names the JSON-RPC methods of
+an endpoint with both GET and POST get_<name> and post_<name>.
+
+After a change that needs a restart, "Restart now?" offers Restart,
+which goes through Moonraker's machine.reboot as the Kiln power dialog
+does (request_kiln_reboot: Kiln's update agent decides, a refusal is a
+toast), or Later, which leaves it for the next start; the row then says
+"Extended memory changes at the next start." A refused change puts the
+switch back and shows Kiln's reason. One change at a time.
+
+When Kiln says the one-time notice is due (notice_pending), it goes under
+the bell once per run ("Extended memory available"); tapping it opens
+Settings > System. Opening the bell (or clearing it) with the entry in it
+tells Kiln it was seen (machine.kiln_os.memory_notice_seen), once, again
+after a failed try. When a start with extended memory did not finish,
+Kiln says why (failed): the row shows "Extended memory was turned off:
+the printer didn't finish starting with it." with the switch off, and a
+warning says the same once per failure (the failed text is kept in the
+config).
+
+When Kiln says a boot loader update is needed (bootloader_update_needed:
+an older Kiln U-Boot started the printer and can't choose the mode, so a
+restart changes nothing), the row shows the same switch with the
+subtitle "Needs a boot loader update to take effect.", nothing is
+pending, "Restart now?" is never asked and no notice goes under the bell.
+The switch still posts the change; it counts after the update.
+
+HELIX_KILN_AD5X builds only; elsewhere nothing is asked and the row stays
+hidden. Strings in en and ru (the Russian notice is shorter, to fit the
+bell entry's 255 bytes).
+
+Tests: Kiln's object read field by field, when the switch and the
+pending line show, the fetch filling the subjects, nothing asked off
+Kiln or without a connection, an older Kiln without the method, switching
+on (the POST, the restart prompt) and off (no prompt), a refusal, one
+change at a time, a fetch during a change, no change before Kiln has
+answered, the notice once and its seen once (again after a failure), a
+failure once per failure, the bell marking the notice seen, a boot loader
+update needed (its subtitle, the switch posting, no restart prompt, no
+notice); the System page row's visibility, greying, switch, pending and
+failure lines and the boot loader subtitle row.
+
+Upstream: not applicable (AD5X OS specific)
+---
+ include/ui_settings_kiln_memory.h             | 200 ++++++++
+ include/ui_settings_system.h                  |   3 +-
+ src/api/moonraker_discovery_sequence.cpp      |   5 +
+ src/ui/panel_widgets/shutdown_widget.cpp      |  25 +
+ src/ui/panel_widgets/shutdown_widget.h        |   7 +
+ src/ui/ui_panel_notification_history.cpp      |  13 +
+ src/ui/ui_settings_kiln_memory.cpp            | 329 +++++++++++++
+ src/ui/ui_settings_system.cpp                 |   8 +
+ tests/unit/test_settings_kiln_memory.cpp      | 457 ++++++++++++++++++
+ tests/unit/test_settings_system_callbacks.cpp | 132 +++++
+ translations/en.yml                           |   9 +
+ translations/ru.yml                           |   9 +
+ ui_xml/settings_system_overlay.xml            |  39 +-
+ 13 files changed, 1234 insertions(+), 2 deletions(-)
+ create mode 100644 include/ui_settings_kiln_memory.h
+ create mode 100644 src/ui/ui_settings_kiln_memory.cpp
+ create mode 100644 tests/unit/test_settings_kiln_memory.cpp
+
+diff --git a/include/ui_settings_kiln_memory.h b/include/ui_settings_kiln_memory.h
+new file mode 100644
+index 00000000..4667ee7d
+--- /dev/null
++++ b/include/ui_settings_kiln_memory.h
+@@ -0,0 +1,200 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++/**
++ * @file ui_settings_kiln_memory.h
++ * @brief Kiln OS: Settings > System > Extended memory
++ *
++ * An AD5X with 512 MiB of memory runs Kiln OS in 256 MiB by default, as every
++ * AD5X does. Extended memory gives Linux the whole 512 MiB from the next start
++ * on. Moonraker's kiln_os component answers:
++ *
++ * - `GET /machine/kiln_os/memory` (JSON-RPC `machine.kiln_os.get_memory`):
++ *   {available, enabled, active, restart_needed, failed, notice_pending,
++ *   bootloader_update_needed, hw_mem_mib, mem_kb}. available: the board has
++ *   512 MiB; enabled: the switch is on; active: "standard" or "extended", what
++ *   this start got; restart_needed: the switch and this start differ; failed:
++ *   why a start with it did not finish (it is then off until switched on
++ *   again), or null; notice_pending: the one-time "Extended memory available"
++ *   notice is due; bootloader_update_needed: an older Kiln boot loader started
++ *   this and can't choose the mode, so a restart changes nothing (Kiln then
++ *   says restart_needed and notice_pending false).
++ * - `POST /machine/kiln_os/memory` with enable (`machine.kiln_os.post_memory`):
++ *   Kiln's update agent sets the switch, which takes effect at the next start;
++ *   answers the GET object. 409 `not_available` on a 256 MiB board.
++ * - `POST /machine/kiln_os/memory_notice_seen`
++ *   (`machine.kiln_os.memory_notice_seen`): the notice was seen (also when it
++ *   is dismissed in Fluidd or Mainsail); answers the GET object.
++ *
++ * Moonraker names the JSON-RPC methods of an endpoint with both GET and POST
++ * get_<name> and post_<name>.
++ *
++ * The state is fetched in the discovery sequence, so on every connect and
++ * Klipper restart. The row shows only when the board has 512 MiB and is
++ * greyed while a job holds the machine (kiln_power_locked). A change asks
++ * "Restart now?"; Restart goes through Moonraker's machine.reboot (Kiln's
++ * update agent and its refusals), Later leaves the change for the next start
++ * and the row says so. Where a boot loader update is needed the row's
++ * subtitle says that instead, and no restart is offered.
++ *
++ * The notice is a bell entry; tapping it opens Settings > System. Opening the
++ * bell (or clearing it) with the entry in it marks the notice seen. A failure
++ * is a warning once per failure (the failed text, kept in the config).
++ *
++ * HELIX_KILN_AD5X builds only: elsewhere nothing is fetched and the row stays
++ * hidden.
++ *
++ * @threading Main thread; Moonraker's answers hop over through lifetime tokens
++ */
++
++#pragma once
++
++#include "async_lifetime_guard.h"
++#include "json_fwd.h"
++#include "lvgl/lvgl.h"
++#include "subject_managed_panel.h"
++
++#include <cstdint>
++#include <functional>
++#include <optional>
++#include <string>
++
++namespace helix {
++class IMoonrakerClient;
++}
++
++namespace helix::kiln_memory {
++
++/// The JSON-RPC method of GET /machine/kiln_os/memory
++inline constexpr const char* kGetMethod = "machine.kiln_os.get_memory";
++
++/// The JSON-RPC method of POST /machine/kiln_os/memory
++inline constexpr const char* kSetMethod = "machine.kiln_os.post_memory";
++
++/// The JSON-RPC method of POST /machine/kiln_os/memory_notice_seen
++inline constexpr const char* kNoticeSeenMethod = "machine.kiln_os.memory_notice_seen";
++
++/// The bell entry's action: opens Settings > System
++inline constexpr const char* kNoticeAction = "kiln_ext_memory";
++
++/// The POST waits for Kiln's update agent (up to 30 s); a little more here
++inline constexpr uint32_t kTimeoutMs = 45000;
++
++/// True on HELIX_KILN_AD5X builds; tests override it.
++bool built_in();
++void set_built_in_for_test(std::optional<bool> value);
++
++/// Kiln's memory object
++struct State {
++    bool available = false;
++    bool enabled = false;
++    bool extended_active = false; ///< active == "extended"
++    bool restart_needed = false;
++    std::string failed;           ///< empty: none
++    bool notice_pending = false;
++    bool bootloader_update_needed = false; ///< a restart changes nothing
++};
++
++/// The memory object (a JSON-RPC result); nullopt when @p result is not one.
++/// A missing field reads as false or empty.
++std::optional<State> parse_state(const nlohmann::json& result);
++
++/// The row's switch: on while the switch is on and no start with it failed
++bool shows_enabled(const State& state);
++
++/// The "changes at the next start" line: a restart is needed, it would help
++/// and nothing failed
++bool shows_pending(const State& state);
++
++/// The "Needs a boot loader update" subtitle (512 MiB boards only)
++bool shows_bootloader_update(const State& state);
++
++/// "Restart now?" after a change Kiln answered with @p state
++bool offers_restart(const State& state);
++
++/// The Extended memory row and its notices.
++///
++/// Subjects: `kiln_extended_memory_available` (1 shows the row),
++/// `kiln_extended_memory_enabled` (the switch), `kiln_extended_memory_pending`
++/// (1 shows "Extended memory changes at the next start."),
++/// `kiln_extended_memory_failed` (1 shows the failure) and
++/// `kiln_extended_memory_bootloader` (1: the row's subtitle says a boot loader
++/// update is needed).
++class MemoryModel {
++  public:
++    MemoryModel() = default;
++    ~MemoryModel();
++    MemoryModel(const MemoryModel&) = delete;
++    MemoryModel& operator=(const MemoryModel&) = delete;
++
++    void init_subjects();
++
++    /// Ask Kiln for the state over the screen's own Moonraker connection
++    /// (nothing off a Kiln build or without a connection).
++    void fetch();
++
++    /// The switch was set to @p on: POST it, then offer the restart. Nothing
++    /// before Kiln has said the board has 512 MiB, or while a change is on
++    /// its way.
++    void set_enabled(bool on);
++
++    /// Kiln's answer: the subjects, and the notice and failure once.
++    void apply(const State& state);
++
++    /// The bell showed (or cleared) the notice: tell Kiln once (again after
++    /// a failed try).
++    void notice_seen();
++
++    const std::optional<State>& state() const {
++        return state_;
++    }
++    bool busy() const {
++        return busy_;
++    }
++    bool notice_posted() const {
++        return notice_posted_;
++    }
++
++    /// Tests: forget the state and what was shown (the subjects stay).
++    void reset_for_test();
++    /// Tests: the client the requests go over; nullptr: the screen's own.
++    void set_client_for_test(IMoonrakerClient* client) {
++        client_override_ = client;
++    }
++
++  private:
++    /// The subjects from state_ (the switch also when unchanged: it may show
++    /// a tap that did not go through).
++    void publish();
++    void post_notice();
++    void show_failure(const std::string& failed);
++    /// The connected client to ask, else nullptr
++    IMoonrakerClient* client() const;
++
++    SubjectManager subjects_;
++    lv_subject_t available_{};
++    lv_subject_t enabled_{};
++    lv_subject_t pending_{};
++    lv_subject_t failed_{};
++    lv_subject_t bootloader_{};
++    bool subjects_initialized_ = false;
++
++    std::optional<State> state_;
++    bool busy_ = false;
++    bool notice_posted_ = false;
++    bool seen_sent_ = false;
++    IMoonrakerClient* client_override_ = nullptr;
++    AsyncLifetimeGuard lifetime_;
++};
++
++MemoryModel& model();
++
++/// Offer the restart after a change ("Restart now?" / Restart / Later).
++void prompt_restart();
++/// Tests: what runs instead of prompt_restart(); empty: prompt_restart().
++void set_restart_prompt_for_test(std::function<void()> prompt);
++
++/// The bell entry's action: open Settings > System. Registered once a notice
++/// is posted.
++void open_system_settings();
++
++} // namespace helix::kiln_memory
+diff --git a/include/ui_settings_system.h b/include/ui_settings_system.h
+index 826aa818..010bf7fd 100644
+--- a/include/ui_settings_system.h
++++ b/include/ui_settings_system.h
+@@ -47,7 +47,8 @@ class SystemSettingsOverlay : public OverlayBase {
+         return "settings_system_overlay";
+     }
+ 
+-    /// Kiln OS: the Log detail and Boot into recovery rows' subjects, before the XML
++    /// Kiln OS: the Log detail, Boot into recovery and Extended memory rows'
++    /// subjects, before the XML
+     void init_subjects() override;
+     void register_callbacks() override;
+ 
+diff --git a/src/api/moonraker_discovery_sequence.cpp b/src/api/moonraker_discovery_sequence.cpp
+index a9ea6f29..70517685 100644
+--- a/src/api/moonraker_discovery_sequence.cpp
++++ b/src/api/moonraker_discovery_sequence.cpp
+@@ -5,6 +5,7 @@
+ 
+ #include "lvgl/src/others/translation/lv_translation.h"
+ #include "ui_notification.h"
++#include "ui_settings_kiln_memory.h"
+ 
+ #include "ui_update_queue.h"
+ 
+@@ -699,6 +700,10 @@ void MoonrakerDiscoverySequence::continue_discovery_objects(uint64_t seq) {
+                                                            text.c_str());
+                         }
+                     }
++                    // Kiln OS: Extended memory (the Settings > System row and its
++                    // bell notice) from kiln_os, on every run like the warnings
++                    helix::ui::queue_update("kiln_memory::fetch",
++                                            []() { helix::kiln_memory::model().fetch(); });
+ #endif
+                     std::string klippy_version = result.value("klippy_version", "unknown");
+                     auto moonraker_version = result.value("moonraker_version", "unknown");
+diff --git a/src/ui/panel_widgets/shutdown_widget.cpp b/src/ui/panel_widgets/shutdown_widget.cpp
+index 64432b50..da651d95 100644
+--- a/src/ui/panel_widgets/shutdown_widget.cpp
++++ b/src/ui/panel_widgets/shutdown_widget.cpp
+@@ -523,6 +523,31 @@ std::string kiln_power_failure_message(const std::string& err_message, bool is_r
+                        why);
+ }
+ 
++void request_kiln_reboot(IMoonrakerAPI* api) {
++    if (!api || !api->is_connected()) {
++        spdlog::warn("[ShutdownDialog] Kiln OS: Moonraker not connected, no reboot");
++        ToastManager::instance().show(ToastSeverity::ERROR, lv_tr("Not connected to the printer"),
++                                      6000);
++        return;
++    }
++    spdlog::info("[ShutdownDialog] Kiln OS: machine reboot through Moonraker");
++    api->machine_reboot(
++        [api]() {
++            spdlog::info("[ShutdownDialog] Kiln OS: machine reboot accepted");
++            schedule_host_down_verification(api, /*is_reboot=*/true);
++        },
++        [](const MoonrakerError& err) {
++            spdlog::warn("[ShutdownDialog] Kiln OS: machine reboot refused ({}, {}): {}", err.code,
++                         err.kiln_reason(), err.message);
++            const std::string message = err.message;
++            helix::ui::queue_update("ShutdownDialog::kiln_reboot_refused", [message]() {
++                ToastManager::instance().show(
++                    ToastSeverity::ERROR,
++                    kiln_power_failure_message(message, /*is_reboot=*/true).c_str(), 8000);
++            });
++        });
++}
++
+ bool kiln_power_locked(bool kiln_host_power, bool job_holds_machine) {
+     return kiln_host_power && job_holds_machine;
+ }
+diff --git a/src/ui/panel_widgets/shutdown_widget.h b/src/ui/panel_widgets/shutdown_widget.h
+index 84cc4abd..0cf2d87d 100644
+--- a/src/ui/panel_widgets/shutdown_widget.h
++++ b/src/ui/panel_widgets/shutdown_widget.h
+@@ -109,6 +109,13 @@ ShutdownDialogPlan plan_power_dialog(bool kiln_host_power, bool api_connected,
+ /// "Shutdown failed" when the message is empty.
+ std::string kiln_power_failure_message(const std::string& err_message, bool is_reboot);
+ 
++/// Kiln OS: machine.reboot through Moonraker only, as the Kiln power dialog
++/// does, for a caller without that dialog (Settings > System > Extended
++/// memory's "Restart now?"). Not connected, or Kiln's update agent refuses:
++/// an error toast ("Not connected to the printer", kiln_power_failure_message()).
++/// Main thread.
++void request_kiln_reboot(IMoonrakerAPI* api);
++
+ /// Kiln OS: whether the power entries are greyed: on a Kiln build
+ /// (@p kiln_host_power) while a job holds the machine (@p job_holds_machine:
+ /// printing, paused or preparing), when Kiln's update agent refuses anyway. Pure.
+diff --git a/src/ui/ui_panel_notification_history.cpp b/src/ui/ui_panel_notification_history.cpp
+index 0e91ef65..fd4fbbb8 100644
+--- a/src/ui/ui_panel_notification_history.cpp
++++ b/src/ui/ui_panel_notification_history.cpp
+@@ -8,6 +8,7 @@
+ #include "ui_nav.h"
+ #include "ui_notification_manager.h"
+ #include "ui_panel_common.h"
++#include "ui_settings_kiln_memory.h"
+ #include "ui_subject_registry.h"
+ #include "ui_utils.h"
+ 
+@@ -22,6 +23,7 @@
+ #include <spdlog/fmt/fmt.h>
+ #include <spdlog/spdlog.h>
+ 
++#include <algorithm>
+ #include <cstring>
+ #include <map>
+ #include <memory>
+@@ -160,6 +162,12 @@ void NotificationHistoryPanel::refresh() {
+     }
+     lv_subject_set_int(&row_count_subject_, static_cast<int>(n));
+ 
++    // Kiln OS: the Extended memory notice was seen here (Kiln is told once)
++    if (std::find(row_actions_.begin(), row_actions_.end(), helix::kiln_memory::kNoticeAction) !=
++        row_actions_.end()) {
++        helix::kiln_memory::model().notice_seen();
++    }
++
+     // Mark all as read
+     history_.mark_all_read();
+ 
+@@ -220,6 +228,11 @@ void NotificationHistoryPanel::handle_history_version_change(int32_t version) {
+ }
+ 
+ void NotificationHistoryPanel::handle_clear_clicked() {
++    // Kiln OS: clearing the Extended memory notice counts as seeing it
++    if (std::find(row_actions_.begin(), row_actions_.end(), helix::kiln_memory::kNoticeAction) !=
++        row_actions_.end()) {
++        helix::kiln_memory::model().notice_seen();
++    }
+     history_.clear();
+     // clear() bumps the store revision; the manager publishes it on its next
+     // badge refresh. Record it now so that publish does not rebuild the list
+diff --git a/src/ui/ui_settings_kiln_memory.cpp b/src/ui/ui_settings_kiln_memory.cpp
+new file mode 100644
+index 00000000..b3f89a55
+--- /dev/null
++++ b/src/ui/ui_settings_kiln_memory.cpp
+@@ -0,0 +1,329 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include "ui_settings_kiln_memory.h"
++
++#include "ui_error_reporting.h"
++#include "ui_modal.h"
++#include "ui_notification.h"
++#include "ui_panel_notification_history.h"
++#include "ui_settings_kiln_recovery.h"
++#include "ui_settings_system.h"
++#include "ui_update_queue.h"
++
++#include "app_globals.h"
++#include "config.h"
++#include "i_moonraker_client.h"
++#include "json_utils.h"
++#include "lvgl/src/others/translation/lv_translation.h"
++#include "moonraker_error.h"
++#include "panel_widgets/shutdown_widget.h"
++#include "static_panel_registry.h"
++
++#include <spdlog/spdlog.h>
++
++namespace helix::kiln_memory {
++
++namespace {
++
++// The touch screen is the AD5X's own (HELIX_KILN_AD5X, set in
++// buildroot/package/helixscreen/helixscreen.mk); other builds have no
++// kiln_os component to ask.
++#if defined(HELIX_KILN_AD5X)
++constexpr bool kBuiltIn = true;
++#else
++constexpr bool kBuiltIn = false;
++#endif
++
++std::optional<bool> g_built_in_override;
++std::function<void()> g_restart_prompt_override;
++
++bool connected(const IMoonrakerClient* client) {
++    return client && client->get_connection_state() == ConnectionState::CONNECTED;
++}
++
++bool flag(const json& object, const char* key) {
++    const json* v = json_util::find_member(object, key);
++    return v && v->is_boolean() && v->get<bool>();
++}
++
++/// The config key that holds the failure last shown, so each one shows once
++std::string failure_shown_key() {
++    return Config::get_instance()->df() + "kiln/extended_memory_failure_shown";
++}
++
++/// Set @p subject, notifying also when the value is unchanged (a switch
++/// the user flipped shows its own state until its subject says otherwise).
++void set_and_notify(lv_subject_t* subject, int value) {
++    if (lv_subject_get_int(subject) == value) {
++        lv_subject_notify(subject);
++    } else {
++        lv_subject_set_int(subject, value);
++    }
++}
++
++} // namespace
++
++bool built_in() {
++    return g_built_in_override.value_or(kBuiltIn);
++}
++
++void set_built_in_for_test(std::optional<bool> value) {
++    g_built_in_override = value;
++}
++
++std::optional<State> parse_state(const json& result) {
++    if (!result.is_object() || !json_util::find_member(result, "available")) {
++        return std::nullopt;
++    }
++    State s;
++    s.available = flag(result, "available");
++    s.enabled = flag(result, "enabled");
++    const json* active = json_util::find_member(result, "active");
++    s.extended_active = active && active->is_string() && active->get<std::string>() == "extended";
++    s.restart_needed = flag(result, "restart_needed");
++    const json* failed = json_util::find_member(result, "failed");
++    if (failed && failed->is_string()) {
++        s.failed = failed->get<std::string>();
++    }
++    s.notice_pending = flag(result, "notice_pending");
++    s.bootloader_update_needed = flag(result, "bootloader_update_needed");
++    return s;
++}
++
++bool shows_enabled(const State& state) {
++    return state.available && state.enabled && state.failed.empty();
++}
++
++bool shows_pending(const State& state) {
++    return state.available && state.restart_needed && !state.bootloader_update_needed &&
++           state.failed.empty();
++}
++
++bool shows_bootloader_update(const State& state) {
++    return state.available && state.bootloader_update_needed;
++}
++
++bool offers_restart(const State& state) {
++    // Kiln says no restart is needed then too; a restart wouldn't change it
++    return state.restart_needed && !state.bootloader_update_needed;
++}
++
++MemoryModel::~MemoryModel() {
++    lifetime_.invalidate();
++    subjects_.deinit_all();
++}
++
++void MemoryModel::init_subjects() {
++    if (subjects_initialized_) {
++        return;
++    }
++    UI_MANAGED_SUBJECT_INT(available_, 0, "kiln_extended_memory_available", subjects_);
++    UI_MANAGED_SUBJECT_INT(enabled_, 0, "kiln_extended_memory_enabled", subjects_);
++    UI_MANAGED_SUBJECT_INT(pending_, 0, "kiln_extended_memory_pending", subjects_);
++    UI_MANAGED_SUBJECT_INT(failed_, 0, "kiln_extended_memory_failed", subjects_);
++    UI_MANAGED_SUBJECT_INT(bootloader_, 0, "kiln_extended_memory_bootloader", subjects_);
++    subjects_initialized_ = true;
++    // An answer that came before Settings > System was first opened
++    publish();
++}
++
++void MemoryModel::publish() {
++    if (!subjects_initialized_) {
++        return;
++    }
++    const State s = state_.value_or(State{});
++    lv_subject_set_int(&available_, s.available ? 1 : 0);
++    if (!busy_) {
++        // While a change is on its way the switch shows it; the answer decides
++        set_and_notify(&enabled_, shows_enabled(s) ? 1 : 0);
++    }
++    lv_subject_set_int(&pending_, shows_pending(s) ? 1 : 0);
++    lv_subject_set_int(&failed_, s.available && !s.failed.empty() ? 1 : 0);
++    lv_subject_set_int(&bootloader_, shows_bootloader_update(s) ? 1 : 0);
++}
++
++IMoonrakerClient* MemoryModel::client() const {
++    IMoonrakerClient* c = client_override_ ? client_override_ : get_moonraker_client();
++    return connected(c) ? c : nullptr;
++}
++
++void MemoryModel::fetch() {
++    IMoonrakerClient* c = built_in() ? client() : nullptr;
++    if (!c) {
++        return;
++    }
++    const auto token = lifetime_.token();
++    c->send_jsonrpc(
++        kGetMethod, json::object(),
++        [this, token](const json& response) {
++            const json* result = json_util::find_member(response, "result");
++            std::optional<State> s = result ? parse_state(*result) : std::nullopt;
++            if (!s) {
++                spdlog::debug("[Kiln memory] Unexpected answer to {}", kGetMethod);
++                return;
++            }
++            token.defer("kiln_memory::state", [this, state = *s]() { apply(state); });
++        },
++        [](const MoonrakerError& err) {
++            // A Kiln OS without extended memory has no such method
++            spdlog::debug("[Kiln memory] {} failed: {}", kGetMethod, err.message);
++        },
++        0, /*silent=*/true);
++}
++
++void MemoryModel::set_enabled(bool on) {
++    if (busy_) {
++        // One change at a time: the switch keeps showing the one on its way
++        if (subjects_initialized_) {
++            lv_subject_notify(&enabled_);
++        }
++        return;
++    }
++    if (!state_ || !state_->available) {
++        // None before Kiln has said the board has 512 MiB
++        publish();
++        return;
++    }
++    IMoonrakerClient* c = client();
++    if (!c) {
++        NOTIFY_WARNING("{}", lv_tr("Not connected to the printer"));
++        publish();
++        return;
++    }
++    spdlog::info("[Kiln memory] Extended memory {}", on ? "on" : "off");
++    busy_ = true;
++    if (subjects_initialized_) {
++        lv_subject_set_int(&enabled_, on ? 1 : 0);
++    }
++    const auto token = lifetime_.token();
++    c->send_jsonrpc(
++        kSetMethod, json{{"enable", on}},
++        [this, token](const json& response) {
++            const json* result = json_util::find_member(response, "result");
++            std::optional<State> s = result ? parse_state(*result) : std::nullopt;
++            token.defer("kiln_memory::set_done", [this, s]() {
++                busy_ = false;
++                if (!s) {
++                    spdlog::warn("[Kiln memory] Unexpected answer to {}", kSetMethod);
++                    NOTIFY_WARNING("{}", lv_tr("Failed"));
++                    publish();
++                    return;
++                }
++                apply(*s);
++                if (offers_restart(*s)) {
++                    if (g_restart_prompt_override) {
++                        g_restart_prompt_override();
++                    } else {
++                        prompt_restart();
++                    }
++                }
++            });
++        },
++        [this, token](const MoonrakerError& err) {
++            spdlog::warn("[Kiln memory] Refused ({}, {}): {}", err.code, err.kiln_reason(),
++                         err.message);
++            const std::string text = helix::kiln_recovery::refusal_text(err.message);
++            token.defer("kiln_memory::set_refused", [this, text]() {
++                busy_ = false;
++                NOTIFY_WARNING("{}", text.empty() ? std::string(lv_tr("Failed")) : text);
++                publish();
++            });
++        },
++        kTimeoutMs, /*silent=*/true);
++}
++
++void MemoryModel::apply(const State& state) {
++    state_ = state;
++    publish();
++    if (!state.available) {
++        return;
++    }
++    // A notice for a mode that can't work before a boot loader update: none
++    if (state.notice_pending && !state.bootloader_update_needed && !notice_posted_) {
++        post_notice();
++    }
++    if (!state.failed.empty()) {
++        show_failure(state.failed);
++    }
++}
++
++void MemoryModel::post_notice() {
++    notice_posted_ = true;
++    helix::ui::set_notification_action_handler(kNoticeAction,
++                                               [](const std::string&) { open_system_settings(); });
++    ui_notification_info_with_action(
++        lv_tr("Extended memory available"),
++        lv_tr("This printer has 512 MiB of memory. Kiln OS uses 256 MiB by default, the same on "
++              "every AD5X. You can switch Extended memory on in Settings > System. It isn't "
++              "needed; it is off by default."),
++        kNoticeAction);
++}
++
++void MemoryModel::show_failure(const std::string& failed) {
++    // Kiln's failure record is one line, the reason and the date: a new
++    // failure is a new text
++    Config* cfg = Config::get_instance();
++    if (cfg && cfg->get<std::string>(failure_shown_key(), "") == failed) {
++        return;
++    }
++    spdlog::warn("[Kiln memory] A start with extended memory failed: {}", failed);
++    NOTIFY_WARNING("{}", lv_tr("Extended memory was turned off: the printer didn't finish "
++                               "starting with it."));
++    if (cfg) {
++        cfg->set<std::string>(failure_shown_key(), failed);
++        cfg->save();
++    }
++}
++
++void MemoryModel::notice_seen() {
++    if (!notice_posted_ || seen_sent_) {
++        return;
++    }
++    IMoonrakerClient* c = client();
++    if (!c) {
++        return;
++    }
++    seen_sent_ = true;
++    spdlog::info("[Kiln memory] Notice seen");
++    const auto token = lifetime_.token();
++    c->send_jsonrpc(
++        kNoticeSeenMethod, json::object(), [](const json&) {},
++        [this, token](const MoonrakerError& err) {
++            spdlog::warn("[Kiln memory] {} failed: {}", kNoticeSeenMethod, err.message);
++            // The next opening of the bell tries again
++            token.defer("kiln_memory::seen_failed", [this]() { seen_sent_ = false; });
++        },
++        0, /*silent=*/true);
++}
++
++void MemoryModel::reset_for_test() {
++    lifetime_.invalidate();
++    state_.reset();
++    busy_ = false;
++    notice_posted_ = false;
++    seen_sent_ = false;
++    publish();
++}
++
++MemoryModel& model() {
++    return helix::lazy_global<MemoryModel>("KilnMemoryModel");
++}
++
++void prompt_restart() {
++    helix::ui::ConfirmOptions options;
++    options.cancel_text = lv_tr("Later");
++    helix::ui::modal_confirm(
++        lv_tr("Restart now?"), lv_tr("Extended memory changes at the next start."),
++        ModalSeverity::Info, lv_tr("Restart"),
++        [] { helix::request_kiln_reboot(get_moonraker_api()); }, options);
++}
++
++void set_restart_prompt_for_test(std::function<void()> prompt) {
++    g_restart_prompt_override = std::move(prompt);
++}
++
++void open_system_settings() {
++    helix::settings::get_system_settings_overlay().show(lv_display_get_screen_active(nullptr));
++}
++
++} // namespace helix::kiln_memory
+diff --git a/src/ui/ui_settings_system.cpp b/src/ui/ui_settings_system.cpp
+index 214c248f..81d8cff7 100644
+--- a/src/ui/ui_settings_system.cpp
++++ b/src/ui/ui_settings_system.cpp
+@@ -8,6 +8,7 @@
+ #include "ui_overlay_performance.h"
+ #include "ui_panel_common.h"
+ #include "ui_settings_ad5x_log.h"
++#include "ui_settings_kiln_memory.h"
+ #include "ui_settings_kiln_recovery.h"
+ #include "ui_settings_security.h"
+ #include "ui_settings_storage.h"
+@@ -40,6 +41,8 @@ void SystemSettingsOverlay::init_subjects() {
+     // Kiln OS: Boot into recovery and Return to Flashforge firmware show on the
+     // AD5X build only
+     helix::kiln_recovery::row().init_subjects();
++    // Kiln OS: Extended memory shows where the board has 512 MiB
++    helix::kiln_memory::model().init_subjects();
+ }
+ 
+ void SystemSettingsOverlay::register_callbacks() {
+@@ -89,6 +92,11 @@ void SystemSettingsOverlay::register_callbacks() {
+         // back (machine.kiln_os.return_stock)
+         {"on_kiln_return_stock_clicked",
+          [](lv_event_t*) { helix::kiln_recovery::confirm_and_request_return_stock(); }},
++        // Kiln OS: all 512 MiB from the next start (machine.kiln_os.post_memory)
++        {"on_kiln_extended_memory_changed",
++         [](lv_event_t* e) {
++             helix::kiln_memory::model().set_enabled(helix::ui::event_checked(e));
++         }},
+         {"on_factory_reset_clicked",
+          [](lv_event_t*) { get_system_settings_overlay().handle_factory_reset_clicked(); }},
+         {"on_factory_reset_confirm",
+diff --git a/tests/unit/test_settings_kiln_memory.cpp b/tests/unit/test_settings_kiln_memory.cpp
+new file mode 100644
+index 00000000..0d235971
+--- /dev/null
++++ b/tests/unit/test_settings_kiln_memory.cpp
+@@ -0,0 +1,457 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//
++// Kiln OS: Settings > System > Extended memory. Moonraker's kiln_os component
++// answers machine.kiln_os.get_memory and machine.kiln_os.post_memory with
++// {available, enabled, active, restart_needed, failed, notice_pending,
++// bootloader_update_needed, hw_mem_mib, mem_kb};
++// machine.kiln_os.memory_notice_seen marks the one-time notice seen. A refusal is an error with "[reason] text" as the message.
++
++#include "ui_notification_history.h"
++#include "ui_panel_notification_history.h"
++#include "ui_settings_kiln_memory.h"
++#include "ui_update_queue.h"
++
++#include "../fake_moonraker_client.h"
++#include "../lvgl_ui_test_fixture.h"
++#include "config.h"
++#include "helix-xml/src/xml/lv_xml.h"
++#include "moonraker_error.h"
++
++#include <cstring>
++#include <string>
++
++#include "../catch_amalgamated.hpp"
++
++using helix::test::FakeMoonrakerClient;
++using nlohmann::json;
++namespace memory = helix::kiln_memory;
++
++namespace {
++
++/// Kiln's memory object
++json memory_object(bool enabled, const char* active, bool restart_needed,
++                   json failed = nullptr, bool notice_pending = false, bool available = true) {
++    return json{{"available", available},
++                {"enabled", enabled},
++                {"active", active},
++                {"restart_needed", restart_needed},
++                {"failed", failed},
++                {"notice_pending", notice_pending},
++                {"hw_mem_mib", available ? 512 : 256},
++                {"mem_kb", 245000}};
++}
++
++/// The same from an older Kiln boot loader that can't choose the mode: Kiln
++/// says a boot loader update is needed, no restart and no notice
++json old_bootloader(json object) {
++    object["bootloader_update_needed"] = true;
++    object["restart_needed"] = false;
++    object["notice_pending"] = false;
++    return object;
++}
++
++json rpc_result(const json& result) {
++    return json{{"jsonrpc", "2.0"}, {"result", result}};
++}
++
++int subject(const char* name) {
++    lv_subject_t* s = lv_xml_get_subject(nullptr, name);
++    REQUIRE(s != nullptr);
++    return lv_subject_get_int(s);
++}
++
++size_t entries_with_action(const char* action) {
++    size_t n = 0;
++    for (const auto& e : NotificationHistory::instance().get_all()) {
++        if (std::strcmp(e.action, action) == 0) {
++            ++n;
++        }
++    }
++    return n;
++}
++
++struct KilnMemoryFixture : LVGLUITestFixture {
++    FakeMoonrakerClient client;
++    int prompts = 0;
++
++    KilnMemoryFixture() {
++        memory::set_built_in_for_test(true);
++        memory::set_restart_prompt_for_test([this] { ++prompts; });
++        memory::model().init_subjects();
++        memory::model().set_client_for_test(&client);
++        memory::model().reset_for_test();
++        NotificationHistory::instance().clear();
++    }
++
++    ~KilnMemoryFixture() override {
++        memory::model().reset_for_test();
++        memory::model().set_client_for_test(nullptr);
++        memory::set_restart_prompt_for_test(nullptr);
++        memory::set_built_in_for_test(std::nullopt);
++        NotificationHistory::instance().clear();
++        drain();
++    }
++
++    static void drain() {
++        helix::ui::UpdateQueue::instance().drain();
++    }
++
++    /// Fetch and answer with @p result
++    void fetched(const json& result) {
++        client.rpc_calls.clear();
++        memory::model().fetch();
++        REQUIRE(client.rpc_calls.size() == 1);
++        CHECK(client.rpc_calls[0].method == memory::kGetMethod);
++        client.rpc_calls[0].success_cb(rpc_result(result));
++        // The answer is applied on the main thread, through the queue
++        drain();
++        client.rpc_calls.clear();
++    }
++};
++
++} // namespace
++
++TEST_CASE("Kiln memory: Kiln's object is read field by field", "[kiln][kiln_memory]") {
++    const auto s = memory::parse_state(memory_object(true, "extended", false, "no start, 2026-11-17"));
++    REQUIRE(s.has_value());
++    CHECK(s->available);
++    CHECK(s->enabled);
++    CHECK(s->extended_active);
++    CHECK_FALSE(s->restart_needed);
++    CHECK(s->failed == "no start, 2026-11-17");
++    CHECK_FALSE(s->notice_pending);
++    CHECK_FALSE(s->bootloader_update_needed);
++
++    const auto old = memory::parse_state(old_bootloader(memory_object(false, "extended", true)));
++    REQUIRE(old.has_value());
++    CHECK(old->bootloader_update_needed);
++    CHECK_FALSE(old->restart_needed);
++
++    const auto standard = memory::parse_state(memory_object(false, "standard", false, nullptr, true));
++    REQUIRE(standard.has_value());
++    CHECK_FALSE(standard->extended_active);
++    CHECK(standard->failed.empty());
++    CHECK(standard->notice_pending);
++
++    // Not the memory object
++    CHECK_FALSE(memory::parse_state(json::object()).has_value());
++    CHECK_FALSE(memory::parse_state(json::array()).has_value());
++    CHECK_FALSE(memory::parse_state(json{{"state", "rebooting"}}).has_value());
++    // A field that isn't there reads as off
++    const auto bare = memory::parse_state(json{{"available", true}});
++    REQUIRE(bare.has_value());
++    CHECK_FALSE(bare->enabled);
++    CHECK_FALSE(bare->restart_needed);
++    CHECK_FALSE(bare->bootloader_update_needed);
++}
++
++TEST_CASE("Kiln memory: the switch and the pending line", "[kiln][kiln_memory]") {
++    memory::State s;
++    s.available = true;
++    s.enabled = true;
++    s.restart_needed = true;
++    CHECK(memory::shows_enabled(s));
++    CHECK(memory::shows_pending(s));
++
++    // A failed start turned it off: the switch shows off, nothing is pending
++    s.failed = "no start";
++    CHECK_FALSE(memory::shows_enabled(s));
++    CHECK_FALSE(memory::shows_pending(s));
++
++    // A 256 MiB board: nothing
++    memory::State small;
++    small.enabled = true;
++    small.restart_needed = true;
++    CHECK_FALSE(memory::shows_enabled(small));
++    CHECK_FALSE(memory::shows_pending(small));
++}
++
++TEST_CASE("Kiln memory: a boot loader update instead of a restart", "[kiln][kiln_memory]") {
++    memory::State s;
++    s.available = true;
++    s.enabled = true;
++    s.restart_needed = true;
++    CHECK(memory::offers_restart(s));
++    CHECK_FALSE(memory::shows_bootloader_update(s));
++
++    // Even if Kiln said a restart is needed, a restart wouldn't change it
++    s.bootloader_update_needed = true;
++    CHECK(memory::shows_bootloader_update(s));
++    CHECK_FALSE(memory::shows_pending(s));
++    CHECK_FALSE(memory::offers_restart(s));
++    // The switch still shows the choice
++    CHECK(memory::shows_enabled(s));
++
++    // A 256 MiB board: nothing
++    memory::State small;
++    small.bootloader_update_needed = true;
++    CHECK_FALSE(memory::shows_bootloader_update(small));
++}
++
++TEST_CASE_METHOD(KilnMemoryFixture, "Kiln memory: the fetch fills the row's subjects",
++                 "[kiln][kiln_memory]") {
++    CHECK(subject("kiln_extended_memory_available") == 0);
++
++    fetched(memory_object(true, "standard", true));
++    CHECK(subject("kiln_extended_memory_available") == 1);
++    CHECK(subject("kiln_extended_memory_enabled") == 1);
++    CHECK(subject("kiln_extended_memory_pending") == 1);
++    CHECK(subject("kiln_extended_memory_failed") == 0);
++
++    fetched(memory_object(true, "extended", false));
++    CHECK(subject("kiln_extended_memory_pending") == 0);
++
++    CHECK(subject("kiln_extended_memory_bootloader") == 0);
++
++    // An older Kiln boot loader: the boot loader subtitle, nothing pending
++    fetched(old_bootloader(memory_object(false, "extended", true)));
++    CHECK(subject("kiln_extended_memory_available") == 1);
++    CHECK(subject("kiln_extended_memory_bootloader") == 1);
++    CHECK(subject("kiln_extended_memory_pending") == 0);
++
++    // A 256 MiB board hides the row
++    fetched(memory_object(false, "standard", false, nullptr, false, /*available=*/false));
++    CHECK(subject("kiln_extended_memory_available") == 0);
++    CHECK(subject("kiln_extended_memory_bootloader") == 0);
++}
++
++TEST_CASE_METHOD(KilnMemoryFixture,
++                 "Kiln memory: with an older boot loader the switch posts, no restart is offered",
++                 "[kiln][kiln_memory]") {
++    fetched(old_bootloader(memory_object(false, "extended", false)));
++
++    memory::model().set_enabled(true);
++    REQUIRE(client.rpc_calls.size() == 1);
++    CHECK(client.rpc_calls[0].method == memory::kSetMethod);
++    CHECK(client.rpc_calls[0].params == json{{"enable", true}});
++    client.rpc_calls[0].success_cb(rpc_result(old_bootloader(memory_object(true, "extended", false))));
++    drain();
++    CHECK(subject("kiln_extended_memory_enabled") == 1);
++    CHECK(subject("kiln_extended_memory_bootloader") == 1);
++    CHECK(subject("kiln_extended_memory_pending") == 0);
++    CHECK(prompts == 0);
++
++    // Even an answer that says a restart is needed: not offered
++    memory::model().set_enabled(false);
++    REQUIRE(client.rpc_calls.size() == 2);
++    json answer = old_bootloader(memory_object(false, "extended", false));
++    answer["restart_needed"] = true;
++    client.rpc_calls[1].success_cb(rpc_result(answer));
++    drain();
++    CHECK(subject("kiln_extended_memory_enabled") == 0);
++    CHECK(subject("kiln_extended_memory_pending") == 0);
++    CHECK(prompts == 0);
++}
++
++TEST_CASE_METHOD(KilnMemoryFixture, "Kiln memory: no notice while a boot loader update is needed",
++                 "[kiln][kiln_memory]") {
++    json object = old_bootloader(memory_object(false, "standard", false));
++    object["notice_pending"] = true;
++    fetched(object);
++    CHECK_FALSE(memory::model().notice_posted());
++    CHECK(entries_with_action(memory::kNoticeAction) == 0);
++}
++
++TEST_CASE_METHOD(KilnMemoryFixture, "Kiln memory: nothing is asked off a Kiln build",
++                 "[kiln][kiln_memory]") {
++    memory::set_built_in_for_test(false);
++    memory::model().fetch();
++    CHECK(client.rpc_calls.empty());
++
++    // Nor without a connection
++    memory::set_built_in_for_test(true);
++    client.connection_state = helix::ConnectionState::DISCONNECTED;
++    memory::model().fetch();
++    CHECK(client.rpc_calls.empty());
++}
++
++TEST_CASE_METHOD(KilnMemoryFixture, "Kiln memory: an old Kiln without the method leaves it hidden",
++                 "[kiln][kiln_memory]") {
++    memory::model().fetch();
++    REQUIRE(client.rpc_calls.size() == 1);
++    client.rpc_calls[0].error_cb(MoonrakerError::from_json_rpc(
++        {{"code", -32601}, {"message", "Method not found"}}, memory::kGetMethod));
++    drain();
++    CHECK(subject("kiln_extended_memory_available") == 0);
++    CHECK_FALSE(memory::model().state().has_value());
++}
++
++TEST_CASE_METHOD(KilnMemoryFixture, "Kiln memory: switching on posts it and offers the restart",
++                 "[kiln][kiln_memory]") {
++    fetched(memory_object(false, "standard", false));
++
++    memory::model().set_enabled(true);
++    REQUIRE(client.rpc_calls.size() == 1);
++    const auto& call = client.rpc_calls[0];
++    CHECK(call.method == memory::kSetMethod);
++    CHECK(call.params == json{{"enable", true}});
++    CHECK(call.timeout_ms == memory::kTimeoutMs);
++    CHECK(memory::model().busy());
++    CHECK(subject("kiln_extended_memory_enabled") == 1);
++
++    // A second tap while the first is on its way sends nothing
++    memory::model().set_enabled(false);
++    CHECK(client.rpc_calls.size() == 1);
++
++    call.success_cb(rpc_result(memory_object(true, "standard", true)));
++    drain();
++    CHECK_FALSE(memory::model().busy());
++    CHECK(subject("kiln_extended_memory_enabled") == 1);
++    CHECK(subject("kiln_extended_memory_pending") == 1);
++    CHECK(prompts == 1);
++}
++
++TEST_CASE_METHOD(KilnMemoryFixture,
++                 "Kiln memory: a fetch while a change is on its way keeps the switch",
++                 "[kiln][kiln_memory]") {
++    fetched(memory_object(false, "standard", false));
++
++    memory::model().set_enabled(true);
++    REQUIRE(client.rpc_calls.size() == 1);
++    // A reconnect's fetch answers with the state from before the change
++    memory::model().fetch();
++    REQUIRE(client.rpc_calls.size() == 2);
++    client.rpc_calls[1].success_cb(rpc_result(memory_object(false, "standard", false)));
++    drain();
++    CHECK(subject("kiln_extended_memory_enabled") == 1);
++
++    client.rpc_calls[0].success_cb(rpc_result(memory_object(true, "standard", true)));
++    drain();
++    CHECK(subject("kiln_extended_memory_enabled") == 1);
++    CHECK(prompts == 1);
++}
++
++TEST_CASE_METHOD(KilnMemoryFixture, "Kiln memory: switching back needs no restart",
++                 "[kiln][kiln_memory]") {
++    fetched(memory_object(true, "standard", true));
++
++    memory::model().set_enabled(false);
++    REQUIRE(client.rpc_calls.size() == 1);
++    CHECK(client.rpc_calls[0].params == json{{"enable", false}});
++    client.rpc_calls[0].success_cb(rpc_result(memory_object(false, "standard", false)));
++    drain();
++    CHECK(subject("kiln_extended_memory_enabled") == 0);
++    CHECK(subject("kiln_extended_memory_pending") == 0);
++    CHECK(prompts == 0);
++}
++
++TEST_CASE_METHOD(KilnMemoryFixture, "Kiln memory: a refusal puts the switch back",
++                 "[kiln][kiln_memory]") {
++    fetched(memory_object(false, "standard", false));
++
++    memory::model().set_enabled(true);
++    REQUIRE(client.rpc_calls.size() == 1);
++    CHECK(subject("kiln_extended_memory_enabled") == 1);
++    client.rpc_calls[0].error_cb(MoonrakerError::from_json_rpc(
++        {{"code", 409},
++         {"message", "[not_available] This printer has 256 MiB"},
++         {"data", {{"reason", "not_available"}}}},
++        memory::kSetMethod));
++    drain();
++    CHECK_FALSE(memory::model().busy());
++    CHECK(subject("kiln_extended_memory_enabled") == 0);
++    CHECK(prompts == 0);
++}
++
++TEST_CASE_METHOD(KilnMemoryFixture, "Kiln memory: no change before Kiln has answered",
++                 "[kiln][kiln_memory]") {
++    memory::model().set_enabled(true);
++    CHECK(client.rpc_calls.empty());
++
++    fetched(memory_object(false, "standard", false, nullptr, false, /*available=*/false));
++    memory::model().set_enabled(true);
++    CHECK(client.rpc_calls.empty());
++}
++
++TEST_CASE_METHOD(KilnMemoryFixture, "Kiln memory: the notice goes under the bell once",
++                 "[kiln][kiln_memory]") {
++    fetched(memory_object(false, "standard", false, nullptr, /*notice_pending=*/true));
++    CHECK(memory::model().notice_posted());
++    CHECK(entries_with_action(memory::kNoticeAction) == 1);
++    // Its tap has a handler: it opens Settings > System
++    CHECK(static_cast<bool>(helix::ui::notification_action_handler(memory::kNoticeAction)));
++
++    // The next run of the discovery sequence (a Klipper restart) adds none
++    fetched(memory_object(false, "standard", false, nullptr, true));
++    CHECK(entries_with_action(memory::kNoticeAction) == 1);
++
++    // Seen: Kiln is told once
++    memory::model().notice_seen();
++    REQUIRE(client.rpc_calls.size() == 1);
++    CHECK(client.rpc_calls[0].method == memory::kNoticeSeenMethod);
++    memory::model().notice_seen();
++    CHECK(client.rpc_calls.size() == 1);
++}
++
++TEST_CASE_METHOD(KilnMemoryFixture, "Kiln memory: a failed seen is sent again",
++                 "[kiln][kiln_memory]") {
++    fetched(memory_object(false, "standard", false, nullptr, true));
++    memory::model().notice_seen();
++    REQUIRE(client.rpc_calls.size() == 1);
++    client.rpc_calls[0].error_cb(MoonrakerError::from_json_rpc(
++        {{"code", 503}, {"message", "Database unavailable"}}, memory::kNoticeSeenMethod));
++    drain();
++    memory::model().notice_seen();
++    CHECK(client.rpc_calls.size() == 2);
++}
++
++TEST_CASE_METHOD(KilnMemoryFixture, "Kiln memory: no notice when none is due or seen is unasked",
++                 "[kiln][kiln_memory]") {
++    // Nothing posted: nothing to mark seen
++    memory::model().notice_seen();
++    CHECK(client.rpc_calls.empty());
++
++    fetched(memory_object(true, "extended", false, nullptr, /*notice_pending=*/false));
++    CHECK_FALSE(memory::model().notice_posted());
++    CHECK(entries_with_action(memory::kNoticeAction) == 0);
++
++    // A 256 MiB board never gets one
++    fetched(memory_object(false, "standard", false, nullptr, true, /*available=*/false));
++    CHECK_FALSE(memory::model().notice_posted());
++}
++
++TEST_CASE_METHOD(KilnMemoryFixture, "Kiln memory: a failed start is shown once per failure",
++                 "[kiln][kiln_memory]") {
++    Config* cfg = Config::get_instance();
++    REQUIRE(cfg != nullptr);
++    const std::string key = cfg->df() + "kiln/extended_memory_failure_shown";
++    cfg->set<std::string>(key, "");
++
++    fetched(memory_object(true, "standard", true, "no start, 2026-11-17 10:00"));
++    CHECK(subject("kiln_extended_memory_failed") == 1);
++    CHECK(subject("kiln_extended_memory_enabled") == 0);
++    CHECK(subject("kiln_extended_memory_pending") == 0);
++    CHECK(cfg->get<std::string>(key, "") == "no start, 2026-11-17 10:00");
++    const size_t shown = NotificationHistory::instance().get_all().size();
++
++    // The same failure on the next start: not again
++    fetched(memory_object(true, "standard", true, "no start, 2026-11-17 10:00"));
++    CHECK(NotificationHistory::instance().get_all().size() == shown);
++
++    // A new one is
++    fetched(memory_object(true, "standard", true, "no start, 2026-11-18 09:00"));
++    CHECK(cfg->get<std::string>(key, "") == "no start, 2026-11-18 09:00");
++
++    cfg->set<std::string>(key, "");
++}
++
++TEST_CASE_METHOD(KilnMemoryFixture, "Kiln memory: opening the bell marks the notice seen",
++                 "[kiln][kiln_memory][notification_history]") {
++    fetched(memory_object(false, "standard", false, nullptr, true));
++    REQUIRE(entries_with_action(memory::kNoticeAction) == 1);
++
++    auto panel = std::make_unique<NotificationHistoryPanel>(state(), nullptr);
++    panel->init_subjects();
++    auto* root = static_cast<lv_obj_t*>(
++        lv_xml_create(lv_screen_active(), "notification_history_panel", nullptr));
++    REQUIRE(root != nullptr);
++    panel->setup(root, lv_screen_active());
++
++    REQUIRE(client.rpc_calls.size() == 1);
++    CHECK(client.rpc_calls[0].method == memory::kNoticeSeenMethod);
++
++    lv_obj_delete(root);
++    drain();
++    panel.reset();
++    drain();
++}
+diff --git a/tests/unit/test_settings_system_callbacks.cpp b/tests/unit/test_settings_system_callbacks.cpp
+index 37c810c0..550499ad 100644
+--- a/tests/unit/test_settings_system_callbacks.cpp
++++ b/tests/unit/test_settings_system_callbacks.cpp
+@@ -7,12 +7,16 @@
+ // way the overlay does (callbacks registered, then the XML) and drive each row.
+ 
+ #include "ui_panel_settings.h"
++#include "ui_settings_kiln_memory.h"
+ #include "ui_settings_kiln_recovery.h"
+ #include "ui_settings_system.h"
+ #include "ui_update_queue.h"
+ 
++#include "../../src/ui/panel_widgets/shutdown_widget.h"
++#include "../fake_moonraker_client.h"
+ #include "../lvgl_ui_test_fixture.h"
+ #include "helix-xml/src/xml/lv_xml.h"
++#include "config.h"
+ #include "settings_manager.h"
+ #include "system_settings_manager.h"
+ 
+@@ -26,6 +30,10 @@ struct SystemCallbacksFixture : LVGLUITestFixture {
+     SystemCallbacksFixture() {
+         SettingsManager::instance().init_subjects();
+         get_global_settings_panel().init_subjects();
++        // Kiln OS: Extended memory greys with kiln_power_locked, made before
++        // any panel XML in the app (SubjectInitializer)
++        helix::deinit_kiln_power_lock_subject();
++        helix::init_kiln_power_lock_subject(state(), /*register_xml=*/true);
+         helix::settings::get_system_settings_overlay().init_subjects();
+         helix::settings::get_system_settings_overlay().register_callbacks();
+         root_ = static_cast<lv_obj_t*>(
+@@ -39,6 +47,7 @@ struct SystemCallbacksFixture : LVGLUITestFixture {
+             lv_obj_delete(root_);
+         }
+         helix::ui::UpdateQueue::instance().drain();
++        helix::deinit_kiln_power_lock_subject();
+         get_global_settings_panel().deinit_subjects();
+         helix::ui::UpdateQueue::instance().drain();
+     }
+@@ -213,3 +222,126 @@ TEST_CASE_METHOD(SystemCallbacksFixture,
+     lv_subject_set_int(available, available_before);
+     process_lvgl(5);
+ }
++
++// Kiln OS: Extended memory shows where Kiln says the board has 512 MiB
++// (kiln_extended_memory_available), greys while a job holds the machine
++// (kiln_power_locked), and its switch posts the change.
++TEST_CASE_METHOD(SystemCallbacksFixture,
++                 "System page: Extended memory shows on 512 MiB boards and posts the switch",
++                 "[settings][system_callbacks][kiln]") {
++    namespace memory = helix::kiln_memory;
++    helix::test::FakeMoonrakerClient client;
++    memory::set_built_in_for_test(true);
++    memory::set_restart_prompt_for_test([] {});
++    memory::model().set_client_for_test(&client);
++    memory::model().reset_for_test();
++    process_lvgl(5);
++
++    lv_obj_t* container = lv_obj_find_by_name(root_, "container_kiln_extended_memory");
++    REQUIRE(container != nullptr);
++    lv_obj_t* pending = lv_obj_find_by_name(root_, "kiln_extended_memory_pending");
++    REQUIRE(pending != nullptr);
++    lv_obj_t* failed = lv_obj_find_by_name(root_, "kiln_extended_memory_failed");
++    REQUIRE(failed != nullptr);
++    lv_obj_t* toggle = part("row_kiln_extended_memory", "toggle");
++    lv_obj_t* row = lv_obj_find_by_name(root_, "row_kiln_extended_memory");
++    REQUIRE(row != nullptr);
++    lv_obj_t* row_bootloader = lv_obj_find_by_name(root_, "row_kiln_extended_memory_bootloader");
++    REQUIRE(row_bootloader != nullptr);
++    lv_obj_t* toggle_bootloader = part("row_kiln_extended_memory_bootloader", "toggle");
++
++    // Before Kiln answers (and on every other build): hidden
++    CHECK(lv_obj_has_flag(container, LV_OBJ_FLAG_HIDDEN));
++
++    memory::State s;
++    s.available = true;
++    memory::model().apply(s);
++    process_lvgl(5);
++    CHECK_FALSE(lv_obj_has_flag(container, LV_OBJ_FLAG_HIDDEN));
++    CHECK(lv_obj_has_flag(pending, LV_OBJ_FLAG_HIDDEN));
++    CHECK(lv_obj_has_flag(failed, LV_OBJ_FLAG_HIDDEN));
++    CHECK_FALSE(lv_obj_has_state(toggle, LV_STATE_CHECKED));
++    // The usual subtitle; the boot loader one only where it is needed
++    CHECK_FALSE(lv_obj_has_flag(row, LV_OBJ_FLAG_HIDDEN));
++    CHECK(lv_obj_has_flag(row_bootloader, LV_OBJ_FLAG_HIDDEN));
++
++    // Greyed while a job holds the machine
++    lv_subject_t* locked = lv_xml_get_subject(nullptr, "kiln_power_locked");
++    REQUIRE(locked != nullptr);
++    lv_subject_set_int(locked, 1);
++    process_lvgl(5);
++    CHECK(lv_obj_has_state(toggle, LV_STATE_DISABLED));
++    lv_subject_set_int(locked, 0);
++    process_lvgl(5);
++    CHECK_FALSE(lv_obj_has_state(toggle, LV_STATE_DISABLED));
++
++    // The switch posts the change
++    lv_obj_add_state(toggle, LV_STATE_CHECKED);
++    lv_obj_send_event(toggle, LV_EVENT_VALUE_CHANGED, nullptr);
++    REQUIRE(client.rpc_calls.size() == 1);
++    CHECK(client.rpc_calls[0].method == memory::kSetMethod);
++    CHECK(client.rpc_calls[0].params == nlohmann::json{{"enable", true}});
++
++    // Kiln's answer: on from the next start
++    s.enabled = true;
++    s.restart_needed = true;
++    client.rpc_calls[0].success_cb(nlohmann::json{
++        {"jsonrpc", "2.0"},
++        {"result",
++         {{"available", true},
++          {"enabled", true},
++          {"active", "standard"},
++          {"restart_needed", true},
++          {"failed", nullptr},
++          {"notice_pending", false}}}});
++    helix::ui::UpdateQueue::instance().drain();
++    process_lvgl(5);
++    CHECK(lv_obj_has_state(toggle, LV_STATE_CHECKED));
++    CHECK_FALSE(lv_obj_has_flag(pending, LV_OBJ_FLAG_HIDDEN));
++
++    // A start with it failed: the failure shows instead, the switch is off
++    s.failed = "no start, 2026-11-17";
++    memory::model().apply(s);
++    process_lvgl(5);
++    CHECK_FALSE(lv_obj_has_flag(failed, LV_OBJ_FLAG_HIDDEN));
++    CHECK(lv_obj_has_flag(pending, LV_OBJ_FLAG_HIDDEN));
++    CHECK_FALSE(lv_obj_has_state(toggle, LV_STATE_CHECKED));
++
++    // An older Kiln boot loader: the same switch with "Needs a boot loader
++    // update to take effect.", nothing pending; its switch posts too
++    s.failed.clear();
++    s.restart_needed = false;
++    s.bootloader_update_needed = true;
++    memory::model().apply(s);
++    process_lvgl(5);
++    CHECK(lv_obj_has_flag(row, LV_OBJ_FLAG_HIDDEN));
++    CHECK_FALSE(lv_obj_has_flag(row_bootloader, LV_OBJ_FLAG_HIDDEN));
++    CHECK(lv_obj_has_flag(pending, LV_OBJ_FLAG_HIDDEN));
++    CHECK(lv_obj_has_state(toggle_bootloader, LV_STATE_CHECKED));
++    lv_obj_t* subtitle = lv_obj_find_by_name(row_bootloader, "description");
++    REQUIRE(subtitle != nullptr);
++    CHECK(std::string(lv_label_get_text(subtitle)) == "Needs a boot loader update to take effect.");
++    lv_obj_remove_state(toggle_bootloader, LV_STATE_CHECKED);
++    lv_obj_send_event(toggle_bootloader, LV_EVENT_VALUE_CHANGED, nullptr);
++    REQUIRE(client.rpc_calls.size() == 2);
++    CHECK(client.rpc_calls[1].params == nlohmann::json{{"enable", false}});
++    lv_subject_set_int(locked, 1);
++    process_lvgl(5);
++    CHECK(lv_obj_has_state(toggle_bootloader, LV_STATE_DISABLED));
++    lv_subject_set_int(locked, 0);
++    process_lvgl(5);
++
++    // A 256 MiB board: hidden
++    memory::model().apply(memory::State{});
++    process_lvgl(5);
++    CHECK(lv_obj_has_flag(container, LV_OBJ_FLAG_HIDDEN));
++
++    memory::model().reset_for_test();
++    memory::model().set_client_for_test(nullptr);
++    memory::set_restart_prompt_for_test(nullptr);
++    memory::set_built_in_for_test(std::nullopt);
++    if (Config* cfg = Config::get_instance()) {
++        cfg->set<std::string>(cfg->df() + "kiln/extended_memory_failure_shown", "");
++    }
++    helix::ui::UpdateQueue::instance().drain();
++}
+diff --git a/translations/en.yml b/translations/en.yml
+index 94436b51..81214ee2 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -5018,6 +5018,15 @@ translations:
+   # Reboot and Shutdown through Kiln's update agent (patch 0071)
+   'Can''t restart the printer: {}': 'Can''t restart the printer: {}'
+   'Can''t shut down the printer: {}': 'Can''t shut down the printer: {}'
++  # Extended memory on Settings > System and its bell notice (patch 0074)
++  'Extended memory': 'Extended memory'
++  'Use all 512 MiB. Not needed; off by default. Takes effect after a restart.': 'Use all 512 MiB. Not needed; off by default. Takes effect after a restart.'
++  'Extended memory changes at the next start.': 'Extended memory changes at the next start.'
++  'Extended memory was turned off: the printer didn''t finish starting with it.': 'Extended memory was turned off: the printer didn''t finish starting with it.'
++  'Needs a boot loader update to take effect.': 'Needs a boot loader update to take effect.'
++  'Extended memory available': 'Extended memory available'
++  'This printer has 512 MiB of memory. Kiln OS uses 256 MiB by default, the same on every AD5X. You can switch Extended memory on in Settings > System. It isn''t needed; it is off by default.': 'This printer has 512 MiB of memory. Kiln OS uses 256 MiB by default, the same on every AD5X. You can switch Extended memory on in Settings > System. It isn''t needed; it is off by default.'
++  'Restart now?': 'Restart now?'
+   # Kiln's tour (patch 0058, tour_steps_kiln.cpp)
+   'Welcome to Kiln OS': 'Welcome to Kiln OS'
+   'Here''s a quick tour of the screen, so you can find things fast.': 'Here''s a quick tour of the screen, so you can find things fast.'
+diff --git a/translations/ru.yml b/translations/ru.yml
+index ac60c03e..ac8033a9 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -5174,6 +5174,15 @@ translations:
+   # Reboot and Shutdown through Kiln's update agent (patch 0071)
+   'Can''t restart the printer: {}': 'Не удалось перезагрузить принтер: {}'
+   'Can''t shut down the printer: {}': 'Не удалось выключить принтер: {}'
++  # Extended memory on Settings > System and its bell notice (patch 0074)
++  'Extended memory': 'Расширенная память'
++  'Use all 512 MiB. Not needed; off by default. Takes effect after a restart.': 'Использовать все 512 МБ. Не обязательно; по умолчанию выключено. Вступает в силу после перезапуска.'
++  'Extended memory changes at the next start.': 'Изменение расширенной памяти вступит в силу при следующем запуске.'
++  'Extended memory was turned off: the printer didn''t finish starting with it.': 'Расширенная память выключена: с ней принтер не смог завершить запуск.'
++  'Needs a boot loader update to take effect.': 'Вступит в силу после обновления загрузчика.'
++  'Extended memory available': 'Доступна расширенная память'
++  'This printer has 512 MiB of memory. Kiln OS uses 256 MiB by default, the same on every AD5X. You can switch Extended memory on in Settings > System. It isn''t needed; it is off by default.': 'В принтере 512 МБ, а Kiln OS на всех AD5X по умолчанию использует 256 МБ. Расширенную память можно включить в Настройки > Система. Это не обязательно.'
++  'Restart now?': 'Перезапустить сейчас?'
+   'Cancel sent. The printer stops its start sequence at the next safe point.': 'Отмена отправлена. Принтер остановит стартовую последовательность в ближайшей безопасной точке.'
+   # The AD5X's filament unit named IFS where the AD5X IFS is in use (patch 0066)
+   'IFS not detected': 'IFS не обнаружен'
+diff --git a/ui_xml/settings_system_overlay.xml b/ui_xml/settings_system_overlay.xml
+index 3a03051c..196727d3 100644
+--- a/ui_xml/settings_system_overlay.xml
++++ b/ui_xml/settings_system_overlay.xml
+@@ -2,7 +2,7 @@
+ <!-- Copyright (C) 2025-2026 356C LLC -->
+ <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+ <!-- System Settings Overlay -->
+-<!-- Security, performance, telemetry, log level, restart, boot into recovery and return to Flashforge firmware (Kiln OS), factory reset -->
++<!-- Security, performance, telemetry, log level, restart, boot into recovery, return to Flashforge firmware and extended memory (Kiln OS), factory reset -->
+ <component>
+   <view name="settings_system_overlay" extends="overlay_panel" title="System" bg_color="#screen_bg">
+     <!-- Content Area - no padding, rows handle their own -->
+@@ -86,6 +86,43 @@
+                             callback="on_kiln_return_stock_clicked" disabled="print_active">
+           <bind_flag_if_eq subject="kiln_boot_recovery_available" flag="hidden" ref_value="0"/>
+         </setting_action_row>
++        <!-- Kiln OS: Extended memory, all 512 MiB from the next start
++             (machine.kiln_os.post_memory); only where the board has 512 MiB,
++             greyed while a job holds the machine. The lines below it say a
++             change waits for a restart, or that a start with it failed.
++             Where only a boot loader update can change the mode, the same
++             switch shows with that subtitle instead. -->
++        <lv_obj name="container_kiln_extended_memory"
++                width="100%" height="content" style_pad_all="0" style_bg_opa="0" style_border_width="0"
++                flex_flow="column" scrollable="false">
++          <bind_flag_if_eq subject="kiln_extended_memory_available" flag="hidden" ref_value="0"/>
++          <setting_toggle_row name="row_kiln_extended_memory"
++                              label="Extended memory" icon="database"
++                              description="Use all 512 MiB. Not needed; off by default. Takes effect after a restart."
++                              subject="kiln_extended_memory_enabled" callback="on_kiln_extended_memory_changed"
++                              disabled="kiln_power_locked">
++            <bind_flag_if_eq subject="kiln_extended_memory_bootloader" flag="hidden" ref_value="1"/>
++          </setting_toggle_row>
++          <setting_toggle_row name="row_kiln_extended_memory_bootloader"
++                              label="Extended memory" icon="database"
++                              description="Needs a boot loader update to take effect."
++                              subject="kiln_extended_memory_enabled" callback="on_kiln_extended_memory_changed"
++                              disabled="kiln_power_locked">
++            <bind_flag_if_eq subject="kiln_extended_memory_bootloader" flag="hidden" ref_value="0"/>
++          </setting_toggle_row>
++          <text_small name="kiln_extended_memory_pending"
++                      width="100%" long_mode="wrap" style_pad_left="#space_lg" style_pad_right="#space_lg"
++                      style_pad_bottom="#space_lg" style_text_color="#text_muted"
++                      text="Extended memory changes at the next start.">
++            <bind_flag_if_eq subject="kiln_extended_memory_pending" flag="hidden" ref_value="0"/>
++          </text_small>
++          <text_small name="kiln_extended_memory_failed"
++                      width="100%" long_mode="wrap" style_pad_left="#space_lg" style_pad_right="#space_lg"
++                      style_pad_bottom="#space_lg" style_text_color="#warning"
++                      text="Extended memory was turned off: the printer didn't finish starting with it.">
++            <bind_flag_if_eq subject="kiln_extended_memory_failed" flag="hidden" ref_value="0"/>
++          </text_small>
++        </lv_obj>
+         <!-- ================================================================== -->
+         <!-- FACTORY RESET -->
+         <!-- ================================================================== -->
+-- 
+2.56.0
+

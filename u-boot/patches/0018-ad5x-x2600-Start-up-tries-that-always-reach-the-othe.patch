@@ -1,5 +1,5 @@
 From 74f860f157a0019180fcde0846dad56cf4bfa9ed Mon Sep 17 00:00:00 2001
-From: valix <djvalic.wc@gmail.com>
+From: djvalic <djvalic@users.noreply.github.com>
 Date: Sun, 15 Nov 2026 12:40:08 -0500
 Subject: [PATCH 18/23] ad5x: x2600: Start-up tries that always reach the other
  slot

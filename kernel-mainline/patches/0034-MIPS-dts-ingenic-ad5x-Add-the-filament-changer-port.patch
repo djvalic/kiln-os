@@ -37,7 +37,7 @@ index 75362aec7..e05ba3182 100644
  	};
  
  	chosen {
-@@ -49,6 +51,11 @@ pins_uart0: uart0 {
+@@ -48,6 +50,11 @@ pins_uart0: uart0 {
  		function = "uart0";
  		groups = "uart0-e";
  	};
@@ -49,7 +49,7 @@ index 75362aec7..e05ba3182 100644
  };
  
  /* Debug console */
-@@ -58,3 +65,20 @@ &uart0 {
+@@ -57,3 +64,20 @@ &uart0 {
  
  	status = "okay";
  };

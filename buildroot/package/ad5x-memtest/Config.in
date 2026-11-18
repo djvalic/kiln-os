@@ -1,0 +1,12 @@
+config BR2_PACKAGE_AD5X_MEMTEST
+	bool "ad5x-memtest"
+	depends on BR2_INIT_BUSYBOX
+	help
+	  Extended memory mode's one-time test of the X2600H's high
+	  DRAM bank (0x30000000-0x3fffffff), on the first start with
+	  the mode on: ad5x-memtest-high (static; pagemap-filtered
+	  pattern passes over the bank's free pages) run by
+	  S05ad5x-memtest, which records the result in
+	  /data/ad5x/kernel and turns the mode off on a fault
+	  (docs/memory.md). Main OS only. The kernel needs
+	  CONFIG_PROC_PAGE_MONITOR (/proc/self/pagemap) and HIGHMEM.

@@ -241,4 +241,7 @@ class LogMode:
 
 
 def load_config(config):
+    # Klippy's memory lock (ad5x_mlock.py), which has no section of its
+    # own: loaded with this always-present one
+    config.get_printer().load_object(config, "ad5x_mlock", None)
     return LogMode(config)

@@ -84,7 +84,15 @@ rescue-system updater that writes the *other* slot (B):
   and `shellscript` runs `ad5x-slot-b.sh` (in the .swu; source in
   `package/ad5x-recovery/swupdate/`).
 - **Order** (SWUpdate's, images not `installed-directly`): the whole .swu is
-  first unpacked into `/tmp` (RAM) and each artifact's sha256 is checked.
+  first unpacked and each artifact's sha256 is checked. It is unpacked into
+  `/data/ad5x/swupdate-tmp` on the data partition (SWUpdate's `TMPDIR`; a
+  run of `ad5x-swu-apply` without the daemon uses
+  `/data/ad5x/swupdate-apply.PID`), so a 256 MiB board doesn't hold the
+  root filesystem image in RAM. Only when the data partition isn't ext4
+  mounted read-write or has less than 256 MiB free is it `/tmp` (RAM), as
+  before. SWUpdate deletes the unpacked files after each install; whatever a
+  power cut leaves is deleted at the next start of `S70swupdate`. The
+  control and progress sockets stay in `/tmp` (`swupdate.config`).
   Then the script's `preinst` step runs: it requires running from slot A,
   checks that `rootfs2`/`kernel2`/`ota` match the SPL table and that the
   by-partlabel links point at them, refuses a mounted rootfs2, and points the

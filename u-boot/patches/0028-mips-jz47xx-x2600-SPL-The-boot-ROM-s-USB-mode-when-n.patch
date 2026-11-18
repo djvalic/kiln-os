@@ -1,0 +1,293 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Mon, 16 Nov 2026 21:00:00 -0500
+Subject: [PATCH 28/28] mips: jz47xx: x2600: SPL: The boot ROM's USB mode when
+ nothing starts
+
+When the four attempts ran out the SPL stopped with the watchdog off: a
+board with nothing bootable on the eMMC then needed the printer opened
+and K4 closed before the boot ROM would wait on J28 (USB) for a
+restore. alexshev86's tests in djvalic/kiln-os#68 show both sides: with
+the SPL's header zeroed the ROM goes to its USB mode by itself (test 1),
+but with both kernel slots' headers zeroed the SPL hangs and only K4
+gets the board into USB mode (test 4).
+
+The start after the last attempt now asks the ROM for its USB mode
+instead, the way Ingenic's softburn does it (the SDK's
+common/cmd_softburn.c: CPM_SLPC = "SWB" << 8 | 2, then do_reset(),
+which is a watchdog reset on XBurst2) and as the soft entry seen
+working in #68 did (devmem, then Linux's reboot: a watchdog reset too,
+ingenic_wdt's restart handler). It is the same reset the SPL already
+uses for every failed try. It logs
+
+  SPL: nothing started after 4 attempts (last 0x...): boot ROM USB mode
+  (J28); power-cycle to try the eMMC again
+
+and resets 10 ms later. This needs neither the DDR nor the eMMC, so a
+DDR or eMMC setup that failed in the last attempt ends the same way.
+
+The scratch pad says the SPL asked: 0x4c00 | the last attempt's low
+byte (not a value Kiln, Linux or Ingenic's SPLs write). Should the ROM
+start the eMMC SPL again with the request still in CPM_SLPC, that start
+finds both, clears CPM_SLPC and stops with the watchdog off as before,
+so a ROM that ignores the request can't make a reset loop. Without the
+request in CPM_SLPC (a power cycle clears it, #68) the marker is a
+fresh start: a power cycle still tries the eMMC again, whatever the
+scratch pad keeps over a power-off. A start over USB with spl-usb.bin's
+tag is a fresh one whatever the scratch pad holds (patch 0025), so a
+restore over J28 runs the normal plan; if that still finds nothing, its
+attempts end in the USB mode again. Someone else's soft entry
+(tools/bench/ad5x-usbboot-mode) without the marker is a start over USB,
+as before.
+
+ad5x_start_plan() takes whether CPM_SLPC held the request, so the
+laptop model (u-boot/tools/test_ad5x_start.py) walks it with the rest.
+---
+ .../mach-jz47xx/include/mach/ad5x_start.h     | 64 ++++++++++++++++---
+ arch/mips/mach-jz47xx/x2600/spl.c             | 57 ++++++++++++++---
+ 2 files changed, 101 insertions(+), 20 deletions(-)
+
+diff --git a/arch/mips/mach-jz47xx/include/mach/ad5x_start.h b/arch/mips/mach-jz47xx/include/mach/ad5x_start.h
+index f0a41a38..2200c71a 100644
+--- a/arch/mips/mach-jz47xx/include/mach/ad5x_start.h
++++ b/arch/mips/mach-jz47xx/include/mach/ad5x_start.h
+@@ -16,12 +16,18 @@
+  *   bit  7    the slot is forced: not the one the boot flag names
+  *
+  * Linux writes 0x1a1a, 0x3535 or 0x4343 when it reboots, Ingenic's SPLs
+- * 0x4f5441/0x41544f; anything not 0x4b00-0x4bff is a fresh start.
++ * 0x4f5441/0x41544f; anything not 0x4b00-0x4bff (or 0x4c00-0x4cff with the
++ * USB request still pending, below) is a fresh start.
++ *
++ * 0x4c00 | the last attempt's low byte: the attempts ran out and the SPL
++ * asked the boot ROM for its USB mode (CPM_SLPC = "SWB" << 8 | 2, then a
++ * watchdog reset, as Ingenic's softburn and Linux's reboot do it), so a
++ * board with nothing bootable waits on J28 as a108:eaef.
+  *
+  * The SPL, from the value it finds (ad5x_start_plan):
+  *   - fresh, or KERNEL (a kernel was started; this is its reboot or a
+- *     power cycle): attempt 0, U-Boot proper if there is one, the flag's
+- *     slot;
++ *     power cycle), or a start over USB: attempt 0, U-Boot proper if
++ *     there is one, the flag's slot;
+  *   - DDR, EMMC (reset during the clock/DDR or eMMC setup): the same plan
+  *     again, next attempt;
+  *   - UBOOT, UBOOT_UP, GAVE_UP (U-Boot proper loaded, up, or gave up
+@@ -29,10 +35,15 @@
+  *   - SLOT, SLOT_UBOOT (the slot's uImage didn't load, or a U-Boot proper
+  *     started from that slot didn't start a kernel): next attempt with the
+  *     other slot, forced;
+- *   - after AD5X_START_TRIES attempts: stop, watchdog off.
++ *   - after AD5X_START_TRIES attempts: ask the boot ROM for its USB mode
++ *     and reset (0x4c00 | the low byte);
++ *   - 0x4c00-0x4cff with the request still in CPM_SLPC on an eMMC start:
++ *     the ROM didn't take it; stop, watchdog off (no second request).
++ *     Without it (a power cycle clears CPM_SLPC; a start over USB with
++ *     spl-usb.bin's tag doesn't look at the scratch pad): a fresh start.
+  * Every value but a fresh one or KERNEL moves the attempt on, so within
+  * AD5X_START_TRIES attempts the board starts a kernel, or the next start
+- * stops.
++ * asks for USB mode, and the one after that stops if the ROM ignored it.
+  *
+  * U-Boot proper keeps the fields and changes the phase: UBOOT -> UBOOT_UP
+  * (started by the SPL from 0xA400), KERNEL -> SLOT_UBOOT (started by the
+@@ -63,12 +74,19 @@ enum ad5x_phase {
+ #define AD5X_ST_SKIP		0x04u
+ #define AD5X_ST_SLOT_B		0x08u
+ #define AD5X_ST_FORCED		0x80u
++#define AD5X_ST_USB		0x4c00u	/* USB mode asked for, once */
+ 
+ static inline int ad5x_st_ours(unsigned int v)
+ {
+ 	return (v & ~0xffu) == AD5X_ST_MAGIC;
+ }
+ 
++/* the SPL asked the boot ROM for its USB mode as the attempts ran out */
++static inline int ad5x_st_usb_asked(unsigned int v)
++{
++	return (v & ~0xffu) == AD5X_ST_USB;
++}
++
+ static inline unsigned int ad5x_st_phase(unsigned int v)
+ {
+ 	return (v >> 4) & 7;
+@@ -91,16 +109,36 @@ struct ad5x_plan {
+ 	int skip_uboot;		/* boot the slot, not U-Boot at 0xA400 */
+ 	int forced;		/* slot_b, not the boot flag, names the slot */
+ 	int slot_b;
+-	int stop;		/* attempts used up: stop, watchdog off */
++	int usb;		/* attempts used up: ask for USB mode, reset */
++	int stop;		/* the ROM ignored that: stop, watchdog off */
+ };
+ 
+-static inline void ad5x_start_plan(unsigned int prev, struct ad5x_plan *p)
++/*
++ * @prev is CPSPR as found (0 for a start over USB with spl-usb.bin's
++ * tag); @slpc_usb: CPM_SLPC still held the soft USB request as this start
++ * began (the SPL clears it). Started after someone else's soft entry
++ * (tools/bench/ad5x-usbboot-mode), that is a start over USB: fresh.
++ */
++static inline void ad5x_start_plan(unsigned int prev, int slpc_usb,
++				   struct ad5x_plan *p)
+ {
+ 	unsigned int ph = ad5x_st_phase(prev), next;
+ 
+ 	p->attempt = 0;
+-	p->skip_uboot = p->forced = p->slot_b = p->stop = 0;
+-	if (!ad5x_st_ours(prev) || ph == AD5X_PH_KERNEL)
++	p->skip_uboot = p->forced = p->slot_b = p->usb = p->stop = 0;
++	if (ad5x_st_usb_asked(prev)) {
++		/*
++		 * The SPL asked for USB mode; if CPM_SLPC still holds that
++		 * request, the ROM started the eMMC anyway: stop. Without it
++		 * (a power cycle clears it) the eMMC is tried again, fresh.
++		 */
++		if (slpc_usb) {
++			p->stop = 1;
++			p->attempt = AD5X_START_TRIES - 1;
++		}
++		return;
++	}
++	if (slpc_usb || !ad5x_st_ours(prev) || ph == AD5X_PH_KERNEL)
+ 		return;				/* a fresh start */
+ 
+ 	next = ad5x_st_attempt(prev) + 1;
+@@ -122,12 +160,18 @@ static inline void ad5x_start_plan(unsigned int prev, struct ad5x_plan *p)
+ 		break;
+ 	}
+ 	if (next >= AD5X_START_TRIES) {
+-		p->stop = 1;
++		p->usb = 1;
+ 		next = AD5X_START_TRIES - 1;
+ 	}
+ 	p->attempt = next;
+ }
+ 
++/* the attempts ran out: what the SPL leaves as it asks for USB mode */
++static inline unsigned int ad5x_start_usb_value(unsigned int prev)
++{
++	return AD5X_ST_USB | (prev & 0xffu);
++}
++
+ /*
+  * The value for @ph in an attempt with plan @p; @slot_b is the slot it
+  * boots, once known (SLOT, KERNEL), else the plan's.
+diff --git a/arch/mips/mach-jz47xx/x2600/spl.c b/arch/mips/mach-jz47xx/x2600/spl.c
+index 6c9e0d73..f9768950 100644
+--- a/arch/mips/mach-jz47xx/x2600/spl.c
++++ b/arch/mips/mach-jz47xx/x2600/spl.c
+@@ -22,7 +22,11 @@
+  *     After a slot failed to load (or a U-Boot proper in it failed), the
+  *     other slot.
+  * A failure resets the board through the watchdog for the next try; after
+- * AD5X_START_TRIES attempts the SPL stops, the watchdog off.
++ * AD5X_START_TRIES attempts the SPL asks the boot ROM for its USB mode
++ * (the soft entry in CPM_SLPC, then a watchdog reset), so a board with
++ * nothing bootable waits on J28 for a restore. Should the ROM start the
++ * eMMC again anyway, the SPL stops there, the watchdog off. A power cycle
++ * clears the request and tries the eMMC again.
+  *
+  * Started by the boot ROM over USB (u-boot/USB-BOOT.md: the bench's cold
+  * start test, nothing written to the eMMC) it does the same, but as a
+@@ -202,13 +206,15 @@ struct serial_device *default_serial_console(void)
+  * cmd_softburn.c; tools/bench/ad5x-usbboot-mode). Nothing says the ROM
+  * clears it, and it survives a watchdog reset; cleared here, the next
+  * reset (a failed try, a reboot of the kernel started) boots from the
+- * eMMC again instead of waiting for USB.
++ * eMMC again instead of waiting for USB. The SPL writes it itself when
++ * its attempts run out (spl_ask_usb).
+  */
+ #define X2600_CPM_SLPC		((void __iomem *)0xb00000cc)
+ #define SLPC_SOFT_USB_BOOT	0x42575302
+ 
+ static bool spl_usb;		/* loaded by the boot ROM over USB */
+-static bool spl_usb_soft;	/* after the soft entry: SLPC cleared */
++static bool spl_usb_tag;	/* spl-usb.bin's tag seen (and cleared) */
++static bool spl_usb_soft;	/* SLPC held the soft entry: cleared */
+ 
+ /* nothing here can hang: SRAM and the CPM only */
+ static void spl_usb_check(void)
+@@ -216,13 +222,12 @@ static void spl_usb_check(void)
+ 	volatile u32 *tag = AD5X_USB_TAG;
+ 
+ 	if (tag[0] == AD5X_USB_TAG0 && tag[1] == AD5X_USB_TAG1) {
+-		spl_usb = true;
++		spl_usb_tag = true;
+ 		tag[0] = 0;	/* not again after a reset without a reload */
+ 		tag[1] = 0;
+ 	}
+ 	if (readl(X2600_CPM_SLPC) == SLPC_SOFT_USB_BOOT) {
+ 		writel(0, X2600_CPM_SLPC);
+-		spl_usb = true;
+ 		spl_usb_soft = true;
+ 	}
+ }
+@@ -325,6 +330,22 @@ static void __noreturn spl_fail(enum ad5x_phase ph, int slot_b,
+ 		;
+ }
+ 
++/*
++ * The attempts ran out: the boot ROM's USB mode, the soft entry as
++ * Ingenic's softburn (and Linux's reboot after it, djvalic/kiln-os#68)
++ * makes it: CPM_SLPC = "SWB" << 8 | 2, then a watchdog reset. The scratch
++ * pad says the SPL asked, so that if the ROM starts the eMMC SPL again
++ * with the request still there, that one stops instead of asking again.
++ * board_init_f writes both before the console and arms the watchdog, so
++ * a hang from there on resets into the ROM too.
++ */
++static void spl_ask_usb(u32 prev)
++{
++	x2600_cpspr_write(ad5x_start_usb_value(prev));
++	writel(SLPC_SOFT_USB_BOOT, X2600_CPM_SLPC);
++	x2600_wdt_start(AD5X_SPL_WDT_MS);
++}
++
+ /* ---- uImages ---- */
+ 
+ /* CRC-32 (IEEE), a nibble at a time: 64 bytes of table */
+@@ -499,9 +520,16 @@ void board_init_f(ulong dummy)
+ 	 */
+ 	spl_usb_check();
+ 	prev = x2600_cpspr_read();
+-	/* over USB: started on purpose from the bench, not another try */
+-	ad5x_start_plan(spl_usb ? 0 : prev, &plan);
+-	if (!plan.stop)
++	/*
++	 * Over USB (the tag, or someone's soft entry): started on purpose,
++	 * not another try. SLPC still holding the request the SPL wrote
++	 * itself (ad5x_start.h) is an eMMC start the ROM made anyway.
++	 */
++	ad5x_start_plan(spl_usb_tag ? 0 : prev, spl_usb_soft, &plan);
++	spl_usb = spl_usb_tag || (spl_usb_soft && !plan.stop);
++	if (plan.usb)
++		spl_ask_usb(prev);
++	else if (!plan.stop)
+ 		spl_phase(AD5X_PH_DDR, plan.slot_b);
+ 
+ 	timer_init();
+@@ -516,11 +544,20 @@ void board_init_f(ulong dummy)
+ 		       "a fresh start\n",
+ 		       spl_usb_soft ? " (soft entry, SLPC cleared)" : "", prev);
+ 
++	if (plan.usb) {
++		printf("SPL: nothing started after %u attempts (last 0x%x): "
++		       "boot ROM USB mode (J28); power-cycle to try the eMMC "
++		       "again\n", AD5X_START_TRIES, prev);
++		x2600_wdt_start(10);
++		while (1)
++			;
++	}
+ 	if (plan.stop) {
+ 		x2600_wdt_stop();
+ 		x2600_cpspr_write(0);
+-		printf("SPL: %u attempts failed (last 0x%x): stopped, power "
+-		       "cycle to retry\n", AD5X_START_TRIES, prev);
++		printf("SPL: the boot ROM started the eMMC, not its USB mode "
++		       "(0x%x, SLPC cleared): stopped, power cycle to retry\n",
++		       prev);
+ 		hang();
+ 	}
+ 	if (plan.attempt)
+-- 
+2.56.0
+

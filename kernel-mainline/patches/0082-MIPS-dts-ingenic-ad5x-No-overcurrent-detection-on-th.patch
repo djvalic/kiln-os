@@ -1,0 +1,39 @@
+From e519244bb24f4228224ce753cf3de4e132fbaf42 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 12:00:00 -0500
+Subject: [PATCH] MIPS: dts: ingenic: ad5x: No overcurrent detection on the OTG
+ port
+
+The OTG controller's port (the board's J28 footprint, the boot ROM's
+USB connector) has no VBUS switch and no overcurrent sense. Without
+disable-over-current, dwc2 turns on the Ingenic overcurrent detection,
+and with the port's 5 V left open (J28 wired to a PC for the boot ROM's
+USB mode) it reads VBUS as not valid and reports an overcurrent at
+every port status: "Overcurrent change detected" about 25 times a
+second, which rotated the system log every 90 s. The host port already
+has the property; set it here too.
+---
+ arch/mips/boot/dts/ingenic/ad5x.dts | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/arch/mips/boot/dts/ingenic/ad5x.dts b/arch/mips/boot/dts/ingenic/ad5x.dts
+index dceef73..fb5964c 100644
+--- a/arch/mips/boot/dts/ingenic/ad5x.dts
++++ b/arch/mips/boot/dts/ingenic/ad5x.dts
+@@ -193,6 +193,13 @@
+ /* OTG port: not on the display's USB ports; set up as the stock firmware does */
+ &otg {
+ 	dr_mode = "otg";
++	/*
++	 * No VBUS switch or overcurrent sense on this port (J28, the boot
++	 * ROM's USB connector); with 5 V left open the Ingenic overcurrent
++	 * logic reports an overcurrent at every port status, as stock
++	 * ignores it too.
++	 */
++	disable-over-current;
+ 
+ 	status = "okay";
+ };
+-- 
+2.56.0
+

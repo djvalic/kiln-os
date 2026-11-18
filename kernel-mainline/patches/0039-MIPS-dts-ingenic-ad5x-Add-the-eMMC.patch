@@ -28,7 +28,7 @@ index 9680565c7..3720da1ae 100644
  		serial0 = &uart0;
  		serial2 = &uart2;
  		serial4 = &uart4;
-@@ -48,7 +49,26 @@ &exclk {
+@@ -47,7 +48,26 @@ &exclk {
  	clock-frequency = <24000000>;
  };
  

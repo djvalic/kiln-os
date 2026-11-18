@@ -23,6 +23,7 @@ not yet in the public copy on GitHub.
 - [orcaslicer.md](orcaslicer.md): OrcaSlicer with Kiln OS.
 - [sound.md](sound.md): the speaker, chimes, `M300` and MIDI files.
 - [logs.md](logs.md): where the logs are and how to get more detail.
+- [memory.md](memory.md): 256 MiB and 512 MiB boards, and what Kiln OS changes at start-up for each.
 - [ifs-troubleshooting.md](ifs-troubleshooting.md): when the IFS drops off.
 
 ## Writing plugins
@@ -61,6 +62,7 @@ not yet in the public copy on GitHub.
 - [bed-weighing-board.md](bed-weighing-board.md): the load-cell board and stock's Z routine.
 - [klipper-fork-diff.md](klipper-fork-diff.md): what Flashforge changed in its Klipper fork and what replaces it.
 - [boot-slots.md](boot-slots.md): the SPL and the eMMC layout (also listed above).
+- [emmc-repair.md](emmc-repair.md): checking, backing up and repairing the eMMC from a Linux PC over USB (J28), when nothing on it starts.
 - [serial-console.md](serial-console.md): the mainboard's DEBUG header (UART0, 3.3 V): our kernel's console and a root login without a network, and why everything before our kernel is silent there.
 
 ## Internal notes

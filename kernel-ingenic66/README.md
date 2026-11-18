@@ -91,6 +91,9 @@ over RS-485, Wi-Fi, Ethernet, the display and touch work on the printer).
    Y); HelixScreen's calibration handles it.
 6. Memory: this kernel ignores `rmem=`/`rtos_size=`; the RTOS area
    4M@0xfc00000 is reserved in the DT. Read the real `mem=` from the printer.
+   It is started with `mem=252M@0x0` and no `rmem=` (S00ad5x-kernel's
+   `kiln_mem`, Kiln's U-Boot and SPL: `docs/memory.md`, "Memory map"); the
+   crash log (ramoops) is the last 256 KiB of that, at 0x0fbc0000.
 7. Userspace: stock's out-of-tree modules and `cmd_gpio` don't apply; the
    heartbeat (PC11) and backlight move to gpiod / the DT backlight. Wi-Fi
    needs `rtw88/rtw8821c_fw.bin`: built into the kernel, v24.11.0 from

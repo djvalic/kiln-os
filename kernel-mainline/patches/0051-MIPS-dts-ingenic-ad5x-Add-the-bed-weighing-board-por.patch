@@ -23,7 +23,7 @@ index 717b941b0..05b3b4d15 100644
  	};
  
  	chosen {
-@@ -146,6 +147,11 @@ pins_uart5: uart5 {
+@@ -145,6 +146,11 @@ pins_uart5: uart5 {
  		function = "uart5";
  		groups = "uart5-data-b";
  	};
@@ -35,7 +35,7 @@ index 717b941b0..05b3b4d15 100644
  };
  
  /* Debug console */
-@@ -189,6 +195,14 @@ &uart5 {
+@@ -188,6 +194,14 @@ &uart5 {
  	status = "okay";
  };
  

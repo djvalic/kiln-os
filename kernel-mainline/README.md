@@ -7,7 +7,7 @@ so the code is sound, not to get it merged. Kiln OS ships it as an opt-in
 second kernel beside the 6.6 SDK kernel (`../kernel-ingenic66/`), which
 stays the default: `ad5x-kernel mainline on` on the printer, and a failed
 7.3 start falls back to 6.6 in the same boot (`S00ad5x-kernel`). The
-buildroot package `ad5x-kernel-mainline` runs `build.sh`. Kiln adds six
+buildroot package `ad5x-kernel-mainline` runs `build.sh`. Kiln adds seven
 patches on top of the series: 0075 (a ramoops region for pstore, as 6.6
 has), 0076 (the eMMC at 50 MHz, as 6.6, until a longer soak at 150), 0077
 (write-combine on XBurst II, as the SDK's 6.6), 0078 (the DPU's fbdev at
@@ -16,7 +16,10 @@ divider left stopped when the clock is enabled, as Ingenic's 6.6 clock
 driver does: the speaker's PWM clock, issue #54) and 0080 (the jz4740
 watchdog driver keeps a watchdog the boot loader left running, fed by the
 kernel until userspace opens `/dev/watchdog`, and stops it on halt and
-poweroff; Kiln's U-Boot starts this kernel with it running).
+poweroff; Kiln's U-Boot starts this kernel with it running) and 0081 (the
+16 MiB the stock firmware keeps for its media drivers are RAM: Kiln's
+boot loaders pass mem=252M@0x0 without rmem=; the ramoops region moves to
+the top of those 252 MiB and shrinks to 256 KiB).
 
 ## Rules
 

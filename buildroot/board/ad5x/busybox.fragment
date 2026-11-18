@@ -2,3 +2,10 @@
 # ionice: the timelapse plugin zips and renders at idle I/O priority, so
 # its eMMC writes don't starve Klipper (issue #40; mq-deadline honours it)
 CONFIG_IONICE=y
+# swapon -p: S04ad5x-memory's zram swap on 256 MiB boards (priority 100)
+CONFIG_FEATURE_SWAPON_PRI=y
+# No crond or crontab: Kiln OS schedules nothing with cron (S51ad5x-clock
+# saves the time itself), so S50crond isn't installed and its idle daemon
+# doesn't run (docs/memory.md)
+# CONFIG_CROND is not set
+# CONFIG_CRONTAB is not set

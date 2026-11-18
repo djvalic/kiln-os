@@ -1,5 +1,5 @@
 From bfe610af43951ca4bec2e347de7dbf0029ce8aef Mon Sep 17 00:00:00 2001
-From: valix <djvalic.wc@gmail.com>
+From: djvalic <djvalic@users.noreply.github.com>
 Date: Sun, 15 Nov 2026 12:46:29 -0500
 Subject: [PATCH 23/23] mips: jz47xx: x2600: SPL: The stock DDR table's name, a
  clock record

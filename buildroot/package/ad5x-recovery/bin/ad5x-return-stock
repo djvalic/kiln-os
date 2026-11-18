@@ -64,6 +64,9 @@
 # slot A with its next update anyway. With Flashforge's boot loader in the
 # first MiB (no Kiln boot loader) steps 1, 5 and 6 don't apply.
 #
+# A usershare that Kiln OS's PC tool made after the factory's was lost
+# (tools/ad5x_usershare.py, KILN-GENERATED.txt) is warned about: stock's
+# programs and settings aren't on it.
 # Refused, nothing written, unless: root; the recovery OS in slot A; no
 # other job (update, backup, restore, USB rescue, start-up actions); the
 # eMMC writable, not mounted, its partitions where the boot loader's table
@@ -169,7 +172,25 @@ read_range() {	# DEV LBA COUNT OUT
 		[ "$(fsize "$4")" = $(($3 * 512)) ]
 }
 banner() { bl_banner "$1"; }		# FILE (a first MiB): its SPL's banner
-ddr_table() { bl_ddr_table "$1"; }	# FILE: its SPL's DDR3 table (hex), or empty
+ddr_table() { bl_ddr_table "$1" "${2:-}"; }	# FILE [NAME]: its SPL's DDR table (hex), or empty
+# ddr_matches BOOT: BOOT's SPL carries this board's DDR table and the disk's
+# SPL ($REF) agrees with it. A 00190 SPL (W634GU6QG-11, the table Kiln's
+# SPL carries byte for byte): the disk's table of that name the same, as
+# always. Another build (00437: one table per chip, none called
+# W634GU6QG-11): the table for this chip (bl_ddr_name, by bl_variant) must
+# be there, the same as the disk's where the disk's SPL has one of that
+# name; beyond that it rests on BOOT being this printer's own copy (its
+# sha256 file, required here, and diff_outside, checked before)
+ddr_matches() {
+	dmn=$(bl_ddr_name "$1")
+	case "$dmn" in
+	'') return 1 ;;
+	W634GU6QG-11) [ -n "$(ddr_table "$1")" ] && [ "$(ddr_table "$1")" = "$(ddr_table "$REF")" ] ;;
+	*) [ -f "$1.sha256" ] || return 1
+	   dmr=$(ddr_table "$REF" "$dmn")
+	   [ -z "$dmr" ] || [ "$dmr" = "$(ddr_table "$1" "$dmn")" ] ;;
+	esac
+}
 # diff_outside A B END: A and B (first MiBs) differ only inside 0x4-0x7,
 # 0x4400-0xA3FF and 0xA400-END
 diff_outside() {
@@ -509,10 +530,20 @@ else
 	bad "no Flashforge stock files found. Tried:${tried:- nothing}"
 	say "  Put Flashforge's update file (AD5X-*.tgz, from Flashforge's website) on a USB stick and check again"
 fi
+# A usershare made by Kiln OS's PC tool (tools/ad5x_usershare.py, after the
+# factory's was lost): Flashforge's programs and settings aren't on it
+if usershare_mount && [ -f "$us_mnt/KILN-GENERATED.txt" ]; then
+	loud "usershare (p6) is not the factory's: Kiln OS's ad5x_usershare.py made it (KILN-GENERATED.txt)" \
+		"after the factory's was lost. Flashforge's firmware keeps its programs and settings there and" \
+		"won't run from it, and its board update can't be armed. Have Flashforge's full firmware package" \
+		"(AD5X-*.tgz) at hand before going back."
+	note "usershare: made by ad5x_usershare.py (KILN-GENERATED.txt), not the factory's"
+	say "usershare: generated"
+fi
 
 # boot.img for Flashforge's SPL (and its unused U-Boot bytes at 0xA400):
-# this printer's own first MiB, Flashforge's SPL, the same GPT and DDR table,
-# equal to the disk outside Kiln's ranges
+# this printer's own first MiB, Flashforge's SPL, the same GPT, this
+# board's DDR table (ddr_matches), equal to the disk outside Kiln's ranges
 BOOT=
 [ -f "$AD5X_DATA/ad5x/stock/boot.img" ] && BOOT_CANDS="$AD5X_DATA/ad5x/stock/boot.img $BOOT_CANDS"
 if [ "$LOADER" = kiln ] && [ -n "$disk_ok" ]; then
@@ -523,7 +554,7 @@ if [ "$LOADER" = kiln ] && [ -n "$disk_ok" ]; then
 		banner "$b" | grep -q '^U-Boot SPL 2013\.07' || continue
 		rc_boot_check "$b" >/dev/null 2>&1 || continue
 		diff_outside "$b" "$REF" "$end" || continue
-		[ -n "$(ddr_table "$b")" ] && [ "$(ddr_table "$b")" = "$(ddr_table "$REF")" ] || continue
+		ddr_matches "$b" || continue
 		BOOT=$b; break
 	done
 	if [ -n "$BOOT" ]; then

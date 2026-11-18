@@ -34,10 +34,12 @@ power cut. Still:
 - **If Kiln's SPL doesn't start on your printer, the printer doesn't
   start at all** (black screen, no network), and no button or update can
   fix that. The only way back that has been proven so far needs the printer
-  opened: the white 5-pin **J28** USB connector on the mainboard, the K4
-  pads shorted (a Kiln SPL that starts and then hangs keeps the chip out
-  of USB mode), a USB cable and Ingenic's USB tool (see "If the printer
-  doesn't start" below).
+  opened: the white 5-pin **J28** USB connector on the mainboard, a USB
+  cable and Ingenic's USB tool (see "If the printer doesn't start"
+  below). When Kiln's SPL runs but finds nothing it can start, it puts
+  the chip into USB mode by itself after four tries; an SPL that doesn't
+  run at all, or hangs before it can reset, also needs the K4 pads
+  shorted.
 - It has been proven on one printer so far (the developer's, with the
   cold-start and fallback tests in `tools/bench/README.md`). A second board
   is known to have byte for byte the same stock boot loader.
@@ -65,13 +67,19 @@ echo "spl:    $spl"
 echo "uboot:  $(h 512 82 1966)"
 echo "ddr:    $ddr $(dd if=$D bs=1 skip=34872 count=12 2>/dev/null)"
 echo "banner: $(dd if=$D bs=512 skip=34 count=48 2>/dev/null | tr -cs 'A-Za-z0-9 :().-' '\n' | grep -m1 'U-Boot SPL')"
+echo "ram:    MemTotal $(awk '$1 == "MemTotal:" { print $2 }' /proc/meminfo) kB; $(tr ' ' '\n' < /proc/cmdline | grep '^mem=' | tr '\n' ' ')"
 echo "parts:  $(cat /sys/block/mmcblk0/mmcblk0p*/start 2>/dev/null | tr '\n' ' ')"
 echo "emmc:   $(cat /sys/block/mmcblk0/device/name /sys/block/mmcblk0/size 2>/dev/null | tr '\n' ' ')"
 [ "$spl $ddr" = "f7b9d763c1e83af8 61b7ee909c0baa50" ] && echo "match:  yes (tested boards)" || echo "match:  no, please post this"
 ```
 
 In the recovery OS, `ad5x-bootloader-install --fingerprint` prints the same
-lines. On Kiln's boot loader already, put `D=/data/ad5x/stock/boot.img` on
+lines, plus `chip:` (X2600H, X2600E-class or unknown, from the `ram:`
+values). It finds the DDR table by its name rather than at 34872: the
+Nov 2025 stock SPL (banner `2013.07-00437`) is one image for X2600H and
+X2600E boards with a table per chip (`X2600H-DDR3L`, `X2600E-DDR3`, ...),
+so there the `ddr:` line is the table for this chip and a `tables:` line
+lists them all. That build isn't on the list. On Kiln's boot loader already, put `D=/data/ad5x/stock/boot.img` on
 a line of its own first: it then reads the saved stock copy instead.
 
 `spl` is the hash of the stock SPL (0x4400-0xA3FF) with 4 bytes at 0x4480
@@ -87,7 +95,7 @@ Known boards so far (`spl` and `ddr` above):
 |---|---|---|---|
 | `f7b9d763c1e83af8` | `61b7ee909c0baa50` | W634GU6QG-11 | the developer's (where it was proven) and alexshev86's (the same by its dump) |
 
-The full output on those boards:
+The full output on those boards (from before the `ram:` line was added):
 
 ```
 length: 17920
@@ -151,7 +159,7 @@ In the recovery OS (`ssh root@<printer>` while the recovery screen shows):
 ```
 ad5x-bootloader-install            # every check, the fingerprint, the plan; writes nothing
 ad5x-bootloader-install --yes      # install (or finish an install that stopped)
-ad5x-bootloader-install --status   # which boot loader, and the install record
+ad5x-bootloader-install --status   # which boot loader and build, and the install record
 reboot
 ```
 
@@ -198,9 +206,35 @@ Flashforge's SPL back the same way. The images are in the recovery OS:
 `SHA256SUMS`, and the build's `report.txt`).
 
 After the install the main OS keeps both kernel partitions on its own 6.6
-with every update, and updates never touch the boot loader. Updating the
-boot loader itself isn't supported yet: to put another build on, go back
-first (below), then install again.
+with every update, and updates never touch the boot loader.
+
+## Upgrading the boot loader
+
+The recovery OS carries the boot loader of its own release. When the
+printer has Kiln's boot loader of another build (an earlier install, or
+the bench tools), the same command upgrades it, over SSH in the recovery
+OS (the recovery screen has no button for it yet):
+
+```
+ad5x-bootloader-install --status   # the build on the disk and the one carried
+ad5x-bootloader-install            # checks; prints "upgrade: Kiln boot loader <old> -> <new>"
+ad5x-bootloader-install --yes      # upgrade (or finish one that stopped)
+```
+
+It needs the same as an install (`/data/ad5x/stock/boot.img` above all:
+the disk no longer has Flashforge's SPL), and the disk must be exactly
+that `boot.img` with a whole Kiln SPL and U-Boot in it. It keeps the old
+first MiB as `/data/ad5x/bootloader/before-upgrade.img`, then writes the
+new SPL (as step 1 above), then the new U-Boot: the old U-Boot's header
+first zeroed, the body up to the end of the old or new U-Boot, whichever
+is longer, the header last. U-Boot's settings, state and records in
+`ota` stay. Every state on the way starts: the new SPL starts the old
+U-Boot, and while U-Boot is written the SPL starts the recovery OS
+itself. As in an install, the SPL write (milliseconds) is the one moment
+a power cut leaves no SPL (USB boot mode, "If nothing starts"). If the new SPL doesn't read back, the old Kiln SPL goes back
+(never Flashforge's, which can't start a Kiln U-Boot). When the disk
+already holds the carried build byte for byte, there is nothing to do.
+Return to Flashforge firmware works after an upgrade as after an install.
 
 ## Going back
 
@@ -215,7 +249,8 @@ Flashforge's boot loader.
 
 1. **Wait five minutes.** Kiln's SPL retries by itself: a U-Boot that
    hangs is reset by the watchdog and skipped, a slot that doesn't load is
-   replaced by the other one.
+   replaced by the other one. On an eMMC that only reads at the slow
+   setting (above), a start takes about 2 minutes longer.
 2. **Switch it off and on once or twice.**
 3. If the recovery screen comes up, the boot loader works and Kiln OS's
    main system didn't start: **Boot main OS** tries again, **Restore
@@ -225,13 +260,38 @@ Flashforge's boot loader.
 4. If nothing starts at all (dark screen, no network after several power
    cycles), see "If nothing starts" below. Ask in
    [issue #68](https://github.com/djvalic/kiln-os/issues/68) before you
-   try it.
+   try it. When Kiln's SPL found nothing to start, it has put the printer
+   into USB boot mode by itself, ready for that.
 
 ### If nothing starts
 
-alexshev86 tried this out on his own printer (issue #68): he zeroed the
-SPL's header sector on purpose and brought the board back over USB. What
-he found:
+**With Kiln's SPL, a printer with nothing bootable left waits in USB
+boot mode by itself.** Kiln's SPL tries four times (U-Boot, then each
+kernel slot); when none of that starts a kernel, it asks the chip's boot
+ROM for its USB mode and restarts into it. No K4 short is needed: a
+computer on **J28** sees USB device `a108:eaef`, as below. The serial
+console's last line says so: `SPL: nothing started after 4 attempts ...:
+boot ROM USB mode (J28); power-cycle to try the eMMC again`. It happens
+within seconds when the kernels are simply missing or damaged (up to
+about three minutes when something hangs on the way).
+
+**Switching the power off and on makes it try the eMMC again**: the
+request doesn't survive a power cut, so the printer starts normally if
+something bootable is back, and otherwise ends up in USB mode again after
+its four tries. If USBCloner doesn't see the chip, power-cycle and wait
+for `a108:eaef` to come back. Should the chip's boot ROM ever ignore the
+request, Kiln's SPL stops on the next start instead of trying again (the
+old behaviour: then only K4 gets the chip into USB mode).
+
+This answers alexshev86's test 4 (issue #68): with both kernel slots'
+headers zeroed, Flashforge's SPL hangs and only K4 helps. With Kiln's
+boot loader, U-Boot still starts the main OS from its own partition in
+that case; where nothing at all can start, Kiln's SPL now goes to USB
+mode instead of hanging (`u-boot/README.md`, "Tries").
+
+alexshev86 also tried the case of a missing SPL on his own printer (test
+1, issue #68): he zeroed the SPL's header sector on purpose and brought
+the board back over USB. What he found:
 
 - **A dead SPL header puts the chip into USB boot mode by itself.** The
   boot ROM finds no SPL and waits for a computer on the white 5-pin
@@ -262,11 +322,44 @@ he found:
   `boot.img`), not a USB read.
 
 What this does **not** cover: an SPL that has a valid header but a broken
-body, or that hangs. Then the boot ROM starts it, and only the K4 pads
+body, or that hangs before it can reset (Kiln's SPL arms the watchdog as
+the first thing it does, so a later hang resets into its next try and in
+the end into USB mode). Then the boot ROM starts it, and only the K4 pads
 (boot_sel to USB) get the chip into USB mode: `u-boot/USB-BOOT.md` and
 `tools/bench/README.md` ("Contingency") describe that, with the
 USBCloner settings for a full backup (alexshev86's, issue #66). This is
 why Kiln OS writes the SPL's header last.
+
+### The whole eMMC from a computer (jolting's tools)
+
+Hunter Laux (jolting) added three ways in for a printer in USB boot mode
+or without a serial cable (u-boot patches 0034-0048, PRs #75, #77, #78,
+#79). They are in Kiln's U-Boot, so they work whatever is on the eMMC
+past its first MiB. Nothing of them runs on a normal start.
+
+- **The eMMC as a USB disk.** With the printer in USB boot mode on J28,
+  `u-boot/tools/ad5x_usbboot.py run-uboot spl-usb2.bin u-boot.bin` starts
+  Kiln's SPL (memory only) and then Kiln's U-Boot from the computer, which
+  offers the whole eMMC as a USB disk. The start itself writes nothing.
+  How to use it: `u-boot/USB-BOOT.md` ("The eMMC as a USB disk"); backing
+  up and repairing: `docs/emmc-repair.md`.
+- **The network rescue.** When only USBCloner reaches a printer, it can
+  write one 1 MiB file with Kiln's SPL and U-Boot and a rescue record in
+  the last sector; Kiln's U-Boot then fetches the rest of the eMMC from a
+  computer on the network, checks every piece and writes it.
+  `docs/emmc-repair.md` has the steps. It tries three times at most and
+  then starts as without it; the record stays until `ad5x_rescue clear`
+  at the U-Boot prompt, a rescue that finishes, or
+  `ad5x-bootloader-install`, which puts the saved stock bytes back in
+  that sector before it installs or upgrades (`--status` shows a record).
+- **Netconsole.** `echo <your computer's IP> > /data/ad5x/netconsole`
+  (as root in Kiln OS) sends U-Boot's console to that computer at every
+  start; keys from it (the stop key, the U-Boot prompt) need
+  `/data/ad5x/netconsole-input` as well. `docs/emmc-repair.md`,
+  "Netconsole"; `u-boot/README.md`, "U-Boot proper".
+
+Kiln's U-Boot now ends one sector earlier, before that rescue record's
+place; `ad5x-bootloader-install` refuses an image that doesn't.
 
 ## Build SPL and U-Boot yourself
 
@@ -304,6 +397,31 @@ understand the risk above and can open the printer if needed, the expert
 override is `--unsupported-board` (over SSH only, with `ssh -t`: it asks
 you to type a sentence to confirm; the touch screen never offers it). It
 prints the board's fingerprint: please post it in issue #68 either way.
+
+The AD5X ships with two chips: X2600H (512 MiB DDR3L, the board Kiln's
+SPL was proven on) and X2600E (256 MiB DDR3). Kiln's SPL reads the chip
+type at power-on and sets up the memory for either, but it has not run
+from eMMC on an X2600E yet, and an SPL that sets the memory up wrong
+leaves the printer in USB mode. So an X2600E is treated like a board
+that isn't on the list: never offered on the touch screen, and installed
+only with `--unsupported-board`. A board where the installer can't tell
+the chip is refused, even with `--unsupported-board`. It tells them apart read-only, from `MemTotal` in
+`/proc/meminfo` (at least 400000 kB: an X2600H; less: a 256 MiB board) and the `mem=...@0x30000000`
+bank on the kernel command line (only an X2600H has RAM there); the
+`chip:` line of the fingerprint shows what it found. (The chip's eFuse
+says it directly, but reading the eFuse needs register writes, so the
+installer doesn't.)
+
+The eMMC chips differ between printers too. Kiln's SPL reads the eMMC
+the way the boot ROM left it. If a read fails, it moves the sample point
+to the middle of the window (RX phase 3) and reads again; if that fails
+too, it starts the eMMC again at the slow setting it uses to identify the
+card (400 kHz, 1 bit) and, if that works, boots that way. That start is
+slow: about 2 extra minutes for the kernel. Each step prints a line on
+the serial console (`u-boot/README.md`, "Chip variants"); please post
+them in issue #68. The kernel gets `lpj=11935744` on an X2600H (what
+Flashforge's 2024 boot loader passes) and `lpj=11476992` on an X2600E
+(measured on one; Flashforge's 2025 boot loader passes it).
 
 The developers' bench tools (`tools/bench/`: `ad5x-spl-flash`,
 `ad5x-uboot-flash`, run from the main OS) are how the boot loader was

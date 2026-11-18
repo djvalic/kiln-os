@@ -1,0 +1,109 @@
+dbus_manager: no dbus_fast import without a system bus
+
+Kiln OS runs no dbus-daemon, so there is no system bus socket. Moonraker
+imported dbus_fast (2.6 MB of Python and Cython modules on the AD5X)
+for its dbus_manager core component at every start, tried to connect
+and logged "Unable to Connect to D-Bus". Nothing on Kiln OS uses the
+bus: the machine component runs the kiln_agent provider (patch 0006),
+not systemd_dbus, and system updates through PackageKit are off.
+
+dbus_manager now reads the system bus address as dbus_fast does
+(DBUS_SYSTEM_BUS_ADDRESS, else unix:path=/var/run/dbus/system_bus_socket).
+When every entry is a unix socket path that doesn't exist it imports
+nothing from dbus_fast, connects to nothing and logs one line. Its API
+stays: is_connected() is False, get_interface()/get_interfaces() raise
+"Bus not available", check_permission() warns and returns False, as
+upstream does after a failed connection; DbusError is an exception
+class that is never raised, so "except dbus_mgr.DbusError" in callers
+still works. With a bus socket (or another transport) dbus_fast is
+imported and used as before.
+
+Upstream: not submitted (AD5X open OS)
+
+--- a/moonraker/components/dbus_manager.py
++++ b/moonraker/components/dbus_manager.py
+@@ -8,37 +8,66 @@
+ import asyncio
+ import pathlib
+ import logging
+-import dbus_fast
+-from dbus_fast.aio import MessageBus, ProxyInterface
+-from dbus_fast.constants import BusType
++from urllib.parse import unquote
+ 
+ # Annotation imports
+ from typing import (
+     TYPE_CHECKING,
+     List,
+     Optional,
++    Type,
+     Any,
+ )
+ 
+ if TYPE_CHECKING:
+     from ..confighelper import ConfigHelper
++    from dbus_fast.aio import MessageBus, ProxyInterface
+ 
+ STAT_PATH = "/proc/self/stat"
+ DOC_URL = (
+     "https://moonraker.readthedocs.io/en/latest/"
+     "installation/#policykit-permissions"
+ )
++SYSTEM_BUS_ADDRESS = "unix:path=/var/run/dbus/system_bus_socket"
++
++def system_bus_present() -> bool:
++    # The system bus address as dbus_fast reads it. Only a unix socket
++    # path can be checked; any other transport is tried.
++    address = os.environ.get("DBUS_SYSTEM_BUS_ADDRESS") or SYSTEM_BUS_ADDRESS
++    for entry in address.split(";"):
++        transport, _, options = entry.strip().partition(":")
++        if not transport:
++            continue
++        paths = [
++            unquote(opt[5:]) for opt in options.split(",")
++            if opt.startswith("path=")
++        ]
++        if transport != "unix" or not paths or os.path.exists(paths[0]):
++            return True
++    return False
++
++class DbusUnavailable(Exception):
++    pass
+ 
+ class DbusManager:
+-    Variant = dbus_fast.Variant
+-    DbusError = dbus_fast.errors.DBusError
++    # Replaced by the dbus_fast types once a system bus is found
++    Variant: Any = None
++    DbusError: Type[Exception] = DbusUnavailable
+     def __init__(self, config: ConfigHelper) -> None:
+         self.server = config.get_server()
+         self.bus: Optional[MessageBus] = None
+         self.polkit: Optional[ProxyInterface] = None
+         self.warned: bool = False
+-        st_path = pathlib.Path(STAT_PATH)
+         self.polkit_subject: List[Any] = []
++        # Without a system bus (no dbus-daemon running) dbus_fast is not
++        # imported and no connection is attempted
++        self.bus_present = system_bus_present()
++        if not self.bus_present:
++            return
++        import dbus_fast
++        self.Variant = dbus_fast.Variant
++        self.DbusError = dbus_fast.errors.DBusError
++        st_path = pathlib.Path(STAT_PATH)
+         if not st_path.is_file():
+             return
+         proc_data = st_path.read_text()
+@@ -55,6 +84,11 @@
+         return self.bus is not None and self.bus.connected
+ 
+     async def component_init(self) -> None:
++        if not self.bus_present:
++            logging.info("No D-Bus system bus, D-Bus features disabled")
++            return
++        from dbus_fast.aio import MessageBus
++        from dbus_fast.constants import BusType
+         try:
+             self.bus = MessageBus(bus_type=BusType.SYSTEM)
+             await self.bus.connect()

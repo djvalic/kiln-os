@@ -4,15 +4,18 @@ Date: Sun, 8 Nov 2026 11:37:01 -0700
 Subject: [PATCH 28/74] MIPS: dts: ingenic: Add Flashforge Adventurer 5X
 
 Add the device tree of the Flashforge Adventurer 5X 3D printer, built
-around the Ingenic X2600 with 512 MiB of DDR (256 MiB at 0 and 256 MiB
-at 0x30000000). The areas the stock firmware keeps for its media drivers
-and for the firmware of the SoC's RISC-V core are reserved.
+around the Ingenic X2600. Units come with 256 MiB of DDR (X2600E) or
+512 MiB (X2600H, another 256 MiB at 0x30000000). The memory node
+describes the 256 MiB at 0 that every unit has; the boot loader passes
+the second bank with mem= where there is one. The areas the stock
+firmware keeps for its media drivers and for the firmware of the SoC's
+RISC-V core are reserved.
 
 For now it enables the debug console on UART0 (PE9 to PE12).
 ---
  arch/mips/boot/dts/ingenic/Makefile |  1 +
- arch/mips/boot/dts/ingenic/ad5x.dts | 60 +++++++++++++++++++++++++++++
- 2 files changed, 61 insertions(+)
+ arch/mips/boot/dts/ingenic/ad5x.dts | 59 +++++++++++++++++++++++++++++
+ 2 files changed, 60 insertions(+)
  create mode 100644 arch/mips/boot/dts/ingenic/ad5x.dts
 
 diff --git a/arch/mips/boot/dts/ingenic/Makefile b/arch/mips/boot/dts/ingenic/Makefile
@@ -29,7 +32,7 @@ new file mode 100644
 index 000000000..75362aec7
 --- /dev/null
 +++ b/arch/mips/boot/dts/ingenic/ad5x.dts
-@@ -0,0 +1,60 @@
+@@ -0,0 +1,59 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/dts-v1/;
 +
@@ -49,8 +52,7 @@ index 000000000..75362aec7
 +
 +	memory@0 {
 +		device_type = "memory";
-+		reg = <0x00000000 0x10000000>,
-+		      <0x30000000 0x10000000>;
++		reg = <0x00000000 0x10000000>;
 +	};
 +
 +	reserved-memory {

@@ -1,5 +1,5 @@
 From 9c0b9b8bcd1d3ffc6e5f7a0fc6594973afa946fa Mon Sep 17 00:00:00 2001
-From: valix <djvalic.wc@gmail.com>
+From: djvalic <djvalic@users.noreply.github.com>
 Date: Sun, 15 Nov 2026 12:41:41 -0500
 Subject: [PATCH 19/23] mips: jz47xx: x2600: SPL: Watchdog first, UART0's
  clock, no endless waits

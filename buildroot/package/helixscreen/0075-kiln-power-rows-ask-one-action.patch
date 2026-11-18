@@ -1,0 +1,597 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 04:58:29 -0500
+Subject: [PATCH] kiln: Reboot and Shutdown rows each ask for their own action
+
+Advanced's Power section lists Reboot and Shutdown as two rows, but both
+opened the same dialog, which offers Reboot and Shutdown again: tapping
+Reboot still asked which of the two.
+
+On HELIX_KILN_AD5X builds (helix::kiln_host_power()) each row now asks
+only for its own action (show_power_entry_dialog): Reboot asks "Restart
+the printer?" with Restart and Cancel, Shutdown asks "Shut down the
+printer?" with Shutdown (styled as danger) and Cancel. A confirmation
+goes through Moonraker's machine.reboot or machine.shutdown as before
+(request_kiln_power, which request_kiln_reboot now calls): Kiln's update
+agent decides, a refusal is a toast with its reason, without a connection
+"Not connected to the printer", and nothing is powered off locally. An
+accepted request shows "Restarting printer..." or "Shutting down
+printer...". The rows stay greyed while a job holds the machine
+(kiln_power_locked).
+
+The home screen's power tile keeps the dialog with both actions: it is the
+one power entry there (the widget is "Shutdown/Reboot", "Shut down or
+restart the host").
+
+Other builds keep upstream's dialog behind both rows. Strings in en and
+ru.
+
+Tests: the questions' texts; on Kiln the real Advanced panel's Reboot row
+asks only to restart and sends machine.reboot on Restart, nothing on
+Cancel, the refusal toast with its reason; the Shutdown row the same for
+machine.shutdown; nothing sent without a connection; other builds open
+upstream's dialog from both rows.
+
+Upstream: not applicable (AD5X OS specific)
+---
+ include/ui_panel_advanced.h              |  12 +-
+ src/ui/panel_widgets/shutdown_widget.cpp |  86 +++++++--
+ src/ui/panel_widgets/shutdown_widget.h   |  38 +++-
+ src/ui/ui_panel_advanced.cpp             |  20 +-
+ tests/unit/test_kiln_power_entries.cpp   | 236 +++++++++++++++++++++++
+ translations/en.yml                      |   5 +
+ translations/ru.yml                      |   5 +
+ ui_xml/advanced_panel.xml                |  15 +-
+ 8 files changed, 377 insertions(+), 40 deletions(-)
+ create mode 100644 tests/unit/test_kiln_power_entries.cpp
+
+diff --git a/include/ui_panel_advanced.h b/include/ui_panel_advanced.h
+index 8ae916a5..81092db9 100644
+--- a/include/ui_panel_advanced.h
++++ b/include/ui_panel_advanced.h
+@@ -160,10 +160,11 @@ class AdvancedPanel : public PanelBase {
+     /// initialized first.
+     void wire_macro_restart_observer();
+ 
+-    // Both POWER rows (Shutdown, Reboot) open the same shared dialog — the
+-    // dialog itself presents shutdown vs. reboot buttons and, on dual-host
+-    // setups, the printer/screen/both scope. Single handler reflects that.
+-    void handle_power_clicked();
++    // Upstream: both POWER rows (Shutdown, Reboot) open the same shared
++    // dialog — it presents shutdown vs. reboot buttons and, on dual-host
++    // setups, the printer/screen/both scope. Kiln OS: each row asks only for
++    // its own action (show_power_entry_dialog).
++    void handle_power_clicked(bool is_reboot);
+ 
+     //
+     // === Static Event Callbacks (registered via lv_xml_register_event_cb) ===
+@@ -180,7 +181,8 @@ class AdvancedPanel : public PanelBase {
+     static void on_helix_plugin_uninstall_clicked(lv_event_t* e);
+     static void on_helix_macros_install_clicked(lv_event_t* e);
+     static void on_helix_macros_update_clicked(lv_event_t* e);
+-    static void on_advanced_power_clicked(lv_event_t* e);
++    static void on_advanced_shutdown_clicked(lv_event_t* e);
++    static void on_advanced_reboot_clicked(lv_event_t* e);
+ 
+     //
+     // === HelixPrint Plugin Support ===
+diff --git a/src/ui/panel_widgets/shutdown_widget.cpp b/src/ui/panel_widgets/shutdown_widget.cpp
+index da651d95..1907c69f 100644
+--- a/src/ui/panel_widgets/shutdown_widget.cpp
++++ b/src/ui/panel_widgets/shutdown_widget.cpp
+@@ -5,6 +5,7 @@
+ 
+ #include "ui_callback_helpers.h"
+ #include "ui_event_safety.h"
++#include "ui_modal.h"
+ #include "ui_observer_guard.h"
+ #include "ui_shutdown_modal.h"
+ #include "ui_split_button.h"
+@@ -523,29 +524,80 @@ std::string kiln_power_failure_message(const std::string& err_message, bool is_r
+                        why);
+ }
+ 
+-void request_kiln_reboot(IMoonrakerAPI* api) {
++void request_kiln_power(IMoonrakerAPI* api, bool is_reboot) {
++    const char* action = is_reboot ? "reboot" : "shutdown";
+     if (!api || !api->is_connected()) {
+-        spdlog::warn("[ShutdownDialog] Kiln OS: Moonraker not connected, no reboot");
++        spdlog::warn("[ShutdownDialog] Kiln OS: Moonraker not connected, no {}", action);
+         ToastManager::instance().show(ToastSeverity::ERROR, lv_tr("Not connected to the printer"),
+                                       6000);
+         return;
+     }
+-    spdlog::info("[ShutdownDialog] Kiln OS: machine reboot through Moonraker");
+-    api->machine_reboot(
+-        [api]() {
+-            spdlog::info("[ShutdownDialog] Kiln OS: machine reboot accepted");
+-            schedule_host_down_verification(api, /*is_reboot=*/true);
+-        },
+-        [](const MoonrakerError& err) {
+-            spdlog::warn("[ShutdownDialog] Kiln OS: machine reboot refused ({}, {}): {}", err.code,
+-                         err.kiln_reason(), err.message);
+-            const std::string message = err.message;
+-            helix::ui::queue_update("ShutdownDialog::kiln_reboot_refused", [message]() {
+-                ToastManager::instance().show(
+-                    ToastSeverity::ERROR,
+-                    kiln_power_failure_message(message, /*is_reboot=*/true).c_str(), 8000);
+-            });
++    spdlog::info("[ShutdownDialog] Kiln OS: machine {} through Moonraker", action);
++    auto on_ok = [api, is_reboot, action]() {
++        spdlog::info("[ShutdownDialog] Kiln OS: machine {} accepted", action);
++        schedule_host_down_verification(api, is_reboot);
++        helix::ui::queue_update("ShutdownDialog::kiln_power_accepted", [is_reboot]() {
++            ToastManager::instance().show(ToastSeverity::INFO,
++                                          is_reboot ? lv_tr("Restarting printer...")
++                                                    : lv_tr("Shutting down printer..."),
++                                          8000);
+         });
++    };
++    auto on_err = [is_reboot, action](const MoonrakerError& err) {
++        spdlog::warn("[ShutdownDialog] Kiln OS: machine {} refused ({}, {}): {}", action, err.code,
++                     err.kiln_reason(), err.message);
++        const std::string message = err.message;
++        helix::ui::queue_update("ShutdownDialog::kiln_power_refused", [message, is_reboot]() {
++            ToastManager::instance().show(
++                ToastSeverity::ERROR, kiln_power_failure_message(message, is_reboot).c_str(), 8000);
++        });
++    };
++    if (is_reboot) {
++        api->machine_reboot(on_ok, on_err);
++    } else {
++        api->machine_shutdown(on_ok, on_err);
++    }
++}
++
++void request_kiln_reboot(IMoonrakerAPI* api) {
++    request_kiln_power(api, /*is_reboot=*/true);
++}
++
++KilnPowerQuestion kiln_power_question(bool is_reboot) {
++    if (is_reboot) {
++        return {lv_tr("Restart the printer?"),
++                lv_tr("The printer can't be used until it has started again."), lv_tr("Restart"),
++                /*destructive=*/false};
++    }
++    return {lv_tr("Shut down the printer?"),
++            lv_tr("The printer stays off until you switch it on again."), lv_tr("Shutdown"),
++            /*destructive=*/true};
++}
++
++void show_power_entry_dialog(IMoonrakerAPI* api, bool is_reboot, ShutdownModal& modal,
++                             AsyncLifetimeGuard& lifetime, lv_obj_t* parent_screen) {
++    if (!helix::kiln_host_power()) {
++        // Upstream: one dialog with both actions behind either entry
++        show_shutdown_dialog(api, modal, lifetime, parent_screen);
++        return;
++    }
++    // Same backstops as show_shutdown_dialog()
++    if (!helix::platform_host_power_supported()) {
++        spdlog::info("[ShutdownDialog] Platform without host power support — ignoring request");
++        return;
++    }
++    if (!api) {
++        spdlog::warn("[ShutdownDialog] No API available");
++        return;
++    }
++    // Kiln OS: the entry names the action, so the question asks only that
++    const KilnPowerQuestion q = kiln_power_question(is_reboot);
++    helix::ui::ConfirmOptions options;
++    options.destructive = q.destructive;
++    options.owner_token = lifetime.token();
++    helix::ui::modal_confirm(
++        q.title, q.message, ModalSeverity::Warning, q.confirm,
++        [api, is_reboot]() { request_kiln_power(api, is_reboot); }, options);
+ }
+ 
+ bool kiln_power_locked(bool kiln_host_power, bool job_holds_machine) {
+diff --git a/src/ui/panel_widgets/shutdown_widget.h b/src/ui/panel_widgets/shutdown_widget.h
+index 0cf2d87d..c87d2045 100644
+--- a/src/ui/panel_widgets/shutdown_widget.h
++++ b/src/ui/panel_widgets/shutdown_widget.h
+@@ -109,13 +109,41 @@ ShutdownDialogPlan plan_power_dialog(bool kiln_host_power, bool api_connected,
+ /// "Shutdown failed" when the message is empty.
+ std::string kiln_power_failure_message(const std::string& err_message, bool is_reboot);
+ 
+-/// Kiln OS: machine.reboot through Moonraker only, as the Kiln power dialog
+-/// does, for a caller without that dialog (Settings > System > Extended
+-/// memory's "Restart now?"). Not connected, or Kiln's update agent refuses:
+-/// an error toast ("Not connected to the printer", kiln_power_failure_message()).
+-/// Main thread.
++/// Kiln OS: machine.reboot (@p is_reboot) or machine.shutdown through
++/// Moonraker only, as the Kiln power dialog does, for a caller without that
++/// dialog (Advanced's Reboot and Shutdown rows, Settings > System > Extended
++/// memory's "Restart now?"). Accepted: "Restarting printer..." or "Shutting
++/// down printer..." as a toast. Not connected, or Kiln's update agent
++/// refuses: an error toast ("Not connected to the printer",
++/// kiln_power_failure_message()). Never powers anything off locally. Main
++/// thread.
++void request_kiln_power(IMoonrakerAPI* api, bool is_reboot);
++
++/// request_kiln_power() with is_reboot.
+ void request_kiln_reboot(IMoonrakerAPI* api);
+ 
++/// Kiln OS: what a Reboot or a Shutdown entry asks (kiln_power_question()):
++/// one action and Cancel, not the dialog with both.
++struct KilnPowerQuestion {
++    const char* title;   ///< "Restart the printer?" or "Shut down the printer?"
++    const char* message; ///< What happens next
++    const char* confirm; ///< "Restart" or "Shutdown"
++    bool destructive;    ///< Shutdown: the confirm button is styled as danger
++};
++
++/// Translated texts for @p is_reboot (Reboot) or Shutdown. Pure apart from
++/// lv_tr().
++KilnPowerQuestion kiln_power_question(bool is_reboot);
++
++/// A dedicated Reboot (@p is_reboot) or Shutdown entry: Advanced's Power
++/// rows. On Kiln OS (helix::kiln_host_power()) it asks for that one action
++/// (kiln_power_question()) and, confirmed, sends it with request_kiln_power().
++/// Other builds open show_shutdown_dialog(), upstream's dialog with both
++/// actions, whichever row was tapped. Nothing on platforms without host power
++/// controls or without @p api.
++void show_power_entry_dialog(IMoonrakerAPI* api, bool is_reboot, ShutdownModal& modal,
++                             AsyncLifetimeGuard& lifetime, lv_obj_t* parent_screen);
++
+ /// Kiln OS: whether the power entries are greyed: on a Kiln build
+ /// (@p kiln_host_power) while a job holds the machine (@p job_holds_machine:
+ /// printing, paused or preparing), when Kiln's update agent refuses anyway. Pure.
+diff --git a/src/ui/ui_panel_advanced.cpp b/src/ui/ui_panel_advanced.cpp
+index a3ec76e5..ff05dcb8 100644
+--- a/src/ui/ui_panel_advanced.cpp
++++ b/src/ui/ui_panel_advanced.cpp
+@@ -94,7 +94,8 @@ void AdvancedPanel::init_subjects() {
+          [](lv_event_t*) { get_global_advanced_panel().handle_pa_tuning_clicked(); }},
+         {"on_timelapse_videos_clicked", on_timelapse_videos_clicked},
+         {"on_timelapse_setup_clicked", on_timelapse_setup_clicked},
+-        {"on_advanced_power_clicked", on_advanced_power_clicked},
++        {"on_advanced_shutdown_clicked", on_advanced_shutdown_clicked},
++        {"on_advanced_reboot_clicked", on_advanced_reboot_clicked},
+     });
+ 
+     // Note: Input shaping uses on_input_shaper_row_clicked registered by InputShaperPanel
+@@ -262,17 +263,22 @@ void AdvancedPanel::on_timelapse_setup_clicked(lv_event_t* /*e*/) {
+     get_global_advanced_panel().handle_timelapse_setup_clicked();
+ }
+ 
+-void AdvancedPanel::on_advanced_power_clicked(lv_event_t* /*e*/) {
+-    get_global_advanced_panel().handle_power_clicked();
++void AdvancedPanel::on_advanced_shutdown_clicked(lv_event_t* /*e*/) {
++    get_global_advanced_panel().handle_power_clicked(/*is_reboot=*/false);
++}
++
++void AdvancedPanel::on_advanced_reboot_clicked(lv_event_t* /*e*/) {
++    get_global_advanced_panel().handle_power_clicked(/*is_reboot=*/true);
+ }
+ 
+ // ============================================================================
+-// POWER HANDLER — shares the same dialog the home-panel power widget uses
++// POWER HANDLER — upstream shares the dialog the home-panel power widget uses
+ // ============================================================================
+ 
+-void AdvancedPanel::handle_power_clicked() {
+-    spdlog::debug("[{}] Power row clicked — opening shutdown dialog", get_name());
+-    helix::show_shutdown_dialog(api_, shutdown_modal_, object_lifetime_, lv_screen_active());
++void AdvancedPanel::handle_power_clicked(bool is_reboot) {
++    spdlog::debug("[{}] {} row clicked", get_name(), is_reboot ? "Reboot" : "Shutdown");
++    helix::show_power_entry_dialog(api_, is_reboot, shutdown_modal_, object_lifetime_,
++                                   lv_screen_active());
+ }
+ 
+ // ============================================================================
+diff --git a/tests/unit/test_kiln_power_entries.cpp b/tests/unit/test_kiln_power_entries.cpp
+new file mode 100644
+index 00000000..df7be85a
+--- /dev/null
++++ b/tests/unit/test_kiln_power_entries.cpp
+@@ -0,0 +1,236 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++/**
++ * Kiln OS: Advanced's Reboot and Shutdown rows each ask for their own action.
++ *
++ * Upstream both rows open the one dialog with Reboot and Shutdown in it, so
++ * tapping Reboot still asked which of the two. On Kiln builds the Reboot row
++ * asks "Restart the printer?" (Restart, Cancel) and the Shutdown row "Shut
++ * down the printer?" (Shutdown, Cancel); a confirmation goes through
++ * Moonraker's machine.reboot or machine.shutdown, which Kiln's update agent
++ * checks, and a refusal is a toast with its reason. Nothing is powered off
++ * locally. Other builds keep upstream's dialog for both rows.
++ */
++
++#include "ui_modal.h"
++#include "ui_panel_advanced.h"
++#include "ui_toast_manager.h"
++#include "ui_update_queue.h"
++
++#include "../../src/ui/panel_widgets/shutdown_widget.h"
++#include "../lvgl_ui_test_fixture.h"
++#include "../test_helpers/modal_answer.h"
++#include "../ui_test_utils.h"
++#include "moonraker_api.h"
++#include "moonraker_client.h"
++#include "moonraker_error.h"
++#include "platform_info.h"
++#include "static_panel_registry.h"
++
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "../catch_amalgamated.hpp"
++
++using namespace helix;
++using Catch::Matchers::ContainsSubstring;
++
++namespace {
++
++/// Records machine.reboot / machine.shutdown instead of sending them.
++class PowerRecordingAPI : public MoonrakerAPI {
++  public:
++    using MoonrakerAPI::MoonrakerAPI;
++
++    bool is_connected() const override {
++        return connected;
++    }
++    void machine_reboot(SuccessCallback, ErrorCallback on_error) override {
++        calls.emplace_back("reboot");
++        last_error = std::move(on_error);
++    }
++    void machine_shutdown(SuccessCallback, ErrorCallback on_error) override {
++        calls.emplace_back("shutdown");
++        last_error = std::move(on_error);
++    }
++
++    bool connected = true;
++    std::vector<std::string> calls;
++    ErrorCallback last_error;
++};
++
++/// The real advanced_panel.xml, its callbacks registered as the app does,
++/// with a PowerRecordingAPI behind the panel.
++struct PowerRowsFixture : LVGLUITestFixture {
++    PowerRecordingAPI power_api{*client(), state()};
++    lv_obj_t* root = nullptr;
++    std::vector<std::pair<ToastSeverity, std::string>> toasts;
++
++    PowerRowsFixture() {
++        // The rows grey with kiln_power_locked, made before any panel XML
++        deinit_kiln_power_lock_subject();
++        init_kiln_power_lock_subject(state(), /*register_xml=*/true);
++        init_global_advanced_panel(state(), &power_api);
++        get_global_advanced_panel().init_subjects();
++        root = static_cast<lv_obj_t*>(lv_xml_create(test_screen(), "advanced_panel", nullptr));
++        REQUIRE(root != nullptr);
++        process_lvgl(5);
++        helix::ui::set_test_toast_hook([this](ToastSeverity sev, const std::string& text,
++                                              uint32_t) { toasts.emplace_back(sev, text); });
++    }
++
++    ~PowerRowsFixture() override {
++        while (ModalStack::instance().top_dialog() != nullptr) {
++            Modal::hide(ModalStack::instance().top_dialog());
++            process_lvgl(5);
++        }
++        if (root && lv_obj_is_valid(root)) {
++            lv_obj_delete(root);
++        }
++        helix::ui::UpdateQueue::instance().drain();
++        StaticPanelRegistry::instance().destroy_all();
++        deinit_kiln_power_lock_subject();
++        helix::ui::set_test_toast_hook(nullptr);
++        set_kiln_host_power_override(-1);
++    }
++
++    void tap(const char* row_name) {
++        lv_obj_t* row = lv_obj_find_by_name(root, row_name);
++        REQUIRE(row != nullptr);
++        lv_obj_send_event(row, LV_EVENT_CLICKED, nullptr);
++        helix::ui::UpdateQueue::instance().drain();
++        process_lvgl(20);
++    }
++
++    static std::string button_text(const char* name) {
++        lv_obj_t* dialog = ModalStack::instance().top_dialog();
++        REQUIRE(dialog != nullptr);
++        lv_obj_t* button = lv_obj_find_by_name(dialog, name);
++        REQUIRE(button != nullptr);
++        return test::subtree_text(button);
++    }
++
++    bool toast_shows(ToastSeverity sev, const std::string& text) const {
++        for (const auto& t : toasts) {
++            if (t.first == sev && t.second == text) {
++                return true;
++            }
++        }
++        return false;
++    }
++};
++
++} // namespace
++
++TEST_CASE("Kiln power entries: each question names one action", "[shutdown][power][kiln]") {
++    const KilnPowerQuestion reboot = kiln_power_question(/*is_reboot=*/true);
++    CHECK(std::string(reboot.title) == "Restart the printer?");
++    CHECK(std::string(reboot.confirm) == "Restart");
++    CHECK_FALSE(reboot.destructive);
++    CHECK_THAT(std::string(reboot.message), !ContainsSubstring("off"));
++
++    const KilnPowerQuestion shutdown = kiln_power_question(/*is_reboot=*/false);
++    CHECK(std::string(shutdown.title) == "Shut down the printer?");
++    CHECK(std::string(shutdown.confirm) == "Shutdown");
++    CHECK(shutdown.destructive);
++    CHECK_THAT(std::string(shutdown.message), !ContainsSubstring("start"));
++}
++
++TEST_CASE_METHOD(PowerRowsFixture, "Kiln power entries: Reboot asks only to restart",
++                 "[shutdown][power][kiln]") {
++    set_kiln_host_power_override(1);
++    tap("row_reboot");
++
++    REQUIRE(ModalStack::instance().top_dialog() != nullptr);
++    const std::string text = test::top_modal_text();
++    CHECK_THAT(text, ContainsSubstring("Restart the printer?"));
++    CHECK_THAT(text, !ContainsSubstring("Shut"));
++    // Not upstream's dialog with both actions
++    CHECK_THAT(text, !ContainsSubstring("Shutdown / Reboot"));
++    CHECK_THAT(button_text("btn_primary"), ContainsSubstring("Restart"));
++    CHECK_THAT(button_text("btn_secondary"), ContainsSubstring("Cancel"));
++    CHECK(power_api.calls.empty());
++
++    SECTION("Restart sends machine.reboot, nothing else") {
++        test::answer_top_modal("btn_primary");
++        REQUIRE(power_api.calls == std::vector<std::string>{"reboot"});
++        CHECK(ModalStack::instance().top_dialog() == nullptr);
++
++        // Kiln's update agent refuses: a toast says why
++        MoonrakerError err;
++        err.message = "A print is running";
++        power_api.last_error(err);
++        helix::ui::UpdateQueue::instance().drain();
++        CHECK(toast_shows(ToastSeverity::ERROR, "Can't restart the printer: A print is running"));
++        CHECK(power_api.calls.size() == 1);
++    }
++
++    SECTION("Cancel sends nothing") {
++        test::answer_top_modal("btn_secondary");
++        CHECK(power_api.calls.empty());
++        CHECK(ModalStack::instance().top_dialog() == nullptr);
++    }
++}
++
++TEST_CASE_METHOD(PowerRowsFixture, "Kiln power entries: Shutdown asks only to shut down",
++                 "[shutdown][power][kiln]") {
++    set_kiln_host_power_override(1);
++    tap("row_shutdown");
++
++    REQUIRE(ModalStack::instance().top_dialog() != nullptr);
++    const std::string text = test::top_modal_text();
++    CHECK_THAT(text, ContainsSubstring("Shut down the printer?"));
++    CHECK_THAT(text, !ContainsSubstring("Restart"));
++    CHECK_THAT(text, !ContainsSubstring("Reboot"));
++    CHECK_THAT(button_text("btn_primary"), ContainsSubstring("Shutdown"));
++    CHECK_THAT(button_text("btn_secondary"), ContainsSubstring("Cancel"));
++
++    SECTION("Shutdown sends machine.shutdown, nothing else") {
++        test::answer_top_modal("btn_primary");
++        REQUIRE(power_api.calls == std::vector<std::string>{"shutdown"});
++
++        MoonrakerError err;
++        err.message = "[starting_up] Start-up has not finished yet, try again in a minute";
++        power_api.last_error(err);
++        helix::ui::UpdateQueue::instance().drain();
++        CHECK(toast_shows(ToastSeverity::ERROR,
++                          "Can't shut down the printer: Start-up has not finished yet, try again "
++                          "in a minute"));
++    }
++
++    SECTION("Cancel sends nothing") {
++        test::answer_top_modal("btn_secondary");
++        CHECK(power_api.calls.empty());
++    }
++}
++
++TEST_CASE_METHOD(PowerRowsFixture, "Kiln power entries: not connected, nothing sent",
++                 "[shutdown][power][kiln]") {
++    set_kiln_host_power_override(1);
++    power_api.connected = false;
++    tap("row_reboot");
++    test::answer_top_modal("btn_primary");
++    CHECK(power_api.calls.empty());
++    CHECK(toast_shows(ToastSeverity::ERROR, "Not connected to the printer"));
++}
++
++TEST_CASE_METHOD(PowerRowsFixture, "Kiln power entries: other builds keep upstream's dialog",
++                 "[shutdown][power][kiln]") {
++    set_kiln_host_power_override(0);
++    set_platform_override(0);
++    for (const char* row : {"row_reboot", "row_shutdown"}) {
++        CAPTURE(row);
++        tap(row);
++        REQUIRE(ModalStack::instance().top_dialog() != nullptr);
++        // Upstream's dialog: both actions, whichever row was tapped
++        const std::string text = test::top_modal_text();
++        CHECK_THAT(text, ContainsSubstring("Shutdown / Reboot"));
++        CHECK_THAT(text, !ContainsSubstring("Restart the printer?"));
++        CHECK_THAT(text, !ContainsSubstring("Shut down the printer?"));
++        CHECK(power_api.calls.empty());
++        Modal::hide(ModalStack::instance().top_dialog());
++        process_lvgl(20);
++    }
++    set_platform_override(-1);
++}
+diff --git a/translations/en.yml b/translations/en.yml
+index 6a4c1ff1..e5111a65 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -5026,6 +5026,11 @@ translations:
+   'Extended memory available': 'Extended memory available'
+   'This printer has 512 MiB of memory. Kiln OS uses 256 MiB by default, the same on every AD5X. You can switch Extended memory on in Settings > System. It isn''t needed; it is off by default.': 'This printer has 512 MiB of memory. Kiln OS uses 256 MiB by default, the same on every AD5X. You can switch Extended memory on in Settings > System. It isn''t needed; it is off by default.'
+   'Restart now?': 'Restart now?'
++  # Reboot or Shutdown asked one at a time on Kiln OS (patch 0075)
++  'Restart the printer?': 'Restart the printer?'
++  'Shut down the printer?': 'Shut down the printer?'
++  'The printer can''t be used until it has started again.': 'The printer can''t be used until it has started again.'
++  'The printer stays off until you switch it on again.': 'The printer stays off until you switch it on again.'
+   # Kiln's tour (patch 0058, tour_steps_kiln.cpp)
+   'Welcome to Kiln OS': 'Welcome to Kiln OS'
+   'Here''s a quick tour of the screen, so you can find things fast.': 'Here''s a quick tour of the screen, so you can find things fast.'
+diff --git a/translations/ru.yml b/translations/ru.yml
+index 4621dec5..c2b797d9 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -5183,6 +5183,11 @@ translations:
+   'This printer has 512 MiB of memory. Kiln OS uses 256 MiB by default, the same on every AD5X. You can switch Extended memory on in Settings > System. It isn''t needed; it is off by default.': 'В принтере 512 МБ, а Kiln OS на всех AD5X по умолчанию использует 256 МБ. Расширенную память можно включить в Настройки > Система. Это не обязательно.'
+   'Restart now?': 'Перезапустить сейчас?'
+   'Cancel sent. The printer stops its start sequence at the next safe point.': 'Отмена отправлена. Принтер остановит стартовую последовательность в ближайшей безопасной точке.'
++  # Reboot or Shutdown asked one at a time on Kiln OS (patch 0075)
++  'Restart the printer?': 'Перезагрузить принтер?'
++  'Shut down the printer?': 'Выключить принтер?'
++  'The printer can''t be used until it has started again.': 'Принтером нельзя пользоваться, пока он не запустится снова.'
++  'The printer stays off until you switch it on again.': 'Принтер останется выключенным, пока вы снова его не включите.'
+   # The AD5X's filament unit named IFS where the AD5X IFS is in use (patch 0066)
+   'IFS not detected': 'IFS не обнаружен'
+   'IFS Active: ': 'IFS активен: '
+diff --git a/ui_xml/advanced_panel.xml b/ui_xml/advanced_panel.xml
+index a88d9de2..412ef6ac 100644
+--- a/ui_xml/advanced_panel.xml
++++ b/ui_xml/advanced_panel.xml
+@@ -260,25 +260,28 @@
+       <!-- ================================================================== -->
+       <!-- POWER SECTION -->
+       <!-- ================================================================== -->
+-      <!-- Both rows open the same dialog the home-panel power widget uses,
+-           which handles single-/dual-host scope and confirms the action.
++      <!-- Upstream: both rows open the same dialog the home-panel power widget
++           uses, which handles single-/dual-host scope and confirms the action.
++           Kiln OS: each row asks only for its own action.
+            Hidden whole (header + rows) on platforms without host power
+            controls (Android) — see platform_host_power_supported in
+            app_globals.cpp. -->
+       <setting_group name="group_power">
+         <bind_flag_if_eq subject="platform_host_power_supported" flag="hidden" ref_value="0"/>
+         <setting_group_header title="POWER" icon="power" hide_icon="false"/>
+-        <!-- Shutdown / Reboot — both rows open the same dialog (which presents
+-           both actions plus, on dual-host, the printer/screen/both scope). -->
++        <!-- Shutdown / Reboot — upstream, both rows open the same dialog (which
++           presents both actions plus, on dual-host, the printer/screen/both
++           scope); Kiln OS asks "Restart the printer?" or "Shut down the
++           printer?" (show_power_entry_dialog). -->
+         <!-- Kiln OS: greyed while a job holds the machine (Kiln's update agent refuses then) -->
+         <setting_action_row name="row_shutdown"
+                             label="Shutdown" icon="power" description="Power off the printer or screen"
+                             disabled="kiln_power_locked">
+-          <event_cb trigger="clicked" callback="on_advanced_power_clicked"/>
++          <event_cb trigger="clicked" callback="on_advanced_shutdown_clicked"/>
+         </setting_action_row>
+         <setting_action_row name="row_reboot" label="Reboot" icon="restart" description="Restart the printer or screen"
+                             disabled="kiln_power_locked">
+-          <event_cb trigger="clicked" callback="on_advanced_power_clicked"/>
++          <event_cb trigger="clicked" callback="on_advanced_reboot_clicked"/>
+         </setting_action_row>
+       </setting_group>
+       <!-- Bottom padding for scroll -->
+-- 
+2.56.0
+

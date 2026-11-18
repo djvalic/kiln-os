@@ -7,6 +7,7 @@
 #   chainload.sh go                         stop everything and jump (no return;
 #                                           SSH drops; runs detached)
 #   chainload.sh unstage                    rmmod chainload
+#   chainload.sh cmdline                    print the command line it passes
 #
 # Files: $DIR/chainload.ko, $DIR/xImage (default image). BusyBox ash.
 #
@@ -14,8 +15,23 @@
 # with ad5x.noslot: /usr/lib/ad5x/slot.sh then reports no slot, so
 # S01ad5x-tryboot/S99ad5x-booted leave the boot flag alone.
 # Boot messages go to the LCD (console=tty0 last).
+# The command line is the running stock kernel's (/proc/cmdline, as
+# S00ad5x-kernel passes it), with the low window of Kiln's kernels as
+# S00ad5x-kernel's kiln_mem makes it (mem=236M@0x0 becomes mem=252M@0x0,
+# rmem= goes). Its mem= arguments tell the board: a second bank at
+# 0x30000000 means 512 MiB. In standard memory (the default, as
+# S00ad5x-kernel's) that bank is taken out; EXTENDED=1 keeps it on a
+# 512 MiB board. ad5x.ram=256|512 and ad5x.memmode=standard|extended say
+# which (docs/memory.md, "Extended memory"). Its root= is replaced; the
+# rest below comes after it, so it wins.
 DIR=${DIR:-/data/ad5x/chainload}
-CMDLINE_BASE="console=ttyS0,115200n8 console=tty0 loglevel=8 ad5x.noslot mem=236M@0x0 mem=256M@0x30000000 rmem=16M@0xec00000 rtos_size=4M@0xfc00000 init=/linuxrc root=PARTLABEL=rootfs2 rootwait rootfstype=squashfs ro lpj=11935744"
+PC=${CHAINLOAD_CMDLINE:-/proc/cmdline}	# (tests)
+HW=256
+tr ' ' '\n' < "$PC" | grep -E -i -q '^mem=[0-9]+[kmg]?@0x0*30000000$' && HW=512
+MODE=standard BANK=
+[ "${EXTENDED:-}" = 1 ] && [ $HW = 512 ] && MODE=extended
+[ $MODE = standard ] && BANK='s/ [mM][eE][mM]=[0-9][0-9]*[kKmMgG]\{0,1\}@0[xX]0*30000000 / /g; '
+CMDLINE_BASE="$(sed "s/^/ /; s/\$/ /; s/ root=[^ ]*//g; s/ rmem=[^ ]*//g; s/ mem=236M@0x0 / mem=252M@0x0 /g; ${BANK}s/^ //; s/ \$//" "$PC") console=tty0 loglevel=8 ad5x.noslot root=PARTLABEL=rootfs2 rootwait rootfstype=squashfs ro ad5x.ram=$HW ad5x.memmode=$MODE"
 
 die() { echo "chainload: $*" >&2; exit 1; }
 
@@ -73,5 +89,6 @@ go)
 	;;
 go-now) go_now ;;
 unstage) rmmod chainload ;;
-*) sed -n '2,20p' "$0"; exit 2 ;;
+cmdline) echo "$CMDLINE_BASE" ;;
+*) sed -n '2,26p' "$0"; exit 2 ;;
 esac

@@ -1,0 +1,217 @@
+From 233511e829bb0a90a2452a9f7d02469270efef53 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 14:56:41 -0500
+Subject: [PATCH 44/48] ad5x: Ethernet only when used: no MAC or PHY probe on a
+ normal start
+
+With the previous patches every start probed the Ethernet device in
+board_init_r() (initr_net, eth_initialize: the RMII pins, the GMAC clock
+gate and clock, the MAC PHY control register, MDIO and the PHY, the
+address written) and mounted usershare (p6) for /MAC, whether or not the
+network was used; bootm's eth_halt() would also have probed it, through
+eth_get_dev(), with NETCONSOLE on.
+
+- net: CONFIG_NET_LAZY_INIT leaves initr_net out of board_init_r(): the
+  first network command probes the device through eth_get_dev(), as it
+  does already when none is current.
+- net: eth_halt() stops only a device that is current and probed; it no
+  longer probes one just to stop it.
+- ad5x: the address from usershare /MAC only where the network may be
+  used: a start over USB, the network rescue, netconsole switched on,
+  and the prompt (the stop key).
+- dwmac_ingenic: the MAC PHY control register's interface field at RMII
+  (4), as the SDK's ingenic_mac.c writes it for the X2600 (with
+  dt-bindings/net/ingenic_gmac.h) and Kiln's 6.6 runs the port; Linux's
+  dwmac-ingenic does the same for the X2000 family. 0 worked too on
+  printer 2 (the field may be ignored in RMII or latched at reset);
+  4 is what the kernels write anyway, so U-Boot no longer changes it to
+  something else first.
+
+A normal start now touches neither the Ethernet hardware nor usershare;
+it binds two more devices from the device tree (the MAC and the OTG
+controller) and no longer prints "Net:".
+---
+ board/flashforge/ad5x/ad5x.c | 10 ++++++++--
+ common/board_r.c             |  4 ++--
+ configs/ad5x_defconfig       |  1 +
+ drivers/net/dwmac_ingenic.c  | 18 +++++++++++++-----
+ net/Kconfig                  | 14 ++++++++++++++
+ net/eth-uclass.c             | 11 +++++++++--
+ 6 files changed, 47 insertions(+), 11 deletions(-)
+
+diff --git a/board/flashforge/ad5x/ad5x.c b/board/flashforge/ad5x/ad5x.c
+index 392a4997..a08afe1b 100644
+--- a/board/flashforge/ad5x/ad5x.c
++++ b/board/flashforge/ad5x/ad5x.c
+@@ -305,6 +305,12 @@ static void ad5x_env_follow_build(void)
+  * /MAC on usershare (p6, the factory data), read only. Not when the
+  * environment already has one; without it the network commands make up
+  * a random, locally administered one.
++ *
++ * Only where the network may be used: a start over USB, the network
++ * rescue, netconsole switched on, and the prompt (someone asked for it
++ * with the stop key). The Ethernet device is probed on its first use
++ * (CONFIG_NET_LAZY_INIT), so a normal start touches neither usershare nor
++ * the MAC and its PHY.
+  */
+ #define AD5X_USERSHARE		6
+ static void ad5x_ethaddr(void)
+@@ -336,7 +342,7 @@ int board_late_init(void)
+ {
+ 	/*
+ 	 * Loaded by the boot ROM over USB after Kiln's SPL set up DDR as stage
+-	 * 1 only (kiln-usbboot run-uboot): offer the eMMC as a USB disk on
++	 * 1 only (ad5x_usbboot.py run-uboot): offer the eMMC as a USB disk on
+ 	 * J28 (the host writes the image, docs: ad5x_emmc_image.py). This
+ 	 * build's default environment in RAM only: the start writes nothing
+ 	 * to the eMMC, whichever build's environment is there.
+@@ -352,7 +358,6 @@ int board_late_init(void)
+ 		return 0;
+ 	}
+ 	ad5x_env_follow_build();
+-	ad5x_ethaddr();
+ 	env_set("ad5x_slot", ad5x_read_slot());
+ 	return 0;
+ }
+@@ -603,6 +608,7 @@ static void ad5x_to_prompt(const char *why)
+ 	x2600_wdt_stop();
+ 	x2600_cpspr_write(0);
+ 	printf("ad5x: %s: U-Boot prompt, watchdog off\n", why);
++	ad5x_ethaddr();		/* for dhcp, wget... typed here */
+ }
+ 
+ /* the U-Boot prompt when the stop key comes within ad5x_delay seconds */
+diff --git a/common/board_r.c b/common/board_r.c
+index a397e209..8d782b6a 100644
+--- a/common/board_r.c
++++ b/common/board_r.c
+@@ -495,7 +495,7 @@ static int initr_boot_led_on(void)
+ 	return 0;
+ }
+ 
+-#if CONFIG_IS_ENABLED(NET)
++#if CONFIG_IS_ENABLED(NET) && !IS_ENABLED(CONFIG_NET_LAZY_INIT)
+ static int initr_net(void)
+ {
+ 	puts("Net:   ");
+@@ -760,7 +760,7 @@ static void initcall_run_r(void)
+ #if CONFIG_IS_ENABLED(PCI_ENDPOINT)
+ 	INITCALL(pci_ep_init);
+ #endif
+-#if CONFIG_IS_ENABLED(NET)
++#if CONFIG_IS_ENABLED(NET) && !IS_ENABLED(CONFIG_NET_LAZY_INIT)
+ 	WATCHDOG_RESET();
+ 	INITCALL(initr_net);
+ #endif
+diff --git a/configs/ad5x_defconfig b/configs/ad5x_defconfig
+index 9bdf30b2..d8bdff74 100644
+--- a/configs/ad5x_defconfig
++++ b/configs/ad5x_defconfig
+@@ -84,6 +84,7 @@ CONFIG_USB_GADGET_DOWNLOAD=y
+ CONFIG_USB_FUNCTION_MASS_STORAGE=y
+ CONFIG_CMD_USB_MASS_STORAGE=y
+ CONFIG_ETH_DESIGNWARE_INGENIC=y
++CONFIG_NET_LAZY_INIT=y
+ CONFIG_NET_RANDOM_ETHADDR=y
+ CONFIG_CMD_DHCP=y
+ CONFIG_CMD_PING=y
+diff --git a/drivers/net/dwmac_ingenic.c b/drivers/net/dwmac_ingenic.c
+index 38148f63..76cf95b5 100644
+--- a/drivers/net/dwmac_ingenic.c
++++ b/drivers/net/dwmac_ingenic.c
+@@ -5,10 +5,10 @@
+  * The X2600 has one MAC, RMII only, at 0x134b0000. Before the generic
+  * driver takes over: its pins (PC16-PC24, function 0, no pulls), its bus
+  * clock gate, the CGU's MAC clock at 50 MHz from the MPLL, and the
+- * interface field in the CPM's MAC PHY control register at 0, which the
+- * X2600 takes for RMII (as Linux's ingenic,x1000-mac and the running
+- * vendor kernel leave it). The 50 MHz RMII reference comes from the PHY:
+- * the SoC's PHY clock pin (PC15) stays a GPIO, as stock leaves it.
++ * interface field in the CPM's MAC PHY control register at RMII (4, as the
++ * SDK's ingenic_mac.c and Kiln's 6.6 set it). The 50 MHz RMII reference
++ * comes from the PHY: the SoC's PHY clock pin (PC15) stays a GPIO, as
++ * stock leaves it.
+  */
+ 
+ #include <dm.h>
+@@ -33,6 +33,7 @@
+ #define CDR_DIV_MASK		0xff
+ #define MACPHYC_SOFT_RST	BIT(3)
+ #define MACPHYC_INTF_MASK	GENMASK(2, 0)
++#define MACPHYC_INTF_RMII	4	/* the SDK's dt-bindings/net/ingenic_gmac.h */
+ 
+ #define GPIO_PORT_C		0xb3603000
+ #define PX_INTC			0x18
+@@ -87,7 +88,14 @@ static int dwmac_ingenic_setup(struct udevice *dev)
+ 		udelay(1);
+ 	}
+ 
+-	clrbits_le32(CPM_MACPHYC, MACPHYC_SOFT_RST | MACPHYC_INTF_MASK);
++	/*
++	 * RMII (4), out of reset; the delay and clock-select bits as they are.
++	 * The SDK's ingenic_mac.c for the X2600 writes 4 here for RMII, and
++	 * so does Linux's dwmac-ingenic for the X2000 family; Kiln's 6.6 runs
++	 * the port that way.
++	 */
++	clrsetbits_le32(CPM_MACPHYC, MACPHYC_SOFT_RST | MACPHYC_INTF_MASK,
++			MACPHYC_INTF_RMII);
+ 	return 0;
+ }
+ 
+diff --git a/net/Kconfig b/net/Kconfig
+index 386376ce..db7e7062 100644
+--- a/net/Kconfig
++++ b/net/Kconfig
+@@ -245,6 +245,20 @@ config BOOTDEV_ETH
+ 	  an operating system over the network, using the PXE (Preboot
+ 	  Execution Environment) protocol.
+ 
++config NET_LAZY_INIT
++	bool "Probe the Ethernet devices on first use, not at start-up"
++	depends on NET_LEGACY
++	help
++	  Without this, board_init_r() probes every Ethernet device
++	  (eth_initialize(): its pins, clocks, MDIO and PHY set up, the MAC
++	  address written) at every start, whether or not anything uses the
++	  network. With it, that happens when a network command (dhcp, ping,
++	  tftpboot, wget, netconsole...) first needs the device, through
++	  eth_get_dev(); a start that never uses the network leaves the
++	  Ethernet hardware alone. The address must then be in the
++	  environment (or the device tree, or the device's ROM) before that
++	  first use.
++
+ config NET_RANDOM_ETHADDR
+ 	bool "Random ethaddr if unset"
+ 	help
+diff --git a/net/eth-uclass.c b/net/eth-uclass.c
+index 07ec59b9..edf7d3b0 100644
+--- a/net/eth-uclass.c
++++ b/net/eth-uclass.c
+@@ -375,6 +375,7 @@ end:
+ 
+ void eth_halt(void)
+ {
++	struct eth_uclass_priv *uc_priv;
+ 	struct udevice *current;
+ 	struct eth_device_priv *priv;
+ 
+@@ -383,8 +384,14 @@ void eth_halt(void)
+ 
+ 	in_init_halt = true;
+ 
+-	current = eth_get_dev();
+-	if (!current)
++	/*
++	 * Only a device that was started can be running: never probe one
++	 * just to stop it (eth_get_dev() would, when none is current yet,
++	 * e.g. from bootm before a kernel when nothing used the network).
++	 */
++	uc_priv = eth_get_uclass_priv();
++	current = uc_priv ? uc_priv->current : NULL;
++	if (!current || !device_active(current))
+ 		goto end;
+ 
+ 	priv = dev_get_uclass_priv(current);
+-- 
+2.56.0
+

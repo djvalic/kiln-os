@@ -1,0 +1,126 @@
+#!/bin/sh
+# Kiln OS's memory mode (docs/memory.md, "Extended memory"). Every printer
+# starts in standard memory: Kiln's kernels use the low 252 MiB, the same
+# on every AD5X. A 512 MiB board can use all of it (extended memory) from
+# the next start on. Root only (the switch is root's).
+#   ad5x-memory [status]            key=value lines:
+#       hw_mem_mib=256|512          the board's RAM
+#       mem_kb=N                    MemTotal now
+#       enabled=0|1                 the switch is on
+#       active=standard|extended    what this start got
+#       restart_needed=0|1          the switch and this start disagree
+#                                   (512 MiB boards only; 0 when a boot
+#                                   loader update is needed)
+#       failed=REASON, WHEN         a start in extended memory didn't finish
+#                                   (empty: none); standard memory until on
+#       bootloader_update_needed=0|1  an older Kiln U-Boot started this and
+#                                   can't choose the mode (lib/memory.sh,
+#                                   mem_mode_fixed; 512 MiB boards only):
+#                                   a restart changes nothing
+#   ad5x-memory extended on|off     the switch, from the next start; "on"
+#                                   is refused on a 256 MiB board and also
+#                                   clears the failure record (the OS's and
+#                                   Kiln's U-Boot's failed-mem). With an
+#                                   older Kiln U-Boot the switch is still
+#                                   written: it counts after a boot loader
+#                                   update
+# Files: /data/ad5x/kernel/extended-memory (the switch), extended-memory-
+# failed (the record); read by S00ad5x-kernel and Kiln's U-Boot.
+# AD5X_LIB overrides /usr/lib/ad5x, AD5X_DATA /data, AD5X_CMDLINE and
+# AD5X_MEMINFO /proc's files (tools/test_ad5x_memory_cli.sh).
+
+# the switch is readable by klipper and www-data (Moonraker's kiln_os),
+# whoever runs this (a root SSH session may run with umask 077; issue #31)
+umask 022
+
+L=${AD5X_LIB:-/usr/lib/ad5x}
+D=${AD5X_DATA:-/data}/ad5x/kernel
+. "$L/memory.sh" || { echo "ad5x-memory: no $L/memory.sh" >&2; exit 1; }
+# Kiln's U-Boot's records (optional: an image always has them)
+ub=
+if [ -f "$L/uboot.sh" ] && [ -f "$L/slot.sh" ]; then
+	. "$L/slot.sh"
+	. "$L/uboot.sh"
+	ub=1
+fi
+
+# failed: the record's line; else U-Boot's failed-mem not copied yet
+failed() {
+	if [ -f $D/extended-memory-failed ]; then
+		head -n 1 $D/extended-memory-failed
+		return 0
+	fi
+	[ -n "$ub" ] || return 0
+	fr=$(uboot_text $UBOOT_RECORDS "$UBOOT_RECORDS_MAGIC" 2>/dev/null) || return 0
+	fv=$(uboot_val "$fr" failed-mem)
+	case "$fv" in ''|-) ;; *) echo "$fv" ;; esac
+}
+
+# when: when the switch counts
+when() {
+	if [ "$(mem_hw_mib)" = 512 ] && mem_mode_fixed; then
+		echo "takes effect after a boot loader update (this one can't choose the memory mode)"
+	else
+		echo "takes effect at the next start"
+	fi
+}
+
+case "$1" in
+status|"")
+	hw=$(mem_hw_mib)
+	act=$(mem_mode)
+	en=0
+	[ -f $D/extended-memory ] && en=1
+	rn=0 bu=0
+	if [ "$hw" = 512 ]; then
+		[ $en = 1 ] && [ "$act" != extended ] && rn=1
+		[ $en = 0 ] && [ "$act" = extended ] && rn=1
+		# a restart doesn't help: the boot loader passes what it always did
+		mem_mode_fixed && bu=1 rn=0
+	fi
+	echo "hw_mem_mib=$hw"
+	echo "mem_kb=$(mem_total_kb)"
+	echo "enabled=$en"
+	echo "active=$act"
+	echo "restart_needed=$rn"
+	echo "failed=$(failed)"
+	echo "bootloader_update_needed=$bu"
+	;;
+extended)
+	case "$2" in
+	on)
+		if [ "$(mem_hw_mib)" != 512 ]; then
+			echo "refused: this printer has 256 MiB"
+			exit 1
+		fi
+		# Kiln's U-Boot's own record first: left there, U-Boot would keep
+		# starting standard and the record would be copied back
+		if [ -n "$ub" ] && [ -n "$(uboot_text $UBOOT_RECORDS "$UBOOT_RECORDS_MAGIC" 2>/dev/null |
+			sed -n 's/^failed-mem //p' | grep -v '^-$')" ]; then
+			if ! r=$(uboot_drop $UBOOT_RECORDS "$UBOOT_RECORDS_MAGIC" failed-mem); then
+				echo "failed: Kiln's U-Boot's record of the failed start (ota 0x90200) not cleared: $r; nothing changed"
+				exit 1
+			fi
+		fi
+		if ! { mkdir -p $D && : > $D/extended-memory && chmod 0644 $D/extended-memory; }; then
+			echo "failed: can't write $D/extended-memory"
+			exit 1
+		fi
+		rm -f $D/extended-memory-failed
+		sync
+		echo "done: extended memory on, $(when)"
+		;;
+	off)
+		if ! rm -f $D/extended-memory; then
+			echo "failed: can't remove $D/extended-memory"
+			exit 1
+		fi
+		sync
+		echo "done: extended memory off, $(when)"
+		;;
+	*) echo "usage: ad5x-memory extended on|off"; exit 2 ;;
+	esac
+	;;
+*) sed -n '2,30p' "$0"; exit 2 ;;
+esac
+exit 0

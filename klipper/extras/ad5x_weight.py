@@ -82,8 +82,17 @@ class AD5XWeight:
         if self.rx_event is not None:
             ev, self.rx_event = self.rx_event, None
             ev.complete(True)
-    def _complete(self):
+    def _answered(self):
         return len(self.rx_buf) > 12 and b"ok" in self.rx_buf
+    def _complete(self):
+        # The whole line: the board sends "command H7 ok. 8596371 60 g
+        # \r\n" in more than one piece at times, and "ok" alone came
+        # before the reading on the printer (issue #69: "bad H7 reply:
+        # 'command H7 ok. 8'"). A reply that never ends its line still
+        # counts once no more bytes come (_request).
+        i = self.rx_buf.find(b"ok")
+        return (self._answered()
+                and (b"\n" in self.rx_buf[i:] or b"\r" in self.rx_buf[i:]))
     def _request(self, cmd):
         """Send cmd and return the reply (caller holds the mutex)."""
         if self.fd is None:
@@ -114,7 +123,7 @@ class AD5XWeight:
                     self.rx_event = None
                 if len(self.rx_buf) == n:
                     break
-            if self._complete():
+            if self._answered():
                 reply = self.rx_buf.decode("ascii", "replace").strip()
                 logging.debug("ad5x_weight: <- %s", reply)
                 return reply

@@ -47,11 +47,11 @@
 # 1 failed, 2 usage, 3 refused (not an AD5X, not stock, already installed).
 #
 # Test overrides: AD5X_SYS AD5X_DEV AD5X_CMDLINE AD5X_MOUNTS AD5X_DT
-# AD5X_USERDATA AD5X_ROOT AD5X_APP_STARTUP AD5X_TMP.
+# AD5X_USERDATA AD5X_ROOT AD5X_APP_STARTUP AD5X_TMP AD5X_MEMINFO.
 : "${AD5X_SYS:=/sys}" "${AD5X_DEV:=/dev}" "${AD5X_CMDLINE:=/proc/cmdline}"
 : "${AD5X_MOUNTS:=/proc/mounts}" "${AD5X_DT:=/proc/device-tree}"
 : "${AD5X_USERDATA:=/usr/data}" "${AD5X_ROOT:=}" "${AD5X_TMP:=/tmp/ad5x-install}"
-: "${AD5X_APP_STARTUP:=/usr/prog/app_startup.sh}"
+: "${AD5X_APP_STARTUP:=/usr/prog/app_startup.sh}" "${AD5X_MEMINFO:=/proc/meminfo}"
 export AD5X_SYS AD5X_DEV AD5X_CMDLINE
 
 check= yes= reboot_after= retry= usb= DIR= RECOVERY= MAIN= SUMS= EMMC= XLOG=
@@ -178,6 +178,29 @@ for e in $SPL; do
 	fi
 done
 log "AD5X: device tree '$compat', eMMC layout matches the boot loader"
+# The chip, for the log only (nothing depends on it here): as the recovery
+# OS's lib/bootloader.sh bl_variant tells it. ad5x.ram=256|512 on the
+# command line (Kiln's boot loaders put it there: a 512 MiB board in
+# standard memory runs without its second bank) counts first, with the
+# same checks; else MemTotal and the mem= bank at 0x30000000 (an X2600H
+# has 512 MiB, an X2600E 256 MiB) must agree. Read only; the eFuse SoC ID
+# would need register writes.
+memkb=$(awk '$1 == "MemTotal:" { print $2; exit }' "$AD5X_MEMINFO" 2>/dev/null)
+banks=$(tr ' ' '\n' 2>/dev/null < "$AD5X_CMDLINE" | grep '^mem=' | tr '\n' ' ' | sed 's/ $//')
+hibank=$(echo "$banks" | tr ' ' '\n' | grep -E -i -c '^mem=[0-9]+[kmg]?@0x0*30000000$')
+ram=$(tr ' ' '\n' 2>/dev/null < "$AD5X_CMDLINE" | sed -n 's/^ad5x\.ram=//p' | sort -u | tr '\n' ' ' | sed 's/ $//')
+case "$memkb" in
+''|*[!0-9]*) memkb= chip=unknown ;;
+*) case "$ram" in
+   512) chip=X2600H ;;
+   256) if [ "$memkb" -lt 400000 ] && [ "$hibank" = 0 ]; then chip=X2600E; else chip=unknown; fi ;;
+   '') if [ "$memkb" -ge 400000 ] && [ "$hibank" -gt 0 ]; then chip=X2600H
+       elif [ "$memkb" -lt 400000 ] && [ "$hibank" = 0 ]; then chip=X2600E
+       else chip=unknown; fi ;;
+   *) chip=unknown ;;
+   esac ;;
+esac
+log "chip: $chip (MemTotal ${memkb:-unreadable}${memkb:+ kB}; mem= banks '${banks:-none}'${ram:+; ad5x.ram=$ram})"
 
 root=$(sed -n 's/.*root=\([^ ]*\).*/\1/p' "$AD5X_CMDLINE")
 case "${root##*/}" in

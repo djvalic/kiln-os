@@ -1,5 +1,5 @@
 From 1132d094d77a24df1df159c2efdf0cff759a6029 Mon Sep 17 00:00:00 2001
-From: valix <djvalic.wc@gmail.com>
+From: djvalic <djvalic@users.noreply.github.com>
 Date: Sun, 15 Nov 2026 11:48:13 -0500
 Subject: [PATCH 15/16] ad5x: Keep the environment in the ota partition
 

@@ -8,11 +8,11 @@ with any system update ("Public and internal names" below).
 
 ## Version
 
-Current: **1.7**.
+Current: **1.8**.
 
 - In Klipper: `printer.ad5x_plugins.api_version` (also printed by
   `LIST_PLUGINS`).
-- On the system: `AD5X_PLUGIN_API="1.7"` in `/usr/lib/os-release`
+- On the system: `AD5X_PLUGIN_API="1.8"` in `/usr/lib/os-release`
   (`/etc/os-release`), for scripts.
 - In the code: `PLUGIN_API_VERSION` in `klipper/extras/ad5x_plugins.py`
   (the build copies it to os-release). `tools/test_plugin_api_doc.py`
@@ -59,7 +59,8 @@ they are loaded".
 | 1.4 | 2026-10-20 | v0.0.7 | The plugin catalog (`INSTALL_PLUGIN`, `UPDATE_PLUGIN`, `REMOVE_PLUGIN`), Moonraker restarted by a switch, the bed heat soak, the speaker, the nozzle size, auto-refill colour matching |
 | 1.5 | 2026-11-07 | v0.0.49 | A plugin that drives the IFS (`owns_ifs`), packages in `extras/`, `printer.load_object()` finding plugin modules; and everything the 1.4 releases added after v0.0.7 that this page now lists (tool map mode, Z offset estimate, IFS operation status, swap abort template, ...) |
 | 1.6 | 2026-11-13 | v0.1.0-rc1 | Root scripts like zMod's plugins have (`root/install.sh`, `update.sh`, `uninstall.sh`, `docs/plugin-root-hooks.md`), `ENABLE_PLUGIN ROOT=1`, `INSTALL_PLUGIN ROOT=1`, `printer.ad5x_plugins` `available.<name>.root` and `root_installed`, the job actions `root install`/`root update`/`root uninstall`; warnings when two plugins bring the same Moonraker component, `python/` package or Klipper section ("Names"); `kiln_` and `ad5x_` module, component, section and macro names refused for plugins that are not Kiln's own ("Names"); Moonraker's `[machine] provider: kiln_agent` (service restarts, "Moonraker"). The named root actions are removed ("Changes") |
-| 1.7 | (next) | (next) | Klipper module names with capitals (`extras/AFC_lane.py`; names that differ only in case count as one, also for the `kiln_`/`ad5x_` rule); `plugin.json` `module_dirs`: more Klipper module folders inside the plugin (a checkout of another project), imported when needed as Klipper imports its own ("Plugin layout", "Module folders"); `INSTALL_PLUGIN` and `UPDATE_PLUGIN` fetch the plugin's git submodules, https only ("Submodules"); `BED_MESH_CALIBRATE`, `LINE_PURGE` and `VORON_PURGE` skipped after `PRINT_START`'s mesh / prime line (or the same step already run) in the same print, `FORCE=1` (issue #73) |
+| 1.7 | 2026-11-16 | v1.0.0-rc3 | Klipper module names with capitals (`extras/AFC_lane.py`; names that differ only in case count as one, also for the `kiln_`/`ad5x_` rule); `plugin.json` `module_dirs`: more Klipper module folders inside the plugin (a checkout of another project), imported when needed as Klipper imports its own ("Plugin layout", "Module folders"); `INSTALL_PLUGIN` and `UPDATE_PLUGIN` fetch the plugin's git submodules, https only ("Submodules"); `BED_MESH_CALIBRATE`, `LINE_PURGE` and `VORON_PURGE` skipped after `PRINT_START`'s mesh / prime line (or the same step already run) in the same print, `FORCE=1` (issue #73) |
+| 1.8 | Unreleased | (next release) | Extended memory mode on printers with 512 MiB (`docs/memory.md`): the macro `KILN_MEMORY_MODE [ENABLE=0\|1]` (macros/ `system.cfg`), Moonraker's `GET`/`POST /machine/kiln_os/memory` and `POST /machine/kiln_os/memory_notice_seen` and the feature name `memory_mode` (`docs/api.md`); the IFS firmware switch: Moonraker's `GET`/`POST /machine/kiln_os/ifs_firmware`, the feature name `ifs_firmware` and the owner's opt-in `/data/ad5x/ifs-switch.enable` ("A plugin that drives the IFS"); bed screws: `[screws_tilt_adjust]`, `SCREWS_TILT_CALCULATE` with tare and the macro `BED_LEVEL_SCREWS_TUNE` (macros/ `quick_actions.cfg`, issue #69) |
 
 **1.5\*** marks the few items that came with a later 1.5 release:
 `LOG_MODE` and `printer.ad5x_log` (v0.0.53), `printer.ad5x_soak.cancel`
@@ -328,8 +329,13 @@ screen show them) and `printer.ad5x_plugins.warnings`.
 
 For a multi-material engine of its own (Happy Hare, ...) on an IFS
 running Klipper firmware (`/data/ad5x/ifs-klipper.enable`, set by the
-owner as root; `docs/deviations-from-stock.md`). With `"owns_ifs": true`
-in `plugin.json`:
+owner as root; `docs/deviations-from-stock.md`). From 1.8 the owner can
+also turn on the IFS firmware switch instead (`/data/ad5x/ifs-switch.enable`;
+Settings > Devices > IFS firmware, `docs/mcu-flashing.md`), which writes
+Klipper's firmware and the enable file itself. A plugin's
+`root/install.sh` may create `ifs-switch.enable` (the owner allows root
+scripts with `ROOT=1`); it must not flash the IFS itself. With
+`"owns_ifs": true` in `plugin.json`:
 
 - `ENABLE_PLUGIN` refuses it unless the IFS answered as Klipper at this
   boot, and while another plugin drives the IFS (the message names both
@@ -437,6 +443,8 @@ printer` before calling one.
 | `WEIGHT_TARE`, `LOAD_CELL_TARE` | | Zero the bed strain gauges | 1.0 |
 | `Z_OFFSET_ESTIMATE` | `[X=]` `[Y=]` `[MAX_FORCE=]` `[STEP=]` `[CLEAN=0]` `[SAVE=1]` | Estimate the print Z offset from the bed load cells (homed first); result in `printer.ad5x_zestimate`; `SAVE=1` sets it when the fit is good | 1.5 |
 | `LOAD_FILAMENT`, `UNLOAD_FILAMENT`, `CLEAR_NOZZLE`, `AUTO_FULL_BED_LEVEL` | as in macros/ `quick_actions.cfg` | Screen quick actions | 1.0 |
+| `SCREWS_TILT_CALCULATE` | Klipper's (`DIRECTION=`, `MAX_DEVIATION=`, ...) | Probe at the four bed screws (`[screws_tilt_adjust]` in `ad5x.cfg`) and show the turns; tares the strain gauges over screw1 and makes one uncounted `PROBE` there first, refuses when not homed; results in Klipper's `printer.screws_tilt_adjust` | 1.8 |
+| `BED_LEVEL_SCREWS_TUNE` | `BED_TEMP=` (80), `EXTRUDER_TEMP=` (130; 0 leaves a heater off), `DIRECTION=CW\|CCW` | zMod's bed screw levelling (macros/ `quick_actions.cfg`): heat, home if needed, `SCREWS_TILT_CALCULATE`, nozzle to the bed centre 50 mm up; heaters stay on; refused during a print | 1.8 |
 | `_PRINT_STATUS` | `MSG=` (none: clear) | Status line on the screen (`M117`) and the console | 1.0 |
 | `GET_FILAMENT_VALUE`, `GET_CUT_VALUE` | | Raw ADC of the toolhead filament sensor / the cutter sensor (stock names) | 1.0 |
 | `HEATER_IDLE_TIMEOUT` | `[MINUTES=]` (at least 5) | Minutes with no print and no heater change before the heaters go off; saved; shows it without parameters | 1.5 |
@@ -534,6 +542,7 @@ each, for its macro panel.
 | `PLUGINS_LIST`, `PLUGIN_ENABLE NAME=`, `PLUGIN_DISABLE NAME=` | `LIST_PLUGINS`, `ENABLE_PLUGIN`, `DISABLE_PLUGIN` | 1.1 |
 | `IFS_TUNE_RUN [CHANNEL=]`, `IFS_TUNE_CLEAR`, `IFS_INFO` | `IFS_TUNE`, `IFS_TUNE_RESET`, `IFS_STATUS` | 1.1 |
 | `CONFIG_BACKUPS_SHOW [ACK=1]` | `CONFIG_BACKUPS` | 1.1 |
+| `KILN_MEMORY_MODE [ENABLE=0\|1]` | Moonraker's remote method `kiln_memory_mode` (`docs/api.md`, `/machine/kiln_os/memory`): Extended memory on or off from the next start, or the mode without `ENABLE`; the answer in the console. Printers with 256 MiB answer "not available" | 1.8 |
 
 ## Public and internal names
 
@@ -570,6 +579,7 @@ step.
 | `printer.ad5x_soak` | `enabled`, `calibration` (per bed temperature `settle`, `drift`, `warp`, `points`, `from`, `stable`, `date`), `running`, `soak`, `last`; 1.5\*: `cancel` (a cancel arrived during the print start and waits for it to end) | 1.4 |
 | `printer.ad5x_zestimate` | Empty until the first `Z_OFFSET_ESTIMATE`, then: `estimate` (mm, the print Z offset it suggests), `press_in` (mm, first contact relative to where the probe fires), `stiffness` (g/mm), `r2` (fit quality, below 0.95 poor), `points`, `trigger_force` (g, null), `saved` (the saved Z offset then, null), `drift` (g), `first_touch` (mm above the trigger, null) | 1.5 |
 | `printer.ad5x_log` | `mode` (`short`/`extended`), `until` (Unix time back to short, null) | 1.5\* |
+| `printer.ad5x_mlock` | `locked` (Klipper's memory is locked in RAM), `flags` (`current,future,onfault`), `limit` (bytes, null: unlimited), `error` (why not, null; `off (...)` with `/data/ad5x/klipper-mlock.disable`) | 1.8 |
 | `printer.ad5x_plugins` | `api_version`, `enabled`, `available` (per plugin: `source`, `description`, `version`, `author`, `url`, `requires_os`, `compatible`; 1.5: `owns_ifs`; 1.6: `root` (it has root scripts), `root_installed` (its `install.sh` ran)), `warnings`; 1.4: `catalog` (per plugin: `title`, `description`, `url`, `requires_os`, `compatible`, `installed`), `job` (`name`, `action`, `state` idle/running/done/failed, `message`; 1.6: `action` `root install`/`root update`/`root uninstall` for the root scripts); 1.5: `ifs_owner` (the plugin driving the IFS at this start, "" Kiln's `[ifs]`) | 1.0 |
 | `printer['gcode_macro _AD5X_UNIT']` | `z_offset`, `cut_x_offset`, `cut_y_offset`, `x_offset`, `y_offset` (purge box at X 52.5 + `x_offset`, Y 229 + `y_offset`; cut at X `cut_x_offset` - 2.5, Y `cut_y_offset` - 7.5) | 1.0 |
 | `printer['gcode_macro _PURGE_BOX_POS']` | `x`, `y` (the purge box spot, with the saved `TRASH_OFFSET`), `dx`, `dy` (its offset from X 52.5 / Y 229: `TRASH_OFFSET`, else unit.cfg's `x_offset`/`y_offset`); what every Kiln box move uses | 1.5\* |

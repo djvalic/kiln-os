@@ -65,6 +65,37 @@
 #                                       channel, kept in Moonraker's database
 #                                       (namespace kiln_os, key
 #                                       update_channel; survives updates)
+#   GET  /machine/kiln_os/memory        Extended memory mode (512 MiB boards,
+#                                       docs/memory.md): available, enabled,
+#                                       active, restart_needed, failed,
+#                                       bootloader_update_needed, ...
+#   POST /machine/kiln_os/memory        ?enable=true|false: the agent runs
+#                                       "ad5x-memory extended on|off" (only
+#                                       the switch in /data/ad5x/kernel; the
+#                                       next start uses it), also while
+#                                       printing; 409 not_available on 256 MiB
+#   POST /machine/kiln_os/memory_notice_seen
+#                                       the one-time notice "Extended memory
+#                                       available" is seen (database
+#                                       namespace kiln_os, memory_notice_seen)
+# The same notice as a Moonraker announcement (feed kiln_os) for Fluidd and
+# Mainsail; dismissing it there counts as seen (snoozing doesn't). Klipper's
+# macro KILN_MEMORY_MODE [ENABLE=0|1] (macros/system.cfg) calls the remote
+# method kiln_memory_mode, answered in the G-code console.
+# The IFS firmware switch (docs/mcu-flashing.md, "IFS firmware switch"):
+#   GET  /machine/kiln_os/ifs_firmware  available (the owner turned it on
+#                                       and the image has Klipper's IFS
+#                                       firmware), the running firmware,
+#                                       the last switch: state idle,
+#                                       running, done or failed, phase,
+#                                       reason, message, version
+#   POST /machine/kiln_os/ifs_firmware  ?target=stock|klipper: the agent
+#                                       checks and answers at once, then
+#                                       switches in the background (Klipper
+#                                       stops for 1-4 minutes); klipper
+#                                       only with the owner's opt-in,
+#                                       refused while printing or while a
+#                                       switch runs. No G-code starts it.
 # Every endpoint answers an object (Moonraker adds HTTP's one "result");
 # errors are KilnError: an HTTP status by kind and "[REASON] text"
 # (docs/api.md, "Errors").
@@ -106,6 +137,7 @@ AGENT_BOOT_RECOVERY = WORK_DIR / "boot-recovery"
 AGENT_RETURN_STOCK = WORK_DIR / "return-stock"
 AGENT_REBOOT = WORK_DIR / "reboot"
 AGENT_SHUTDOWN = WORK_DIR / "shutdown"
+AGENT_IFS = WORK_DIR / "ifs-firmware"
 PLUGINS_DIR = pathlib.Path("/data/ad5x/plugins")
 PLUGINS_LINK = "plugins"
 APPS_DIR = pathlib.Path("/data/ad5x/apps")
@@ -120,7 +152,8 @@ OS_RELEASE = pathlib.Path("/usr/lib/os-release")
 # What this OS offers clients (docs/api.md, "Feature names"); "updates" and
 # "lane_data" are added while their components run
 FEATURES = ("ifs", "soak", "setup_wizard", "plugins", "kernel_retry",
-            "boot_recovery", "3mf_upload", "print_error", "return_stock")
+            "boot_recovery", "3mf_upload", "print_error", "return_stock",
+            "ifs_firmware")
 # The update channel (docs/updates.md, "Test channel"): in Moonraker's
 # database, so it survives Kiln OS updates; only POST /machine/kiln_os/channel
 # writes it (a protected namespace)
@@ -128,6 +161,44 @@ CHANNELS = ("stable", "test")
 DEFAULT_CHANNEL = "stable"
 DB_NAMESPACE = "kiln_os"
 DB_CHANNEL_KEY = "update_channel"
+# Extended memory mode (docs/memory.md): S04ad5x-memory's record of this
+# start (MEM_KB, LOW_MEM, HW_MEM_MIB=256|512, MEM_MODE=standard|extended,
+# MEM_MODE_FIXED=0|1: an older Kiln U-Boot that can't choose the mode),
+# the switch (written by ad5x-memory, root) and the failure record of a
+# start in extended mode that didn't finish (line 1: reason, date), both in
+# KERNEL_DIR
+MEMORY_CONF = pathlib.Path("/run/ad5x-memory.conf")
+MEMORY_SWITCH = "extended-memory"
+MEMORY_FAILED = "extended-memory-failed"
+AGENT_MEMORY = WORK_DIR / "memory-mode"
+MEMORY_MODES = ("standard", "extended")
+DB_NOTICE_KEY = "memory_notice_seen"
+# The notice (the touch screen's bell and a Moonraker announcement)
+NOTICE_FEED = "kiln_os"
+NOTICE_TITLE = "Extended memory available"
+NOTICE_TEXT = (
+    "This printer has 512 MiB of memory. Kiln OS uses 256 MiB by default, "
+    "the same on every AD5X. You can switch Extended memory on in Settings "
+    "> System. It isn't needed; it is off by default.")
+NOTICE_URL = ("https://github.com/djvalic/kiln-os/blob/main/docs/api.md"
+              "#get-machinekiln_osmemory")
+MEMORY_FAILED_TEXT = ("Extended memory was turned off: the printer didn't "
+                      "finish starting with it.")
+REMOTE_MEMORY = "kiln_memory_mode"
+# The IFS firmware switch: the agent's status of the last switch (root's
+# folder, S68ad5x-update-agent ifs_job), the owner's opt-in (either file;
+# root's folder, so only the owner over SSH, or a plugin's root script the
+# owner allowed, makes one), the image's Klipper firmware for the IFS and
+# its version, and S61klipper's record that the IFS answered as Klipper
+IFS_STATUS = pathlib.Path("/data/ad5x/kiln-status/ifs-firmware")
+IFS_OPTIN = pathlib.Path("/data/ad5x/ifs-switch.enable")
+IFS_KLIPPER_ENABLE = pathlib.Path("/data/ad5x/ifs-klipper.enable")
+IFS_IMAGE = pathlib.Path("/usr/share/ad5x/mcu/ifs.hex")
+IFS_IMAGE_VERSION = pathlib.Path("/usr/share/ad5x/mcu/IFS_VERSION")
+IFS_ANSWERS_KLIPPER = pathlib.Path("/run/ad5x/ifs-klipper")
+IFS_TARGETS = ("stock", "klipper")
+IFS_STATES = ("running", "done", "failed")
+IFS_KEYS = ("target", "state", "phase", "reason", "message", "version")
 # A Kiln OS release tag (not the daily packages "klipper-v...", not "sources")
 OS_TAG = re.compile(r"v\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?")
 
@@ -172,6 +243,11 @@ AGENT_REFUSALS: Tuple[Tuple[str, str], ...] = (
     ("start-up has not finished", "starting_up"),
     ("the recovery OS is being written", "recovery_updating"),
     ("slot A doesn't hold the recovery OS", "no_recovery"),
+    ("this printer has 256 MiB", "not_available"),
+    ("the IFS firmware is being switched", "ifs_switching"),
+    ("the IFS firmware switch is off", "not_enabled"),
+    ("this image has no Klipper firmware for the IFS", "not_available"),
+    ("the printer is busy", "printer_busy"),
 )
 # Refusals that are failures on the printer (500)
 AGENT_REFUSAL_FAILURES = ("can't write the boot flag",)
@@ -397,6 +473,146 @@ def kernel_notice(st: Dict[str, Any]) -> str:
         f"{why}. Sound and some drivers are unavailable. To try it again: "
         "POST /machine/kiln_os/kernel_retry (the printer reboots), or "
         "'ad5x-kernel retry' over SSH, then reboot.")
+
+
+def read_memory_conf() -> Dict[str, str]:
+    """/run/ad5x-memory.conf as a dict; {} when missing or unreadable"""
+    conf: Dict[str, str] = {}
+    for line in read_record(MEMORY_CONF).splitlines():
+        key, sep, val = line.partition("=")
+        if sep:
+            conf[key.strip()] = val.strip().strip('"\'')
+    return conf
+
+
+def memory_status(seen: bool) -> Dict[str, Any]:
+    """Extended memory mode: GET /machine/kiln_os/memory's object. SEEN:
+    the notice was seen (database). Without HW_MEM_MIB in the record (an
+    older S04ad5x-memory) the mode is not available. A failure record
+    turns the switch off as far as the next start goes (the boot paths
+    start standard until "ad5x-memory extended on" removes it), so enabled
+    is false then and the failure is in "failed". MEM_MODE_FIXED=1 (an
+    older Kiln U-Boot started this): only a boot loader update changes the
+    mode, so bootloader_update_needed is true, and restart_needed and
+    notice_pending are false (a restart wouldn't do it)."""
+    conf = read_memory_conf()
+    try:
+        hw: Optional[int] = int(conf.get("HW_MEM_MIB", ""))
+    except ValueError:
+        hw = None
+    if hw not in (256, 512):
+        hw = None
+    try:
+        mem_kb: Optional[int] = int(conf.get("MEM_KB", ""))
+    except ValueError:
+        mem_kb = None
+    active = conf.get("MEM_MODE", "")
+    if active not in MEMORY_MODES:
+        active = "standard"
+    lines = read_record(KERNEL_DIR / MEMORY_FAILED).splitlines()
+    failed = lines[0].strip() if lines else ""
+    switch = KERNEL_DIR / MEMORY_SWITCH
+    enabled = (switch.exists() or switch.is_symlink()) and not failed
+    available = hw == 512
+    update = available and conf.get("MEM_MODE_FIXED") == "1"
+    return {
+        "available": available,
+        "enabled": enabled,
+        "active": active,
+        "restart_needed": (available and not update
+                           and enabled != (active == "extended")),
+        "failed": failed or None,
+        "notice_pending": (available and not update
+                           and active == "standard"
+                           and not enabled and not seen),
+        "bootloader_update_needed": update,
+        "hw_mem_mib": hw,
+        "mem_kb": mem_kb,
+    }
+
+
+def parse_enable(val: Any) -> bool:
+    """enable= of POST /machine/kiln_os/memory and KILN_MEMORY_MODE"""
+    v = str(val).strip().lower() if val is not None else ""
+    if v in ("true", "1", "on", "yes"):
+        return True
+    if v in ("false", "0", "off", "no"):
+        return False
+    raise bad_parameter(
+        "No enable given (true or false)" if not v
+        else f"enable must be true or false, not '{val}'")
+
+
+def memory_report(st: Dict[str, Any]) -> List[str]:
+    """KILN_MEMORY_MODE's answer in the G-code console"""
+    if not st["available"]:
+        hw = st["hw_mem_mib"]
+        has = f"this printer has {hw} MiB" if hw else \
+            "this printer's memory size is unknown"
+        return [f"Extended memory: not available ({has}; it needs 512 MiB)"]
+    lines = [f"Extended memory: {'on' if st['enabled'] else 'off'} "
+             f"(this start: {st['active']})"]
+    if st["failed"]:
+        lines.append(f"{MEMORY_FAILED_TEXT} ({st['failed']})")
+    if st["bootloader_update_needed"]:
+        lines.append("Needs a boot loader update to take effect: this boot "
+                     "loader can't choose the memory mode")
+    if st["restart_needed"]:
+        lines.append("Takes effect at the next start (restart the printer)")
+    return lines
+
+
+def read_ifs_record() -> Dict[str, str]:
+    """The agent's status of the last IFS firmware switch (key=value
+    lines); {} when there is none or it can't be read"""
+    rec: Dict[str, str] = {}
+    for line in read_record(IFS_STATUS).splitlines():
+        key, sep, val = line.partition("=")
+        if sep and key in IFS_KEYS:
+            rec[key] = val.strip()
+    return rec
+
+
+def ifs_firmware_status(ifs_version: Optional[str] = None
+                        ) -> Dict[str, Any]:
+    """GET /machine/kiln_os/ifs_firmware's object. IFS_VERSION: Klipper's
+    printer.ifs.version ("3.0.7" on Flashforge's firmware, "Klipper ..."
+    on Klipper's), None when Klipper didn't say. The running firmware:
+    unknown during a switch; klipper when S61klipper found the IFS
+    answering as Klipper at Klipper's last start; else from ifs.version;
+    else what the last switch put on; else unknown."""
+    rec = read_ifs_record()
+    state = rec.get("state", "")
+    if state not in IFS_STATES:
+        state = "idle"
+    target = rec.get("target", "")
+    if target not in IFS_TARGETS:
+        target = ""
+    enabled = IFS_OPTIN.is_file() or IFS_KLIPPER_ENABLE.is_file()
+    if state == "running":
+        firmware = "unknown"
+    elif IFS_ANSWERS_KLIPPER.exists():
+        firmware = "klipper"
+    elif ifs_version:
+        firmware = ("klipper" if ifs_version.startswith("Klipper")
+                    else "stock")
+    elif state == "done" and target:
+        firmware = target
+    else:
+        firmware = "unknown"
+    image_version = read_record(IFS_IMAGE_VERSION).strip()
+    return {
+        "available": enabled and IFS_IMAGE.is_file(),
+        "enabled": enabled,
+        "firmware": firmware,
+        "state": state,
+        "target": target or None,
+        "phase": rec.get("phase") or None if state == "running" else None,
+        "reason": rec.get("reason") or None if state == "failed" else None,
+        "message": rec.get("message") or None if state == "failed" else None,
+        "version": rec.get("version") or None if state == "done" else None,
+        "klipper_version": image_version or None,
+    }
 
 
 # One request at a time: the agent answers every request in one status file
@@ -971,6 +1187,26 @@ class KilnOS:
         self.server.register_endpoint(
             "/machine/kiln_os/channel", RequestType.POST,
             self._handle_channel)
+        # GET and POST: JSON-RPC machine.kiln_os.get_memory and
+        # machine.kiln_os.post_memory (Moonraker's names for an endpoint
+        # with two request types)
+        self.server.register_endpoint(
+            "/machine/kiln_os/memory", RequestType.GET | RequestType.POST,
+            self._handle_memory)
+        self.server.register_endpoint(
+            "/machine/kiln_os/memory_notice_seen", RequestType.POST,
+            self._handle_memory_notice_seen)
+        # JSON-RPC machine.kiln_os.get_ifs_firmware and post_ifs_firmware
+        self.server.register_endpoint(
+            "/machine/kiln_os/ifs_firmware",
+            RequestType.GET | RequestType.POST, self._handle_ifs_firmware)
+        # KILN_MEMORY_MODE (macros/system.cfg)
+        self.server.register_remote_method(REMOTE_MEMORY,
+                                           self._remote_memory_mode)
+        # Fluidd's and Mainsail's dismiss of the notice's announcement
+        self.server.register_event_handler(
+            "announcements:dismissed", self._on_announcement_dismissed)
+        self.notice_lock = asyncio.Lock()
         self.deploy: Optional[KilnDeploy] = None
         self.db = self.server.lookup_component("database", None)
         if self.db is not None:
@@ -1061,6 +1297,8 @@ class KilnOS:
             features.append("updates")
         if self.server.lookup_component("kiln_lanes", None) is not None:
             features.append("lane_data")
+        if read_memory_conf().get("HW_MEM_MIB") == "512":
+            features.append("memory_mode")
         return {
             "os_version": read_kiln_version()["VERSION"],
             "api_version": read_api_version(),
@@ -1115,6 +1353,216 @@ class KilnOS:
         await ask_agent(self.server, AGENT_RETURN_STOCK, "return-stock\n",
                         ("rebooting",), timeout=30)
         return dict(REBOOTING)
+
+    # Extended memory mode (docs/memory.md)
+
+    async def component_init(self) -> None:
+        # After the announcements component's own init (a core component,
+        # set up before the others): its entries are loaded by then
+        await self._sync_memory_notice()
+
+    async def notice_seen(self) -> bool:
+        if self.db is None:
+            return False
+        try:
+            return bool(await self.db.get_item(DB_NAMESPACE, DB_NOTICE_KEY,
+                                               False))
+        except Exception:
+            logging.exception("kiln_os: reading memory_notice_seen")
+            return False
+
+    async def memory_status(self) -> Dict[str, Any]:
+        return memory_status(await self.notice_seen())
+
+    async def _store_notice_seen(self) -> None:
+        if self.db is None:
+            raise KilnError("database_unavailable",
+                            "Moonraker's database is not available", 503)
+        await self.db.insert_item(DB_NAMESPACE, DB_NOTICE_KEY, True)
+
+    async def set_memory_mode(self, enable: bool) -> Dict[str, Any]:
+        """The switch through the agent ("ad5x-memory extended on|off");
+        allowed while printing (only a file changes, the next start uses
+        it). The owner has found the setting: the notice counts as seen."""
+        st = await self.memory_status()
+        if not st["available"]:
+            hw = st["hw_mem_mib"]
+            raise KilnError(
+                "not_available", "Extended memory needs 512 MiB of memory; "
+                + (f"this printer has {hw} MiB" if hw
+                   else "this printer's memory size is unknown"), 409)
+        mode = "on" if enable else "off"
+        status = await ask_agent(self.server, AGENT_MEMORY, f"{mode}\n",
+                                 ("done",), timeout=30)
+        logging.info(f"kiln_os: extended memory {mode}: {status}")
+        if self.db is not None:
+            try:
+                await self._store_notice_seen()
+            except Exception:
+                logging.exception("kiln_os: storing memory_notice_seen")
+        await self._sync_memory_notice()
+        return await self.memory_status()
+
+    async def _handle_memory(self, web_request: WebRequest
+                             ) -> Dict[str, Any]:
+        if web_request.get_request_type() == RequestType.POST:
+            return await self.set_memory_mode(
+                parse_enable(web_request.get_str("enable", None)))
+        return await self.memory_status()
+
+    async def _handle_memory_notice_seen(self, web_request: WebRequest
+                                         ) -> Dict[str, Any]:
+        await self._store_notice_seen()
+        await self._sync_memory_notice()
+        return await self.memory_status()
+
+    async def _remote_memory_mode(self, enable: Any = None) -> None:
+        """KILN_MEMORY_MODE [ENABLE=0|1]: the mode, or switch it; the
+        answer in the G-code console (Klipper doesn't wait for it)"""
+        try:
+            if enable is None:
+                st = await self.memory_status()
+            else:
+                st = await self.set_memory_mode(parse_enable(enable))
+            lines = [f"// {line}" for line in memory_report(st)]
+        except Exception as e:
+            if not isinstance(e, KilnError):
+                logging.exception("kiln_os: KILN_MEMORY_MODE")
+            lines = [f"!! KILN_MEMORY_MODE: {e}"]
+        for line in lines:
+            self.server.send_event("server:gcode_response", line)
+
+    # The IFS firmware switch (docs/mcu-flashing.md)
+
+    async def _ifs_version(self) -> Optional[str]:
+        """Klipper's printer.ifs.version; None when Klipper doesn't answer
+        or has no ifs object (a plugin drives the IFS)"""
+        kapis = self.server.lookup_component("klippy_apis", None)
+        if kapis is None:
+            return None
+        try:
+            res = await kapis.query_objects({"ifs": ["version"]}, None)
+        except Exception:
+            return None
+        if not isinstance(res, dict) or not isinstance(res.get("ifs"), dict):
+            return None
+        ver = res["ifs"].get("version")
+        return ver if isinstance(ver, str) and ver else None
+
+    async def ifs_firmware_status(self) -> Dict[str, Any]:
+        return ifs_firmware_status(await self._ifs_version())
+
+    async def switch_ifs_firmware(self, target: str) -> Dict[str, Any]:
+        """Ask the agent to switch the IFS to TARGET. It checks again
+        (print state, idle_timeout, opt-in, a running switch), answers at
+        once and switches in the background; the reply is the GET object
+        with state running."""
+        if target not in IFS_TARGETS:
+            raise bad_parameter(
+                "No target given (stock or klipper)" if not target
+                else f"target must be stock or klipper, not '{target}'")
+        st = ifs_firmware_status()
+        if st["state"] == "running":
+            raise KilnError("ifs_switching",
+                            "The IFS firmware is being switched, try again "
+                            "in a few minutes", 409)
+        if target == "klipper" and not st["enabled"]:
+            raise KilnError(
+                "not_enabled", "The IFS firmware switch is off (the owner "
+                f"turns it on over SSH: touch {IFS_OPTIN})", 409)
+        if target == "klipper" and not IFS_IMAGE.is_file():
+            raise KilnError("not_available", "This image has no Klipper "
+                            "firmware for the IFS", 409)
+        status = await ask_agent(self.server, AGENT_IFS, f"{target}\n",
+                                 ("done",), timeout=30)
+        logging.info(f"kiln_os: IFS firmware {target}: {status}")
+        return await self.ifs_firmware_status()
+
+    async def _handle_ifs_firmware(self, web_request: WebRequest
+                                   ) -> Dict[str, Any]:
+        if web_request.get_request_type() == RequestType.POST:
+            target = web_request.get_str("target", None)
+            return await self.switch_ifs_firmware(
+                str(target).strip().lower() if target is not None else "")
+        return await self.ifs_firmware_status()
+
+    # The notice as a Moonraker announcement (feed kiln_os): there while
+    # notice_pending, removed otherwise. Its id changes with each add
+    # ("kiln_os/DATE"), so it is found by feed and title. A dismiss in
+    # Fluidd or Mainsail marks the notice seen; a snooze (a dismiss with a
+    # wake time) doesn't. Kiln's own "seen" dismisses it first, so clients
+    # get Moonraker's announcement_dismissed.
+
+    async def _notices(self, ann: Any) -> List[Dict[str, Any]]:
+        try:
+            entries = await ann.get_announcements(include_dismissed=True)
+        except Exception:
+            logging.exception("kiln_os: listing announcements")
+            return []
+        return [e for e in entries if isinstance(e, dict)
+                and e.get("feed") == NOTICE_FEED
+                and e.get("title") == NOTICE_TITLE]
+
+    async def _sync_memory_notice(self) -> None:
+        ann = self.server.lookup_component("announcements", None)
+        if ann is None:
+            return
+        async with self.notice_lock:
+            try:
+                await self._sync_notice(ann)
+            except Exception:
+                logging.exception("kiln_os: memory notice announcement")
+
+    async def _sync_notice(self, ann: Any) -> None:
+        ours = await self._notices(ann)
+        seen = await self.notice_seen()
+        if not seen and self.db is not None and any(
+                e.get("dismissed") and not e.get("dismiss_wake")
+                for e in ours):
+            # Dismissed while this component wasn't listening
+            await self._store_notice_seen()
+            seen = True
+        st = memory_status(seen)
+        if st["notice_pending"]:
+            for e in ours[1:]:
+                await self._drop_notice(ann, e, False)
+            if not ours:
+                entry = ann.add_internal_announcement(
+                    NOTICE_TITLE, NOTICE_TEXT, NOTICE_URL, "normal",
+                    NOTICE_FEED)
+                logging.info("kiln_os: memory notice announced "
+                             f"({entry.get('entry_id')})")
+            return
+        for e in ours:
+            await self._drop_notice(ann, e, seen)
+
+    async def _drop_notice(self, ann: Any, entry: Dict[str, Any],
+                           dismiss: bool) -> None:
+        eid = entry["entry_id"]
+        try:
+            if dismiss and not entry.get("dismissed"):
+                await ann.dismiss_announcement(eid)
+            await ann.remove_announcement(eid)
+        except Exception as e:
+            logging.info(f"kiln_os: announcement {eid}: {e}")
+
+    async def _on_announcement_dismissed(self, data: Any) -> None:
+        eid = str(data.get("entry_id", "")) if isinstance(data, dict) else ""
+        ann = self.server.lookup_component("announcements", None)
+        if ann is None or not eid.startswith(NOTICE_FEED + "/"):
+            return
+        entry = next((e for e in await self._notices(ann)
+                      if e.get("entry_id") == eid), None)
+        if entry is None or entry.get("dismiss_wake") or self.db is None:
+            # Gone (Kiln removed it), snoozed, or nowhere to keep it
+            return
+        try:
+            await self._store_notice_seen()
+        except Exception:
+            logging.exception("kiln_os: storing memory_notice_seen")
+            return
+        logging.info("kiln_os: memory notice dismissed in a web client")
+        await self._sync_memory_notice()
 
 
 def load_component(config: ConfigHelper) -> KilnOS:

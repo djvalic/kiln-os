@@ -1,5 +1,5 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: valix <djvalic.wc@gmail.com>
+From: djvalic <djvalic@users.noreply.github.com>
 Date: Thu, 12 Nov 2026 15:01:26 -0500
 Subject: [PATCH] clk: ingenic: cgu: Start a stopped divider on enable
 

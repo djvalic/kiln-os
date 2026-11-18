@@ -15,10 +15,14 @@ TARGET=$1
 # Files of earlier builds that packages no longer install: Buildroot never
 # removes anything from the target tree, so drop them here.
 # S07ad5x-stock-helpers (replaced by S07ad5x-board) mounted slot A, now the
-# recovery OS, and ran a second heartbeat.
-for f in etc/init.d/S07ad5x-stock-helpers; do
+# recovery OS, and ran a second heartbeat. S50crond, the crond and crontab
+# links and /etc/cron: from builds before busybox.fragment turned crond
+# off (Kiln OS schedules nothing with cron).
+for f in etc/init.d/S07ad5x-stock-helpers etc/init.d/S50crond \
+		usr/sbin/crond usr/bin/crontab; do
 	rm -f "$TARGET/$f"
 done
+rmdir "$TARGET/etc/cron/crontabs" "$TARGET/etc/cron" 2>/dev/null || true
 REPO=$(cd "$BR2_EXTERNAL_AD5X_PATH/.." && pwd)
 
 # Vendor files: none, or bundled in a private build (shared with the recovery image)

@@ -26,7 +26,7 @@ index e05ba3182..9680565c7 100644
  	};
  
  	chosen {
-@@ -52,10 +54,20 @@ pins_uart0: uart0 {
+@@ -51,10 +53,20 @@ pins_uart0: uart0 {
  		groups = "uart0-e";
  	};
  
@@ -47,7 +47,7 @@ index e05ba3182..9680565c7 100644
  };
  
  /* Debug console */
-@@ -66,6 +78,14 @@ &uart0 {
+@@ -65,6 +77,14 @@ &uart0 {
  	status = "okay";
  };
  
@@ -62,7 +62,7 @@ index e05ba3182..9680565c7 100644
  /*
   * Filament changer (IFS): half-duplex RS-485, driver enable on PC3. The
   * transceiver does not echo what it sends, and the IFS answers within a
-@@ -82,3 +102,11 @@ &uart4 {
+@@ -81,3 +101,11 @@ &uart4 {
  
  	status = "okay";
  };

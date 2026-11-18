@@ -1,0 +1,469 @@
+From 8641f099f4bee797ecb2c5799cac4ac9fff77bb5 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Mon, 16 Nov 2026 22:30:00 -0700
+Subject: [PATCH 29/29] mips: jz47xx: x2600: DDR parameters by the SoC ID in
+ the eFuse
+
+The X2600 comes in variants with different DDR dies in the package:
+the AD5X ships with the X2600H (512 MiB DDR3L) and the X2600E (256 MiB
+DDR3). The SPL always set up the X2600H's DDR, so on an X2600E its DDR
+test failed.
+
+Read the SoC info from the eFuse as Ingenic's check_socid() does, build
+the DDR ID from it and pick the matching table: the X2600H's as before,
+the X2600E's as the 2025 stock SPL carries it.
+
+With 256 MiB, leave the second bank (mem=256M@0x30000000) off the
+kernel command line, in the SPL and in U-Boot proper, as the stock SPL
+does.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+[Kiln OS: one decision for the SPL and U-Boot proper in
+ mach/x2600_ram.h, plain C for the laptop tests. Fail-safe: an X2600H,
+ a blank eFuse, a read that doesn't finish, check bits that differ or
+ a variant Ingenic doesn't list keep the X2600H's table, as before;
+ only a good SoC ID that isn't an X2600H and decodes to DDR3 with
+ 256 MiB picks the X2600E's. The X2600N's 128 MiB table dropped: the
+ kernels' memory layout needs the low 256 MiB, so any other DDR stops
+ the attempt before the DDR setup (spl_fail, then the boot ROM's USB
+ mode after the last one). The X2600E's table is static const and
+ copied over the X2600H's, so the DDR code is unchanged. The eFuse is
+ powered down after the read, as check_socid() does. The second bank
+ is dropped as any word mem=...@0x30000000, wherever it is. The SPL
+ logs the SoC ID and the table it chose. The DDR test is unchanged:
+ address lines 2-27 are the low 256 MiB on both.]
+---
+ arch/mips/mach-jz47xx/include/mach/x2600.h    |   8 ++
+ .../mips/mach-jz47xx/include/mach/x2600_ram.h | 121 ++++++++++++++++++
+ arch/mips/mach-jz47xx/x2600/sdram.c           |  52 ++++++++
+ arch/mips/mach-jz47xx/x2600/spl.c             |  37 +++++-
+ arch/mips/mach-jz47xx/x2600/spl.h             |   1 +
+ arch/mips/mach-jz47xx/x2600/x2600.c           |  50 +++++++-
+ board/flashforge/ad5x/ad5x.c                  |  13 +-
+ 7 files changed, 278 insertions(+), 4 deletions(-)
+ create mode 100644 arch/mips/mach-jz47xx/include/mach/x2600_ram.h
+
+diff --git a/arch/mips/mach-jz47xx/include/mach/x2600.h b/arch/mips/mach-jz47xx/include/mach/x2600.h
+index 8d72d4be..2931a468 100644
+--- a/arch/mips/mach-jz47xx/include/mach/x2600.h
++++ b/arch/mips/mach-jz47xx/include/mach/x2600.h
+@@ -7,6 +7,7 @@
+ #define __MACH_X2600_H__
+ 
+ #include <linux/types.h>
++#include <mach/x2600_ram.h>
+ 
+ void x2600_uart0_plain_baud(void);
+ 
+@@ -23,6 +24,13 @@ void x2600_wdt_stop(void);
+ u32 x2600_cpspr_read(void);
+ void x2600_cpspr_write(u32 val);
+ 
++/*
++ * The SoC info from the eFuse (20 bits, mach/x2600_ram.h), or
++ * X2600_SOCID_* < 0; the eFuse is powered down after the read. Which DDR
++ * table and how much RAM: x2600_ram_mib() of it.
++ */
++int x2600_socid(void);
++
+ /*
+  * The eMMC as the stock SPL sees it: its built-in partition table (the
+  * GPT agrees on every AD5X examined), 512-byte sectors.
+diff --git a/arch/mips/mach-jz47xx/include/mach/x2600_ram.h b/arch/mips/mach-jz47xx/include/mach/x2600_ram.h
+new file mode 100644
+index 00000000..76a2b716
+--- /dev/null
++++ b/arch/mips/mach-jz47xx/include/mach/x2600_ram.h
+@@ -0,0 +1,121 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Ingenic X2600: which variant this is and how much RAM it has, the one
++ * decision the SPL (DDR table, kernel command line) and U-Boot proper
++ * (kernel command line) both take from the SoC info in the eFuse. Plain C
++ * without U-Boot headers: Kiln's laptop tests
++ * (u-boot/tools/test_ad5x_start.py) build it on the host.
++ *
++ * The SoC info, as Ingenic's x2600/check_socid.c reads it: eFuse words
++ * 0x1a and 0x1b, 20 bits from byte 0x6b (bit 24 of the first word), then
++ * the same 20 bits again as check bits (the second word's 31:12). In it:
++ * the variant in 19:16 (0 X2600, 1 X2600E, 2 X2600M, 3 X2600H, 4 X2660,
++ * 5 X2670, 6 X2670M), DDR3 in 15 (else DDR2), the DDR vendor in 14:11 and
++ * the capacity code in 10:7 (Ingenic's MEM_256M 0 ... MEM_512M 4 ...).
++ * The DDR ID Ingenic's tables are matched by is DDR_CHIP_ID(vendor, type,
++ * capacity) of those fields.
++ *
++ * The AD5X boards seen so far: an X2600H (0x38200, DDR ID 0x84) with
++ * 512 MiB of DDR3L, and an X2600E (0x18000, DDR ID 0x80) with 256 MiB of
++ * DDR3 (djvalic/kiln-os#68, #74).
++ *
++ * Fail-safe: only a SoC ID with good check bits that is not an X2600H and
++ * decodes to DDR3 with 256 MiB is an X2600E. An X2600H, a blank eFuse, a
++ * read that doesn't finish, check bits that differ or a variant Ingenic
++ * doesn't list all give 512 MiB, the X2600H's table, as every Kiln SPL
++ * before this one did. Another known variant with a DDR Kiln has no table
++ * for (128 MiB and less, DDR2) gives 0: the SPL stops before the DDR
++ * setup, since the kernels' memory layout (mem=236M, rmem at 0x0ec00000,
++ * the RISC-V core's 4 MiB at 0x0fc00000) needs the low 256 MiB.
++ */
++#ifndef __MACH_X2600_RAM_H__
++#define __MACH_X2600_RAM_H__
++
++/* x2600_socid()'s answers that are no SoC ID (< 0) */
++#define X2600_SOCID_BLANK	(-1)	/* no SoC info in the eFuse */
++#define X2600_SOCID_TIMEOUT	(-2)	/* the eFuse read didn't finish */
++#define X2600_SOCID_CHECK	(-3)	/* the check bits differ */
++
++#define X2600_SOC(id)		(((unsigned int)(id) >> 16) & 0xf)
++#define X2600_SOC_H		3
++#define X2600_SOC_KNOWN		7	/* Ingenic lists variants 0-6 */
++#define X2600_SOC_DDR3(id)	(((unsigned int)(id) >> 15) & 1)
++#define X2600_SOC_MEM(id)	(((unsigned int)(id) >> 7) & 0xf)
++/* Ingenic's DDR_CHIP_ID(vendor, type, capacity), type 2 DDR3, 3 DDR2 */
++#define X2600_DDR_ID(id)	((X2600_SOC_DDR3(id) ? 2U : 3U) << 6 |	\
++				 (((unsigned int)(id) >> 11) & 0xf) << 3 | \
++				 X2600_SOC_MEM(id))
++#define X2600_MEM_256M		0
++#define X2600_MEM_512M		4
++
++/* the SoC info from eFuse words 0x1a (@d0) and 0x1b (@d1) */
++static inline int x2600_socid_decode(unsigned int d0, unsigned int d1)
++{
++	unsigned int id = (d0 >> 24 | d1 << 8) & 0xfffff;
++
++	if (id != d1 >> 12)
++		return X2600_SOCID_CHECK;
++	if (!id)
++		return X2600_SOCID_BLANK;
++	return (int)id;
++}
++
++/*
++ * The RAM of the board with SoC info @socid (x2600_socid()), in MiB: 512
++ * (the X2600H's DDR table), 256 (the X2600E's), or 0 (no table: the SPL
++ * stops).
++ */
++static inline unsigned int x2600_ram_mib(int socid)
++{
++	if (socid < 0 || X2600_SOC(socid) == X2600_SOC_H ||
++	    X2600_SOC(socid) >= X2600_SOC_KNOWN)
++		return 512;
++	if (!X2600_SOC_DDR3(socid))
++		return 0;
++	switch (X2600_SOC_MEM(socid)) {
++	case X2600_MEM_512M:
++		return 512;
++	case X2600_MEM_256M:
++		return 256;
++	}
++	return 0;
++}
++
++/*
++ * Take the X2600H's second bank off kernel command line @s, in place:
++ * every word "mem=<size>@0x30000000", with the spaces after it (before it
++ * when it is the last word). Words are separated by spaces.
++ */
++static inline void x2600_args_drop_high_bank(char *s)
++{
++	static const char at[] = "@0x30000000";
++	const int n = sizeof(at) - 1;
++	char *w = s, *e, *d;
++	int i, hit;
++
++	while (*w) {
++		if (*w == ' ') {
++			w++;
++			continue;
++		}
++		for (e = w; *e && *e != ' '; e++)
++			;
++		hit = e - w > 4 + n && w[0] == 'm' && w[1] == 'e' &&
++		      w[2] == 'm' && w[3] == '=';
++		for (i = 0; hit && i < n; i++)
++			hit = e[i - n] == at[i];	/* the word's last n */
++		if (!hit) {
++			w = e;
++			continue;
++		}
++		while (*e == ' ')
++			e++;
++		if (!*e)
++			while (w > s && w[-1] == ' ')
++				w--;
++		for (d = w; (*d = *e); d++, e++)
++			;
++	}
++}
++
++#endif
+diff --git a/arch/mips/mach-jz47xx/x2600/sdram.c b/arch/mips/mach-jz47xx/x2600/sdram.c
+index 4e41c86b..de999d83 100644
+--- a/arch/mips/mach-jz47xx/x2600/sdram.c
++++ b/arch/mips/mach-jz47xx/x2600/sdram.c
+@@ -10,6 +10,9 @@
+  * 4 Gbit DDR3L part on the board). u-boot/tools/check_first_mib.py finds
+  * both in a unit's stock SPL and refuses a first MiB for a unit whose
+  * values differ (another board build) from the ones compiled here.
++ * An X2600E (256 MiB of DDR3) gets the table the newer stock SPL
++ * (2013.07-00437, Nov 2025) carries for it instead, chosen from the SoC
++ * info in the eFuse (mach/x2600_ram.h, x2600_sdram_select()).
+  *
+  * Copyright (c) 2017-2025 Ingenic Semiconductor Co., Ltd.
+  */
+@@ -17,6 +20,7 @@
+ #include "spl.h"
+ #include <stdio.h>
+ #include <asm/io.h>
++#include <linux/string.h>
+ #include <linux/bitops.h>
+ #include <linux/delay.h>
+ #include <linux/types.h>
+@@ -190,6 +194,42 @@ static struct x2600_ddr_params ddr = {
+ 	.rx_dqs1 = 3, .tx_dqs1 = 3,
+ };
+ 
++/*
++ * The X2600E's 256 MiB of DDR3 (DDR ID 0x80), as the newer stock SPL
++ * carries it: no PHY drive/ODT or deskew values, so the SDK's defaults
++ * stay. Copied over the table above only on an X2600E, so that the code
++ * below reads one table either way.
++ */
++static const struct x2600_ddr_params ddr_x2600e = {
++	.name		= "X2600E-DDR3",
++	.id		= 0x80,
++	.type		= X2600_DDR3,
++	.freq		= 900000000,
++	.ddrc_cfg	= 0x82004a35,
++	.ddrc_ctrl	= 0x00003092,
++	.ddrc_mmap0	= 0x000020f0,
++	.ddrc_mmap1	= 0x00003000,
++	.ddrc_refcnt	= 0x40db0081,
++	.ddrc_timing	= { 0x08140e09, 0x0a0a070d, 0x030d040d, 0x202c1f06,
++			    0x8006a065 },
++	.ddrc_autosr_cnt = 0x52000101,
++	.ddrc_autosr_en	= 1,
++	.ddrc_hregpro	= 1,
++	.ddrc_pregpro	= 1,
++	.ddrc_cguc0	= 0x11111111,
++	.ddrc_cguc1	= 0x00000113,
++	.ddrp_memcfg	= 0x8a,
++	.ddrp_cl	= 0xd,
++	.ddrp_cwl	= 0x9,
++	.mr0		= 0x1f14,
++	.mr1		= 0x10002,
++	.mr2		= 0x20020,
++	.mr3		= 0x30000,
++	.chip0_size	= 0x10000000,
++	.remap		= { 0x11020100, 0x07061312, 0x0b0a0908, 0x0f0e0d0c,
++			    0x05040310, 0x17161514 },
++};
++
+ static inline u32 cpm_rd(u32 off) { return readl(CPM + off); }
+ static inline void cpm_wr(u32 v, u32 off) { writel(v, CPM + off); }
+ static inline u32 ddrc_rd(u32 off) { return readl(DDRC + off); }
+@@ -490,6 +530,18 @@ void x2600_spl_clocks_init(void)
+ 	       cpm_rd(CPM_CPEPCR));
+ }
+ 
++/*
++ * The DDR table for @mib (x2600_ram_mib(): 512 or 256): the X2600H's,
++ * which the table above already is, or the X2600E's copied over it.
++ */
++void x2600_sdram_select(unsigned int mib)
++{
++	if (mib == 256)
++		memcpy(&ddr, &ddr_x2600e, sizeof(ddr));
++	printf("SPL: %s DDR table %s, %u MiB\n",
++	       mib == 256 ? "X2600E" : "X2600H", ddr.name, ddr.chip0_size >> 20);
++}
++
+ int x2600_sdram_init(void)
+ {
+ 	if (ddr.type != X2600_DDR3) {
+diff --git a/arch/mips/mach-jz47xx/x2600/spl.c b/arch/mips/mach-jz47xx/x2600/spl.c
+index f9768950..a0af3f27 100644
+--- a/arch/mips/mach-jz47xx/x2600/spl.c
++++ b/arch/mips/mach-jz47xx/x2600/spl.c
+@@ -11,8 +11,11 @@
+  *  2. the CPM scratch pad tells a fresh start from another try after a
+  *     watchdog reset (mach/ad5x_start.h); the watchdog is armed for every
+  *     phase;
+- *  3. clocks and DDR3 (sdram.c); not in the chainload-test build
+- *     (CONFIG_AD5X_SPL_CHAINLOAD), which runs from DDR under Linux;
++ *  3. clocks and DDR3 (sdram.c): the DDR table by the SoC info in the
++ *     eFuse (mach/x2600_ram.h: the X2600H's 512 MiB, also when the eFuse
++ *     says nothing usable, or the X2600E's 256 MiB; any other DDR stops
++ *     here); not in the chainload-test build (CONFIG_AD5X_SPL_CHAINLOAD),
++ *     which runs from DDR under Linux;
+  *  4. the eMMC (spl_emmc.c);
+  *  5. U-Boot proper, when eMMC 0xA400 holds a U-Boot uImage with good
+  *     CRCs (header and data) and U-Boot proper hasn't failed this start;
+@@ -307,6 +310,26 @@ static int spl_ddr_test(void)
+ }
+ #endif
+ 
++/* ---- which X2600 (mach/x2600_ram.h) ---- */
++
++static unsigned int spl_ram_mib;	/* 512: X2600H, 256: X2600E */
++
++/* the SoC info from the eFuse, logged, and the RAM it means (0: none) */
++static unsigned int spl_x2600_ram(void)
++{
++	int id = x2600_socid();
++
++	if (id >= 0)
++		printf("SPL: SoC ID %05x (variant %u), DDR ID %02x\n", id,
++		       X2600_SOC(id), X2600_DDR_ID(id));
++	else
++		printf("SPL: SoC ID: %s: as an X2600H\n",
++		       id == X2600_SOCID_BLANK ? "none in the eFuse" :
++		       id == X2600_SOCID_TIMEOUT ? "the eFuse read timed out" :
++		       "check bits differ");
++	return x2600_ram_mib(id);
++}
++
+ /* ---- the tries (mach/ad5x_start.h) ---- */
+ 
+ static struct ad5x_plan plan;
+@@ -438,6 +461,9 @@ static int ad5x_build_argv(char root)
+ 	strcpy(spl_args, AD5X_ARGS);
+ 	p = strstr(spl_args, "mmcblk0pX");
+ 	p[8] = root;
++	/* 256 MiB (an X2600E): no second bank, as its stock SPL starts it */
++	if (spl_ram_mib < 512)
++		x2600_args_drop_high_bank(spl_args);
+ 
+ 	spl_argv[argc++] = "spl";
+ 	for (p = spl_args; *p && argc < AD5X_MAX_ARGS; ) {
+@@ -569,6 +595,13 @@ void board_init_f(ulong dummy)
+ 
+ #ifndef CONFIG_AD5X_SPL_CHAINLOAD
+ 	x2600_spl_clocks_init();
++#endif
++	/* below 256 MiB, or no DDR3: stop before the DDR setup, try again */
++	spl_ram_mib = spl_x2600_ram();
++	if (!spl_ram_mib)
++		spl_fail(AD5X_PH_DDR, plan.slot_b, "no DDR table for this X2600");
++#ifndef CONFIG_AD5X_SPL_CHAINLOAD
++	x2600_sdram_select(spl_ram_mib);
+ 	if (x2600_sdram_init())
+ 		spl_fail(AD5X_PH_DDR, plan.slot_b, "DDR training failed");
+ 	if (spl_usb) {
+diff --git a/arch/mips/mach-jz47xx/x2600/spl.h b/arch/mips/mach-jz47xx/x2600/spl.h
+index ddab059e..6b081911 100644
+--- a/arch/mips/mach-jz47xx/x2600/spl.h
++++ b/arch/mips/mach-jz47xx/x2600/spl.h
+@@ -9,6 +9,7 @@ int ad5x_emmc_init(void);
+ int ad5x_emmc_read(u32 lba, u32 cnt, void *dst);
+ 
+ void x2600_spl_clocks_init(void);
++void x2600_sdram_select(unsigned int mib);
+ int x2600_sdram_init(void);
+ 
+ #endif
+diff --git a/arch/mips/mach-jz47xx/x2600/x2600.c b/arch/mips/mach-jz47xx/x2600/x2600.c
+index c1c13223..0a79eaef 100644
+--- a/arch/mips/mach-jz47xx/x2600/x2600.c
++++ b/arch/mips/mach-jz47xx/x2600/x2600.c
+@@ -1,7 +1,8 @@
+ // SPDX-License-Identifier: GPL-2.0+
+ /*
+  * Ingenic X2600 SoC: what the SPL and U-Boot proper share (console
+- * registers, the OST timer, the watchdog, the CPM scratch pad).
++ * registers, the OST timer, the watchdog, the CPM scratch pad, the SoC
++ * info in the eFuse).
+  */
+ 
+ #include <init.h>
+@@ -191,3 +192,50 @@ void _machine_restart(void)
+ 		;
+ }
+ #endif
++
++/*
++ * eFuse: the SoC info as Ingenic's x2600/check_socid.c reads it (words
++ * 0x1a-0x1b, RD_ADJ 4, RD_STROBE 0), powered down (EFUSE_CTRL PD) once the
++ * read is done, as there; read only. The eFuse clock gate is left as it
++ * was found (Kiln's SPL opens it in its clock setup, before this).
++ */
++#define X2600_EFUSE		((void __iomem *)0xb3480000)
++#define EFUSE_CTRL		0x00
++#define EFUSE_CFG		0x04
++#define EFUSE_STATE		0x08
++#define EFUSE_DATA(n)		(0x0c + 4 * (n))
++#define EFUSE_CTRL_ADDR_SHIFT	21
++#define EFUSE_CTRL_LEN_SHIFT	16
++#define EFUSE_CTRL_PD		BIT(8)
++#define EFUSE_CTRL_RD_EN	BIT(0)
++#define EFUSE_CFG_RD_ADJ_SHIFT	24
++#define EFUSE_STATE_RD_DONE	BIT(0)
++#define EFUSE_SOCINFO_WORD	0x1a
++#define CLKGR0_EFUSE		BIT(0)
++
++int x2600_socid(void)
++{
++	u32 gate = readl(X2600_CPM_CLKGR0) & CLKGR0_EFUSE;
++	u32 d0, d1, t;
++
++	clrbits_le32(X2600_CPM_CLKGR0, CLKGR0_EFUSE);
++	writel(0, X2600_EFUSE + EFUSE_STATE);
++	writel(4 << EFUSE_CFG_RD_ADJ_SHIFT, X2600_EFUSE + EFUSE_CFG);
++	writel(0, X2600_EFUSE + EFUSE_CTRL);
++	writel(EFUSE_SOCINFO_WORD << EFUSE_CTRL_ADDR_SHIFT |
++	       (2 - 1) << EFUSE_CTRL_LEN_SHIFT, X2600_EFUSE + EFUSE_CTRL);
++	setbits_le32(X2600_EFUSE + EFUSE_CTRL, EFUSE_CTRL_RD_EN);
++	for (t = 0; !(readl(X2600_EFUSE + EFUSE_STATE) & EFUSE_STATE_RD_DONE);
++	     t++)
++		if (t >= 100000)
++			break;
++	writel(EFUSE_CTRL_PD, X2600_EFUSE + EFUSE_CTRL);
++	d0 = readl(X2600_EFUSE + EFUSE_DATA(0));
++	d1 = readl(X2600_EFUSE + EFUSE_DATA(1));
++	writel(0, X2600_EFUSE + EFUSE_STATE);
++	setbits_le32(X2600_CPM_CLKGR0, gate);
++
++	if (t >= 100000)
++		return X2600_SOCID_TIMEOUT;
++	return x2600_socid_decode(d0, d1);
++}
+diff --git a/board/flashforge/ad5x/ad5x.c b/board/flashforge/ad5x/ad5x.c
+index 155ec9c3..0051f90e 100644
+--- a/board/flashforge/ad5x/ad5x.c
++++ b/board/flashforge/ad5x/ad5x.c
+@@ -66,7 +66,8 @@ int board_early_init_f(void)
+ }
+ 
+ /*
+- * 512 MiB in two banks: 236 MiB at 0 (lowmem, the only part KSEG0 reaches
++ * 512 MiB in two banks (an X2600H; an X2600E has only the low 256 MiB,
++ * mach/x2600_ram.h): 236 MiB at 0 (lowmem, the only part KSEG0 reaches
+  * below the rmem and rtos regions) and 256 MiB at 0x30000000. Above 236 MiB
+  * the low bank holds rmem (16 MiB at 0x0ec00000) and the RISC-V
+  * co-processor's 4 MiB (0x0fc00000), which the SPL may have started: U-Boot
+@@ -439,6 +440,7 @@ static void ad5x_bootargs(const char *root, int own, int extra_ok,
+ 	char extra[256] = "";
+ 	char *args;
+ 	long len;
++	unsigned int mib;
+ 
+ 	if (own && extra_ok) {
+ 		/* as S00ad5x-kernel adds: cmdline-extra comes last */
+@@ -461,6 +463,15 @@ static void ad5x_bootargs(const char *root, int own, int extra_ok,
+ 			 " ad5x.wdt=%u", wdt);
+ 	snprintf(args + strlen(args), CONFIG_SYS_CBSIZE - strlen(args),
+ 		 " %s", extra);
++	/*
++	 * 256 MiB (an X2600E, mach/x2600_ram.h, as the SPL decided): no
++	 * second bank, from args_spl or cmdline-extra alike
++	 */
++	mib = x2600_ram_mib(x2600_socid());
++	if (mib < 512) {
++		x2600_args_drop_high_bank(args);
++		printf("ad5x: %u MiB: no second bank for the kernel\n", mib);
++	}
+ 	env_set("bootargs", args);
+ 	free(args);
+ }
+-- 
+2.56.0
+

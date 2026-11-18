@@ -56,8 +56,9 @@ The X2600 boot ROM (eMMC on MSC0) reads two things from the user area:
   ad5x_spl_image.py apply-plan PLAN.json IN OUT
       the plan applied to the file IN (a first MiB) -> OUT, as an installer
       would apply it to the device
-  ad5x_spl_image.py usb-image SPL_IMAGE OUT
-      SPL_IMAGE (spl-mmc.img) with the USB tag "KILNUSB1" at header offset
+  ad5x_spl_image.py usb-image [--stage2] SPL_IMAGE OUT
+      SPL_IMAGE (spl-mmc.img) with the USB tag "KILNUSB1" ("KILNUSB2" with
+      --stage2: spl-usb2.bin, for run-uboot) at header offset
       0x7f0 -> OUT (spl-usb.bin), what u-boot/tools/ad5x_usbboot.py sends
       the boot ROM over USB: the same bytes at the same addresses as an
       eMMC start loads, the SPL's code unchanged (u-boot/USB-BOOT.md)
@@ -114,6 +115,9 @@ STACK_RESERVE = 0x800      # x2600/u-boot-spl.lds AD5X_SPL_STACK_SIZE
 # eMMC image has zeros there
 USB_TAG_OFF = 0x7F0
 USB_TAG = b"KILNUSB1"
+# spl-usb2.bin: DDR only, then back to the ROM for U-Boot proper as stage 2
+# (patch 0034, ad5x_usbboot.py run-uboot)
+USB_TAG_STAGE2 = b"KILNUSB2"
 # what the X2600 boot ROM's USB mode takes for stage 1 from 0x80001000
 # (Ingenic Cloner's firmwares/x2600/config.cfg: d2i_len=0x7000)
 USB_STAGE1_MAX = 0x7000
@@ -141,6 +145,12 @@ DESCRIPTORS = [
 # partition (p1 at LBA 2048 on every known unit)
 UBOOT_EMMC_OFF = SPL_AREA_END
 UBOOT_AREA_END = 1 << 20
+# the first MiB's last sector (LBA 2047) is the network rescue record's
+# (patch 0045, ad5x_emmc_image.py --rescue): U-Boot proper ends before it,
+# as the SPL's AD5X_UBOOT_MAX and build.sh's UBOOT_EMMC_MAX say
+RESCUE_LBA = UBOOT_AREA_END // 512 - 1
+RESCUE_MAGIC = b"KILN-RESCUE 1\n"
+UBOOT_MAX_END = RESCUE_LBA * 512
 UIMAGE_MAGIC = 0x27051956
 UIMAGE_HEADER = 64
 IH_OS_LINUX, IH_OS_U_BOOT, IH_ARCH_MIPS = 5, 17, 5
@@ -197,8 +207,9 @@ def spl_image(spl_bin):
     return img + bytes(round_up(len(img)) - len(img))
 
 
-def usb_image(spl_img):
-    """spl-mmc.img -> spl-usb.bin: the USB tag in the header's zero room."""
+def usb_image(spl_img, tag=USB_TAG):
+    """spl-mmc.img -> spl-usb.bin (or spl-usb2.bin with USB_TAG_STAGE2):
+    the USB tag in the header's zero room."""
     magic, count, p = decode(spl_img)
     if magic != SPL_MAGIC or p[0:4] != PARAMS_ID:
         raise ImageError("not an SPL image (header missing)")
@@ -210,12 +221,12 @@ def usb_image(spl_img):
     if len(spl_img) > USB_STAGE1_MAX:
         raise ImageError("%d bytes: the boot ROM takes at most %d over USB" %
                          (len(spl_img), USB_STAGE1_MAX))
-    room = spl_img[USB_TAG_OFF:USB_TAG_OFF + len(USB_TAG)]
-    if room != bytes(len(USB_TAG)):
+    room = spl_img[USB_TAG_OFF:USB_TAG_OFF + len(tag)]
+    if room != bytes(len(tag)):
         raise ImageError("header offset 0x%x isn't zero (%s)" %
                          (USB_TAG_OFF, room.hex()))
     out = bytearray(spl_img)
-    out[USB_TAG_OFF:USB_TAG_OFF + len(USB_TAG)] = USB_TAG
+    out[USB_TAG_OFF:USB_TAG_OFF + len(tag)] = tag
     return bytes(out)
 
 
@@ -279,10 +290,20 @@ def decode(data, base=0):
     return magic, count, p
 
 
+def rescue_record(mib):
+    """@mib (a first MiB) holds a network rescue record in LBA 2047."""
+    o = RESCUE_LBA * 512
+    return mib[o:o + len(RESCUE_MAGIC)] == RESCUE_MAGIC
+
+
 def first_mib(dump, spl_img):
     """@dump with @spl_img at 0x4400 and the INGE length at 0x0004."""
     if len(dump) != 1 << 20:
         raise ImageError("the dump is %d bytes, not 1 MiB" % len(dump))
+    if rescue_record(dump):
+        # Kiln's U-Boot would run it at every start
+        raise ImageError("the dump holds a network rescue record in LBA "
+                         "%d: not a stock first MiB" % RESCUE_LBA)
     if dump[0:4] != PARAMS_ID or dump[SPL_EMMC_OFF:SPL_EMMC_OFF + 4] != \
             SPL_MAGIC:
         raise ImageError("the dump has no INGE block at 0 or no SPL at "
@@ -292,10 +313,11 @@ def first_mib(dump, spl_img):
         raise ImageError("not an SPL image (header missing)")
     if CHAINLOAD_MARKER in spl_img:
         raise ImageError("chainload-test SPL: refused")
-    if spl_img[USB_TAG_OFF:USB_TAG_OFF + len(USB_TAG)] == USB_TAG:
+    if spl_img[USB_TAG_OFF:USB_TAG_OFF + len(USB_TAG)] in (USB_TAG,
+                                                           USB_TAG_STAGE2):
         # on the eMMC every start would count as a fresh one (no tries)
-        raise ImageError("this is spl-usb.bin, for the boot ROM's USB mode "
-                         "only: use spl-mmc.img")
+        raise ImageError("this is spl-usb.bin or spl-usb2.bin, for the boot "
+                         "ROM's USB mode only: use spl-mmc.img")
     if len(spl_img) != count * BLOCK or count > MAX_BLOCKS:
         raise ImageError("SPL image length %d doesn't match its block count "
                          "%d" % (len(spl_img), count))
@@ -364,7 +386,7 @@ def uboot_mib(mib, uboot_img):
     if len(mib) != 1 << 20:
         raise ImageError("the first MiB is %d bytes, not 1 MiB" % len(mib))
     errs = uimage_problems(uboot_img, IH_OS_U_BOOT,
-                           UBOOT_AREA_END - UBOOT_EMMC_OFF)
+                           UBOOT_MAX_END - UBOOT_EMMC_OFF)
     if errs:
         raise ImageError("U-Boot image: Kiln's SPL would refuse it: %s" %
                          "; ".join(errs))
@@ -376,6 +398,9 @@ def uboot_mib(mib, uboot_img):
             not uboot_img[32:64].startswith(UBOOT_NAME):
         raise ImageError("U-Boot image: not Kiln's (load 0x%x, entry 0x%x, "
                          "name %r)" % (load, ep, uboot_img[32:64]))
+    if rescue_record(mib):
+        raise ImageError("the first MiB holds a network rescue record in "
+                         "LBA %d" % RESCUE_LBA)
     if mib[UBOOT_EMMC_OFF:UBOOT_EMMC_OFF + 4] == \
             struct.pack(">I", UIMAGE_MAGIC):
         raise ImageError("the first MiB holds a uImage at 0xA400 already: "
@@ -494,6 +519,9 @@ def main(argv=None):
     w.add_argument("spl_image")
     w.add_argument("out")
     u = sub.add_parser("usb-image")
+    u.add_argument("--stage2", action="store_true",
+                   help="tag KILNUSB2 (spl-usb2.bin): DDR, then back to the "
+                   "boot ROM for U-Boot proper as stage 2")
     u.add_argument("spl_image")
     u.add_argument("out")
     x = sub.add_parser("apply-plan")
@@ -531,7 +559,8 @@ def main(argv=None):
             print("write plan: %s (writes 0x4-0x7 and 0x4400-0xa3ff only)" %
                   args.out)
         elif args.cmd == "usb-image":
-            img = usb_image(read(args.spl_image))
+            img = usb_image(read(args.spl_image),
+                            USB_TAG_STAGE2 if args.stage2 else USB_TAG)
             write(args.out, img)
             print("USB image: %s, %d bytes to 0x%08x, entry 0x%08x (%d of "
                   "the %d bytes the boot ROM takes over USB)" %

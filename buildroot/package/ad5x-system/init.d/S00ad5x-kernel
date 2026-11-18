@@ -2,8 +2,9 @@
 # Kiln OS runs our own kernel (6.6, kernel-ingenic66/), without touching
 # the boot slots: they keep the printer's stock 5.10 kernel, every boot
 # starts with it, and this runs first thing on it and starts our kernel
-# from RAM (chainload.ko, kernel-ingenic66/chainload): same command line,
-# same root, plus ad5x.kernel=own panic=10 loglevel=5. The boot flag and
+# from RAM (chainload.ko, kernel-ingenic66/chainload): same command line
+# (but the low RAM window of our kernels, kiln_mem below), same root, plus
+# ad5x.kernel=own panic=10 loglevel=5. The boot flag and
 # the eMMC are not written, only markers on /data/ad5x/kernel (issue #42):
 #   pending     written (and synced) before the jump: "UPTIME slot S RELEASE"
 #   started     pending renamed by this script on our kernel, first thing in
@@ -61,6 +62,22 @@
 # ad5x.kernel=own): a direct start as above; a pending from the chain is
 # dropped the same way (lib/slot.sh, boot_loader: Kiln's SPL in the first
 # MiB). S01ad5x-tryboot's try-once then guards the start, as on the chain.
+# Memory (docs/memory.md, "Extended memory"): a 512 MiB board's second
+# bank (the stock SPL's mem=256M@0x30000000) goes to our kernel only in
+# extended mode: /data/ad5x/kernel/extended-memory (ad5x-memory extended
+# on), no extended-memory-failed, not the first start after an install.
+# Otherwise (standard, the default; every 256 MiB board) every mem= word
+# at 0x30000000 is taken out, cmdline-extra's too. Either way the line
+# ends in ad5x.ram=256|512 (the board, from the stock line's bank) and
+# ad5x.memmode=standard|extended (lib/memory.sh reads them). An extended
+# start also writes extended-memory-pending, which S99ad5x-booted
+# removes; found here at the next stock pass, the memory is blamed:
+# extended-memory-failed ("the printer didn't finish starting with it",
+# when), that start's pending or started dropped uncounted, and this start
+# is our kernel again in standard memory (its failure then counts as any).
+# On our kernel started by Kiln's U-Boot, U-Boot's own record of a failed
+# extended start (failed-mem) is copied into extended-memory-failed
+# (lib/uboot.sh, uboot_mem_mirror).
 # AD5X_LIB overrides /usr/lib/ad5x (tools/test_kernel_fallback.sh).
 
 # Files this creates are readable by klipper and www-data, whoever started
@@ -70,6 +87,9 @@ umask 022
 LIB=${AD5X_LIB:-/usr/lib/ad5x}
 . $LIB/kernel.sh
 . $LIB/slot.sh
+. $LIB/memory.sh
+# optional, as in S99ad5x-booted: only for U-Boot's failed-mem record
+[ -f $LIB/uboot.sh ] && . $LIB/uboot.sh
 K=$LIB/kernel66			# 6.6 and chainload.ko
 KM=$LIB/kernel-mainline		# 7.3, opt-in
 M=/tmp/kdata
@@ -83,6 +103,18 @@ mount_data() {
 	# Moonraker (kiln_os, as klipper) reads the records
 	chmod 755 $M/ad5x $d 2>/dev/null
 	return 0
+}
+
+# kiln_mem: the stock kernel's command line (stdin) for our kernels. They
+# get the low 252 MiB, 0x0-0x0fbfffff: stock's mem=236M@0x0 becomes
+# mem=252M@0x0, and rmem= (16 MiB at 0x0ec00000 that stock keeps for its
+# media drivers, which neither of our kernels has) goes. The RISC-V core's
+# 4 MiB at 0x0fc00000 stay reserved in their device trees, which keep their
+# crash log (ramoops) at 0x0fbc0000. Everything else stays as it is, byte
+# for byte; the stock kernel keeps its own command line. Kiln's U-Boot and
+# SPL do the same (u-boot/patches/0031, x2600_args_kiln_low).
+kiln_mem() {
+	sed 's/^/ /; s/$/ /; s/ rmem=[^ ]*//g; s/ mem=236M@0x0 / mem=252M@0x0 /g; s/^ //; s/ $//'
 }
 
 # "; after 2026-11-08 10:15 UTC (last saved clock)": the clock is still at
@@ -145,8 +177,13 @@ start)
 		fi
 		if [ -n "$who" ] && [ -f $d/pending ]; then
 			echo "$(cut -d' ' -f1-4 $d/pending) unfinished: chainload start never reached userspace (dropped at $who)" >> $d/history
-			rm -f $d/pending
+			rm -f $d/pending $d/extended-memory-pending
 			sync
+		fi
+		# Kiln's U-Boot recorded a failed start in extended memory
+		# (failed-mem in its records): standard memory from now on, here too
+		if [ -n "$uboot" ] && command -v uboot_mem_mirror >/dev/null 2>&1; then
+			uboot_mem_mirror $d "$(mem_when $M/ad5x/clock)"
 		fi
 		if [ -f $d/pending ]; then
 			# Our kernel, started by this script: it reached userspace.
@@ -187,6 +224,21 @@ start)
 		echo "ad5x-kernel: the last start (our kernel, started directly by a boot loader) didn't finish; not counted"
 		echo "$(cut -d' ' -f1-4 $d/started) unfinished: started directly by a boot loader, not counted" >> $d/history
 		rm -f $d/started
+	fi
+	# The last start was in extended memory (S99ad5x-booted removes
+	# extended-memory-pending) and didn't finish: the memory is blamed, not
+	# the kernel. Recorded (standard memory until ad5x-memory extended on);
+	# that start's pending or started is dropped without counting it, so
+	# this start is our kernel again, in standard memory.
+	if [ -f $d/extended-memory-pending ]; then
+		mp=$(cut -d' ' -f1-4 $d/extended-memory-pending)
+		mwhy="the printer didn't finish starting with it"
+		echo "ad5x-kernel: the last start, in extended memory, didn't finish; standard memory from now on (ad5x-memory extended on)"
+		echo "$mwhy, $(mem_when $M/ad5x/clock)" > $d/extended-memory-failed
+		echo "${mp:-? slot $SLOT $rel} failed in extended memory: $mwhy$(saved_clock); standard memory from now on, not counted for the kernel" >> $d/history
+		rm -f $d/extended-memory-pending $d/pending $d/started
+		sync
+		ad5x-bootlog "  extended memory failed: standard memory"
 	fi
 	[ -f $d/pending ] && give_up pending "before userspace"
 	if [ -f $d/started ]; then
@@ -245,15 +297,37 @@ start)
 		echo "ad5x-kernel: no kernel_restart_prepare in kallsyms; stock kernel"
 		umount $M; exit 0
 	fi
-	echo "ad5x-kernel: starting our kernel ($rel)"
-	ad5x-bootlog "  chainload own kernel"
+	# The memory mode (docs/memory.md, "Extended memory"): the stock SPL's
+	# line has the second bank on a 512 MiB board, and that says the board
+	hw=256
+	mem_bank_on "$(cat /proc/cmdline)" && hw=512
+	mode=standard
+	if [ $hw = 512 ] && [ -f $d/extended-memory ]; then
+		if [ -f $M/ad5x/install/recovery.squashfs ]; then
+			echo "ad5x-kernel: first start after the install: standard memory, not extended"
+		elif [ -f $d/extended-memory-failed ]; then
+			echo "ad5x-kernel: extended memory failed before ($(head -n 1 $d/extended-memory-failed)); standard memory (ad5x-memory extended on)"
+		else
+			mode=extended
+		fi
+	fi
+	echo "ad5x-kernel: starting our kernel ($rel, $mode memory)"
+	if [ $mode = extended ]; then
+		ad5x-bootlog "  chainload own kernel, extended memory"
+	else
+		ad5x-bootlog "  chainload own kernel"
+	fi
 	# loglevel=5 (after stock's loglevel=8; the last one counts): warnings
 	# and worse on the serial console. 7.3's console thread (nice -20)
 	# busy-waits on the 115200 port and holds up Klipper during log bursts;
 	# dmesg still has every level. /data/ad5x/kernel/cmdline-extra: more
-	# kernel options (tests); it comes last, so loglevel=8 there brings the
-	# full console back.
-	cmdline="$(cat /proc/cmdline) ad5x.kernel=own panic=10 loglevel=5 $(cat $d/cmdline-extra 2>/dev/null)"
+	# kernel options (tests); it comes after that, so loglevel=8 there
+	# brings the full console back. Standard memory: no mem= at 0x30000000,
+	# from either. The memory tokens come last, so they can't be overridden.
+	extra=$(cat $d/cmdline-extra 2>/dev/null)
+	cmdline="$(kiln_mem < /proc/cmdline) ad5x.kernel=own panic=10 loglevel=5${extra:+ $extra}"
+	[ $mode = standard ] && cmdline=$(printf '%s\n' "$cmdline" | mem_drop_bank)
+	cmdline="$cmdline ad5x.ram=$hw ad5x.memmode=$mode"
 	if ! insmod $K/chainload.ko image=$img krp=0x$krp cmdline="\"$cmdline\""; then
 		echo "ad5x-kernel: staging failed; stock kernel"
 		umount $M; exit 0
@@ -263,10 +337,15 @@ start)
 	# script started the panel with stock's display drivers first.
 	# pending is on the eMMC before the jump: a start that never comes back
 	# is found by the next boot.
-	if ! { echo "$(cut -d' ' -f1 /proc/uptime)s slot $SLOT $rel" > $d/pending &&
-	       sync && [ -s $d/pending ]; }; then
+	# extended-memory-pending: this start is in extended memory (the same
+	# words), on the eMMC with pending
+	mk="$(cut -d' ' -f1 /proc/uptime)s slot $SLOT $rel"
+	if ! { echo "$mk" > $d/pending &&
+	       { [ $mode = standard ] || echo "$mk" > $d/extended-memory-pending; } &&
+	       sync && [ -s $d/pending ] &&
+	       { [ $mode = standard ] || [ -s $d/extended-memory-pending ]; }; }; then
 		echo "ad5x-kernel: can't write the start marker; stock kernel"
-		rm -f $d/pending
+		rm -f $d/pending $d/extended-memory-pending
 		rmmod chainload 2>/dev/null; umount $M; exit 0
 	fi
 	umount $M

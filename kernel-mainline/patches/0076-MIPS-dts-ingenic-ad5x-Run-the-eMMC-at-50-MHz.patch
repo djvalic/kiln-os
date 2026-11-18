@@ -1,5 +1,5 @@
 From 3b8f7cd35df19f11736a50687dbd2e65ecd94bf2 Mon Sep 17 00:00:00 2001
-From: valix <djvalic.wc@gmail.com>
+From: djvalic <djvalic@users.noreply.github.com>
 Date: Wed, 11 Nov 2026 18:42:31 -0500
 Subject: [PATCH] MIPS: dts: ingenic: ad5x: Run the eMMC at 50 MHz
 
@@ -15,7 +15,7 @@ diff --git a/arch/mips/boot/dts/ingenic/ad5x.dts b/arch/mips/boot/dts/ingenic/ad
 index efd466b59..7e4b5ff29 100644
 --- a/arch/mips/boot/dts/ingenic/ad5x.dts
 +++ b/arch/mips/boot/dts/ingenic/ad5x.dts
-@@ -188,7 +188,7 @@ &msc0 {
+@@ -187,7 +187,7 @@ &msc0 {
  	pinctrl-0 = <&pins_mmc0>;
  
  	bus-width = <8>;

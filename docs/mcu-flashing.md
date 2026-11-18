@@ -95,7 +95,124 @@ instead of Klipper `identify`. An answer is success: "ifs: flashforge 3.0.7
 No answer: "Flashforge's firmware written, but it doesn't answer F19"
 (exit 1); switch the printer off and on, and see `/data/ad5x/mcu/ifs.log`.
 Any other image is checked as Klipper, as before (`tools/test_ifs_flash.sh`
-covers both, and the IFS lines of `status`).
+covers both, and the IFS lines of `status`). `ad5x-mcu flash-ifs stock`
+finds Flashforge's image itself: `ifs.hex` in stock's newest control
+directory on the usershare partition (`PROGRAM/control/<version>/`,
+written there by stock's own updates), used only when it matches that
+directory's `md5sum.list` and carries the `F19` answer. Nothing from
+Flashforge is in Kiln's image or on Kiln's servers.
+
+**Checks before every IFS write.** `ad5x-mcu` sends nothing to the IFS
+(F37 already erases its bootloader's flag page) unless the image is one
+the IFS bootloader can take: Intel hex records with right checksums and
+one end record, the data from `0x08010000` (the bootloader puts the first
+block there; the flasher sends no address) to below `0x08080000`, a stack
+pointer the bootloader starts (`(SP & 0x2FFE0000) == 0x20000000`) and a
+reset vector inside the image. Otherwise: "... is not an IFS image (why):
+nothing sent to the IFS". While the bootloader doesn't answer ("unplug
+the IFS cable and plug it back in"), every try sends F37 again: after a
+replug the IFS may run its application, and only F37 gets it back into
+the bootloader.
+
+### IFS firmware switch (Settings > Devices > IFS firmware)
+
+From PR #41 by Hunter Laux. The IFS runs Flashforge's firmware (driven by
+`ifs.py` over `ttyS4`) or Klipper's (`[mcu ifs]`, needed by plugins that
+drive the IFS, such as Happy Hare). The switch writes either one without
+SSH and without a reboot.
+
+**Owner opt-in.** The switch to Klipper is offered and accepted only when
+the owner turned it on: `/data/ad5x/ifs-switch.enable` exists (create it
+over SSH as root: `touch /data/ad5x/ifs-switch.enable`), or
+`/data/ad5x/ifs-klipper.enable` does (the owner already put Klipper on the
+IFS the old way). `/data/ad5x` is root's, so no client on the network can
+turn it on; a plugin's `root/install.sh` can, because the owner allowed
+its root scripts (`ROOT=1`). Without it the touch screen hides the row,
+and Moonraker and the agent refuse `klipper` (409 `not_enabled`). The way
+back to stock is open to everyone: Flashforge's firmware is the IFS's
+default. A switch to stock on an IFS that had `ifs-klipper.enable` creates
+`ifs-switch.enable`, so the owner can switch back later. Remove
+`ifs-switch.enable` to turn the switch off again.
+
+**The touch screen**: Settings > Devices > IFS firmware (HelixScreen
+patches 0076 and 0077), shown only when `available`. It shows the
+firmware now and the switch to the other one (both when the IFS answers
+neither), asks first, then shows the phase ("Unplug the IFS cable and
+plug it back in" when the bootloader doesn't answer) and the result once
+Klipper is back. While Klipper is stopped for the switch it holds off the
+"Printer shutdown" and "Klipper disconnected" dialogs, also when the
+screen is closed, until Klipper is back or reports an error.
+
+**One request path.** The screen (or any client) asks Moonraker:
+`POST /machine/kiln_os/ifs_firmware?target=stock|klipper` (`docs/api.md`).
+There is no G-code command: the switch stops Klipper, and no macro or
+print file may start it. Moonraker checks first (opt-in, Kiln's IFS image
+there, no switch running), then hands `ifs-firmware` to the root agent
+(`S68ad5x-update-agent`) like its other requests. The agent checks again:
+the opt-in, no switch running, no print running or paused (or no answer
+about it), and Klipper's `idle_timeout` not `Printing` (a filament load
+typed in the console). It writes the status (`running`), answers "done:
+switching the IFS to ... firmware" at once, and runs the switch as a
+background job (`S68ad5x-update-agent ifs-job`):
+
+1. Klipper is stopped (it holds the IFS's port).
+2. To Klipper: `ifs-klipper.enable` is created, then `ad5x-mcu flash-ifs`
+   writes `/usr/share/ad5x/mcu/ifs.hex` (`FLASHED_IFS`) and checks that
+   the IFS answers with that version. To stock: `ad5x-mcu flash-ifs stock`
+   (above), which removes `ifs-klipper.enable` once Flashforge's firmware
+   is written and checks its `F19` answer.
+3. Klipper is started again, also after a failure.
+
+The job takes 1 to 4 minutes (2 minutes of them only when the bootloader
+doesn't answer and the screen asks for the cable to be replugged). While
+it runs the agent keeps answering: a reboot, shutdown, service action,
+update install, kernel retry, boot into recovery, Return to Flashforge
+firmware or plugin root script is refused at once (409 `ifs_switching`,
+"the IFS firmware is being switched"); a second switch too. Extended
+memory still goes through (it only writes a file).
+
+**Status.** `/data/ad5x/kiln-status/ifs-firmware` (root's folder, readable
+by all): `target`, `state` (`running`, `done`, `failed`), `phase`
+(`stopping`, `writing`, `replug`, `verifying`, `starting`), `reason` and
+`message` of a failure, `version` the IFS answered. `GET
+/machine/kiln_os/ifs_firmware` serves it with the running firmware, also
+while Klipper is down. Failure reasons: `bad_image`, `no_stock_firmware`
+(no usable `ifs.hex` on the usershare), `no_bootloader` (no answer within
+2 minutes), `flash_failed`, `no_answer` (written, but the firmware doesn't
+answer), `interrupted` (the printer restarted during the switch),
+`failed` (anything else, also a switch whose job stopped without a
+result). The log is `/data/ad5x/kiln-log/agent.log` and
+`/data/ad5x/mcu/log`, `/data/ad5x/mcu/ifs.log`.
+
+**Power cut or failure in the middle.** Klipper still starts: a plugin
+that drives the IFS (`owns_ifs`) is skipped with a warning while the IFS
+doesn't answer as Klipper (`ad5x_plugins.py`), and `ifs.py` keeps trying
+to reach Flashforge's firmware. At the next start the agent marks the
+switch `interrupted`. The IFS's bootloader is not written by either
+firmware, so the IFS can always be written again:
+
+- Cut during a switch to Klipper: `ifs-klipper.enable` is already there,
+  so `ad5x-mcu boot` at the next start writes Klipper's firmware (it does
+  so whenever the IFS doesn't answer with this version).
+- Cut during a switch to stock: `ifs-klipper.enable` is removed only after
+  the write, so the next start writes Klipper's firmware back, a firmware
+  that works. Switch to stock again.
+- An IFS left in its bootloader (it answers neither firmware): switch
+  again from the screen (both buttons show), or over SSH with Klipper
+  stopped: `ad5x-mcu flash-ifs stock` (or `flash-ifs` for Klipper, with
+  the enable file). If the bootloader doesn't answer, unplug the IFS cable
+  and plug it back in while `ad5x-mcu` waits.
+- Last resort, when the bootloader itself no longer answers: write
+  Flashforge's image over SWD with a debug probe on the IFS board's
+  SWCK/SWIO/3.3V/GND pads ("Community projects" below); the bootloader
+  below `0x08010000` must be written too then, so only from a full dump
+  of a working IFS.
+
+Tests: `tools/test_update_agent_ifs.sh` (the agent: opt-in, refusals, the
+background job, the other requests while it runs, interrupted at start),
+`tools/test_ifs_flash.sh` (`flash-ifs stock`, the image checks, F37 on
+every try, the phases and reasons), `tools/test_kiln_os.py` (the
+endpoint). Not yet tested on a printer.
 
 Screens while it works: "Updating the boards", "Switch off and on", "Board
 update failed". `ad5x-mcu status` shows both versions and the IFS's

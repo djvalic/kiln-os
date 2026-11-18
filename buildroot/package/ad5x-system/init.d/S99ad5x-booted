@@ -2,7 +2,9 @@
 # Start-up finished (see S01ad5x-tryboot): boot this slot again next time,
 # if SSH is up (without it a broken system couldn't be fixed). Also marks
 # a start of our own kernel as successful (S00ad5x-kernel): "started"
-# becomes last-ok; pending and the count of unfinished starts go.
+# becomes last-ok; pending and the count of unfinished starts go, and
+# extended-memory-pending (this start was in extended memory and it
+# finished: docs/memory.md, "Extended memory").
 # Then makes /run/ad5x-booted, this boot's "start-up finished" marker
 # (lib/slot.sh, start_done): the update agent, ad5x-update and
 # ad5x-boot-recovery go ahead only with it and the flag on this slot.
@@ -113,8 +115,11 @@ stale_updates() {
 # and read back. Its records (ota 0x90200: which kernel failed, why it fell
 # back) are logged and kept: they are why this start may be on another
 # kernel than the one chosen, and they keep U-Boot off a kernel that
-# failed; "ad5x-kernel retry" clears them. Only with ad5x.uboot=1: a start
-# through Flashforge's or Kiln's SPL alone never reads or writes them.
+# failed; "ad5x-kernel retry" clears them. Their failed-mem (a start in
+# extended memory U-Boot found unconfirmed) is copied into
+# /data/ad5x/kernel/extended-memory-failed when S00ad5x-kernel hasn't yet
+# (uboot_mem_mirror). Only with ad5x.uboot=1: a start through Flashforge's
+# or Kiln's SPL alone never reads or writes them.
 uboot_booted() {
 	st=$(uboot_text $UBOOT_STATE "$UBOOT_STATE_MAGIC")
 	rec=$(uboot_text $UBOOT_RECORDS "$UBOOT_RECORDS_MAGIC")
@@ -133,6 +138,9 @@ uboot_booted() {
 	if [ -n "$rec" ]; then
 		echo "booted: U-Boot's records (kept until ad5x-kernel retry): $(uboot_records_line "$rec")"
 		ad5x-bootlog "  uboot records: $(uboot_records_line "$rec")"
+		command -v uboot_mem_mirror >/dev/null 2>&1 && [ -d $D ] &&
+			uboot_mem_mirror $D "$( (. ${AD5X_LIB:-/usr/lib/ad5x}/memory.sh && mem_when) 2>/dev/null)" |
+				sed 's/^/booted: /'
 	fi
 }
 
@@ -146,9 +154,10 @@ start)
 		set_flag $SLOT
 		echo "booted: start-up complete, boot flag on slot $SLOT"
 		# our kernel started from the stock one (S00ad5x-kernel): done
-		if [ -f $D/started ] || [ -f $D/pending ] || [ -f $D/unfinished ]; then
+		if [ -f $D/started ] || [ -f $D/pending ] || [ -f $D/unfinished ] ||
+		   [ -f $D/extended-memory-pending ]; then
 			[ -f $D/started ] && echo "$(cat $D/started) ok" > $D/last-ok
-			rm -f $D/started $D/pending $D/unfinished; sync
+			rm -f $D/started $D/pending $D/unfinished $D/extended-memory-pending; sync
 		fi
 		# This boot's start-up has finished: only with the flag read back
 		if [ "$(read_flag)" = "$(flag_for $SLOT)" ]; then

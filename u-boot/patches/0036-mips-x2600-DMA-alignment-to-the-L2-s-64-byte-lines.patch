@@ -1,0 +1,33 @@
+From 920c0320603f544d896db7e5919a8f15d45c5325 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Tue, 17 Nov 2026 07:35:48 -0700
+Subject: [PATCH 36/48] mips: x2600: DMA alignment to the L2's 64-byte lines
+
+ARCH_DMA_MINALIGN was MIPS's default 32, the L1 line. The X2600's L2
+has 64-byte lines (Config2 SL), and its range operations work on whole
+lines: invalidating a 32-byte-aligned DMA buffer or descriptor also
+dropped the other half of its L2 line, flushing one wrote the other
+half back. Two DesignWare descriptors of 32 bytes share an L2 line.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ arch/mips/mach-jz47xx/Kconfig | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/arch/mips/mach-jz47xx/Kconfig b/arch/mips/mach-jz47xx/Kconfig
+index 9a8b9375..b98f0c80 100644
+--- a/arch/mips/mach-jz47xx/Kconfig
++++ b/arch/mips/mach-jz47xx/Kconfig
+@@ -15,6 +15,9 @@ config SOC_JZ4780
+ config SOC_X2600
+ 	bool
+ 	select SUPPORT_LITTLE_ENDIAN
++	# DMA buffers to the L2's 64-byte lines (L1: 32): a buffer that
++	# shared a line with other data would lose or leak it on a range op
++	select SYS_CACHE_SHIFT_6
+ 	select SUPPORTS_CPU_MIPS32_R1
+ 	select SUPPORTS_CPU_MIPS32_R2
+ 	help
+-- 
+2.56.0
+

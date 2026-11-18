@@ -1,5 +1,5 @@
 From 5789b6ef815fb275ad4afa2e7de1e984d054c2c5 Mon Sep 17 00:00:00 2001
-From: valix <djvalic.wc@gmail.com>
+From: djvalic <djvalic@users.noreply.github.com>
 Date: Wed, 11 Nov 2026 20:51:56 -0500
 Subject: [PATCH] MIPS: Ingenic: Write-combine on XBurst II
 

@@ -221,6 +221,10 @@ start() {
 		return 0
 	fi
 	mkdir -p $RUN
+	# 256 MiB board (S04ad5x-memory): two capture buffers per camera
+	# instead of ustreamer's default (one per CPU core, plus one)
+	buffers=
+	grep -qx 'LOW_MEM=1' /run/ad5x-memory.conf 2>/dev/null && buffers=--buffers=2
 	n=0
 	for dev in $(cameras); do
 		if [ $n -ge $MAX_CAMERAS ]; then
@@ -235,8 +239,12 @@ start() {
 			--device=$dev --host=127.0.0.1 --port=$port \
 			--format=MJPEG --encoder=HW --resolution=$res \
 			--desired-fps=$fps --persistent \
-			--drop-same-frames=30 --log-level=0
-		echo "camera $n: $dev ${res}@${fps} on /webcam$([ $n -gt 1 ] && echo $n)/"
+			--drop-same-frames=30 --log-level=0 $buffers
+		# The OOM killer's first choice: a camera is the least needed
+		# (docs/memory.md)
+		p=$(cat $RUN/$n.pid 2>/dev/null) && [ -n "$p" ] &&
+			echo 500 > /proc/$p/oom_score_adj 2>/dev/null
+		echo "camera $n: $dev ${res}@${fps}${buffers:+ ($buffers)} on /webcam$([ $n -gt 1 ] && echo $n)/"
 	done
 	[ $n -gt 0 ] || echo "camera: none found"
 	# Background: the streams take seconds, and boot must not wait for them.

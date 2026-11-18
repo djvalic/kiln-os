@@ -1,0 +1,130 @@
+From 67dd72d2704e149522c371ca309a513c923fa793 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 19:00:00 -0500
+Subject: [PATCH 33/33] ad5x: lpj by the X2600 variant
+
+The stock SPL's command line carries lpj=11935744, the 2024 stock SPL's
+value, and Kiln's SPL and U-Boot proper passed it on every board. An
+X2600E (256 MiB) measures 11476992, and the 2025 stock SPL passes that
+there (djvalic/kiln-os#68).
+
+x2600_args_lpj() turns the word lpj=11935744 into lpj=11476992 on
+256 MiB, in place (the same length). The SPL applies it to every kernel
+it starts from a slot, Kiln's 6.6 and Flashforge's 5.10 alike; U-Boot
+proper to every kernel it starts, before cmdline-extra is added, so that
+an owner's lpj= there is left as it is. An X2600H keeps 11935744.
+---
+ .../mips/mach-jz47xx/include/mach/x2600_ram.h | 39 ++++++++++++++++++-
+ arch/mips/mach-jz47xx/x2600/spl.c             |  2 +-
+ board/flashforge/ad5x/ad5x.c                  |  2 +
+ board/flashforge/ad5x/ad5x.env                |  4 +-
+ 4 files changed, 44 insertions(+), 3 deletions(-)
+
+diff --git a/arch/mips/mach-jz47xx/include/mach/x2600_ram.h b/arch/mips/mach-jz47xx/include/mach/x2600_ram.h
+index 4fad2fa0..3f94a0c4 100644
+--- a/arch/mips/mach-jz47xx/include/mach/x2600_ram.h
++++ b/arch/mips/mach-jz47xx/include/mach/x2600_ram.h
+@@ -256,6 +256,41 @@ static inline int x2600_args_memory(char *s, unsigned int size,
+ 	return extended;
+ }
+ 
++/*
++ * Loops per jiffy (HZ 100), the kernels' delay loop. The stock SPL's line
++ * has the X2600H's, lpj=11935744 (the 2024 00190 stock SPL's). On 256 MiB
++ * (an X2600E) that word becomes lpj=11476992 on command line @s, in
++ * place: what that board measures, and what the 2025 00437 stock SPL
++ * passes (djvalic/kiln-os#68). The same length; any other lpj= word stays.
++ */
++#define X2600_LPJ_H		"11935744"
++#define X2600_LPJ_E		"11476992"
++
++static inline void x2600_args_lpj(char *s, unsigned int mib)
++{
++	static const char h[] = "lpj=" X2600_LPJ_H, e[] = X2600_LPJ_E;
++	const int n = sizeof(h) - 1;
++	char *w = s, *end;
++	int i, hit;
++
++	if (mib != 256)
++		return;
++	while (*w) {
++		if (*w == ' ') {
++			w++;
++			continue;
++		}
++		for (end = w; *end && *end != ' '; end++)
++			;
++		hit = end - w == n;
++		for (i = 0; hit && i < n; i++)
++			hit = w[i] == h[i];
++		for (i = 0; hit && e[i]; i++)
++			w[4 + i] = e[i];
++		w = end;
++	}
++}
++
+ /* Kiln's 6.6, by the start of its uImage name (kernel-ingenic66/build.sh) */
+ #define X2600_KILN66_NAME	"Linux-6.6-ad5x"
+ 
+@@ -268,7 +303,8 @@ static inline int x2600_args_memory(char *s, unsigned int size,
+  * (x2600_args_memory_words): the SPL can't read the owner's choice on
+  * /data, and this start is a fallback. Any other kernel (Flashforge's
+  * 5.10) gets the stock SPL's line as it starts it: without the second
+- * bank on 256 MiB. (The stock line has no ad5x.* words to drop.)
++ * bank on 256 MiB. (The stock line has no ad5x.* words to drop.) Either
++ * gets the lpj for the board (x2600_args_lpj).
+  */
+ static inline void x2600_args_spl(char *s, unsigned int size,
+ 				  unsigned int mib, const char *name)
+@@ -284,6 +320,7 @@ static inline void x2600_args_spl(char *s, unsigned int size,
+ 		x2600_args_drop_high_bank(s);
+ 	if (!kiln[i])
+ 		x2600_args_memory_words(s, size, mib, 0);
++	x2600_args_lpj(s, mib);
+ }
+ 
+ #endif
+diff --git a/arch/mips/mach-jz47xx/x2600/spl.c b/arch/mips/mach-jz47xx/x2600/spl.c
+index fc0ceba7..b6279035 100644
+--- a/arch/mips/mach-jz47xx/x2600/spl.c
++++ b/arch/mips/mach-jz47xx/x2600/spl.c
+@@ -451,7 +451,7 @@ static ulong spl_load_uimage(u32 lba, ulong max, u8 os)
+ 	return ep;
+ }
+ 
+-/* the stock SPL's command line (lpj as the stock SPL passes it) */
++/* the stock SPL's command line (an X2600E's lpj: x2600_args_spl) */
+ #define AD5X_ARGS	"console=ttyS0,115200n8 loglevel=8 mem=236M@0x0 " \
+ 			"rmem=16M@0xec00000 rtos_size=4M@0xfc00000 " \
+ 			"mem=256M@0x30000000 init=/linuxrc root=/dev/mmcblk0pX " \
+diff --git a/board/flashforge/ad5x/ad5x.c b/board/flashforge/ad5x/ad5x.c
+index 86951334..8b915422 100644
+--- a/board/flashforge/ad5x/ad5x.c
++++ b/board/flashforge/ad5x/ad5x.c
+@@ -488,6 +488,8 @@ static void ad5x_bootargs(const char *root, int own, int extra_ok,
+ 	snprintf(args, CONFIG_SYS_CBSIZE, "%s root=%s%s ad5x.uboot=1",
+ 		 env_get("args_spl"), root,
+ 		 own ? " ad5x.kernel=own panic=10 loglevel=5" : "");
++	/* an X2600E's lpj, before cmdline-extra (the owner's) is added */
++	x2600_args_lpj(args, mib);
+ 	/* Kiln's kernel: the low window it gets (mach/x2600_ram.h) */
+ 	if (own)
+ 		x2600_args_kiln_low(args);
+diff --git a/board/flashforge/ad5x/ad5x.env b/board/flashforge/ad5x/ad5x.env
+index c1e1ff47..6010b713 100644
+--- a/board/flashforge/ad5x/ad5x.env
++++ b/board/flashforge/ad5x/ad5x.env
+@@ -11,7 +11,9 @@
+  *               with /usr/lib/ad5x/watchdog.conf and without
+  *               /data/ad5x/watchdog.disable. 0: always stopped. The
+  *               recovery OS starts with it stopped.
+- *   args_spl    the stock SPL's command line without root= (lpj as stock)
++ *   args_spl    the stock SPL's command line without root= (lpj as the
++ *               2024 stock SPL's, the X2600H's; an X2600E gets its own:
++ *               x2600_args_lpj in mach/x2600_ram.h)
+  */
+ bootcmd=ad5x_boot
+ ad5x_delay=2
+-- 
+2.56.0
+

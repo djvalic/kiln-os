@@ -1,4 +1,4 @@
-From: valix <djvalic.wc@gmail.com>
+From: djvalic <djvalic@users.noreply.github.com>
 Date: Fri, 13 Nov 2026 12:00:00 -0500
 Subject: [PATCH] serialposix: custom baud rates on Linux MIPS
 

@@ -1,5 +1,5 @@
 From c9e3e147ddb2e62316b8c10cfef29387ac9df19a Mon Sep 17 00:00:00 2001
-From: valix <djvalic.wc@gmail.com>
+From: djvalic <djvalic@users.noreply.github.com>
 Date: Fri, 6 Nov 2026 04:56:03 -0500
 Subject: [PATCH] Snapshot: count it served before waking the HTTP thread
 

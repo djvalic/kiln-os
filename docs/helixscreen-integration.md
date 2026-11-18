@@ -23,8 +23,8 @@ for `LW` `https://github.com/Hrybmo/lesswaste/blob/3d42421a6ed020baaa7563c94a56a
 
 ## Our patches
 
-`buildroot/package/helixscreen/*.patch` on HelixScreen v1.1.0-rc.1: 65
-files, `0001` to `0073` (the missing numbers were dropped because upstream
+`buildroot/package/helixscreen/*.patch` on HelixScreen v1.1.0-rc.1: 69
+files, `0001` to `0077` (the missing numbers were dropped because upstream
 has them). `docs/setup-wizard.md` ("HelixScreen side") lists `0001` to
 `0019` with what each does: among them the AD5X setup steps (0001, 0002,
 0003, 0006 time zone), the IFS port sensors (0004), Settings > Plugins
@@ -68,6 +68,7 @@ of the real configs. Not run against HelixScreen itself.
 | Renamed | Our raw `IFS_LOAD CHANNEL=` -> `IFS_FEED`, `IFS_UNLOAD CHANNEL=` -> `IFS_RETRACT` (`FX` names) |
 | Z offset | `SET_GCODE_OFFSET` wrapper saves `zoffset = {'z': ..}` (Helper-Script provider, section 4); first start seeds it from `unit.cfg` `z_offset`; `PRINT_START` applies it (`_APPLY_Z_OFFSET`); internal resets use `_SET_GCODE_OFFSET` |
 | `LOAD_CELL_TARE` | Macro -> `WEIGHT_TARE` |
+| Screws Tilt screen (issue #69) | Shown once `[screws_tilt_adjust]` is in the config (`ad5x.cfg`; `H src/printer/printer_discovery_parse.cpp:865`). It homes every run, sends `LOAD_CELL_TARE` (database rule `zmod_load_cell_tare`), then `SCREWS_TILT_CALCULATE` (the default of the Screws Tilt macro slot, `H src/printer/standard_macros.cpp:78`), which on Kiln tares again over the front-left screw, makes one touch there that isn't counted, tares, and probes the four screws; no heating. `BED_LEVEL_SCREWS_TUNE` (heats first, `macros/quick_actions.cfg`) can be picked for that slot in HelixScreen's settings |
 
 Not matched / open:
 

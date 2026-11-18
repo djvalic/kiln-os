@@ -1,5 +1,5 @@
 From c41778da05be5cfb6648cdda0279d7a9643c44b9 Mon Sep 17 00:00:00 2001
-From: valix <djvalic.wc@gmail.com>
+From: djvalic <djvalic@users.noreply.github.com>
 Date: Sun, 15 Nov 2026 11:49:02 -0500
 Subject: [PATCH 16/16] ad5x: Boot rules: state in ota, 6.6, 7.3 or the stock
  kernel, checked fallback

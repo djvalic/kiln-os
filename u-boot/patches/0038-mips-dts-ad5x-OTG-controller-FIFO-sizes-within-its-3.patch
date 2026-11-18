@@ -1,0 +1,34 @@
+From aaf4c7cc68c31dfb4f5d7bdcd709151c909b6f1f Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Tue, 17 Nov 2026 03:41:00 -0700
+Subject: [PATCH 38/48] mips: dts: ad5x: OTG controller, FIFO sizes within its
+ 3576 words
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ arch/mips/dts/ad5x.dts | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/arch/mips/dts/ad5x.dts b/arch/mips/dts/ad5x.dts
+index ebe16a80..349c40a8 100644
+--- a/arch/mips/dts/ad5x.dts
++++ b/arch/mips/dts/ad5x.dts
+@@ -65,6 +65,15 @@
+ 			compatible = "snps,dwc2";
+ 			reg = <0x13500000 0x40000>;
+ 			dr_mode = "peripheral";
++			/*
++			 * The FIFO RAM is 3576 words (GHWCFG3) for RX, the
++			 * non-periodic TX FIFO and 8 dedicated TX FIFOs
++			 * (GHWCFG4): the driver's defaults (1024 + 1024 +
++			 * 8 x 384) run past it. 1024 + 256 + 8 x 256 = 3328.
++			 */
++			g-rx-fifo-size = <1024>;
++			g-np-tx-fifo-size = <256>;
++			g-tx-fifo-size = <256 256 256 256 256 256 256 256>;
+ 		};
+ 	};
+ };
+-- 
+2.56.0
+

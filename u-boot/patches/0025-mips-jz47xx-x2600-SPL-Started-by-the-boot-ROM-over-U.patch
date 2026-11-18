@@ -1,5 +1,5 @@
 From c61067fc7f054092febb7522fe69bb697df1825b Mon Sep 17 00:00:00 2001
-From: valix <djvalic.wc@gmail.com>
+From: djvalic <djvalic@users.noreply.github.com>
 Date: Sun, 15 Nov 2026 13:16:43 -0500
 Subject: [PATCH 25/25] mips: jz47xx: x2600: SPL: Started by the boot ROM over
  USB

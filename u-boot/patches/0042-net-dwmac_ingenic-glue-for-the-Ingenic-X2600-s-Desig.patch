@@ -1,0 +1,189 @@
+From f7170b0a8b9a5ea3007f311e614ba6b7fd10079d Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Tue, 17 Nov 2026 07:45:29 -0700
+Subject: [PATCH 42/48] net: dwmac_ingenic: glue for the Ingenic X2600's
+ DesignWare GMAC
+
+The X2600 has one GMAC 3.7, RMII only, with the enhanced descriptors
+(DMA HW feature register bit 24). Before designware_eth_probe(): the
+RMII pins (PC16-PC24, function 0, no pulls), the GMAC's clock gate, the
+CGU's MAC clock at 50 MHz from the MPLL (its rate read from the PLL
+register) and the CPM's MAC PHY control register's interface field at 0,
+which the X2600 takes for RMII (Linux's ingenic,x1000-mac writes the
+same). The RMII reference clock comes from the PHY; the SoC's PHY clock
+pin (PC15) is left alone, as the vendor kernel leaves it.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ drivers/net/Kconfig         |  11 ++++
+ drivers/net/Makefile        |   1 +
+ drivers/net/dwmac_ingenic.c | 123 ++++++++++++++++++++++++++++++++++++
+ 3 files changed, 135 insertions(+)
+ create mode 100644 drivers/net/dwmac_ingenic.c
+
+diff --git a/drivers/net/Kconfig b/drivers/net/Kconfig
+index faa08e9e..cdc463c4 100644
+--- a/drivers/net/Kconfig
++++ b/drivers/net/Kconfig
+@@ -385,6 +385,17 @@ config ETH_DESIGNWARE
+ 	  100Mbit and 1 Gbit operation. You must enable CONFIG_PHYLIB to
+ 	  provide the PHY (physical media interface).
+ 
++config ETH_DESIGNWARE_INGENIC
++	bool "Ingenic X2600 glue driver for Synopsys Designware Ethernet MAC"
++	depends on SOC_X2600
++	select ETH_DESIGNWARE
++	select DW_ALTDESCRIPTOR
++	help
++	  This provides the glue layer to use the Synopsys Designware
++	  Ethernet MAC on the Ingenic X2600 SoC: its pins, clocks and RMII
++	  mode. The X2600's GMAC has the enhanced descriptors (DMA HW
++	  feature register bit 24).
++
+ config ETH_DESIGNWARE_MESON8B
+ 	bool "Amlogic Meson8b and later glue driver for Synopsys Designware Ethernet MAC"
+ 	select ETH_DESIGNWARE
+diff --git a/drivers/net/Makefile b/drivers/net/Makefile
+index 4c1f4094..09d2a9df 100644
+--- a/drivers/net/Makefile
++++ b/drivers/net/Makefile
+@@ -35,6 +35,7 @@ obj-$(CONFIG_EEPRO100) += eepro100.o
+ obj-$(CONFIG_ESSEDMA) += essedma.o
+ obj-$(CONFIG_ETHOC) += ethoc.o
+ obj-$(CONFIG_ETH_DESIGNWARE) += designware.o
++obj-$(CONFIG_ETH_DESIGNWARE_INGENIC) += dwmac_ingenic.o
+ obj-$(CONFIG_ETH_DESIGNWARE_MESON8B) += dwmac_meson8b.o
+ obj-$(CONFIG_ETH_DESIGNWARE_S700) += dwmac_s700.o
+ obj-$(CONFIG_ETH_DESIGNWARE_SOCFPGA) += dwmac_socfpga.o
+diff --git a/drivers/net/dwmac_ingenic.c b/drivers/net/dwmac_ingenic.c
+new file mode 100644
+index 00000000..38148f63
+--- /dev/null
++++ b/drivers/net/dwmac_ingenic.c
+@@ -0,0 +1,123 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Ingenic X2600 glue for the Synopsys DesignWare Ethernet MAC (GMAC 3.7).
++ *
++ * The X2600 has one MAC, RMII only, at 0x134b0000. Before the generic
++ * driver takes over: its pins (PC16-PC24, function 0, no pulls), its bus
++ * clock gate, the CGU's MAC clock at 50 MHz from the MPLL, and the
++ * interface field in the CPM's MAC PHY control register at 0, which the
++ * X2600 takes for RMII (as Linux's ingenic,x1000-mac and the running
++ * vendor kernel leave it). The 50 MHz RMII reference comes from the PHY:
++ * the SoC's PHY clock pin (PC15) stays a GPIO, as stock leaves it.
++ */
++
++#include <dm.h>
++#include <dm/device_compat.h>
++#include <asm/io.h>
++#include <linux/bitops.h>
++#include <linux/delay.h>
++#include "designware.h"
++
++#define CPM_BASE		((void __iomem *)0xb0000000)
++#define CPM_MPLL		(CPM_BASE + 0x14)
++#define CPM_CLKGR0		(CPM_BASE + 0x20)
++#define CPM_MACCDR		(CPM_BASE + 0x54)
++#define CPM_MACPHYC		(CPM_BASE + 0xe4)
++
++#define CLKGR0_GMAC		BIT(6)
++#define CDR_PARENT_SHIFT	30
++#define CDR_PARENT_MPLL		1
++#define CDR_CE			BIT(29)
++#define CDR_BUSY		BIT(28)
++#define CDR_STOP		BIT(27)
++#define CDR_DIV_MASK		0xff
++#define MACPHYC_SOFT_RST	BIT(3)
++#define MACPHYC_INTF_MASK	GENMASK(2, 0)
++
++#define GPIO_PORT_C		0xb3603000
++#define PX_INTC			0x18
++#define PX_MSKC			0x28
++#define PX_PAT1C		0x38
++#define PX_PAT0C		0x48
++#define PX_PUC			0x88
++#define PX_PDC			0x98
++#define RMII_PINS		GENMASK(24, 16)	/* PC16-PC24 */
++
++#define EXCLK_HZ		24000000UL
++#define MAC_CLK_HZ		50000000UL
++
++/* the MPLL's rate from its register: EXCLK * M / N / OD0 / OD1 */
++static ulong x2600_mpll_hz(void)
++{
++	u32 v = readl(CPM_MPLL);
++	u32 m = v >> 20 & 0xfff, n = v >> 14 & 0x3f;
++	u32 od0 = v >> 8 & 0x7, od1 = v >> 11 & 0x7;
++
++	if (!m || !n || !od0 || !od1)
++		return 0;
++	return (u64)EXCLK_HZ * m / n / od0 / od1;
++}
++
++static int dwmac_ingenic_setup(struct udevice *dev)
++{
++	void __iomem *pc = (void __iomem *)GPIO_PORT_C;
++	ulong mpll = x2600_mpll_hz();
++	u32 div, i;
++
++	writel(RMII_PINS, pc + PX_INTC);
++	writel(RMII_PINS, pc + PX_MSKC);
++	writel(RMII_PINS, pc + PX_PAT1C);
++	writel(RMII_PINS, pc + PX_PAT0C);
++	writel(RMII_PINS, pc + PX_PUC);
++	writel(RMII_PINS, pc + PX_PDC);
++
++	clrbits_le32(CPM_CLKGR0, CLKGR0_GMAC);
++
++	if (!mpll || mpll % MAC_CLK_HZ || mpll / MAC_CLK_HZ > 256) {
++		dev_err(dev, "MPLL %lu Hz: no 50 MHz MAC clock from it\n", mpll);
++		return -EINVAL;
++	}
++	div = mpll / MAC_CLK_HZ - 1;
++	writel(CDR_PARENT_MPLL << CDR_PARENT_SHIFT | CDR_CE | div, CPM_MACCDR);
++	for (i = 0; readl(CPM_MACCDR) & CDR_BUSY; i++) {
++		if (i == 1000) {
++			dev_err(dev, "MAC clock: divider stays busy\n");
++			return -ETIMEDOUT;
++		}
++		udelay(1);
++	}
++
++	clrbits_le32(CPM_MACPHYC, MACPHYC_SOFT_RST | MACPHYC_INTF_MASK);
++	return 0;
++}
++
++static int dwmac_ingenic_probe(struct udevice *dev)
++{
++	int ret = dwmac_ingenic_setup(dev);
++
++	if (ret)
++		return ret;
++	return designware_eth_probe(dev);
++}
++
++static int dwmac_ingenic_of_to_plat(struct udevice *dev)
++{
++	return designware_eth_of_to_plat(dev);
++}
++
++static const struct udevice_id dwmac_ingenic_ids[] = {
++	{ .compatible = "ingenic,x2600-mac" },
++	{ }
++};
++
++U_BOOT_DRIVER(dwmac_ingenic) = {
++	.name		= "dwmac_ingenic",
++	.id		= UCLASS_ETH,
++	.of_match	= dwmac_ingenic_ids,
++	.of_to_plat	= dwmac_ingenic_of_to_plat,
++	.probe		= dwmac_ingenic_probe,
++	.ops		= &designware_eth_ops,
++	.priv_auto	= sizeof(struct dw_eth_dev),
++	.plat_auto	= sizeof(struct eth_pdata),
++	.flags		= DM_FLAG_ALLOC_PRIV_DMA,
++};
+-- 
+2.56.0
+

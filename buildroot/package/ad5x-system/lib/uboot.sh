@@ -9,7 +9,13 @@
 #   0x90200 (sector 1153)  records: the kernels U-Boot found failed
 #                          ("failed-own", "failed-mainline"), "fallbacks N"
 #                          and "reason" of the last fallback. Kept until
-#                          "ad5x-kernel retry" zeroes it.
+#                          "ad5x-kernel retry" zeroes it. "failed-mem
+#                          REASON": a start in extended memory wasn't
+#                          confirmed (U-Boot starts standard from then on);
+#                          copied into /data/ad5x/kernel/extended-memory-
+#                          failed (uboot_mem_mirror); U-Boot drops it after
+#                          a confirmed start, "ad5x-memory extended on"
+#                          too (uboot_drop).
 # Each: "kiln-uboot-state 1" / "kiln-uboot-records 1", "key value" lines,
 # then "crc32 XXXXXXXX" (zlib CRC-32 of every byte before that line), NUL
 # padded. A sector that doesn't parse or has a wrong CRC counts as empty
@@ -148,4 +154,52 @@ uboot_clear() {
 # uboot_records_line TEXT: the records in one line, for logs
 uboot_records_line() {
 	echo "failed own kernel $(uboot_val "$1" failed-own), failed mainline $(uboot_val "$1" failed-mainline), $(uboot_val "$1" fallbacks) fallback(s); last: $(uboot_val "$1" reason)"
+}
+
+# uboot_drop SECTOR MAGIC KEY: the sector's text without its KEY lines,
+# written back with a new crc32 line (NUL padded, synced) and read back.
+# Nothing to do (0) when the sector doesn't parse or has no KEY line.
+# Prints what happened; 1 when the write failed or didn't read back.
+uboot_drop() {
+	udn=$1 udm=$2 udk=$3
+	udt=$(uboot_text "$udn" "$udm") || { echo "nothing there"; return 0; }
+	printf '%s\n' "$udt" | grep -q "^$udk " || { echo "no $udk line"; return 0; }
+	udb=$(printf '%s\n' "$udt" | sed '/^crc32 /,$d' | grep -v "^$udk ")
+	# shellcheck disable=SC2046 # four words, the CRC's bytes
+	set -- $(printf '%s\n' "$udb" | gzip -c | tail -c 8 | head -c 4 | od -An -t x1)
+	[ $# = 4 ] || { echo "no CRC-32 (gzip)"; return 1; }
+	udc=$4$3$2$1
+	o=$(part ota) || { echo "no ota partition"; return 1; }
+	# the whole sector in a file first: dd's read from a pipe may be short
+	udf=$(mktemp "${TMPDIR:-/tmp}/uboot-sector.XXXXXX" 2>/dev/null || mktemp /tmp/uboot-sector.XXXXXX) ||
+		{ echo "no temporary file"; return 1; }
+	{ printf '%s\ncrc32 %s\n' "$udb" "$udc"; head -c 512 /dev/zero; } | head -c 512 > "$udf"
+	if ! dd if="$udf" of="$o" bs=512 seek="$udn" count=1 conv=fsync,notrunc 2>/dev/null; then
+		rm -f "$udf"
+		echo "writing sector $udn of $o failed"
+		return 1
+	fi
+	rm -f "$udf"
+	udr=$(uboot_text "$udn" "$udm")
+	if [ "$udr" != "$(printf '%s\ncrc32 %s' "$udb" "$udc")" ]; then
+		echo "sector $udn of $o doesn't read back as written"
+		return 1
+	fi
+	echo "$udk taken out (read back)"
+}
+
+# uboot_mem_mirror DIR [WHEN]: U-Boot's failed-mem record (a start in
+# extended memory it found unconfirmed) copied into DIR/extended-memory-
+# failed ("REASON, WHEN"; WHEN default "date unknown") when that file isn't
+# there yet: the OS's boot paths, U-Boot and ad5x-memory read that file.
+# U-Boot drops failed-mem itself once a later start is confirmed, so the
+# copy is made in the start that follows the failure (S00ad5x-kernel, else
+# S99ad5x-booted); "ad5x-memory extended on" takes both out.
+uboot_mem_mirror() {
+	umr=$(uboot_text $UBOOT_RECORDS "$UBOOT_RECORDS_MAGIC") || return 0
+	umv=$(uboot_val "$umr" failed-mem)
+	case "$umv" in ''|-) return 0 ;; esac
+	[ -f "$1/extended-memory-failed" ] && return 0
+	echo "$umv, ${2:-date unknown}" > "$1/extended-memory-failed" && sync
+	echo "Kiln's U-Boot: a start in extended memory failed ($umv): standard memory until ad5x-memory extended on"
 }

@@ -1,0 +1,481 @@
+From 61ecd7fa0511cd274215eb54fcb73076af684ee1 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 14:59:43 -0500
+Subject: [PATCH 46/48] ad5x: Network rescue: three tries, then a normal start;
+ ad5x_rescue
+
+The rescue of the previous patch started again from its record after
+every failure, forever, with the watchdog off: only serial, netconsole or
+USB got a printer out of it.
+
+- Each start of the rescue is counted in the record first (a "tries="
+  line, written and read back before anything else); after
+  AD5X_RESCUE_TRIES (3) U-Boot starts as without it. The record stays,
+  saying so, until "ad5x_rescue clear", Kiln's boot loader installer or
+  a rescue that finished (its normal first MiB, written last) replaces
+  it. A record U-Boot can't count in is not started.
+- The record is parsed and checked in bootlogic.c (host-tested): the
+  server a unicast IPv4 address, the port 1-65535, the sha256 64 hex
+  digits, the optional MAC, ip and netmask well-formed; a record that
+  doesn't check is ignored (and said so).
+- The watchdog restarts at 900 s before the network setup and before each
+  piece (ad5x_wdt), so a hang is a reset, and a try, too.
+- The read-back buffer moves to 0x86000000, apart from AD5X_SCRATCH.
+- ad5x_rescue shows the record, "ad5x_rescue clear" zeroes its sector.
+
+A normal start still reads LBA 2047 once and does nothing more without
+the magic line.
+---
+ board/flashforge/ad5x/ad5x.c      | 169 +++++++++++++++++++-----------
+ board/flashforge/ad5x/bootlogic.c | 143 +++++++++++++++++++++++++
+ board/flashforge/ad5x/bootlogic.h |  51 +++++++++
+ 3 files changed, 302 insertions(+), 61 deletions(-)
+
+diff --git a/board/flashforge/ad5x/ad5x.c b/board/flashforge/ad5x/ad5x.c
+index bb5a32a7..1fb637a1 100644
+--- a/board/flashforge/ad5x/ad5x.c
++++ b/board/flashforge/ad5x/ad5x.c
+@@ -31,7 +31,6 @@
+ #include <asm/global_data.h>
+ #include <mach/ad5x_start.h>
+ #include <mach/x2600.h>
+-#include <linux/ctype.h>
+ #include <linux/delay.h>
+ #include <linux/string.h>
+ #include <vsprintf.h>
+@@ -344,107 +343,108 @@ static void ad5x_ethaddr(void)
+ /*
+  * A first MiB written by USBCloner after the rest of the eMMC was lost
+  * (ad5x_emmc_image.py --rescue, docs/emmc-repair.md) carries a record in
+- * its last sector, text "key=value" lines after the magic line:
+- *
+- *   KILN-RESCUE 1
+- *   server=192.168.1.10        the PC that serves the image's rescue/
+- *   port=8000                  its HTTP port
+- *   sha256=<64 hex>            rescue/rescue.scr's
+- *   mac=24:A1:0D:B8:5A:58      optional: the address to use meanwhile
+- *   ip=192.168.1.50            optional, with netmask=: no DHCP
+- *   netmask=255.255.255.0
++ * its last sector (bootlogic.h, "network rescue record"): the PC that
++ * serves the image's rescue/, its HTTP port, rescue.scr's sha256, and
++ * optionally the Ethernet address and a static address.
+  *
+  * U-Boot then fetches rescue.scr over HTTP, checks its sha256 against the
+  * record and runs it. The script fetches every piece of the eMMC, checks
+  * each one's sha256, writes it and checks what reads back; the normal first
+- * MiB comes last and clears the record. Any failure: a reset, and the
+- * rescue starts again from the record. The watchdog stays off.
++ * MiB comes last and clears the record. Any failure: a reset after 10 s,
++ * and the rescue starts again from the record, AD5X_RESCUE_TRIES times in
++ * all (each start counted in the record before it runs); then U-Boot
++ * starts as without it and the record stays, saying "tries=3", until
++ * "ad5x_rescue clear" or Kiln's boot loader installer replaces it. The
++ * watchdog restarts at AD5X_RESCUE_WDT_S before the network setup and
++ * before each piece, so a hang anywhere is a reset (and a try) too.
++ *
++ * On every start: one sector read (LBA 2047), nothing more without the
++ * magic line.
+  */
+-#define AD5X_RESCUE_MAGIC	"KILN-RESCUE 1\n"
++#define AD5X_RESCUE_WDT_S	"900"
+ 
+-static const char *ad5x_rescue_val(const char *rec, const char *key,
+-				   char *out, size_t n)
++static enum ad5x_rescue_state ad5x_rescue_read(char *sec,
++					       struct ad5x_rescue_rec *r)
+ {
+-	size_t kl = strlen(key);
+-	const char *p = rec;
+-
+-	while ((p = strstr(p, key))) {
+-		if ((p == rec || p[-1] == '\n') && p[kl] == '=') {
+-			size_t l = strcspn(p + kl + 1, "\n");
+-
+-			if (l >= n)
+-				return NULL;
+-			memcpy(out, p + kl + 1, l);
+-			out[l] = '\0';
+-			return out;
+-		}
+-		p += kl;
+-	}
+-	return NULL;
++	if (ad5x_read_sector(AD5X_RESCUE_LBA, sec))
++		return AD5X_RESCUE_NONE;
++	return ad5x_rescue_parse(sec, r);
+ }
+ 
+ static int ad5x_rescue(void)
+ {
+-	char rec[576] __aligned(ARCH_DMA_MINALIGN);
+-	char srv[32], port[8], sha[72], mac[24], ip[32], mask[32];
+-	const char *c;
++	char sec[AD5X_REC_SIZE] __aligned(ARCH_DMA_MINALIGN);
++	char out[AD5X_REC_SIZE] __aligned(ARCH_DMA_MINALIGN);
++	struct ad5x_rescue_rec r;
+ 
+-	if (ad5x_read_sector(AD5X_RESCUE_LBA, rec))
++	switch (ad5x_rescue_read(sec, &r)) {
++	case AD5X_RESCUE_NONE:
+ 		return 0;
+-	rec[512] = '\0';
+-	if (strncmp(rec, AD5X_RESCUE_MAGIC, strlen(AD5X_RESCUE_MAGIC)))
++	case AD5X_RESCUE_BAD:
++		printf("ad5x: network rescue record in LBA %u: %s: ignored\n",
++		       AD5X_RESCUE_LBA, r.why);
++		env_set("ad5x_rescue", "bad");
+ 		return 0;
+-	if (!ad5x_rescue_val(rec, "server", srv, sizeof(srv)) ||
+-	    !ad5x_rescue_val(rec, "port", port, sizeof(port)) ||
+-	    !ad5x_rescue_val(rec, "sha256", sha, sizeof(sha)) ||
+-	    strlen(sha) != 64) {
+-		printf("ad5x: rescue record without server, port or sha256: "
+-		       "ignored\n");
++	case AD5X_RESCUE_GAVE_UP:
++		printf("ad5x: network rescue record in LBA %u: given up after "
++		       "%u tries; a normal start (\"ad5x_rescue clear\" removes "
++		       "it)\n", AD5X_RESCUE_LBA, r.tries);
++		env_set("ad5x_rescue", "gave-up");
++		return 0;
++	case AD5X_RESCUE_RUN:
++		break;
++	}
++	/* this try counted first: a hang or reset from here on is one */
++	if (ad5x_rescue_counted(sec, r.tries + 1, out) ||
++	    ad5x_write_sector(AD5X_RESCUE_LBA, out) ||
++	    ad5x_read_sector(AD5X_RESCUE_LBA, sec) ||
++	    memcmp(sec, out, sizeof(out))) {
++		printf("ad5x: network rescue record: can't count this try in "
++		       "it: not started; a normal start\n");
+ 		return 0;
+ 	}
+-	for (c = sha; *c; c++)
+-		if (!isxdigit(*c))
+-			return 0;
+ 	x2600_wdt_stop();
+ 	x2600_cpspr_write(0);
+ 	env_set_default(NULL, 0);
+-	if (ad5x_rescue_val(rec, "mac", mac, sizeof(mac)))
+-		env_set("ethaddr", mac);
++	if (r.mac[0])
++		env_set("ethaddr", r.mac);
+ 	else
+ 		ad5x_ethaddr();
+-	if (ad5x_rescue_val(rec, "ip", ip, sizeof(ip))) {
+-		env_set("ipaddr", ip);
+-		env_set("netmask", ad5x_rescue_val(rec, "netmask", mask,
+-						   sizeof(mask)) ?
+-			mask : "255.255.255.0");
++	if (r.ip[0]) {
++		env_set("ipaddr", r.ip);
++		env_set("netmask", r.netmask);
+ 		env_set("kr_net", "true");
+ 	} else {
+ 		env_set("kr_net", "setenv autoload no; dhcp");
+ 	}
+-	env_set("kr_srv", srv);
+-	env_set("httpdstp", port);
+-	env_set("kr_sha", sha);
++	env_set("kr_srv", r.server);
++	env_set("httpdstp", r.port);
++	env_set("kr_sha", r.sha256);
+ 	env_set("kr_sa", "0x81000000");		/* the script */
+ 	env_set("kr_la", "0x82000000");		/* a piece, up to 32 MiB */
+-	env_set("kr_rb", "0x84000000");		/* its read-back */
++	/* its read-back, above AD5X_SCRATCH (0x84000000, small files) */
++	env_set("kr_rb", "0x86000000");
+ 	env_set("kr_fail", "echo ad5x rescue: failed, again in 10 s; sleep 10; "
+ 		"reset");
+ 	/* the script sets f (path, or - for zeros), sz, blk, cnt, sum */
+ 	env_set("kr_get", "if test \"${f}\" = -; then mw.b ${kr_la} 0 ${sz}; "
+ 		"else wget ${kr_la} ${kr_srv}:${f}; fi && "
+ 		"hash -v sha256 ${kr_la} ${sz} ${sum}");
+-	env_set("kr_piece", "run kr_get || run kr_get || run kr_get || "
++	env_set("kr_piece", "ad5x_wdt " AD5X_RESCUE_WDT_S "; "
++		"run kr_get || run kr_get || run kr_get || "
+ 		"run kr_fail; mmc write ${kr_la} ${blk} ${cnt} && "
+ 		"mmc read ${kr_rb} ${blk} ${cnt} && "
+ 		"hash -v sha256 ${kr_rb} ${sz} ${sum} || run kr_fail");
+-	env_set("kr_start", "mmc dev 0; run kr_net || run kr_fail; "
++	env_set("kr_start", "ad5x_wdt " AD5X_RESCUE_WDT_S "; mmc dev 0; "
++		"run kr_net || run kr_fail; "
+ 		"wget ${kr_sa} ${kr_srv}:/rescue/rescue.scr || run kr_fail; "
+ 		"hash -v sha256 ${kr_sa} ${filesize} ${kr_sha} || run kr_fail; "
+ 		"source ${kr_sa} || run kr_fail");
+ 	env_set("bootcmd", "run kr_start");
+ 	env_set("bootdelay", "0");
+-	printf("ad5x: network rescue from %s:%s (the first MiB's record): "
+-	       "watchdog off\n", srv, port);
++	printf("ad5x: network rescue from %s:%s (the first MiB's record), "
++	       "try %u of %u\n", r.server, r.port, r.tries + 1,
++	       AD5X_RESCUE_TRIES);
+ 	return 1;
+ }
+ 
+@@ -894,3 +894,50 @@ U_BOOT_CMD(ad5x_wdt, 2, 0, do_ad5x_wdt,
+ 	   "start or stop the watchdog",
+ 	   "SECONDS  - reset the board after SECONDS (1-1431) unless fed\n"
+ 	   "ad5x_wdt off      - stop it");
++
++/*
++ * ad5x_rescue [clear]: the network rescue record in the first MiB's last
++ * sector (LBA 2047): what it says, or clear it (the sector zeroed, only
++ * when it holds a record).
++ */
++static int do_ad5x_rescue(struct cmd_tbl *cmdtp, int flag, int argc,
++			  char *const argv[])
++{
++	char sec[AD5X_REC_SIZE] __aligned(ARCH_DMA_MINALIGN);
++	struct ad5x_rescue_rec r;
++	enum ad5x_rescue_state st;
++
++	if (argc > 2 || (argc == 2 && strcmp(argv[1], "clear")))
++		return CMD_RET_USAGE;
++	if (ad5x_read_sector(AD5X_RESCUE_LBA, sec)) {
++		printf("can't read LBA %u\n", AD5X_RESCUE_LBA);
++		return CMD_RET_FAILURE;
++	}
++	st = ad5x_rescue_parse(sec, &r);
++	if (st == AD5X_RESCUE_NONE) {
++		printf("no network rescue record in LBA %u\n", AD5X_RESCUE_LBA);
++		return CMD_RET_SUCCESS;
++	}
++	if (argc == 1) {
++		if (st == AD5X_RESCUE_BAD)
++			printf("a record that doesn't check (%s): ignored\n",
++			       r.why);
++		else
++			printf("server %s:%s, %u of %u tries made%s\n",
++			       r.server, r.port, r.tries, AD5X_RESCUE_TRIES,
++			       st == AD5X_RESCUE_GAVE_UP ? ": given up" : "");
++		return CMD_RET_SUCCESS;
++	}
++	memset(sec, 0, sizeof(sec));
++	if (ad5x_write_sector(AD5X_RESCUE_LBA, sec)) {
++		printf("writing LBA %u failed\n", AD5X_RESCUE_LBA);
++		return CMD_RET_FAILURE;
++	}
++	printf("network rescue record cleared\n");
++	return CMD_RET_SUCCESS;
++}
++
++U_BOOT_CMD(ad5x_rescue, 2, 0, do_ad5x_rescue,
++	   "the network rescue record (the first MiB's last sector)",
++	   "       - show it\n"
++	   "ad5x_rescue clear - remove it");
+diff --git a/board/flashforge/ad5x/bootlogic.c b/board/flashforge/ad5x/bootlogic.c
+index be1c38c5..8f60df32 100644
+--- a/board/flashforge/ad5x/bootlogic.c
++++ b/board/flashforge/ad5x/bootlogic.c
+@@ -529,3 +529,146 @@ unsigned int ad5x_wdt_seconds(const struct ad5x_inputs *in,
+ 		return 0;
+ 	return wdt_os > AD5X_WDT_MAX_S ? AD5X_WDT_MAX_S : wdt_os;
+ }
++
++int ad5x_ipv4(const char *s, unsigned char ip[4])
++{
++	unsigned int i, v, digits;
++
++	for (i = 0; i < 4; i++) {
++		for (v = 0, digits = 0; *s >= '0' && *s <= '9'; s++) {
++			v = v * 10 + (unsigned int)(*s - '0');
++			if (++digits > 3 || v > 255)
++				return 0;
++		}
++		if (!digits || (i < 3 && *s++ != '.'))
++			return 0;
++		ip[i] = (unsigned char)v;
++	}
++	return *s == '\0';
++}
++
++/* the value of "@key=" on a line of @text (NUL-terminated) into @out */
++static int rescue_val(const char *text, const char *key, char *out,
++		      unsigned int n)
++{
++	unsigned int kl = strlen(key), l;
++	const char *p = text, *e;
++
++	for (; *p; p = *e ? e + 1 : e) {
++		e = strchr(p, '\n');
++		if (!e)
++			e = p + strlen(p);
++		if ((unsigned int)(e - p) > kl && !strncmp(p, key, kl) &&
++		    p[kl] == '=') {
++			l = (unsigned int)(e - p) - kl - 1;
++			if (l >= n)
++				return -1;
++			memcpy(out, p + kl + 1, l);
++			out[l] = '\0';
++			return 1;
++		}
++	}
++	out[0] = '\0';
++	return 0;
++}
++
++/* digits only (checked before) as a number, saturating past 999999 */
++static unsigned long dec(const char *s)
++{
++	unsigned long v = 0;
++
++	for (; *s && v < 1000000; s++)
++		v = v * 10 + (unsigned long)(*s - '0');
++	return v;
++}
++
++static int all_of(const char *s, const char *set, unsigned int len)
++{
++	unsigned int i;
++
++	for (i = 0; s[i]; i++)
++		if (!strchr(set, s[i]))
++			return 0;
++	return !len || i == len;
++}
++
++#define HEX "0123456789abcdefABCDEF"
++
++enum ad5x_rescue_state ad5x_rescue_parse(const char *sec,
++					 struct ad5x_rescue_rec *r)
++{
++	char text[AD5X_REC_SIZE + 1], tries[8];
++	unsigned char ip[4];
++	unsigned long port;
++
++	memset(r, 0, sizeof(*r));
++	memcpy(text, sec, AD5X_REC_SIZE);
++	text[AD5X_REC_SIZE] = '\0';
++	if (strncmp(text, AD5X_RESCUE_MAGIC, strlen(AD5X_RESCUE_MAGIC)))
++		return AD5X_RESCUE_NONE;
++#define BAD(m) do { snprintf(r->why, sizeof(r->why), "%s", m); \
++		    return AD5X_RESCUE_BAD; } while (0)
++	if (rescue_val(text, "server", r->server, sizeof(r->server)) != 1 ||
++	    !ad5x_ipv4(r->server, ip) || !ip[0] || ip[0] >= 224)
++		BAD("server: not a unicast IPv4 address");
++	if (rescue_val(text, "port", r->port, sizeof(r->port)) != 1 ||
++	    !all_of(r->port, "0123456789", 0) || !r->port[0] ||
++	    (port = dec(r->port)) < 1 || port > 65535)
++		BAD("port: not 1-65535");
++	if (rescue_val(text, "sha256", r->sha256, sizeof(r->sha256)) != 1 ||
++	    !all_of(r->sha256, HEX, 64))
++		BAD("sha256: not 64 hex digits");
++	if (rescue_val(text, "mac", r->mac, sizeof(r->mac)) < 0 ||
++	    (r->mac[0] && (strlen(r->mac) != 17 ||
++	     !all_of(r->mac, HEX ":", 17) || r->mac[2] != ':' ||
++	     r->mac[5] != ':' || r->mac[8] != ':' || r->mac[11] != ':' ||
++	     r->mac[14] != ':')))
++		BAD("mac: not xx:xx:xx:xx:xx:xx");
++	if (rescue_val(text, "ip", r->ip, sizeof(r->ip)) < 0 ||
++	    (r->ip[0] && !ad5x_ipv4(r->ip, ip)))
++		BAD("ip: not an IPv4 address");
++	if (rescue_val(text, "netmask", r->netmask, sizeof(r->netmask)) < 0 ||
++	    (r->netmask[0] && !ad5x_ipv4(r->netmask, ip)))
++		BAD("netmask: not an IPv4 address");
++	if (r->ip[0] && !r->netmask[0])
++		snprintf(r->netmask, sizeof(r->netmask), "255.255.255.0");
++	if (rescue_val(text, "tries", tries, sizeof(tries)) < 0 ||
++	    (tries[0] && (!all_of(tries, "0123456789", 0) ||
++			  strlen(tries) > 3)))
++		BAD("tries: not a count");
++#undef BAD
++	r->tries = (unsigned int)dec(tries);
++	return r->tries < AD5X_RESCUE_TRIES ? AD5X_RESCUE_RUN :
++	       AD5X_RESCUE_GAVE_UP;
++}
++
++int ad5x_rescue_counted(const char *sec, unsigned int tries, char *out)
++{
++	char text[AD5X_REC_SIZE + 1];
++	const char *p, *e;
++	unsigned int n = 0, l;
++
++	memcpy(text, sec, AD5X_REC_SIZE);
++	text[AD5X_REC_SIZE] = '\0';
++	memset(out, 0, AD5X_REC_SIZE);
++	for (p = text; *p; p = *e ? e + 1 : e) {
++		e = strchr(p, '\n');
++		if (!e)
++			e = p + strlen(p);
++		if (!strncmp(p, "tries=", 6))
++			continue;
++		l = (unsigned int)(e - p);
++		if (n + l + 1 >= AD5X_REC_SIZE)
++			return -1;
++		memcpy(out + n, p, l);
++		n += l;
++		out[n++] = '\n';
++	}
++	l = (unsigned int)snprintf(out + n, AD5X_REC_SIZE - n, "tries=%u\n",
++				   tries);
++	if (n + l >= AD5X_REC_SIZE) {
++		memset(out, 0, AD5X_REC_SIZE);
++		return -1;
++	}
++	return 0;
++}
+diff --git a/board/flashforge/ad5x/bootlogic.h b/board/flashforge/ad5x/bootlogic.h
+index e2819e7d..0d3ddc2b 100644
+--- a/board/flashforge/ad5x/bootlogic.h
++++ b/board/flashforge/ad5x/bootlogic.h
+@@ -148,6 +148,57 @@ int ad5x_records_parse(const char *buf, struct ad5x_records *rec);
+ void ad5x_release_clean(char *dst, const char *src, unsigned int len);
+ 
+ const char *ad5x_kernel_name(enum ad5x_kernel k);
++
++/* a dotted IPv4 address, strictly (four numbers 0-255): 1, else 0 */
++int ad5x_ipv4(const char *s, unsigned char ip[4]);
++
++/*
++ * The network rescue record (ad5x.c, "network rescue"): the first MiB's
++ * last sector (LBA 2047), AD5X_REC_SIZE bytes, text: the magic line, then
++ * "key=value" lines, NUL-padded:
++ *
++ *   KILN-RESCUE 1
++ *   server=192.168.1.10   the PC serving rescue/ (an IPv4 address)
++ *   port=8000             its HTTP port
++ *   sha256=<64 hex>       rescue/rescue.scr's
++ *   mac=...               optional: the Ethernet address meanwhile
++ *   ip=... netmask=...    optional: a static address instead of DHCP
++ *   tries=N               U-Boot's: the rescue's starts so far
++ *
++ * U-Boot counts each start of the rescue before it runs it (the record
++ * written back with tries one more; ad5x_rescue_counted) and starts none
++ * once AD5X_RESCUE_TRIES were made: it starts as if there were no record,
++ * which stays as it is to say what happened, until "ad5x_rescue clear",
++ * Kiln's boot loader installer or a rescue that finished (it writes the
++ * normal first MiB last) replaces it.
++ */
++#define AD5X_RESCUE_MAGIC	"KILN-RESCUE 1\n"
++#define AD5X_RESCUE_TRIES	3
++
++enum ad5x_rescue_state {
++	AD5X_RESCUE_NONE,	/* no record (no magic line) */
++	AD5X_RESCUE_BAD,	/* a record that doesn't check: ignored */
++	AD5X_RESCUE_RUN,	/* a record to run (tries < AD5X_RESCUE_TRIES) */
++	AD5X_RESCUE_GAVE_UP,	/* tries used up: ignored, kept */
++};
++
++struct ad5x_rescue_rec {
++	char server[16];
++	char port[6];
++	char sha256[65];
++	char mac[18];			/* "": none */
++	char ip[16], netmask[16];	/* "": DHCP */
++	unsigned int tries;
++	char why[64];			/* AD5X_RESCUE_BAD: what's wrong */
++};
++
++enum ad5x_rescue_state ad5x_rescue_parse(const char *sec,
++					 struct ad5x_rescue_rec *r);
++/*
++ * @sec (a record) with tries=@tries in place of its tries line, in @out
++ * (AD5X_REC_SIZE bytes, NUL-padded); 0, or -1 when it doesn't fit
++ */
++int ad5x_rescue_counted(const char *sec, unsigned int tries, char *out);
+ unsigned int ad5x_crc32(unsigned int crc, const void *buf, unsigned int len);
+ 
+ #endif /* __AD5X_BOOTLOGIC_H__ */
+-- 
+2.56.0
+

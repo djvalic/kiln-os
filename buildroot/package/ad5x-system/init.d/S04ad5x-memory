@@ -1,0 +1,139 @@
+#!/bin/sh
+# Memory settings, early at every boot (before the data partition and the
+# services). Some AD5X units have an Ingenic X2600E with 256 MiB of RAM
+# (MemTotal about 216-229 MB, by kernel, with the stock 236 MiB low
+# window; about 16 MB more with Kiln's 252 MiB), others an X2600H with
+# 512 MiB (about 470-480 MB, then 486-496 MB). Kiln's kernels use only
+# the low 252 MiB on both unless Extended memory is on (a 512 MiB board,
+# ad5x-memory extended on). One image runs on both and this adapts it at
+# boot (docs/memory.md).
+# Every board:
+#   vm.min_free_kbytes 4096: the kernel keeps 4 MiB free for allocations
+#     that can't wait (USB, Wi-Fi, the eMMC driver) instead of the ~1.8 MiB
+#     it picks for this RAM size
+#   tmpfs sizes: Buildroot's fstab mounts /tmp, /run and /dev/shm without
+#     one, so each may take half the RAM. /tmp 24M (Moonraker's uploads go
+#     to /data: S62moonraker), /run 8M (pid files, the boot log, nginx's
+#     temp folders, the copy of /etc/shadow bound over it), /dev/shm 8M
+# Under 300000 kB (a 256 MiB board; a 512 MiB board in standard memory
+# mode too):
+#   64 MiB of zram swap (lz4 when the kernel has it, else lzo-rle) at
+#   priority 100; vm.swappiness 100 (idle program memory goes to zram
+#   before the page cache is dropped, which squashfs would have to
+#   decompress again) and vm.page-cluster 0 (one page per swap-in: zram
+#   has no seek cost)
+# /run/ad5x-memory.conf records what was found, for other scripts and
+# plugins (S64ad5x-camera, Moonraker's kiln_os, ad5x-memory):
+#   MEM_KB=<MemTotal in kB>
+#   LOW_MEM=0|1          by MemTotal, as above
+#   HW_MEM_MIB=256|512   the board's RAM, whatever this start got
+#   MEM_MODE=standard|extended
+#   MEM_MODE_FIXED=0|1   1: the boot loader can't choose the mode (an older
+#                        Kiln U-Boot), only a boot loader update changes it
+# (lib/memory.sh: ad5x.ram= and ad5x.memmode= from the boot loader first,
+# mem_mode_fixed; docs/memory.md, "Extended memory"). A 512 MiB board in
+# standard mode (the default) has about 240 MB and LOW_MEM=1, as a 256 MiB
+# board.
+# Main OS only: ad5x-recovery.mk installs its own list of init scripts.
+# AD5X_MEMORY_ROOT: a test root for /proc, /sys, /dev and /run
+# (tools/test_memory.sh); AD5X_LIB overrides /usr/lib/ad5x.
+
+# Files this creates are readable by klipper and www-data, whoever started
+# it (a root SSH session may run with umask 077; issue #31)
+umask 022
+
+R=${AD5X_MEMORY_ROOT:-}
+LOW_KB=300000
+L=${AD5X_LIB:-/usr/lib/ad5x}
+# the one parser of the RAM and the mode; without it (it is in the same
+# image, so never) both by MemTotal
+[ -f "$L/memory.sh" ] && . "$L/memory.sh"
+ZRAM_SIZE=64M
+
+# set_sys NAME VALUE: NAME is the path under /proc/sys (vm/swappiness)
+set_sys() {
+	echo "$2" > "$R/proc/sys/$1" 2>/dev/null || echo "memory: could not set $1"
+}
+
+# cap MOUNTPOINT SIZE [OPTIONS]: a tmpfs mounted there gets that size.
+# OPTIONS: the mount's own flags, stated again so the remount can't drop
+# them
+cap() {
+	awk -v m="$1" '$2 == m && $3 == "tmpfs" { f = 1 } END { exit !f }' \
+		"$R/proc/mounts" 2>/dev/null || return 0
+	mount -o "remount,${3:+$3,}size=$2" "$1" || echo "memory: $1 not resized"
+}
+
+# zram_swap: swap on /dev/zram0; sets alg to the compressor it uses (the
+# one the kernel shows in brackets)
+zram_swap() {
+	z=$R/sys/block/zram0
+	[ -d "$z" ] || modprobe zram 2>/dev/null
+	[ -d "$z" ] || { echo "memory: this kernel has no zram"; return 1; }
+	if ! grep -q '^/dev/zram0 ' "$R/proc/swaps" 2>/dev/null; then
+		# a size set before (by hand, an earlier try): start again
+		[ "$(cat "$z/disksize" 2>/dev/null)" = 0 ] || echo 1 > "$z/reset" 2>/dev/null
+		# the kernel lists its compressors, the current one in brackets
+		have=" $(tr -d '[]' < "$z/comp_algorithm" 2>/dev/null) "
+		for a in lz4 lzo-rle lzo; do
+			case "$have" in *" $a "*)
+				echo $a > "$z/comp_algorithm" 2>/dev/null && alg=$a
+				break ;;
+			esac
+		done
+		echo $ZRAM_SIZE > "$z/disksize" 2>/dev/null ||
+			{ echo "memory: zram size not set"; return 1; }
+		mkswap "$R/dev/zram0" >/dev/null 2>&1 ||
+			{ echo "memory: mkswap on zram failed"; return 1; }
+		# BusyBox without swapon -p (FEATURE_SWAPON_PRI) takes it as is:
+		# the only swap, so its priority doesn't matter
+		swapon -p 100 "$R/dev/zram0" 2>/dev/null || swapon "$R/dev/zram0" ||
+			{ echo "memory: swapon on zram failed"; return 1; }
+	fi
+	cur=$(sed -n 's/.*\[\([^]]*\)\].*/\1/p' "$z/comp_algorithm" 2>/dev/null)
+	alg=${cur:-$alg}
+	return 0
+}
+
+case "$1" in
+start)
+	kb=$(awk '$1 == "MemTotal:" { print $2; exit }' "$R/proc/meminfo" 2>/dev/null)
+	case "$kb" in
+	''|*[!0-9]*) echo "memory: no MemTotal in /proc/meminfo; nothing changed"; exit 0 ;;
+	esac
+	set_sys vm/min_free_kbytes 4096
+	cap /tmp 24M
+	cap /run 8M nosuid,nodev
+	cap /dev/shm 8M
+	if command -v mem_hw_mib >/dev/null 2>&1; then
+		hw=$(mem_hw_mib) mode=$(mem_mode) fixed=0
+		mem_mode_fixed && fixed=1
+	else
+		hw=256 mode=standard fixed=0
+		[ "$kb" -ge 400000 ] && hw=512 mode=extended
+	fi
+	if [ "$hw" = 512 ]; then
+		board="512 MiB board (X2600H), $mode memory"
+		[ $fixed = 1 ] && board="$board (set by an older boot loader)"
+	else
+		board="256 MiB board (X2600E)"
+	fi
+	low=0 note= alg=
+	if [ "$kb" -lt $LOW_KB ]; then
+		low=1
+		if zram_swap; then
+			set_sys vm/swappiness 100
+			set_sys vm/page-cluster 0
+			note="zram swap $ZRAM_SIZE (${alg:-?})"
+		else
+			note="no zram swap"
+		fi
+	fi
+	printf 'MEM_KB=%s\nLOW_MEM=%s\nHW_MEM_MIB=%s\nMEM_MODE=%s\nMEM_MODE_FIXED=%s\n' \
+		"$kb" "$low" "$hw" "$mode" "$fixed" > "$R/run/ad5x-memory.conf"
+	echo "memory: MemTotal $kb kB, $board${note:+; $note}"
+	echo "$(cut -d' ' -f1 "$R/proc/uptime" 2>/dev/null)   memory: $kb kB, $board${note:+, $note}" \
+		>> "$R/run/ad5x-boot.log" 2>/dev/null
+	;;
+esac
+exit 0

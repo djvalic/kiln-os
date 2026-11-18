@@ -1,0 +1,64 @@
+From 9cb4766869050607a7f58fb58dea2a21486ee8d5 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 14:54:08 -0500
+Subject: [PATCH 40/48] mips: x2600: Partial lines written back before a range
+ is invalidated
+
+invalidate_dcache_range() dropped the first and last line of a range
+that covers them only in part, and with them any dirty data of the
+neighbours sharing those lines. Linux's r4k_dma_cache_inv() and the
+vendor kernel's mips_sc_inv() write such lines back and invalidate them
+first; so does this now, by the larger line size (the L2's 64 bytes).
+Buffers aligned to ARCH_DMA_MINALIGN (64 since SYS_CACHE_SHIFT_6) have no
+partial lines, so DMA into them is unchanged.
+---
+ arch/mips/mach-jz47xx/x2600/cache.c | 24 ++++++++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+
+diff --git a/arch/mips/mach-jz47xx/x2600/cache.c b/arch/mips/mach-jz47xx/x2600/cache.c
+index 74137ad0..7029c02f 100644
+--- a/arch/mips/mach-jz47xx/x2600/cache.c
++++ b/arch/mips/mach-jz47xx/x2600/cache.c
+@@ -16,6 +16,7 @@
+ #include <asm/io.h>
+ #include <asm/mipsregs.h>
+ #include <asm/system.h>
++#include <linux/kernel.h>
+ 
+ static unsigned long line_size(unsigned long field)
+ {
+@@ -77,8 +78,31 @@ void flush_dcache_range(ulong start_addr, ulong stop)
+ 	sync();
+ }
+ 
++/*
++ * A line that the range covers only in part also holds other data, which
++ * may be dirty in the cache: written back and invalidated, not dropped, as
++ * Linux's r4k_dma_cache_inv() and the vendor kernel's mips_sc_inv() do. The
++ * larger of the two line sizes (the L2's 64 bytes; an L1 line lies within
++ * one) decides what is partial. Buffers aligned to ARCH_DMA_MINALIGN (64
++ * bytes, SYS_CACHE_SHIFT_6) have no such lines.
++ */
+ void invalidate_dcache_range(ulong start_addr, ulong stop)
+ {
++	ulong ls = max(l1d_line(), l2_line());
++
++	if (!ls || start_addr >= stop)
++		return;
++	if (start_addr & (ls - 1)) {
++		flush_dcache_range(start_addr & ~(ls - 1),
++				   (start_addr & ~(ls - 1)) + ls);
++		start_addr = (start_addr & ~(ls - 1)) + ls;
++	}
++	if (stop & (ls - 1) && stop > start_addr) {
++		flush_dcache_range(stop & ~(ls - 1), (stop & ~(ls - 1)) + ls);
++		stop &= ~(ls - 1);
++	}
++	if (start_addr >= stop)
++		return;
+ 	l2_hit_war();
+ 	range(start_addr, stop, l2_line(), HIT_INVALIDATE_SD);
+ 	range(start_addr, stop, l1d_line(), HIT_INVALIDATE_D);
+-- 
+2.56.0
+

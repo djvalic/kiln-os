@@ -112,6 +112,16 @@
         1
       ],
       [
+        "BED_LEVEL_SCREWS_TUNE",
+        "Bed screws",
+        1
+      ],
+      [
+        "SCREWS_TILT_CALCULATE",
+        "",
+        1
+      ],
+      [
         "LOAD_CELL_TARE",
         "Tare load cell",
         1

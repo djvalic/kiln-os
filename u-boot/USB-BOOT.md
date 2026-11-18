@@ -65,6 +65,28 @@ follows a watchdog reset (Linux's reboot), not a power-on: the CPM, the
 PLLs and the DDR controller are reset, but the DDR chips keep power and
 CPSPR, SLPC and the RTC domain keep their values.
 
+**Kiln's SPL by itself** (patch 0028): when its four attempts found
+nothing to start (both kernel slots' uImages bad, U-Boot proper absent or
+finding no kernel, the DDR or the eMMC not coming up), the next start
+writes the same request to CPM_SLPC and resets through the watchdog, so
+the board waits on J28 as `a108:eaef` without K4 or a running Linux. The
+console says:
+
+```
+SPL: nothing started after 4 attempts (last 0x4b..): boot ROM USB mode (J28); power-cycle to try the eMMC again
+```
+
+CPSPR then holds `0x4c00` | the last attempt's low byte. Should the ROM
+start the eMMC SPL again with the request still in CPM_SLPC, that SPL
+stops with the watchdog off (`SPL: the boot ROM started the eMMC, not its
+USB mode ...`) instead of asking again. A power cycle clears CPM_SLPC:
+the SPL then tries the eMMC again from attempt 0, and where nothing has
+changed, asks for the USB mode again after its four attempts (seconds
+when the slots are just bad; a hang costs up to its watchdog, 10 s per
+SPL phase, 30 s + 120 s for U-Boot proper).
+`u-boot/README.md`, "Tries", has the details and the loop guard;
+`tools/bench/README.md`, drill 5, the bench check.
+
 **K4** (alexshev86, #68): closing the pad pair K4 changes the boot-select
 straps `boot_sel[2:0]` (R370-R374 next to K4) from `101` (eMMC) to `111`
 (USB), so the ROM starts in USB mode at every power-on, even with a good
@@ -91,7 +113,7 @@ Vendor requests on EP0 (recipient device), data on bulk OUT 0x01:
 | 0x04 PROG_START1 | OUT 0x40 | entry point, split |
 | 0x05 PROG_START2 | OUT 0x40 | (stage 2 in DDR; unused) |
 
-`run-spl`: GET_CPU_INFO; SET_DATA_ADDR 0x80001000; SET_DATA_LEN (13,824
+`run-spl`: GET_CPU_INFO; SET_DATA_ADDR 0x80001000; SET_DATA_LEN (14,336
 bytes for the current build); the image on bulk OUT; FLUSH_CACHE;
 PROG_START1 0x80001800. Timeouts 1 s (control) and 10 s (bulk). Exit 0
 started, 1 error (nothing started), 3 PROG_START1 got no status stage
@@ -112,7 +134,7 @@ Why the whole image, header included: Cloner sends its parameter records
 (BDIF/DDR/BOOT, for its own stage 1) and its code behind them as one block
 to 0x80001000; Kiln sends its 2 KiB eMMC header there instead, so SRAM
 holds what an eMMC start loads, plus the tag. Kiln's SPL has its DDR
-values built in and reads only the tag from the header. 13,824 bytes is
+values built in and reads only the tag from the header. 14,336 bytes is
 within the SPL window (24 KiB, 48 blocks, to 0x80007000) and Cloner's
 0x7000. FLUSH_CACHE before PROG_START1 follows Ingenic's `usb_load.c`
 (the window is cached KSEG0); `--no-flush` is there if the ROM disagrees.
@@ -126,7 +148,12 @@ anything it would have left to the ROM's eMMC path:
   at 0x80007000; it never returns to the ROM;
 - patch 0025: sees the tag (or CPM_SLPC = 0x42575302) and clears both, so
   the next reset boots from the eMMC; treats the start as fresh (CPSPR is
-  printed, not counted); runs a DDR test after the DDR setup;
+  printed, not counted); runs a DDR test after the DDR setup. Also after
+  patch 0028's own request (CPSPR `0x4c__`) when the tag is there:
+  spl-usb.bin is always a fresh start. Without the tag, CPM_SLPC with
+  `0x4c__` is an eMMC start the ROM made despite the request, and the SPL
+  stops; so after the SPL's own request send spl-usb.bin, not
+  spl-mmc.img;
 - it arms its own watchdog (10 s per phase) and opens every clock gate it
   uses itself: OST, UART0, TCU/RTC (watchdog), EFUSE, DDR, and MSC0
   (patch 0024: before the controller's reset; the ROM opens that one only
@@ -157,6 +184,7 @@ SPL: CPCCR ..., APLL ..., MPLL ..., EPLL ...
 SPL: DDR3 W634GU6QG-11, 900 MHz
 SPL: DDR 512 MiB up
 SPL: DDR test: data lines, address lines 2-27, 16 MiB at 0x1000000: good (... ms)
+SPL: eMMC over USB: MSC0CDR 0x..., now 0x...: RX phase 3, tuning off
 SPL: no U-Boot at 0xA400: the slot, as the stock SPL
 SPL: slot b
 SPL: <uImage name>, <size> bytes at 0x80f00000
@@ -165,6 +193,10 @@ SPL: starting the kernel
 
    then the kernel and the main OS as usual (Klipper ready in Fluidd).
    With K4 the first line after the banner has no "(soft entry ...)".
+   A failed eMMC read adds a line `SPL: eMMC CMD17 at 0x... block 0:
+   <step> <timeout|error>; status 0x..., present 0x..., MSC0CDR 0x...`
+   and the next try (`again from CMD0 at 400 kHz, 1 bit`; u-boot/README.md,
+   "Chip variants").
 
 Log per start: date and time, how it entered USB mode (K4 + power cycle,
 or soft), the CPU info, the whole console log, the DDR test time, and
@@ -182,12 +214,55 @@ the ROM waits on USB again. Write down the SPL's last line and the
 scratch pad value the next USB start prints. Nothing goes onto the eMMC
 because of a failure.
 
+## The eMMC as a USB disk (ums)
+
+`run-uboot` starts the SPL as stage 1 only and then Kiln's U-Boot proper
+from the laptop. U-Boot runs `ums 0 mmc 0`, so the laptop sees the whole
+eMMC as a USB disk (`UMS disk 0`, the eMMC's size), with nothing on the
+eMMC needed and nothing written by the start itself:
+
+```
+# the printer in the boot ROM's USB mode (above), then:
+python3 u-boot/tools/ad5x_usbboot.py run-uboot \
+    $WORK/out/dist/spl-usb2.bin $WORK/out/dist/u-boot.bin
+lsblk -o NAME,SIZE,MODEL        # the new disk: check it before writing
+```
+
+- `spl-usb2.bin` is `spl-mmc.img` tagged `KILNUSB2`: it sets up DDR (and
+  the eMMC as for a start over USB: its clock, RX phase 3, the pads at
+  1.8 V) and goes back to the boot ROM, which takes `u-boot.bin` as stage
+  2 (patch 0034; 0039 hands the ROM its own Status and Cause back). The
+  watchdog stays off. The boot ROM's USB mode leaves the MSC pads at
+  3.3 V; the SPL sets 1.8 V on every start, and U-Boot proper checks
+  again before it probes the eMMC (0049): without it the card answers
+  but U-Boot's 50 MHz transfers fail (#68). `run-uboot` refuses an SPL without that tag: it
+  would boot the eMMC instead of going back to the ROM.
+- U-Boot proper finds `0x5a2b` in CPSPR (only the `KILNUSB2` SPL leaves
+  it), takes its build's default environment in RAM only and runs
+  `ums 0 mmc 0`: the start writes nothing to the eMMC. Ethernet works
+  there too (`dhcp`, `wget` at the prompt after Ctrl-C).
+- Ctrl-C on the console ends `ums`; a power cycle starts from the eMMC
+  again.
+- U-Boot proper moves eMMC data by ADMA2 (0050, PR #81): by PIO, reads
+  returned a wrong word now and then while the Ethernet MAC's DMA ran
+  (netconsole), with the bus CRC good.
+- Reads run at about 14 MB/s. On printer 2 (A31M8C eMMC at 52 MHz) about
+  one data CRC error per 2 GB read turned up under ums; U-Boot stops the
+  read and reads that chunk again (patch 0037), so the host sees no
+  error. Read back what you write (`sha256sum` over the same range).
+- Back up the eMMC first: everything up to the end of p6 (0x4da00000;
+  p6 holds the unit's factory data, never write it from another unit's
+  backup) and what you need of p7.
+
 ## Getting back
 
 - **Power cycle** (off for a few seconds; the smart plug): CPM_SLPC
   doesn't survive power-off, the stock SPL boots from the eMMC.
 - After a start of Kiln's SPL over USB the kernel's reboot also goes back
   to the eMMC (the SPL cleared CPM_SLPC).
+- After Kiln's SPL asked for the USB mode itself (0028), a power cycle
+  tries the eMMC again too; if still nothing starts there, it ends in the
+  USB mode again.
 - **K4**: open it again, then power-cycle.
 - None of this writes the eMMC: it still holds the stock SPL and both
   slots as before.
@@ -196,7 +271,7 @@ because of a failure.
 
 - GET_CPU_INFO's answer on the X2600 (Cloner reads 5 bytes) and the
   endpoints (`info` prints the descriptors).
-- That the ROM takes 13,824 bytes at 0x80001000 (Cloner's own stage 1 is
+- That the ROM takes 14,336 bytes at 0x80001000 (Cloner's own stage 1 is
   9,432 bytes; `d2i_len` is written commented out in its config) and
   starts 0x80001800 with PROG_START1.
 - Whether FLUSH_CACHE before PROG_START1 is right, and whether the ROM
