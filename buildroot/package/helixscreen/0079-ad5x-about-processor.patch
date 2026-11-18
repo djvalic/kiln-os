@@ -1,0 +1,632 @@
+From 53824c199cca54c2147535b02bdf22aba5eb5be7 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Wed, 18 Nov 2026 11:48:11 -0700
+Subject: [PATCH] ad5x: About shows the X2600 variant
+
+AD5X boards come with different X2600 variants: the X2600E has 256 MiB
+of DDR3 in the package, the X2600H 512 MiB. Settings -> About now names
+it next to the eMMC:
+
+  Processor  X2600E, 256 MiB DDR3, SoC ID 0x18000, core 0.0
+
+The SoC information comes from the eFuse: Kiln's 7.3 kernel exposes it as
+the nvmem cell socinfo@6b (20 bits, then the same 20 bits as a check).
+Ingenic's 6.6 kernel has no eFuse driver; there the row reads "X2600,
+256 MiB, variant unknown", the size from the boot loader's ad5x.ram= when
+it gave one. The core revision comes from /proc/cpuinfo. The variant
+names are Ingenic's seven; a capacity code of 8 or more shows as an
+unknown size. The chip ID in the eFuse is left out: it is a serial
+number, and About screenshots get posted.
+
+Kiln builds only (HELIX_KILN_AD5X); elsewhere the row stays hidden.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ include/system/kiln_hardware.h    |  59 +++++++++++--
+ include/ui_settings_about.h       |   3 +
+ src/system/kiln_hardware.cpp      | 136 ++++++++++++++++++++++++++++++
+ src/ui/ui_settings_about.cpp      |  10 ++-
+ tests/unit/test_kiln_hardware.cpp | 117 ++++++++++++++++++++++++-
+ translations/de.yml               |   1 +
+ translations/en.yml               |   1 +
+ translations/es.yml               |   1 +
+ translations/fr.yml               |   1 +
+ translations/it.yml               |   1 +
+ translations/ja.yml               |   1 +
+ translations/ko.yml               |   1 +
+ translations/pt.yml               |   1 +
+ translations/ru.yml               |   1 +
+ translations/tr.yml               |   1 +
+ translations/zh.yml               |   1 +
+ ui_xml/about_settings_overlay.xml |   7 +-
+ 17 files changed, 333 insertions(+), 10 deletions(-)
+
+diff --git a/include/system/kiln_hardware.h b/include/system/kiln_hardware.h
+index 8f2a254b..41f96f40 100644
+--- a/include/system/kiln_hardware.h
++++ b/include/system/kiln_hardware.h
+@@ -3,21 +3,70 @@
+ 
+ /**
+  * @file kiln_hardware.h
+- * @brief Kiln OS on the AD5X: which parts the printer has.
++ * @brief Kiln OS on the AD5X: which X2600 and which eMMC the printer has.
+  *
+- * AD5X boards differ in parts that matter for support, such as the eMMC
+- * (58A398, A31M8C, MMC8GB so far). The About panel shows it.
++ * AD5X boards differ in parts that matter for support: the X2600 variant
++ * (the X2600E has 256 MiB of DDR3 in the package, the X2600H 512 MiB) and
++ * the eMMC. The About panel shows both.
++ *
++ * The X2600's SoC information is in its eFuse. Kiln's 7.3 kernel exposes it
++ * as the nvmem cell "socinfo@6b": 20 bits, then the same 20 bits again as a
++ * check. Ingenic's 6.6 kernel has no driver for the eFuse; there the variant
++ * is unknown, and the RAM size comes from Kiln's boot loader (ad5x.ram= on
++ * the kernel command line) when it gave one.
+  */
+ 
++#include <cstdint>
++#include <optional>
+ #include <string>
+ 
+ namespace helix::kiln_hardware {
+ 
++/// The X2600's SoC information, decoded
++struct SocInfo {
++    uint32_t id = 0;       ///< the 20 bits as stored
++    unsigned variant = 0;  ///< bits 19:16: 1 X2600E, 3 X2600H, ...
++    bool ddr3 = false;     ///< bit 15, else DDR2
++    unsigned ram_mib = 0;  ///< from the capacity code, bits 10:7; 0 unknown
++};
++
++/**
++ * @brief Decode the raw socinfo cell.
++ *
++ * @p raw is the cell's bytes as the kernel returns them (little-endian,
++ * at least 5). nullopt when the two copies differ or the field is blank.
++ */
++std::optional<SocInfo> decode_socinfo(const std::string& raw);
++
++/// Ingenic's name for the variant ("X2600E", "X2600H", ...), or "X2600 variant N"
++std::string variant_name(unsigned variant);
++
++/**
++ * @brief The board's RAM in MiB from ad5x.ram= in @p cmdline.
++ *
++ * 256 or 512; nullopt without one, for other values, or when it is given
++ * twice with different values.
++ */
++std::optional<unsigned> boot_loader_ram_mib(const std::string& cmdline);
++
++/// The core's revision from /proc/cpuinfo ("0.0" from "... XBurst II V0.0"), or ""
++std::string core_revision(const std::string& cpuinfo);
++
++/**
++ * @brief The processor row: "X2600E, 256 MiB DDR3, SoC ID 0x18000, core 0.0".
++ *
++ * Without the eFuse: "X2600, 256 MiB, variant unknown, core 0.0", the size
++ * from the boot loader if it gave one.
++ *
++ * @p root is the test seam: the files are read below it (/sys, /proc).
++ * "" when the machine is not an X2600.
++ */
++std::string processor_summary(const std::string& root = "");
++
+ /**
+  * @brief The eMMC row: "A31M8C (maker 0xEC), PRV 0x30, 58.2 GiB".
+  *
+- * From /sys/block/mmcblk0; "" when there is no eMMC there. @p root is the
+- * test seam: the files are read below it.
++ * From /sys/block/mmcblk0; "" when there is no eMMC there.
+  */
+ std::string emmc_summary(const std::string& root = "");
+ 
+diff --git a/include/ui_settings_about.h b/include/ui_settings_about.h
+index 82d47b1f..dceed88b 100644
+--- a/include/ui_settings_about.h
++++ b/include/ui_settings_about.h
+@@ -116,7 +116,9 @@ class AboutSettingsOverlay : public OverlayBase {
+     lv_subject_t log_dest_value_subject_{};
+     lv_subject_t host_arch_value_subject_{};
+     lv_subject_t about_copyright_subject_{};
++    lv_subject_t processor_value_subject_{};
+     lv_subject_t emmc_value_subject_{};
++    lv_subject_t has_processor_subject_{};
+     lv_subject_t has_emmc_subject_{};
+ 
+     // Static buffers for string subjects
+@@ -130,6 +132,7 @@ class AboutSettingsOverlay : public OverlayBase {
+     char log_dest_value_buf_[256];
+     char host_arch_value_buf_[64];
+     char about_copyright_buf_[48];
++    char processor_value_buf_[96];
+     char emmc_value_buf_[96];
+ 
+     // Debounce tracker restart on inadvertent re-open
+diff --git a/src/system/kiln_hardware.cpp b/src/system/kiln_hardware.cpp
+index fc69422e..514cf279 100644
+--- a/src/system/kiln_hardware.cpp
++++ b/src/system/kiln_hardware.cpp
+@@ -5,12 +5,19 @@
+ 
+ #include <spdlog/fmt/fmt.h>
+ 
++#include <array>
++#include <cctype>
++#include <filesystem>
++#include <system_error>
++
+ namespace helix::kiln_hardware {
+ 
+ namespace tio = helix::text_io;
+ 
+ namespace {
+ 
++constexpr uint32_t kFieldMask = 0xfffff; // 20 bits
++
+ std::string read_trimmed(const std::string& path) {
+     auto body = tio::read_file(path, 4096);
+     if (!body) {
+@@ -19,8 +26,137 @@ std::string read_trimmed(const std::string& path) {
+     return std::string(tio::trim(*body));
+ }
+ 
++/// The socinfo cell of whichever nvmem device carries one
++std::string read_socinfo_cell(const std::string& root) {
++    std::error_code ec;
++    const std::filesystem::path devices = root + "/sys/bus/nvmem/devices";
++    for (const auto& dev : std::filesystem::directory_iterator(devices, ec)) {
++        const auto cell = dev.path() / "cells" / "socinfo@6b,0";
++        if (auto raw = tio::read_file(cell.string(), 16)) {
++            return *raw;
++        }
++    }
++    return {};
++}
++
++bool is_x2600(const std::string& root) {
++    const auto compatible = tio::read_file(root + "/proc/device-tree/compatible", 4096);
++    // NUL-separated strings
++    return compatible && compatible->find("ingenic,x2600") != std::string::npos;
++}
++
+ } // namespace
+ 
++std::optional<SocInfo> decode_socinfo(const std::string& raw) {
++    if (raw.size() < 5) {
++        return std::nullopt;
++    }
++    uint64_t bits = 0;
++    for (std::size_t i = 0; i < 5; ++i) {
++        bits |= static_cast<uint64_t>(static_cast<unsigned char>(raw[i])) << (8 * i);
++    }
++    const auto first = static_cast<uint32_t>(bits & kFieldMask);
++    const auto second = static_cast<uint32_t>((bits >> 20) & kFieldMask);
++    if (first == 0 || first != second) {
++        return std::nullopt;
++    }
++
++    // Ingenic's capacity codes 0-7 (MEM_256M .. MEM_1G); 8 and up unknown
++    static constexpr std::array<unsigned, 8> kMib = {256, 128, 64, 32, 512, 16, 8, 1024};
++    const unsigned capacity = (first >> 7) & 0xf;
++
++    SocInfo info;
++    info.id = first;
++    info.variant = (first >> 16) & 0xf;
++    info.ddr3 = (first >> 15) & 1;
++    info.ram_mib = capacity < kMib.size() ? kMib[capacity] : 0;
++    return info;
++}
++
++std::string variant_name(unsigned variant) {
++    // Ingenic's order (their SPL's soc_type)
++    static constexpr std::array<const char*, 7> kNames = {
++        "X2600", "X2600E", "X2600M", "X2600H", "X2660", "X2670", "X2670M"};
++    if (variant < kNames.size()) {
++        return kNames[variant];
++    }
++    return fmt::format("X2600 variant {}", variant);
++}
++
++std::optional<unsigned> boot_loader_ram_mib(const std::string& cmdline) {
++    static const std::string kKey = "ad5x.ram=";
++    std::optional<unsigned> mib;
++    std::size_t pos = 0;
++    while ((pos = cmdline.find(kKey, pos)) != std::string::npos) {
++        const bool word_start = pos == 0 || std::isspace(static_cast<unsigned char>(cmdline[pos - 1]));
++        pos += kKey.size();
++        if (!word_start) {
++            continue;
++        }
++        std::size_t end = pos;
++        while (end < cmdline.size() && !std::isspace(static_cast<unsigned char>(cmdline[end]))) {
++            ++end;
++        }
++        const std::string value = cmdline.substr(pos, end - pos);
++        unsigned v = 0;
++        if (value == "256") {
++            v = 256;
++        } else if (value == "512") {
++            v = 512;
++        } else {
++            return std::nullopt;
++        }
++        if (mib && *mib != v) {
++            return std::nullopt;
++        }
++        mib = v;
++    }
++    return mib;
++}
++
++std::string core_revision(const std::string& cpuinfo) {
++    // "cpu model : Ingenic XBurst II V0.0  FPU V0.0"
++    const auto line = cpuinfo.find("cpu model");
++    if (line == std::string::npos) {
++        return {};
++    }
++    const auto end = cpuinfo.find('\n', line);
++    const std::string text = cpuinfo.substr(line, end == std::string::npos ? end : end - line);
++    const auto v = text.find(" V");
++    if (v == std::string::npos) {
++        return {};
++    }
++    std::size_t stop = v + 2;
++    while (stop < text.size() && (std::isdigit(static_cast<unsigned char>(text[stop])) ||
++                                  text[stop] == '.')) {
++        ++stop;
++    }
++    return stop > v + 2 ? text.substr(v + 2, stop - v - 2) : std::string();
++}
++
++std::string processor_summary(const std::string& root) {
++    if (!is_x2600(root)) {
++        return {};
++    }
++    const auto cpuinfo = tio::read_file(root + "/proc/cpuinfo", 64 * 1024);
++    const std::string rev = cpuinfo ? core_revision(*cpuinfo) : std::string();
++    const std::string core = rev.empty() ? std::string() : fmt::format(", core {}", rev);
++
++    if (const auto soc = decode_socinfo(read_socinfo_cell(root))) {
++        const char* type = soc->ddr3 ? "DDR3" : "DDR2";
++        const std::string ram = soc->ram_mib ? fmt::format("{} MiB {}", soc->ram_mib, type)
++                                             : fmt::format("{}, size unknown", type);
++        return fmt::format("{}, {}, SoC ID 0x{:05x}{}", variant_name(soc->variant), ram, soc->id,
++                           core);
++    }
++
++    // No eFuse driver (6.6): the size Kiln's boot loader passed, if any
++    const auto cmdline = tio::read_file(root + "/proc/cmdline", 4096);
++    const auto mib = cmdline ? boot_loader_ram_mib(*cmdline) : std::nullopt;
++    const std::string ram = mib ? fmt::format(", {} MiB", *mib) : std::string();
++    return fmt::format("X2600{}, variant unknown{}", ram, core);
++}
++
+ std::string emmc_summary(const std::string& root) {
+     const std::string block = root + "/sys/block/mmcblk0";
+     const std::string dev = block + "/device";
+diff --git a/src/ui/ui_settings_about.cpp b/src/ui/ui_settings_about.cpp
+index 4d7d1861..4bc2f7bd 100644
+--- a/src/ui/ui_settings_about.cpp
++++ b/src/ui/ui_settings_about.cpp
+@@ -107,15 +107,21 @@ void AboutSettingsOverlay::init_subjects() {
+         UI_MANAGED_SUBJECT_STRING(host_arch_value_subject_, host_arch_value_buf_,
+                                   diag.identity.host_arch.c_str(), "host_arch_value", subjects_);
+ 
+-        // Kiln OS on the AD5X: the eMMC (a part that differs between
+-        // boards). The hardware doesn't change while running.
++        // Kiln OS on the AD5X: the X2600 variant and the eMMC (the parts that
++        // differ between boards). The hardware doesn't change while running.
+ #if defined(HELIX_KILN_AD5X)
++        const std::string processor = helix::kiln_hardware::processor_summary();
+         const std::string emmc = helix::kiln_hardware::emmc_summary();
+ #else
++        const std::string processor;
+         const std::string emmc;
+ #endif
++        UI_MANAGED_SUBJECT_STRING(processor_value_subject_, processor_value_buf_,
++                                  processor.c_str(), "about_processor_value", subjects_);
+         UI_MANAGED_SUBJECT_STRING(emmc_value_subject_, emmc_value_buf_, emmc.c_str(),
+                                   "about_emmc_value", subjects_);
++        UI_MANAGED_SUBJECT_INT(has_processor_subject_, processor.empty() ? 0 : 1,
++                               "about_has_processor", subjects_);
+         UI_MANAGED_SUBJECT_INT(has_emmc_subject_, emmc.empty() ? 0 : 1, "about_has_emmc",
+                                subjects_);
+     });
+diff --git a/tests/unit/test_kiln_hardware.cpp b/tests/unit/test_kiln_hardware.cpp
+index 2ca52436..719a51dd 100644
+--- a/tests/unit/test_kiln_hardware.cpp
++++ b/tests/unit/test_kiln_hardware.cpp
+@@ -1,8 +1,11 @@
+ // SPDX-License-Identifier: GPL-3.0-or-later
+ 
+ /**
+- * Kiln OS: the About panel names the eMMC, from /sys/block/mmcblk0.
+- * Values below are printer 2's A31M8C.
++ * Kiln OS: the About panel names the X2600 variant and the eMMC.
++ *
++ * The SoC information comes from the eFuse (Kiln's 7.3 kernel, nvmem cell
++ * socinfo@6b: 20 bits twice), the eMMC from /sys/block/mmcblk0. Values
++ * below are printer 2's: an X2600E with 256 MiB of DDR3 and an A31M8C.
+  */
+ 
+ #include "system/kiln_hardware.h"
+@@ -18,6 +21,14 @@ namespace fs = std::filesystem;
+ 
+ namespace {
+ 
++// 0x18000 twice, as the kernel returns the cell
++const std::string kSocinfoX2600E("\x00\x80\x01\x00\x18", 5);
++
++const char* kCpuinfo = "system type\t\t: xburst2-based\n"
++                       "machine\t\t\t: Flashforge Adventurer 5X\n"
++                       "processor\t\t: 0\n"
++                       "cpu model\t\t: Ingenic XBurst II V0.0  FPU V0.0\n";
++
+ struct Root {
+     fs::path dir;
+     Root() {
+@@ -38,8 +49,110 @@ struct Root {
+     std::string str() const { return dir.string(); }
+ };
+ 
++void x2600_board(const Root& r) {
++    r.put("proc/device-tree/compatible",
++          std::string("flashforge,ad5x\0ingenic,x2600\0", 31));
++    r.put("proc/cpuinfo", kCpuinfo);
++}
++
+ } // namespace
+ 
++TEST_CASE("Kiln hardware: the SoC information decodes", "[kiln][hardware]") {
++    const auto soc = decode_socinfo(kSocinfoX2600E);
++    REQUIRE(soc);
++    CHECK(soc->id == 0x18000);
++    CHECK(soc->variant == 1);
++    CHECK(soc->ddr3);
++    CHECK(soc->ram_mib == 256);
++    CHECK(variant_name(soc->variant) == "X2600E");
++    CHECK(variant_name(0) == "X2600");
++    CHECK(variant_name(2) == "X2600M");
++    CHECK(variant_name(3) == "X2600H");
++    CHECK(variant_name(4) == "X2660");
++    CHECK(variant_name(5) == "X2670");
++    CHECK(variant_name(6) == "X2670M");
++    CHECK(variant_name(7) == "X2600 variant 7");
++}
++
++TEST_CASE("Kiln hardware: a 512 MiB X2600H decodes", "[kiln][hardware]") {
++    // variant 3, DDR3, capacity code 4 (512 MiB): 0x38200, twice
++    const uint64_t bits = 0x38200ull | (0x38200ull << 20);
++    std::string raw;
++    for (int i = 0; i < 5; ++i)
++        raw += static_cast<char>((bits >> (8 * i)) & 0xff);
++    const auto soc = decode_socinfo(raw);
++    REQUIRE(soc);
++    CHECK(soc->variant == 3);
++    CHECK(soc->ram_mib == 512);
++}
++
++TEST_CASE("Kiln hardware: a capacity code of 8 and up is unknown", "[kiln][hardware]") {
++    // variant 1, DDR3, capacity code 8 (bit 10): 0x18400, twice
++    const uint64_t bits = 0x18400ull | (0x18400ull << 20);
++    std::string raw;
++    for (int i = 0; i < 5; ++i)
++        raw += static_cast<char>((bits >> (8 * i)) & 0xff);
++    const auto soc = decode_socinfo(raw);
++    REQUIRE(soc);
++    CHECK(soc->variant == 1);
++    CHECK(soc->ram_mib == 0);
++}
++
++TEST_CASE("Kiln hardware: the boot loader's RAM size", "[kiln][hardware]") {
++    CHECK(boot_loader_ram_mib("console=ttyS0 ad5x.ram=256 ad5x.memmode=standard") == 256u);
++    CHECK(boot_loader_ram_mib("ad5x.ram=512\n") == 512u);
++    CHECK(boot_loader_ram_mib("ad5x.ram=512 ad5x.ram=512") == 512u);
++    CHECK_FALSE(boot_loader_ram_mib("console=ttyS0 mem=236M@0x0"));
++    CHECK_FALSE(boot_loader_ram_mib("ad5x.ram=256 ad5x.ram=512"));
++    CHECK_FALSE(boot_loader_ram_mib("ad5x.ram=1024"));
++    CHECK_FALSE(boot_loader_ram_mib("xad5x.ram=256"));
++}
++
++TEST_CASE("Kiln hardware: a bad SoC information is refused", "[kiln][hardware]") {
++    CHECK_FALSE(decode_socinfo(""));
++    CHECK_FALSE(decode_socinfo(std::string("\x00\x80\x01", 3)));
++    CHECK_FALSE(decode_socinfo(std::string(5, '\0')));
++    // the copies differ
++    CHECK_FALSE(decode_socinfo(std::string("\x00\x80\x01\x00\x19", 5)));
++}
++
++TEST_CASE("Kiln hardware: the core revision comes from cpuinfo", "[kiln][hardware]") {
++    CHECK(core_revision(kCpuinfo) == "0.0");
++    CHECK(core_revision("cpu model\t: Ingenic XBurst II V1.2  FPU V0.0") == "1.2");
++    CHECK(core_revision("model name\t: ARMv7") == "");
++    CHECK(core_revision("cpu model\t: Ingenic XBurst II") == "");
++}
++
++TEST_CASE("Kiln hardware: the processor row", "[kiln][hardware]") {
++    Root r;
++    SECTION("not an X2600: no row") {
++        r.put("proc/device-tree/compatible", std::string("rockchip,rk3328\0", 16));
++        CHECK(processor_summary(r.str()).empty());
++    }
++    SECTION("7.3 with the eFuse") {
++        x2600_board(r);
++        r.put("sys/bus/nvmem/devices/jz4780-efuse0/cells/socinfo@6b,0", kSocinfoX2600E);
++        CHECK(processor_summary(r.str()) == "X2600E, 256 MiB DDR3, SoC ID 0x18000, core 0.0");
++    }
++    SECTION("7.3 with an unknown capacity code") {
++        x2600_board(r);
++        r.put("sys/bus/nvmem/devices/jz4780-efuse0/cells/socinfo@6b,0",
++              std::string("\x00\x84\x01\x40\x18", 5));
++        CHECK(processor_summary(r.str()) ==
++              "X2600E, DDR3, size unknown, SoC ID 0x18400, core 0.0");
++    }
++    SECTION("6.6 without an eFuse driver or ad5x.ram=") {
++        x2600_board(r);
++        r.put("proc/cmdline", "console=ttyS0,115200n8 mem=236M@0x0\n");
++        CHECK(processor_summary(r.str()) == "X2600, variant unknown, core 0.0");
++    }
++    SECTION("6.6 with Kiln's boot loader's ad5x.ram=") {
++        x2600_board(r);
++        r.put("proc/cmdline", "console=ttyS0,115200n8 ad5x.ram=256 ad5x.memmode=standard\n");
++        CHECK(processor_summary(r.str()) == "X2600, 256 MiB, variant unknown, core 0.0");
++    }
++}
++
+ TEST_CASE("Kiln hardware: the eMMC row", "[kiln][hardware]") {
+     Root r;
+     SECTION("no eMMC: no row") {
+diff --git a/translations/de.yml b/translations/de.yml
+index 2fe96c44..d6ffa484 100644
+--- a/translations/de.yml
++++ b/translations/de.yml
+@@ -3174,6 +3174,7 @@ translations:
+   Proceed: Fortfahren
+   # Source: abort_progress_modal.xml:20
+   Processing...: 'Wird verarbeitet...'
++  Processor: Prozessor
+   Profile deleted: Profil gelöscht
+   Profile name (e.g., default): Profilname (z.B. Standard)
+   Profile names cannot contain ';': "Profilnamen dürfen kein ';' enthalten"
+diff --git a/translations/en.yml b/translations/en.yml
+index c4a3274f..d86f9fff 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -3096,6 +3096,7 @@ translations:
+   Proceed: Proceed
+   # Source: abort_progress_modal.xml:20
+   Processing...: Processing...
++  Processor: Processor
+   Product: Product
+   Profile deleted: Profile deleted
+   Profile name (e.g., default): Profile name (e.g., default)
+diff --git a/translations/es.yml b/translations/es.yml
+index 771fd281..104e8142 100644
+--- a/translations/es.yml
++++ b/translations/es.yml
+@@ -3166,6 +3166,7 @@ translations:
+   Proceed: Continuar
+   # Source: abort_progress_modal.xml:20
+   Processing...: 'Procesando...'
++  Processor: Procesador
+   Profile deleted: Perfil eliminado
+   Profile name (e.g., default): Nombre del perfil (ej., default)
+   Profile names cannot contain ';': "Los nombres de perfil no pueden contener ';'"
+diff --git a/translations/fr.yml b/translations/fr.yml
+index 7c6f1795..91174420 100644
+--- a/translations/fr.yml
++++ b/translations/fr.yml
+@@ -3183,6 +3183,7 @@ translations:
+   Proceed: Continuer
+   # Source: abort_progress_modal.xml:20
+   Processing...: 'Traitement...'
++  Processor: Processeur
+   Profile deleted: Profil supprimé
+   Profile name (e.g., default): 'Nom du profil (ex : default)'
+   Profile names cannot contain ';': "Les noms de profil ne peuvent pas contenir ';'"
+diff --git a/translations/it.yml b/translations/it.yml
+index 74065455..778c4d76 100644
+--- a/translations/it.yml
++++ b/translations/it.yml
+@@ -3164,6 +3164,7 @@ translations:
+   Proceed: Procedi
+   # Source: abort_progress_modal.xml:20
+   Processing...: 'Elaborazione in corso...'
++  Processor: Processore
+   Profile deleted: Profilo eliminato
+   Profile name (e.g., default): Nome profilo (es. default)
+   Profile names cannot contain ';': "I nomi dei profili non possono contenere ';'"
+diff --git a/translations/ja.yml b/translations/ja.yml
+index b58e9a93..6ee0b7f2 100644
+--- a/translations/ja.yml
++++ b/translations/ja.yml
+@@ -3015,6 +3015,7 @@ translations:
+   Proceed: 続行
+   # Source: abort_progress_modal.xml:20
+   Processing...: '処理中...'
++  Processor: プロセッサ
+   Profile deleted: プロファイルを削除しました
+   Profile name (e.g., default): 'プロファイル名（例: default）'
+   Profile names cannot contain ';': "プロファイル名に ';' は使用できません"
+diff --git a/translations/ko.yml b/translations/ko.yml
+index 8b89cc30..32fbd95a 100644
+--- a/translations/ko.yml
++++ b/translations/ko.yml
+@@ -2931,6 +2931,7 @@ translations:
+   Problem found: 문제 발견
+   Proceed: 진행
+   Processing...: 처리 중...
++  Processor: 프로세서
+   Product: 제품
+   Profile deleted: 프로필 삭제됨
+   Profile name (e.g., default): '프로필 이름 (예: default)'
+diff --git a/translations/pt.yml b/translations/pt.yml
+index ddb1344d..516da466 100644
+--- a/translations/pt.yml
++++ b/translations/pt.yml
+@@ -3167,6 +3167,7 @@ translations:
+   Proceed: Prosseguir
+   # Source: abort_progress_modal.xml:20
+   Processing...: 'Processando...'
++  Processor: Processador
+   Profile deleted: Perfil excluído
+   Profile name (e.g., default): 'Nome do perfil (ex.: padrão)'
+   Profile names cannot contain ';': "Os nomes de perfil não podem conter ';'"
+diff --git a/translations/ru.yml b/translations/ru.yml
+index 0dd83607..e620b0ed 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -3209,6 +3209,7 @@ translations:
+   Proceed: Продолжить
+   # Source: abort_progress_modal.xml:20
+   Processing...: 'Обработка...'
++  Processor: Процессор
+   Profile deleted: Профиль удалён
+   Profile name (e.g., default): Имя профиля (например, default)
+   Profile names cannot contain ';': "Имена профилей не могут содержать ';'"
+diff --git a/translations/tr.yml b/translations/tr.yml
+index bd4f37ef..54c741fb 100644
+--- a/translations/tr.yml
++++ b/translations/tr.yml
+@@ -2931,6 +2931,7 @@ translations:
+   Problem found: Sorun bulundu
+   Proceed: Devam et
+   Processing...: İşleniyor...
++  Processor: İşlemci
+   Product: Ürün
+   Profile deleted: Profil silindi
+   Profile name (e.g., default): Profil adı (ör. default)
+diff --git a/translations/zh.yml b/translations/zh.yml
+index 2abdafec..a72956da 100644
+--- a/translations/zh.yml
++++ b/translations/zh.yml
+@@ -3006,6 +3006,7 @@ translations:
+   Proceed: 继续
+   # Source: abort_progress_modal.xml:20
+   Processing...: '处理中...'
++  Processor: 处理器
+   Profile deleted: 配置文件已删除
+   Profile name (e.g., default): 配置名称（例如：default）
+   Profile names cannot contain ';': "配置名称不能包含 ';'"
+diff --git a/ui_xml/about_settings_overlay.xml b/ui_xml/about_settings_overlay.xml
+index f13fb87a..d533a42c 100644
+--- a/ui_xml/about_settings_overlay.xml
++++ b/ui_xml/about_settings_overlay.xml
+@@ -69,7 +69,12 @@
+         <bind_flag_if_eq subject="settings_is_android" flag="hidden" ref_value="1"/>
+         <setting_info_row name="row_host_arch" label="Host" icon="sysinfo" bind_value="host_arch_value"/>
+       </lv_obj>
+-      <!-- Kiln OS: the eMMC (hidden elsewhere) -->
++      <!-- Kiln OS: the X2600 variant and the eMMC (hidden elsewhere) -->
++      <lv_obj name="container_processor" width="100%" style_pad_all="0" scrollable="false">
++        <bind_flag_if_eq subject="about_has_processor" flag="hidden" ref_value="0"/>
++        <setting_info_row name="row_processor"
++                          label="Processor" icon="sysinfo" bind_value="about_processor_value"/>
++      </lv_obj>
+       <lv_obj name="container_emmc" width="100%" style_pad_all="0" scrollable="false">
+         <bind_flag_if_eq subject="about_has_emmc" flag="hidden" ref_value="0"/>
+         <setting_info_row name="row_emmc" label="eMMC" icon="sd" bind_value="about_emmc_value"/>
+-- 
+2.43.0
+

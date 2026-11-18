@@ -1,0 +1,295 @@
+From 8acbf3bc860a6ad27d0239f1c9fc05c1f11652c0 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Tue, 17 Nov 2026 19:15:00 -0700
+Subject: [PATCH] nvmem: jz4780-efuse: Add the X2600
+
+The X2600's eFuse holds the SoC information that tells its variants
+apart (the X2600E with 256 MiB of DDR3 in the package, the X2600H with
+512 MiB, ...), and the chip ID. Its controller is a later version of the
+JZ4780's: the registers are the same, but
+
+- the address and the length of a read are in 32 bit words, at most 8;
+- the array has a power-down bit, and after every power-up the
+  redundancy row must be read before the array, so that the controller
+  applies the repairs it holds;
+- RD_DONE stays set until it is cleared;
+- the read timing fields sit elsewhere in EFUCFG, with other limits;
+- of its 2048 bits, only the first 120 bytes can be read through the
+  controller; the keys after them are for the security ROM only.
+
+Power the array up for each read and down again afterwards, and expose
+the 120 readable bytes, to root only, since they hold the chip ID, a
+per-chip serial number. The read timing rounds the bus clock period
+down to whole nanoseconds, as Ingenic's code does: 34 cycles at the
+usual 300 MHz. Writing is not supported, as for the JZ4780.
+
+The register layout and the read sequence follow the X2000
+programming manual, whose eFuse controller is the X2600's; Ingenic's
+SDK driver for the X2600 agrees with it.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ drivers/nvmem/Kconfig        |   6 +-
+ drivers/nvmem/jz4780-efuse.c | 167 ++++++++++++++++++++++++++++++++++-
+ 2 files changed, 169 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/nvmem/Kconfig b/drivers/nvmem/Kconfig
+index c36c2a4c2..677fbcea4 100644
+--- a/drivers/nvmem/Kconfig
++++ b/drivers/nvmem/Kconfig
+@@ -226,14 +226,14 @@ config NVMEM_IMX_OCOTP_SCU
+ 	  available on i.MX8 SoCs.
+ 
+ config NVMEM_JZ4780_EFUSE
+-	tristate "JZ4780 EFUSE Memory Support"
++	tristate "JZ4780 and X2600 EFUSE Memory Support"
+ 	depends on MACH_INGENIC || COMPILE_TEST
+ 	depends on HAS_IOMEM
+ 	depends on OF
+ 	select REGMAP_MMIO
+ 	help
+-	  Say Y here to include support for JZ4780 efuse memory found on
+-	  all JZ4780 SoC based devices.
++	  Say Y here to include support for the efuse memory found on
++	  Ingenic JZ4780 and X2600 SoC based devices.
+ 	  To compile this driver as a module, choose M here: the module
+ 	  will be called nvmem_jz4780_efuse.
+ 
+diff --git a/drivers/nvmem/jz4780-efuse.c b/drivers/nvmem/jz4780-efuse.c
+index 9270ff1f2..34956f30d 100644
+--- a/drivers/nvmem/jz4780-efuse.c
++++ b/drivers/nvmem/jz4780-efuse.c
+@@ -18,12 +18,20 @@
+  * which reads/writes based on strobes. The strobe is configured in the config
+  * register and is based on number of cycles of the bus clock.
+  *
++ * The X2600 has 2K bits in fourteen segments, of which the first ten
++ * (words 0x00 to 0x1d) can be read through the controller; the keys after
++ * them are only readable by the security ROM. Its controller addresses the
++ * array in 32 bit words, and the array is powered down between reads.
++ *
+  * Driver supports read only as the writes are done in the Factory.
+  */
+ 
++#include <linux/bitfield.h>
+ #include <linux/bitops.h>
+ #include <linux/clk.h>
++#include <linux/minmax.h>
+ #include <linux/module.h>
++#include <linux/mutex.h>
+ #include <linux/nvmem-provider.h>
+ #include <linux/of.h>
+ #include <linux/platform_device.h>
+@@ -60,10 +68,25 @@
+ #define EFUSTATE_WR_DONE	BIT(1)
+ #define EFUSTATE_RD_DONE	BIT(0)
+ 
++/* X2600: the address and the length are in words */
++#define X2600_EFUCTRL_ADDR	GENMASK(26, 21)
++#define X2600_EFUCTRL_LEN	GENMASK(18, 16)
++#define X2600_EFUCTRL_RWL	BIT(11)	/* the redundancy row */
++#define X2600_EFUCTRL_PD	BIT(8)	/* power-down */
++
++#define X2600_EFUCFG_RD_ADJ	GENMASK(27, 24)
++#define X2600_EFUCFG_RD_STROBE	GENMASK(20, 16)	/* signed */
++
++#define X2600_EFU_WORDS		8	/* data registers */
++#define X2600_EFU_READABLE	0x1e	/* words before the keys */
++#define X2600_EFU_RIR_ADDR	0x1f	/* the redundancy row: 2 words */
++#define X2600_EFU_RIR_WORDS	2
++
+ struct jz4780_efuse;
+ 
+ struct jz4780_efuse_soc_info {
+ 	unsigned int size;
++	bool root_only;
+ 	int (*setup)(struct jz4780_efuse *efuse, unsigned long clk_rate);
+ 	nvmem_reg_read_t reg_read;
+ };
+@@ -72,6 +95,7 @@ struct jz4780_efuse {
+ 	struct device *dev;
+ 	struct regmap *map;
+ 	struct clk *clk;
++	struct mutex lock; /* the X2600's power-up and read sequence */
+ };
+ 
+ /* main entry point */
+@@ -166,6 +190,141 @@ static const struct jz4780_efuse_soc_info jz4780_efuse_soc_info = {
+ 	.reg_read = jz4780_efuse_read,
+ };
+ 
++static int x2600_efuse_xfer(struct jz4780_efuse *efuse, u32 ctrl)
++{
++	unsigned int state;
++	int ret;
++
++	/* RD_DONE stays set until it is cleared */
++	regmap_write(efuse->map, JZ_EFUSTATE, 0);
++	regmap_write(efuse->map, JZ_EFUCTRL, ctrl);
++	regmap_write(efuse->map, JZ_EFUCTRL, ctrl | EFUCTRL_RD_EN);
++
++	ret = regmap_read_poll_timeout(efuse->map, JZ_EFUSTATE, state,
++				       state & EFUSTATE_RD_DONE,
++				       10, 10 * USEC_PER_MSEC);
++	if (ret)
++		dev_err(efuse->dev, "Timed out reading the eFuse\n");
++
++	return ret;
++}
++
++/*
++ * Only ever reads: nothing in this driver sets EFUCTRL's write enable or
++ * EFUCFG's programming bits, and that is the only guard against blowing
++ * fuses.
++ */
++static int x2600_efuse_read(void *context, unsigned int offset,
++			    void *val, size_t bytes)
++{
++	struct jz4780_efuse *efuse = context;
++	u32 data[X2600_EFU_WORDS];
++	__le32 buf[X2600_EFU_WORDS];
++	int ret, i;
++
++	mutex_lock(&efuse->lock);
++
++	/*
++	 * Power the array up. The redundancy row must be read after every
++	 * power-up, before the array: the controller keeps the repairs it
++	 * holds and applies them to the reads that follow.
++	 */
++	regmap_write(efuse->map, JZ_EFUCTRL, 0);
++	ret = x2600_efuse_xfer(efuse,
++			       FIELD_PREP(X2600_EFUCTRL_ADDR, X2600_EFU_RIR_ADDR) |
++			       FIELD_PREP(X2600_EFUCTRL_LEN, X2600_EFU_RIR_WORDS - 1) |
++			       X2600_EFUCTRL_RWL);
++
++	while (!ret && bytes) {
++		unsigned int start = round_down(offset, sizeof(u32));
++		unsigned int words = min_t(unsigned int, X2600_EFU_WORDS,
++					   DIV_ROUND_UP(offset + bytes - start,
++							sizeof(u32)));
++		size_t chunk = min_t(size_t, bytes,
++				     start + words * sizeof(u32) - offset);
++
++		ret = x2600_efuse_xfer(efuse,
++				       FIELD_PREP(X2600_EFUCTRL_ADDR,
++						  start / sizeof(u32)) |
++				       FIELD_PREP(X2600_EFUCTRL_LEN, words - 1));
++		if (ret)
++			break;
++
++		ret = regmap_bulk_read(efuse->map, JZ_EFUDATA(0), data, words);
++		if (ret)
++			break;
++
++		/* the first data register holds the lowest address */
++		for (i = 0; i < words; i++)
++			buf[i] = cpu_to_le32(data[i]);
++		memcpy(val, (u8 *)buf + offset - start, chunk);
++
++		val += chunk;
++		offset += chunk;
++		bytes -= chunk;
++	}
++
++	regmap_write(efuse->map, JZ_EFUSTATE, 0);
++	regmap_write(efuse->map, JZ_EFUCTRL, X2600_EFUCTRL_PD);
++
++	mutex_unlock(&efuse->lock);
++
++	return ret;
++}
++
++static int x2600_efuse_setup(struct jz4780_efuse *efuse,
++			     unsigned long clk_rate)
++{
++	unsigned long period, rd_adj, rd_strobe, cycles;
++
++	if (!clk_rate) {
++		dev_err(efuse->dev, "Bus clock rate unknown\n");
++		return -EINVAL;
++	}
++
++	/*
++	 * In bus clock cycles:
++	 *   (rd_adj + 1) cycles > 4 ns, and
++	 *   (rd_adj + rd_strobe + 30) cycles > 100 ns.
++	 * The period is rounded down to whole nanoseconds, as in Ingenic's
++	 * code, which errs towards longer strobes: 34 cycles at 300 MHz.
++	 * rd_strobe is signed; it is not made negative, which only makes
++	 * the strobe longer than it needs to be.
++	 */
++	period = NSEC_PER_SEC / clk_rate;
++	if (!period) {
++		dev_err(efuse->dev, "Bus clock rate too high\n");
++		return -EINVAL;
++	}
++	rd_adj = 4 / period;
++	cycles = 100 / period + 1;
++	rd_strobe = cycles > 30 + rd_adj ? cycles - 30 - rd_adj : 0;
++
++	if (rd_adj > FIELD_MAX(X2600_EFUCFG_RD_ADJ) ||
++	    rd_strobe > FIELD_MAX(X2600_EFUCFG_RD_STROBE) / 2) {
++		dev_err(efuse->dev, "Cannot set clock configuration\n");
++		return -EINVAL;
++	}
++
++	regmap_update_bits(efuse->map, JZ_EFUCFG,
++			   X2600_EFUCFG_RD_ADJ | X2600_EFUCFG_RD_STROBE,
++			   FIELD_PREP(X2600_EFUCFG_RD_ADJ, rd_adj) |
++			   FIELD_PREP(X2600_EFUCFG_RD_STROBE, rd_strobe));
++
++	/* Keep the array powered down until it is read */
++	regmap_write(efuse->map, JZ_EFUCTRL, X2600_EFUCTRL_PD);
++
++	return 0;
++}
++
++static const struct jz4780_efuse_soc_info x2600_efuse_soc_info = {
++	.size = X2600_EFU_READABLE * sizeof(u32),
++	/* the chip ID, a serial number, is in words 0 to 4 */
++	.root_only = true,
++	.setup = x2600_efuse_setup,
++	.reg_read = x2600_efuse_read,
++};
++
+ static struct nvmem_config jz4780_efuse_nvmem_config = {
+ 	.name = "jz4780-efuse",
+ 	.word_size = 1,
+@@ -204,6 +363,10 @@ static int jz4780_efuse_probe(struct platform_device *pdev)
+ 	if (!efuse)
+ 		return -ENOMEM;
+ 
++	ret = devm_mutex_init(dev, &efuse->lock);
++	if (ret)
++		return ret;
++
+ 	regs = devm_platform_ioremap_resource(pdev, 0);
+ 	if (IS_ERR(regs))
+ 		return PTR_ERR(regs);
+@@ -239,6 +402,7 @@ static int jz4780_efuse_probe(struct platform_device *pdev)
+ 	cfg.dev = &pdev->dev;
+ 	cfg.priv = efuse;
+ 	cfg.size = soc_info->size;
++	cfg.root_only = soc_info->root_only;
+ 	cfg.reg_read = soc_info->reg_read;
+ 
+ 	nvmem = devm_nvmem_register(dev, &cfg);
+@@ -248,6 +412,7 @@ static int jz4780_efuse_probe(struct platform_device *pdev)
+ 
+ static const struct of_device_id jz4780_efuse_match[] = {
+ 	{ .compatible = "ingenic,jz4780-efuse", .data = &jz4780_efuse_soc_info },
++	{ .compatible = "ingenic,x2600-efuse", .data = &x2600_efuse_soc_info },
+ 	{ /* sentinel */ },
+ };
+ MODULE_DEVICE_TABLE(of, jz4780_efuse_match);
+@@ -264,5 +429,5 @@ module_platform_driver(jz4780_efuse_driver);
+ MODULE_AUTHOR("PrasannaKumar Muralidharan <prasannatsmkumar@gmail.com>");
+ MODULE_AUTHOR("H. Nikolaus Schaller <hns@goldelico.com>");
+ MODULE_AUTHOR("Paul Cercueil <paul@crapouillou.net>");
+-MODULE_DESCRIPTION("Ingenic JZ4780 efuse driver");
++MODULE_DESCRIPTION("Ingenic JZ4780 and X2600 efuse driver");
+ MODULE_LICENSE("GPL v2");
+-- 
+2.43.0
+

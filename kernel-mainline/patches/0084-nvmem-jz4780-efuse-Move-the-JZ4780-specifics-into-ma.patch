@@ -1,0 +1,177 @@
+From 9b038ee1f913c0b76f30d2f11ad4de9cc9bf3130 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Tue, 17 Nov 2026 19:14:06 -0700
+Subject: [PATCH] nvmem: jz4780-efuse: Move the JZ4780 specifics into match
+ data
+
+The size of the eFuse, the way the read timing is set and the way the
+array is read differ between the JZ4780 and later Ingenic SoCs. Move
+them into per-SoC data selected by the compatible, so that support for
+another SoC can be added without touching the JZ4780's paths.
+
+No functional change.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ drivers/nvmem/jz4780-efuse.c | 93 ++++++++++++++++++++++++------------
+ 1 file changed, 62 insertions(+), 31 deletions(-)
+
+diff --git a/drivers/nvmem/jz4780-efuse.c b/drivers/nvmem/jz4780-efuse.c
+index 0b01b840e..9270ff1f2 100644
+--- a/drivers/nvmem/jz4780-efuse.c
++++ b/drivers/nvmem/jz4780-efuse.c
+@@ -27,6 +27,7 @@
+ #include <linux/nvmem-provider.h>
+ #include <linux/of.h>
+ #include <linux/platform_device.h>
++#include <linux/property.h>
+ #include <linux/regmap.h>
+ #include <linux/timer.h>
+ 
+@@ -59,6 +60,14 @@
+ #define EFUSTATE_WR_DONE	BIT(1)
+ #define EFUSTATE_RD_DONE	BIT(0)
+ 
++struct jz4780_efuse;
++
++struct jz4780_efuse_soc_info {
++	unsigned int size;
++	int (*setup)(struct jz4780_efuse *efuse, unsigned long clk_rate);
++	nvmem_reg_read_t reg_read;
++};
++
+ struct jz4780_efuse {
+ 	struct device *dev;
+ 	struct regmap *map;
+@@ -115,13 +124,53 @@ static int jz4780_efuse_read(void *context, unsigned int offset,
+ 	return 0;
+ }
+ 
++static int jz4780_efuse_setup(struct jz4780_efuse *efuse,
++			      unsigned long clk_rate)
++{
++	unsigned long rd_adj;
++	unsigned long rd_strobe;
++
++	/*
++	 * rd_adj and rd_strobe are 4 bit values
++	 * conditions:
++	 *   bus clk_period * (rd_adj + 1) > 6.5ns
++	 *   bus clk_period * (rd_adj + 5 + rd_strobe) > 35ns
++	 *   i.e. rd_adj >= 6.5ns / clk_period
++	 *   i.e. rd_strobe >= 35 ns / clk_period - 5 - rd_adj + 1
++	 * constants:
++	 *   1 / 6.5ns == 153846154 Hz
++	 *   1 / 35ns == 28571429 Hz
++	 */
++
++	rd_adj = clk_rate / 153846154;
++	rd_strobe = clk_rate / 28571429 - 5 - rd_adj + 1;
++
++	if (rd_adj > EFUCFG_RD_ADJ_MASK ||
++	    rd_strobe > EFUCFG_RD_STR_MASK) {
++		dev_err(efuse->dev, "Cannot set clock configuration\n");
++		return -EINVAL;
++	}
++
++	regmap_update_bits(efuse->map, JZ_EFUCFG,
++			   (EFUCFG_RD_ADJ_MASK << EFUCFG_RD_ADJ_SHIFT) |
++			   (EFUCFG_RD_STR_MASK << EFUCFG_RD_STR_SHIFT),
++			   (rd_adj << EFUCFG_RD_ADJ_SHIFT) |
++			   (rd_strobe << EFUCFG_RD_STR_SHIFT));
++
++	return 0;
++}
++
++static const struct jz4780_efuse_soc_info jz4780_efuse_soc_info = {
++	.size = 1024,
++	.setup = jz4780_efuse_setup,
++	.reg_read = jz4780_efuse_read,
++};
++
+ static struct nvmem_config jz4780_efuse_nvmem_config = {
+ 	.name = "jz4780-efuse",
+-	.size = 1024,
+ 	.word_size = 1,
+ 	.stride = 1,
+ 	.owner = THIS_MODULE,
+-	.reg_read = jz4780_efuse_read,
+ };
+ 
+ static const struct regmap_config jz4780_efuse_regmap_config = {
+@@ -138,16 +187,19 @@ static void clk_disable_unprepare_helper(void *clock)
+ 
+ static int jz4780_efuse_probe(struct platform_device *pdev)
+ {
++	const struct jz4780_efuse_soc_info *soc_info;
+ 	struct nvmem_device *nvmem;
+ 	struct jz4780_efuse *efuse;
+ 	struct nvmem_config cfg;
+ 	unsigned long clk_rate;
+-	unsigned long rd_adj;
+-	unsigned long rd_strobe;
+ 	struct device *dev = &pdev->dev;
+ 	void __iomem *regs;
+ 	int ret;
+ 
++	soc_info = device_get_match_data(dev);
++	if (!soc_info)
++		return -EINVAL;
++
+ 	efuse = devm_kzalloc(dev, sizeof(*efuse), GFP_KERNEL);
+ 	if (!efuse)
+ 		return -ENOMEM;
+@@ -179,36 +231,15 @@ static int jz4780_efuse_probe(struct platform_device *pdev)
+ 
+ 	efuse->dev = dev;
+ 
+-	/*
+-	 * rd_adj and rd_strobe are 4 bit values
+-	 * conditions:
+-	 *   bus clk_period * (rd_adj + 1) > 6.5ns
+-	 *   bus clk_period * (rd_adj + 5 + rd_strobe) > 35ns
+-	 *   i.e. rd_adj >= 6.5ns / clk_period
+-	 *   i.e. rd_strobe >= 35 ns / clk_period - 5 - rd_adj + 1
+-	 * constants:
+-	 *   1 / 6.5ns == 153846154 Hz
+-	 *   1 / 35ns == 28571429 Hz
+-	 */
+-
+-	rd_adj = clk_rate / 153846154;
+-	rd_strobe = clk_rate / 28571429 - 5 - rd_adj + 1;
+-
+-	if (rd_adj > EFUCFG_RD_ADJ_MASK ||
+-	    rd_strobe > EFUCFG_RD_STR_MASK) {
+-		dev_err(&pdev->dev, "Cannot set clock configuration\n");
+-		return -EINVAL;
+-	}
+-
+-	regmap_update_bits(efuse->map, JZ_EFUCFG,
+-			   (EFUCFG_RD_ADJ_MASK << EFUCFG_RD_ADJ_SHIFT) |
+-			   (EFUCFG_RD_STR_MASK << EFUCFG_RD_STR_SHIFT),
+-			   (rd_adj << EFUCFG_RD_ADJ_SHIFT) |
+-			   (rd_strobe << EFUCFG_RD_STR_SHIFT));
++	ret = soc_info->setup(efuse, clk_rate);
++	if (ret)
++		return ret;
+ 
+ 	cfg = jz4780_efuse_nvmem_config;
+ 	cfg.dev = &pdev->dev;
+ 	cfg.priv = efuse;
++	cfg.size = soc_info->size;
++	cfg.reg_read = soc_info->reg_read;
+ 
+ 	nvmem = devm_nvmem_register(dev, &cfg);
+ 
+@@ -216,7 +247,7 @@ static int jz4780_efuse_probe(struct platform_device *pdev)
+ }
+ 
+ static const struct of_device_id jz4780_efuse_match[] = {
+-	{ .compatible = "ingenic,jz4780-efuse" },
++	{ .compatible = "ingenic,jz4780-efuse", .data = &jz4780_efuse_soc_info },
+ 	{ /* sentinel */ },
+ };
+ MODULE_DEVICE_TABLE(of, jz4780_efuse_match);
+-- 
+2.43.0
+
