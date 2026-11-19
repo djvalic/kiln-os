@@ -15,6 +15,8 @@
 # start to it, at the same point (uboot_booted below), and notes the first
 # such start in the boot loader's install record when there is one
 # (lib/bootloader.sh, bl_note_main_start; the recovery screen shows it).
+# A/B (ad5x.ab=a|b, lib/ab.sh): also clears U-Boot's boot count and
+# SWUpdate's ustate, so an update in this slot is kept (ab_confirm).
 # AD5X_LIB overrides /usr/lib/ad5x (tools/test_kernel_fallback.sh).
 
 # Files this creates are readable by klipper and www-data, whoever started
@@ -162,6 +164,8 @@ start)
 		# This boot's start-up has finished: only with the flag read back
 		if [ "$(read_flag)" = "$(flag_for $SLOT)" ]; then
 			[ -f "$UB" ] && uboot_started && uboot_booted
+			AB=${AD5X_LIB:-/usr/lib/ad5x}/ab.sh
+			[ -f "$AB" ] && ( . "$AB" && ab_confirm ) | sed 's/^/booted: /'
 			BL=${AD5X_LIB:-/usr/lib/ad5x}/bootloader.sh
 			[ -f "$UB" ] && [ -f "$BL" ] && uboot_started &&
 				( . "$BL" && bl_note_main_start ) 2>/dev/null

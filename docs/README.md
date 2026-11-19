@@ -13,6 +13,7 @@ not yet in the public copy on GitHub.
 - [updates.md](updates.md): how releases are made and how the printer installs them.
 - [sponsoring.md](sponsoring.md): sponsoring Kiln OS, and what it does and doesn't mean.
 - [recovery-os.md](recovery-os.md): the recovery system in slot A: updates, backup, restore, USB rescue.
+- [ab-updates.md](ab-updates.md): A/B updates (prototype for 2.0, opt-in): the main OS in both slots, SWUpdate and U-Boot's boot count.
 - [own-boot-loader.md](own-boot-loader.md): Kiln's own boot loader (experimental, opt-in): known boards, the risk, installing it from the recovery OS, building it yourself, going back.
 - [deviations-from-stock.md](deviations-from-stock.md): every behaviour that differs from stock, what to watch for, how to go back.
 - [config-layout.md](config-layout.md): which Klipper config file holds what, and which ones you edit.

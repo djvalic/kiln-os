@@ -9,3 +9,5 @@ CONFIG_FEATURE_SWAPON_PRI=y
 # doesn't run (docs/memory.md)
 # CONFIG_CROND is not set
 # CONFIG_CRONTAB is not set
+# cpio -o -H newc: A/B updates pack the .swu SWUpdate installs (lib/ab.sh)
+CONFIG_FEATURE_CPIO_O=y

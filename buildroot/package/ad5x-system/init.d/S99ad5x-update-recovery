@@ -112,6 +112,10 @@ kernel2_due() {
 
 case "$1" in
 start)
+	# A/B (lib/ab.sh): slot A holds the main OS, not the recovery OS
+	if [ -f /usr/lib/ad5x/ab.sh ] && ( . /usr/lib/ad5x/ab.sh && ab_mode ); then
+		echo "S99ad5x-update-recovery: A/B (ad5x.ab=a|b): no recovery OS"; exit 0
+	fi
 	[ "$SLOT" = B ] || exit 0
 	# A first install still writing its recovery OS (S99ad5x-install-recovery)
 	[ -f /data/ad5x/install/recovery.squashfs ] && exit 0
