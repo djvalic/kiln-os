@@ -20,6 +20,7 @@ not yet in the public copy on GitHub.
 - [setup-wizard.md](setup-wizard.md): the first-boot setup wizard on the touch screen (design and contract).
 - [plugins.md](plugins.md): switching plugins on and off, installing them.
 - [zmod-compat.md](zmod-compat.md): printing G-code made for zMod and Bambufy.
+- [zmod-and-kiln-os.md](zmod-and-kiln-os.md): how Kiln OS differs from zMod, and what it owes to it.
 - [orcaslicer.md](orcaslicer.md): OrcaSlicer with Kiln OS.
 - [sound.md](sound.md): the speaker, chimes, `M300` and MIDI files.
 - [logs.md](logs.md): where the logs are and how to get more detail.
