@@ -1,0 +1,610 @@
+From a1ee2e9a1c8b66cd44c3a32b8a971512d82d4e47 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Thu, 19 Nov 2026 00:28:43 -0700
+Subject: [PATCH] ad5x: A/B main OS slots on U-Boot's boot count (SWUpdate)
+
+A printer whose slot A root holds Kiln's kernels has the main OS in both
+slots. kiln_slot in the environment then says which one to start, and an
+update is guarded by U-Boot's standard boot count, as SWUpdate expects of
+the boot loader:
+
+- SWUpdate, installing into the other slot, sets kiln_slot,
+  upgrade_available=1 and bootcount=0 in one environment write.
+- Each start counts in bootcount (BOOTCOUNT_LIMIT, BOOTCOUNT_ENV: only
+  while upgrade_available is set). Past bootlimit (2) altbootcmd runs
+  "ad5x_boot alt": back to the other slot, ustate=3 (SWUpdate's failed),
+  the count cleared. So does an install cut off (recovery_status
+  in_progress with an update pending).
+- The main OS clears upgrade_available, bootcount and ustate once a start
+  has finished.
+- Within a slot the boot rules are 1.x's (7.3, then 6.6, state and
+  records in ota). Where 1.x would go to the recovery OS (no kernel left),
+  A/B goes to the other slot once per start, with fresh state and records.
+- The boot flag follows kiln_slot, so the SPL (when U-Boot gives up) and
+  Linux see the same slot.
+- The A/B variables are kept when the environment resets to a new
+  build's defaults.
+- The command line keeps ad5x.uboot=1, which 1.x systems and recovery OSes
+  look for, and adds ad5x.ab=a|b (the slot started) or ad5x.ab=- (this
+  U-Boot knows A/B, 1.x's layout).
+
+A printer in 1.x's layout (slot A holds the recovery OS) starts as before;
+an "ad5x_boot alt" there only clears a boot count left over.
+
+ad5x_ab_pick() is plain C in bootlogic.c, host-tested
+(tools/test_bootlogic_ab.py).
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ board/flashforge/ad5x/ad5x.c      | 293 +++++++++++++++++++++++++++---
+ board/flashforge/ad5x/ad5x.env    |  11 ++
+ board/flashforge/ad5x/bootlogic.c |  53 ++++++
+ board/flashforge/ad5x/bootlogic.h |  38 ++++
+ configs/ad5x_defconfig            |   2 +
+ 5 files changed, 374 insertions(+), 23 deletions(-)
+
+diff --git a/board/flashforge/ad5x/ad5x.c b/board/flashforge/ad5x/ad5x.c
+index c13dedf8..e6724cc8 100644
+--- a/board/flashforge/ad5x/ad5x.c
++++ b/board/flashforge/ad5x/ad5x.c
+@@ -302,14 +302,34 @@ static char ad5x_a_name[IH_NMLEN + 1];
+  * never runs an older build's settings. (The boot state is not in the
+  * environment: bootlogic.h.)
+  */
++/*
++ * The A/B state lives in the environment (bootlogic.h, "A/B"): kept over
++ * a reset to this build's defaults, or a U-Boot update would forget which
++ * slot is good and that an update is still unconfirmed
++ */
++static const char *const ad5x_ab_keep[] = {
++	"kiln_slot", "upgrade_available", "bootcount", "ustate",
++	"recovery_status",
++};
++
+ static void ad5x_env_follow_build(void)
+ {
+ 	const char *built = env_get("ad5x_build");
++	char keep[ARRAY_SIZE(ad5x_ab_keep)][32];
++	unsigned int i;
+ 
+ 	if (built && !strcmp(built, version_string))
+ 		return;
+ 	printf("ad5x: environment from another build: defaults\n");
++	for (i = 0; i < ARRAY_SIZE(ad5x_ab_keep); i++) {
++		const char *v = env_get(ad5x_ab_keep[i]);
++
++		strlcpy(keep[i], v ? v : "", sizeof(keep[i]));
++	}
+ 	env_set_default(NULL, 0);
++	for (i = 0; i < ARRAY_SIZE(ad5x_ab_keep); i++)
++		if (keep[i][0])
++			env_set(ad5x_ab_keep[i], keep[i]);
+ 	env_set("ad5x_build", version_string);
+ 	if (ad5x_layout_ok())
+ 		env_save();
+@@ -646,9 +666,26 @@ static unsigned int ad5x_ram_mib(void)
+ 	return mib;
+ }
+ 
++/*
++ * The main OS's root partition: rootfs2 (p4) in 1.x's layout; in A/B the
++ * slot ad5x_ab_pick() chose (p2 for A)
++ */
++static int ad5x_main_part = 4;
++/* A/B (below, "A/B"): this start is A/B, and the slot it takes */
++static int ad5x_ab;
++static enum ad5x_slot_id ad5x_ab_slot;
++
++/* a root partition holds Kiln's main OS: one of its kernels is there */
++static int ad5x_has_main(int part)
++{
++	return ad5x_exists(part, "/usr/lib/ad5x/kernel66/xImage") ||
++	       ad5x_exists(part, "/usr/lib/ad5x/kernel-mainline/xImage");
++}
++
+ static void ad5x_gather(struct ad5x_inputs *in)
+ {
+ 	const char *slot = ad5x_read_slot();
++	int p = ad5x_main_part;
+ 
+ 	memset(in, 0, sizeof(*in));
+ 	in->flag_b = slot && *slot == 'b';
+@@ -672,14 +709,14 @@ static void ad5x_gather(struct ad5x_inputs *in)
+ 			ad5x_exists(7, "/ad5x/kernel/extended-memory-failed");
+ 	}
+ 
+-	/* rootfs2: p4, SquashFS */
+-	in->have_66 = ad5x_exists(4, "/usr/lib/ad5x/kernel66/xImage");
+-	ad5x_line(4, "/usr/lib/ad5x/kernel66/release", in->rel_66,
++	/* the main OS's root (rootfs2, p4; A/B: the slot's), SquashFS */
++	in->have_66 = ad5x_exists(p, "/usr/lib/ad5x/kernel66/xImage");
++	ad5x_line(p, "/usr/lib/ad5x/kernel66/release", in->rel_66,
+ 		  AD5X_REL_LEN);
+-	in->have_73 = ad5x_exists(4, "/usr/lib/ad5x/kernel-mainline/xImage");
+-	ad5x_line(4, "/usr/lib/ad5x/kernel-mainline/release", in->rel_73,
++	in->have_73 = ad5x_exists(p, "/usr/lib/ad5x/kernel-mainline/xImage");
++	ad5x_line(p, "/usr/lib/ad5x/kernel-mainline/release", in->rel_73,
+ 		  AD5X_REL_LEN);
+-	in->wdt_capable = ad5x_exists(4, "/usr/lib/ad5x/watchdog.conf");
++	in->wdt_capable = ad5x_exists(p, "/usr/lib/ad5x/watchdog.conf");
+ 
+ 	/* slot A: p1's kernel (loaded to AD5X_LOAD_A) and p2's root */
+ 	ad5x_a_name[0] = '\0';
+@@ -693,25 +730,39 @@ static void ad5x_gather(struct ad5x_inputs *in)
+ 
+ static void ad5x_print(const struct ad5x_inputs *in)
+ {
+-	printf("ad5x: flag %s; state: %u tries, last %s %s; records: own "
+-	       "%s, mainline %s\n", in->flag_b ? "b" : "a", in->state.tries,
++	char where[32];
++
++	/* A/B: the slot in kiln_slot, its root; 1.x: the flag, rootfs2 */
++	if (ad5x_ab)
++		snprintf(where, sizeof(where), "A/B slot %c, root p%d",
++			 ad5x_slot_char(ad5x_ab_slot), ad5x_main_part);
++	else
++		snprintf(where, sizeof(where), "flag %s",
++			 in->flag_b ? "b" : "a");
++	printf("ad5x: %s; state: %u tries, last %s %s; records: own "
++	       "%s, mainline %s\n", where, in->state.tries,
+ 	       ad5x_kernel_name(in->state.kernel), in->state.release,
+ 	       in->rec.failed_own[0] ? in->rec.failed_own : "-",
+ 	       in->rec.failed_mainline[0] ? in->rec.failed_mainline : "-");
+ 	printf("ad5x: /data %s (mainline %s, after install %s, S00 failed "
+-	       "%s/%s); rootfs2 6.6 %s %s, 7.3 %s %s; slot A %s, p1 %s%s\n",
++	       "%s/%s); %s 6.6 %s %s, 7.3 %s %s",
+ 	       in->data_ok ? "ok" : "unread", in->mainline_wanted ? "on" : "off",
+ 	       in->after_install ? "yes" : "no",
+ 	       in->s00_failed[0] ? in->s00_failed : "-",
+ 	       in->s00_failed_mainline[0] ? in->s00_failed_mainline : "-",
++	       ad5x_ab ? "root" : "rootfs2",
+ 	       in->have_66 ? "yes" : "no", in->rel_66,
+-	       in->have_73 ? "yes" : "no", in->rel_73,
+-	       in->slot_a_ok ? "ok" : "not startable",
+-	       ad5x_a_name[0] ? ad5x_a_name : "no kernel",
+-	       !ad5x_a_name[0] || ad5x_slot_a_kernel_ok(ad5x_a_name) ? "" :
+-	       " (not Kiln's 6.6: never started)");
+-	printf("ad5x: watchdog: wdt_os %lu, rootfs2 %s, /data %s\n",
+-	       env_get_ulong("wdt_os", 10, 0),
++	       in->have_73 ? "yes" : "no", in->rel_73);
++	if (ad5x_ab)
++		printf("\n");
++	else
++		printf("; slot A %s, p1 %s%s\n",
++		       in->slot_a_ok ? "ok" : "not startable",
++		       ad5x_a_name[0] ? ad5x_a_name : "no kernel",
++		       !ad5x_a_name[0] || ad5x_slot_a_kernel_ok(ad5x_a_name) ?
++		       "" : " (not Kiln's 6.6: never started)");
++	printf("ad5x: watchdog: wdt_os %lu, %s %s, /data %s\n",
++	       env_get_ulong("wdt_os", 10, 0), ad5x_ab ? "root" : "rootfs2",
+ 	       in->wdt_capable ? "feeds it" : "doesn't feed it",
+ 	       in->wdt_off ? "switches it off" : "doesn't switch it off");
+ 	printf("ad5x: memory: %u MiB; extended memory %s%s; unconfirmed "
+@@ -754,6 +805,9 @@ static int ad5x_commit(const struct ad5x_decision *d)
+  * @mem_ext: extended memory, the second bank kept (ad5x_decide() decided
+  * it for the main OS; the recovery OS: 0, always standard)
+  */
++/* ad5x.ab= on the command line (ad5x_bootargs) */
++static const char *ad5x_ab_arg = "-";
++
+ static void ad5x_bootargs(const char *root, int own, int extra_ok,
+ 			  unsigned int wdt, int mem_ext)
+ {
+@@ -774,9 +828,15 @@ static void ad5x_bootargs(const char *root, int own, int extra_ok,
+ 	args = malloc(CONFIG_SYS_CBSIZE);
+ 	if (!args)
+ 		return;
+-	snprintf(args, CONFIG_SYS_CBSIZE, "%s root=%s%s ad5x.uboot=1",
+-		 env_get("args_spl"), root,
+-		 own ? " ad5x.kernel=own panic=10 loglevel=5" : "");
++	/*
++	 * ad5x.uboot=1 as before (every 1.x system and recovery OS looks for
++	 * exactly that); ad5x.ab= says this U-Boot knows A/B: the slot it
++	 * started ("a"/"b"), or "-" in 1.x's layout
++	 */
++	snprintf(args, CONFIG_SYS_CBSIZE, "%s root=%s%s ad5x.uboot=1 "
++		 "ad5x.ab=%s", env_get("args_spl"), root,
++		 own ? " ad5x.kernel=own panic=10 loglevel=5" : "",
++		 ad5x_ab_arg);
+ 	/* an X2600E's lpj, before cmdline-extra (the owner's) is added */
+ 	x2600_args_lpj(args, mib);
+ 	/* Kiln's kernel: the low window it gets (mach/x2600_ram.h) */
+@@ -862,12 +922,181 @@ static int ad5x_wait_key(void)
+ 	return 0;
+ }
+ 
++/* ---- A/B ---- */
++
++/*
++ * The main OS in both slots (bootlogic.h, "A/B"): kiln_slot in the
++ * environment says which one to start, and U-Boot's standard boot count
++ * guards an update. SWUpdate, installing into the other slot, sets
++ * kiln_slot, upgrade_available=1 and bootcount=0 in one write; each start
++ * then counts in bootcount (CONFIG_BOOTCOUNT_ENV), and past bootlimit
++ * altbootcmd ("ad5x_boot alt") goes back to the slot before. The main OS
++ * clears upgrade_available, bootcount and ustate once a start has
++ * finished (S99ad5x-booted). The boot flag follows kiln_slot, so the SPL,
++ * when U-Boot gives up, and Linux both see the same slot.
++ *
++ * A printer is A/B when slot A's root holds Kiln's kernels; otherwise
++ * 1.x's rules run as before, with nothing read from or written to these
++ * variables (an "ad5x_boot alt" only clears a boot count left over).
++ */
++static int ad5x_ab_switched;	/* this start went to the other slot */
++static char ad5x_ab_c[2];
++
++static int ad5x_slot_part(enum ad5x_slot_id s)
++{
++	return s == AD5X_SLOT_A ? 2 : 4;
++}
++
++static enum ad5x_slot_id ad5x_other(enum ad5x_slot_id s)
++{
++	return s == AD5X_SLOT_A ? AD5X_SLOT_B : AD5X_SLOT_A;
++}
++
++/*
++ * The other slot may be fallen back to: it holds the main OS, and no
++ * SWUpdate install into it is unfinished or failed (recovery_status set
++ * without an update pending: SWUpdate sets it to in_progress before it
++ * writes the other slot and to failed when that fails, and removes it only
++ * after a whole install)
++ */
++static int ad5x_ab_other_ok(enum ad5x_slot_id slot, int upgrade)
++{
++	if (env_get("recovery_status") && !upgrade)
++		return 0;
++	return ad5x_has_main(ad5x_slot_part(ad5x_other(slot)));
++}
++
++static void ad5x_ab_clear_count(void)
++{
++	env_set_ulong("upgrade_available", 0);
++	env_set_ulong("bootcount", 0);
++}
++
++/* the environment and the boot flag after @o; nothing with @dry */
++static void ad5x_ab_apply(const struct ad5x_ab_out *o, int dry)
++{
++	const char *cur = env_get("kiln_slot");
++	const char *flag;
++	int save = 0;
++
++	ad5x_ab_slot = o->slot;
++	ad5x_ab_c[0] = ad5x_slot_char(o->slot);
++	ad5x_ab_c[1] = '\0';
++	ad5x_main_part = ad5x_slot_part(o->slot);
++	ad5x_ab_arg = ad5x_ab_c;
++	if (dry)
++		return;
++	if (!cur || strcmp(cur, ad5x_ab_c)) {
++		env_set("kiln_slot", ad5x_ab_c);
++		save = 1;
++	}
++	if (o->failed) {
++		env_set("ustate", "3");	/* SWUpdate's STATE_FAILED */
++		save = 1;
++	}
++	if (o->clear_upgrade &&
++	    (env_get_ulong("upgrade_available", 10, 0) ||
++	     env_get_ulong("bootcount", 10, 0))) {
++		ad5x_ab_clear_count();
++		save = 1;
++	}
++	if (save && ad5x_layout_ok() && env_save())
++		printf("ad5x: A/B: saving the environment failed\n");
++	if (o->switched && ad5x_layout_ok()) {
++		/*
++		 * the state and records count the other slot's starts and name
++		 * its kernels (both slots may hold the same release): fresh
++		 * ones, with why
++		 */
++		char buf[AD5X_REC_SIZE] __aligned(ARCH_DMA_MINALIGN);
++		struct ad5x_records rec = { 0 };
++
++		memset(buf, 0, sizeof(buf));
++		ad5x_write_sector(AD5X_STATE_LBA, buf);
++		snprintf(rec.reason, sizeof(rec.reason), "%s", o->msg);
++		ad5x_records_format(&rec, buf);
++		ad5x_write_sector(AD5X_RECORDS_LBA, buf);
++	}
++	flag = ad5x_read_slot();
++	if (flag && *flag != ad5x_ab_c[0] && ad5x_write_slot(ad5x_ab_c[0]))
++		printf("ad5x: A/B: writing the boot flag failed\n");
++}
++
++/*
++ * Before the boot rules: whether this start is A/B and which slot it
++ * takes (ad5x_ab_pick); @alt: run as altbootcmd
++ */
++static void ad5x_ab_setup(int alt, int dry)
++{
++	struct ad5x_ab_in ai = { 0 };
++	struct ad5x_ab_out ao;
++	const char *s = env_get("kiln_slot");
++	const char *rs = env_get("recovery_status");
++
++	ad5x_ab_switched = 0;
++	ad5x_ab = ad5x_has_main(2);
++	if (!ad5x_ab) {
++		ad5x_main_part = 4;
++		ad5x_ab_arg = "-";
++		if (alt && !dry) {
++			printf("ad5x: boot count past bootlimit in 1.x's layout: "
++			       "cleared\n");
++			ad5x_ab_clear_count();
++			if (ad5x_layout_ok())
++				env_save();
++		}
++		return;
++	}
++	if (s && (*s == 'a' || *s == 'b') && !s[1]) {
++		ai.slot = *s == 'a' ? AD5X_SLOT_A : AD5X_SLOT_B;
++	} else {
++		const char *f = ad5x_read_slot();
++
++		ai.slot = f && *f == 'a' ? AD5X_SLOT_A : AD5X_SLOT_B;
++	}
++	ai.upgrade = env_get_ulong("upgrade_available", 10, 0) != 0;
++	ai.other_main = ad5x_ab_other_ok(ai.slot, ai.upgrade);
++	ai.alt = alt;
++	ai.in_progress = rs && !strcmp(rs, "in_progress");
++	ad5x_ab_pick(&ai, &ao);
++	printf("ad5x: A/B: %s (bootcount %lu, bootlimit %lu)\n", ao.msg,
++	       env_get_ulong("bootcount", 10, 0),
++	       env_get_ulong("bootlimit", 10, 0));
++	ad5x_ab_switched = ao.switched;
++	ad5x_ab_apply(&ao, dry);
++}
++
++/*
++ * A/B: ad5x_decide() found no kernel left in the slot: the other slot,
++ * once per start (ad5x_ab_apply gives it fresh state and records). 1 when
++ * it switched.
++ */
++static int ad5x_ab_fallback(int dry)
++{
++	struct ad5x_ab_in ai = { 0 };
++	struct ad5x_ab_out ao;
++
++	ai.slot = ad5x_ab_slot;
++	ai.upgrade = env_get_ulong("upgrade_available", 10, 0) != 0;
++	ai.other_main = ad5x_ab_other_ok(ai.slot, ai.upgrade);
++	ai.no_kernel = 1;
++	ai.switched = ad5x_ab_switched;
++	ad5x_ab_pick(&ai, &ao);
++	printf("ad5x: A/B: %s\n", ao.msg);
++	if (!ao.switched)
++		return 0;
++	ad5x_ab_switched = 1;
++	ad5x_ab_apply(&ao, dry);
++	return 1;
++}
++
+ static int do_ad5x_boot(struct cmd_tbl *cmdtp, int flag, int argc,
+ 			char *const argv[])
+ {
+ 	struct ad5x_inputs in;
+ 	struct ad5x_decision d;
+ 	int dry = argc > 1 && !strcmp(argv[1], "-n");
++	int alt = argc > 1 && !strcmp(argv[1], "alt");
+ 	unsigned int wdt;
+ 	int round;
+ 	long len;
+@@ -878,12 +1107,27 @@ static int do_ad5x_boot(struct cmd_tbl *cmdtp, int flag, int argc,
+ 		ad5x_to_prompt("key pressed");
+ 		return CMD_RET_SUCCESS;
+ 	}
++	ad5x_ab_setup(alt, dry);
+ 	ad5x_gather(&in);
++	if (ad5x_ab) {
++		/* no recovery OS in slot A; the flag follows kiln_slot */
++		in.slot_a_ok = 0;
++		in.flag_b = 1;
++	}
+ 	ad5x_print(&in);
+ 
+ 	/* a kernel that can't even be loaded is left out, and decided again */
+ 	for (round = 0; round < 4; round++) {
+ 		ad5x_decide(&in, &d);
++		if (ad5x_ab && d.fallback && ad5x_ab_fallback(dry)) {
++			ad5x_gather(&in);
++			in.slot_a_ok = 0;
++			in.flag_b = 1;
++			ad5x_print(&in);
++			continue;
++		}
++		if (ad5x_ab)
++			d.write_flag = 0;
+ 		wdt = ad5x_wdt_seconds(&in, &d,
+ 				       env_get_ulong("wdt_os", 10, 0));
+ 		printf("ad5x: %s\n", d.msg);
+@@ -916,12 +1160,14 @@ static int do_ad5x_boot(struct cmd_tbl *cmdtp, int flag, int argc,
+ 			const char *path = d.kernel == AD5X_K_73 ?
+ 				"/usr/lib/ad5x/kernel-mainline/xImage" :
+ 				"/usr/lib/ad5x/kernel66/xImage";
++			char root[24];
+ 
+-			len = ad5x_load(4, path, AD5X_LOAD_MAIN,
++			snprintf(root, sizeof(root), "/dev/mmcblk0p%d",
++				 ad5x_main_part);
++			len = ad5x_load(ad5x_main_part, path, AD5X_LOAD_MAIN,
+ 					AD5X_KERNEL_MAX);
+ 			if (len > 0) {
+-				ad5x_bootargs("/dev/mmcblk0p4", 1, 1, wdt,
+-					      d.mem_ext);
++				ad5x_bootargs(root, 1, 1, wdt, d.mem_ext);
+ 				ad5x_wdt_s = wdt;
+ 				ad5x_ub_what = d.kernel == AD5X_K_73 ?
+ 					AD5X_UB_MAIN_73 : AD5X_UB_MAIN_66;
+@@ -953,7 +1199,8 @@ static int do_ad5x_boot(struct cmd_tbl *cmdtp, int flag, int argc,
+ U_BOOT_CMD(ad5x_boot, 2, 0, do_ad5x_boot,
+ 	   "start the main or the recovery OS (u-boot/README.md)",
+ 	   "    - as at power on\n"
+-	   "ad5x_boot -n - only show what it would start and why");
++	   "ad5x_boot -n - only show what it would start and why\n"
++	   "ad5x_boot alt - as altbootcmd: the boot count passed bootlimit");
+ 
+ /* ad5x_flag [a|b]: show the boot flag, or set it for the next start */
+ static int do_ad5x_flag(struct cmd_tbl *cmdtp, int flag, int argc,
+diff --git a/board/flashforge/ad5x/ad5x.env b/board/flashforge/ad5x/ad5x.env
+index 6010b713..3be056bd 100644
+--- a/board/flashforge/ad5x/ad5x.env
++++ b/board/flashforge/ad5x/ad5x.env
+@@ -14,8 +14,19 @@
+  *   args_spl    the stock SPL's command line without root= (lpj as the
+  *               2024 stock SPL's, the X2600H's; an X2600E gets its own:
+  *               x2600_args_lpj in mach/x2600_ram.h)
++ *   bootlimit   A/B (ad5x.c, "A/B"): starts of an updated slot before
++ *               U-Boot runs altbootcmd and goes back to the slot before
++ *               (U-Boot's boot count, counted only while
++ *               upgrade_available is set)
++ *   altbootcmd  run instead of bootcmd past bootlimit
++ *
++ * A/B state, set by SWUpdate and the main OS and kept when U-Boot is
++ * updated: kiln_slot (a or b), upgrade_available, bootcount, ustate,
++ * recovery_status.
+  */
+ bootcmd=ad5x_boot
++altbootcmd=ad5x_boot alt
++bootlimit=2
+ ad5x_delay=2
+ wdt_os=30
+ loadaddr=0x82000000
+diff --git a/board/flashforge/ad5x/bootlogic.c b/board/flashforge/ad5x/bootlogic.c
+index 7221861e..2c18af5f 100644
+--- a/board/flashforge/ad5x/bootlogic.c
++++ b/board/flashforge/ad5x/bootlogic.c
+@@ -463,6 +463,7 @@ void ad5x_decide(const struct ad5x_inputs *in, struct ad5x_decision *out)
+ 	}
+ 
+ 	if (to_recovery) {
++		out->fallback = 1;
+ 		add(why, "%s", ": recovery OS");
+ 		if (in->flag_b && in->slot_a_ok) {
+ 			set_reason(out, why);
+@@ -716,3 +717,55 @@ void ad5x_nc_decide(int file, const char *line, int input,
+ 	snprintf(nc->ip, sizeof(nc->ip), "%s", tok);
+ 	nc->mode = input ? AD5X_NC_IN : AD5X_NC_OUT;
+ }
++
++char ad5x_slot_char(enum ad5x_slot_id s)
++{
++	return s == AD5X_SLOT_A ? 'a' : 'b';
++}
++
++/*
++ * A/B: the slot this start takes. The current one, unless it has failed
++ * and the other holds the main OS:
++ * - altbootcmd ran: an update's slot didn't finish starting bootlimit
++ *   times (U-Boot's boot count);
++ * - recovery_status is still set with an update pending: SWUpdate's install
++ *   was cut off;
++ * - ad5x_decide() found no kernel left in it (1.x's step to the recovery
++ *   OS), once per start.
++ * Going back from a pending update marks it failed (ustate=3, as SWUpdate
++ * expects of the boot loader); the boot count is cleared either way.
++ */
++void ad5x_ab_pick(const struct ad5x_ab_in *in, struct ad5x_ab_out *out)
++{
++	char cur = ad5x_slot_char(in->slot);
++	char oth = ad5x_slot_char(in->slot == AD5X_SLOT_A ? AD5X_SLOT_B :
++							     AD5X_SLOT_A);
++	const char *why = NULL;
++
++	memset(out, 0, sizeof(*out));
++	out->slot = in->slot;
++	if (in->alt)
++		why = "didn't finish starting after an update";
++	else if (in->in_progress && in->upgrade)
++		why = "holds an install that was cut off";
++	else if (in->no_kernel && !in->switched)
++		why = "has no kernel left to start";
++	if (in->alt || (in->in_progress && in->upgrade))
++		out->clear_upgrade = 1;
++	if (!why) {
++		snprintf(out->msg, sizeof(out->msg), "slot %c%s", cur,
++			 in->upgrade ? ", an update not yet confirmed" : "");
++		return;
++	}
++	if (!in->other_main) {
++		snprintf(out->msg, sizeof(out->msg), "slot %c %s; slot %c "
++			 "holds no main OS: slot %c again", cur, why, oth, cur);
++		return;
++	}
++	out->slot = in->slot == AD5X_SLOT_A ? AD5X_SLOT_B : AD5X_SLOT_A;
++	out->switched = 1;
++	out->failed = in->upgrade;
++	out->clear_upgrade = 1;
++	snprintf(out->msg, sizeof(out->msg), "slot %c %s: slot %c", cur, why,
++		 oth);
++}
+diff --git a/board/flashforge/ad5x/bootlogic.h b/board/flashforge/ad5x/bootlogic.h
+index 75bf5b87..0fedf944 100644
+--- a/board/flashforge/ad5x/bootlogic.h
++++ b/board/flashforge/ad5x/bootlogic.h
+@@ -107,6 +107,11 @@ struct ad5x_decision {
+ 	struct ad5x_state state;	/* to write before the start */
+ 	struct ad5x_records rec;	/* to write before the start */
+ 	int state_changed, rec_changed;
++	/*
++	 * no kernel of the main OS's could be taken (1.x: the recovery OS
++	 * next; A/B: the other slot, ad5x_ab_pick)
++	 */
++	int fallback;
+ 	int mem_ext;	/* AD5X_BOOT_MAIN with the second bank (= state's) */
+ 	char msg[AD5X_REASON_LEN];	/* what was decided and why */
+ };
+@@ -230,6 +235,39 @@ struct ad5x_nc {
+  */
+ void ad5x_nc_decide(int file, const char *line, int input,
+ 		    struct ad5x_nc *nc);
++/*
++ * A/B (ad5x.c, "A/B"): the main OS in both slots, the U-Boot environment
++ * holding the slot to start (kiln_slot) and U-Boot's standard boot count
++ * (upgrade_available, bootcount, bootlimit, altbootcmd) with SWUpdate's
++ * markers (ustate, recovery_status). A printer is A/B when slot A's root
++ * holds Kiln's kernels; otherwise 1.x's rules run, unchanged.
++ */
++enum ad5x_slot_id {
++	AD5X_SLOT_A,
++	AD5X_SLOT_B,
++};
++
++struct ad5x_ab_in {
++	enum ad5x_slot_id slot;	/* kiln_slot, else the boot flag's */
++	int other_main;		/* the other slot's root holds the main OS */
++	int upgrade;		/* upgrade_available: an update not confirmed */
++	int alt;		/* altbootcmd: bootcount passed bootlimit */
++	int in_progress;	/* recovery_status set: an install cut off */
++	int no_kernel;		/* ad5x_decide() found no kernel in slot */
++	int switched;		/* this start already went to the other slot */
++};
++
++struct ad5x_ab_out {
++	enum ad5x_slot_id slot;	/* the slot to start */
++	int switched;		/* it is the other one: kiln_slot changes */
++	int failed;		/* SWUpdate's ustate=3: the update failed */
++	int clear_upgrade;	/* upgrade_available and bootcount to 0 */
++	char msg[AD5X_REASON_LEN];
++};
++
++void ad5x_ab_pick(const struct ad5x_ab_in *in, struct ad5x_ab_out *out);
++char ad5x_slot_char(enum ad5x_slot_id s);
++
+ unsigned int ad5x_crc32(unsigned int crc, const void *buf, unsigned int len);
+ 
+ #endif /* __AD5X_BOOTLOGIC_H__ */
+diff --git a/configs/ad5x_defconfig b/configs/ad5x_defconfig
+index 97f98a74..b0727687 100644
+--- a/configs/ad5x_defconfig
++++ b/configs/ad5x_defconfig
+@@ -103,3 +103,5 @@ CONFIG_BOOT_RETRY=y
+ CONFIG_BOOT_RETRY_TIME=-1
+ CONFIG_RESET_TO_RETRY=y
+ CONFIG_MMC_SDHCI_ADMA=y
++CONFIG_BOOTCOUNT_LIMIT=y
++CONFIG_BOOTCOUNT_ENV=y
+-- 
+2.43.0
+

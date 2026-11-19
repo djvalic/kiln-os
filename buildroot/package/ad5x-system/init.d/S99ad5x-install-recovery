@@ -17,6 +17,10 @@ umask 022
 I=/data/ad5x/install
 case "$1" in
 start)
+	# A/B (lib/ab.sh): slot A holds the main OS, not the recovery OS
+	if [ -f /usr/lib/ad5x/ab.sh ] && ( . /usr/lib/ad5x/ab.sh && ab_mode ); then
+		echo "S99ad5x-install-recovery: A/B (ad5x.ab=a|b): no recovery OS"; exit 0
+	fi
 	[ "$SLOT" = B ] && [ -f $I/recovery.squashfs ] && [ -f $I/recovery.sha256 ] || exit 0
 	[ "$(read_flag)" = ota:kernel2 ] || { echo "install-recovery: start-up not complete, later"; exit 0; }
 	n=$(cat $I/recovery.tries 2>/dev/null || echo 0)

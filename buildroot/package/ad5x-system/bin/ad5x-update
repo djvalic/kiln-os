@@ -34,6 +34,18 @@
 #       Flashforge's SPL (its kernel2 keeps the 5.10). Run by
 #       S99ad5x-update-recovery after start-up.
 #
+#   ad5x-update --ab [--reboot] FILE.zip|ROOTFS.squashfs|- [SHA256]
+#       Convert a printer in 1.x's layout to A/B (docs/ab-updates.md):
+#       from the main OS in slot B, under a Kiln U-Boot that knows A/B
+#       (ad5x.ab=- on the command line), SWUpdate installs FILE's main OS
+#       into slot A, over the recovery OS. U-Boot starts slot A next and
+#       goes back to slot B if it doesn't finish starting.
+#
+#   A/B printers (ad5x.ab=a|b on the command line, lib/ab.sh): FILE (an
+#   update .zip or a rootfs.squashfs) goes straight into the other slot,
+#   with SWUpdate; no recovery OS, and --install-recovery and --kernel2
+#   are refused.
+#
 #   -   read the file from stdin (e.g. piped over ssh)
 #
 # Staging an update, and --install-recovery --reboot, are refused until
@@ -48,17 +60,18 @@ LIB=${AD5X_LIB:-/usr/lib/ad5x}
 . $LIB/uboot.sh
 
 die() { echo "ad5x-update: $*" >&2; exit 1; }
-usage() { sed -n '2,43p' "$0"; exit ${1:-2}; }
+usage() { sed -n '2,55p' "$0"; exit ${1:-2}; }
 # slot A can't start the recovery OS: exit code 4 (the update agent answers
 # "refused: ..." with this text, reason no_recovery)
 refuse_a() { echo "ad5x-update: $*" >&2; exit 4; }
 SLOTA_MSG="this printer runs the main OS from slot A (root=/dev/mmcblk0p2). Updates don't support that layout: see docs/recovery-os.md, section 'Main OS in slot A'."
 
-mode=swu reboot_after= replace_stock= no_wait=
+mode=swu reboot_after= replace_stock= no_wait= convert_ab=
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--install-recovery) mode=recovery ;;
 	--kernel2) mode=kernel2 ;;
+	--ab) convert_ab=1 ;;
 	--replace-stock) replace_stock=1 ;;
 	--reboot) reboot_after=1 ;;
 	--no-wait) no_wait=1 ;;
@@ -70,6 +83,13 @@ while [ $# -gt 0 ]; do
 done
 [ $# -ge 1 ] || [ $mode = kernel2 ] || usage
 FILE=${1:-} WANT=${2:-}
+
+# A/B (lib/ab.sh): the main OS goes into the other slot with SWUpdate
+. $LIB/ab.sh
+if ab_mode || [ -n "$convert_ab" ]; then
+	[ $mode = swu ] || die "A/B: no recovery OS or kernel2 job (ad5x.ab=$(ab_arg))"
+	ab_install "$FILE" "$WANT" "$reboot_after" "$convert_ab"
+fi
 
 if [ "$SLOT" = A ]; then die "$SLOTA_MSG"; fi
 [ "$SLOT" = B ] || die "run from the main OS in slot B (this is slot '${SLOT:-?}')"

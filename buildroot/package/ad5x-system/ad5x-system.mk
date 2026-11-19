@@ -77,6 +77,16 @@ define AD5X_SYSTEM_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/usr/bin/ad5x-sound
 	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-update \
 		$(TARGET_DIR)/usr/bin/ad5x-update
+	$(INSTALL) -D -m 0644 $(@D)/lib/ab.sh $(TARGET_DIR)/usr/lib/ad5x/ab.sh
+	$(INSTALL) -D -m 0644 $(@D)/swupdate/ad5x-ab.sh \
+		$(TARGET_DIR)/usr/lib/ad5x/ab/ad5x-ab.sh
+	$(INSTALL) -D -m 0644 $(@D)/swupdate/mk-ab-sw-description.sh \
+		$(TARGET_DIR)/usr/lib/ad5x/ab/mk-ab-sw-description.sh
+	$(INSTALL) -D -m 0755 $(@D)/swupdate/ab-pack.py \
+		$(TARGET_DIR)/usr/lib/ad5x/ab/ab-pack.py
+	$(INSTALL) -D -m 0644 $(@D)/etc/fw_env.config \
+		$(TARGET_DIR)/etc/fw_env.config
+	echo "ad5x 1.0" > $(TARGET_DIR)/etc/hwrevision
 	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-boot-recovery \
 		$(TARGET_DIR)/usr/bin/ad5x-boot-recovery
 	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-restore-stock \
