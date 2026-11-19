@@ -18,6 +18,11 @@
  *                           then "--counted--" and the sector with tries=N
  *                           (ad5x_rescue_counted) up to its first NUL, or
  *                           "--nofit--"
+ *   bootlogic_cli ab        A/B (ad5x_ab_pick): "key value" lines on
+ *                           stdin (slot a|b, other_main upgrade alt
+ *                           in_progress no_kernel switched 0/1), the pick
+ *                           as "key value" lines (slot switched failed
+ *                           clear_upgrade msg)
  *   bootlogic_cli nc FILE INPUT
  *                           the netconsole switch (ad5x_nc_decide): FILE 0/1
  *                           (/data/ad5x/netconsole exists), its text on
@@ -109,13 +114,14 @@ static int decide(void)
 	       "rec_changed %d\nstate_tries %u\nstate_kernel %s\n"
 	       "state_release %s\nrec_failed_own %s\nrec_failed_mainline %s\n"
 	       "rec_fallbacks %u\nrec_reason %s\nmsg %s\nwdt %u\n"
-	       "mem_ext %d\nstate_mem_ext %d\nrec_failed_mem %s\n",
+	       "mem_ext %d\nstate_mem_ext %d\nrec_failed_mem %s\n"
+	       "fallback %d\n",
 	       target(d.target), ad5x_kernel_name(d.kernel), d.write_flag,
 	       d.state_changed, d.rec_changed, d.state.tries,
 	       ad5x_kernel_name(d.state.kernel), d.state.release,
 	       d.rec.failed_own, d.rec.failed_mainline, d.rec.fallbacks,
 	       d.rec.reason, d.msg, ad5x_wdt_seconds(&in, &d, wdt_os),
-	       d.mem_ext, d.state.mem_ext, d.rec.failed_mem);
+	       d.mem_ext, d.state.mem_ext, d.rec.failed_mem, d.fallback);
 	ad5x_state_format(&d.state, buf);
 	printf("--state--\n%s--end--\n", buf);
 	ad5x_records_format(&d.rec, buf);
@@ -177,6 +183,51 @@ static int rescue(int argc, char **argv)
 	return 0;
 }
 
+static int ab(void)
+{
+	struct ad5x_ab_in in;
+	struct ad5x_ab_out out;
+	char line[128], *v;
+	int n;
+
+	memset(&in, 0, sizeof(in));
+	while (fgets(line, sizeof(line), stdin)) {
+		line[strcspn(line, "\n")] = '\0';
+		if (!line[0])
+			continue;
+		v = strchr(line, ' ');
+		if (!v) {
+			fprintf(stderr, "no value: %s\n", line);
+			exit(2);
+		}
+		*v++ = '\0';
+		n = atoi(v);
+		if (!strcmp(line, "slot"))
+			in.slot = *v == 'a' ? AD5X_SLOT_A : AD5X_SLOT_B;
+		else if (!strcmp(line, "other_main"))
+			in.other_main = n;
+		else if (!strcmp(line, "upgrade"))
+			in.upgrade = n;
+		else if (!strcmp(line, "alt"))
+			in.alt = n;
+		else if (!strcmp(line, "in_progress"))
+			in.in_progress = n;
+		else if (!strcmp(line, "no_kernel"))
+			in.no_kernel = n;
+		else if (!strcmp(line, "switched"))
+			in.switched = n;
+		else {
+			fprintf(stderr, "unknown key %s\n", line);
+			exit(2);
+		}
+	}
+	ad5x_ab_pick(&in, &out);
+	printf("slot %c\nswitched %d\nfailed %d\nclear_upgrade %d\nmsg %s\n",
+	       ad5x_slot_char(out.slot), out.switched, out.failed,
+	       out.clear_upgrade, out.msg);
+	return 0;
+}
+
 static int nc(int file, int input)
 {
 	static const char *const mode[] = { "off", "out", "in" };
@@ -196,6 +247,8 @@ int main(int argc, char **argv)
 		return decide();
 	if (argc == 2 && !strcmp(argv[1], "parse"))
 		return parse();
+	if (argc == 2 && !strcmp(argv[1], "ab"))
+		return ab();
 	if (argc == 4 && !strcmp(argv[1], "nc"))
 		return nc(atoi(argv[2]), atoi(argv[3]));
 	if ((argc == 2 || argc == 3) && !strcmp(argv[1], "rescue"))

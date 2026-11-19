@@ -741,7 +741,7 @@ the console.
 |---|---|---|---|
 | 0x00000 | 12 B | boot flag `ota:kernel2\n` / `ota:kernel\n` (scripts read 256 B) | userspace, U-Boot on a fallback |
 | 0x10000 | 8 KiB | boot trace (`ad5x-bootlog`) | userspace |
-| 0x80000 | 32 KiB | U-Boot environment | U-Boot (once per build), `fw_setenv` |
+| 0x80000 | 32 KiB | U-Boot environment (A/B: `kiln_slot`, the boot count, SWUpdate's markers) | U-Boot (once per build; A/B: the boot count), `fw_setenv`, SWUpdate |
 | 0x88000 | 32 KiB | its redundant copy | |
 | 0x90000 | 512 B | U-Boot state (sector 0x480 of p5) | U-Boot before each main-OS start; `S99ad5x-booted` zeroes it when the start finished |
 | 0x90200 | 512 B | U-Boot records (sector 0x481) | U-Boot; `ad5x-kernel retry` zeroes it |
@@ -836,6 +836,31 @@ still starts whatever it is given.
 Every failing sequence ends in the recovery OS within three unconfirmed
 starts (7.3 once, 6.6 twice; an extended start is one of them), or stays
 on the main OS when slot A is broken (`test_bootlogic.py`, Simulation).
+
+### A/B (0051)
+
+When slot A's root holds Kiln's kernels, the main OS is in both slots and
+these rules run per slot (`docs/ab-updates.md`):
+
+- the slot is `kiln_slot` in the environment (else the boot flag's), and
+  the flag is written to match before the start;
+- an update is guarded by U-Boot's boot count (`BOOTCOUNT_LIMIT`,
+  `BOOTCOUNT_ENV`): with `upgrade_available` set each start counts in
+  `bootcount`; past `bootlimit` (2) `altbootcmd` (`ad5x_boot alt`) goes
+  back to the other slot and sets SWUpdate's `ustate=3`;
+- `recovery_status` set with an update pending (an install cut off after
+  SWUpdate set `kiln_slot`): back to the other slot as well; set without
+  one: the other slot isn't fallen back to (its install is unfinished or
+  failed);
+- within the slot, the rules above; where they would start the recovery OS,
+  the other slot instead, once per start, with fresh state and records;
+- `kiln_slot`, `upgrade_available`, `bootcount`, `ustate` and
+  `recovery_status` survive a reset to a new build's defaults;
+- the command line adds `ad5x.ab=a|b`, or `ad5x.ab=-` in 1.x's layout;
+  `ad5x.uboot=1` stays as it was, as 1.x systems look for exactly that.
+
+`ad5x_ab_pick()` is in `bootlogic.c`; `tools/test_bootlogic_ab.py` runs it
+on the build host.
 
 ## Watchdog (findings D and the audit)
 
