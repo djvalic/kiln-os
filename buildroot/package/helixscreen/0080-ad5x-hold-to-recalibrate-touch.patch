@@ -1,0 +1,191 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Thu, 19 Nov 2026 13:30:00 -0700
+Subject: [PATCH] touch: hold the screen 10 s to recalibrate
+
+The touch screen is the AD5X's only input. When the touch calibration
+does not fit the panel, the screen that fixes it cannot be reached from
+the screen: it takes SSH (HELIX_TOUCH_CALIBRATE=1, --calibrate-touch)
+or editing settings.json (issue #90). The calibration screen itself
+reads raw values, so only getting to it needs a gesture that does not
+depend on where the finger lands.
+
+A press held 10 s anywhere opens touch calibration, the same overlay as
+Settings, on any screen, the wizard included. It is timed in
+calibrated_read_cb on the raw press state, before LVGL hands the press
+to a widget:
+
+- releases shorter than 200 ms inside the hold are digitizer noise
+- when it fires, the widget under the finger gets PRESS_LOST (a jog
+  pad stops its hold repeat) and LVGL waits for the release, so the
+  release is not a click
+- it fires once per press and is armed again only after 3 s with no
+  touch, so a panel that reports a touch all the time does not open
+  calibration over and over
+- nothing happens while calibration is already open
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+--- a/include/touch_calibration_wrapper.h
++++ b/include/touch_calibration_wrapper.h
+@@ -83,6 +83,24 @@
+ /// samples within one press.
+ inline constexpr int kTransposedGuessCorroboration = 3;
+ 
++/// A press held this long anywhere on the screen opens touch calibration
++/// (set_calibration_hold_handler). It is measured on the raw press state, before
++/// LVGL hands the press to a widget, so it works with any calibration.
++inline constexpr uint32_t kCalibrationHoldMs = 10000;
++/// A release shorter than this inside a hold is digitizer noise, not a lift.
++inline constexpr uint32_t kCalibrationHoldGapMs = 200;
++/// After the hold fires, it is armed again only once the panel has reported no
++/// touch for this long, so a panel that reports a touch all the time does not
++/// open calibration over and over.
++inline constexpr uint32_t kCalibrationHoldRearmMs = 3000;
++
++/// Called on the LVGL thread, from the read callback, when a press has been held
++/// for kCalibrationHoldMs. Returns true when it takes the hold (and schedules the
++/// calibration screen); the press is then ended so the widget under the finger
++/// gets no click. Returns false to leave the press alone (calibration already
++/// open). nullptr turns the gesture off.
++void set_calibration_hold_handler(std::function<bool()> handler);
++
+ /// Read callback wrapper that applies affine touch calibration.
+ /// Chains to original_read_cb first, then transforms coordinates.
+ void calibrated_read_cb(lv_indev_t* indev, lv_indev_data_t* data);
+--- a/src/api/touch_calibration_wrapper.cpp
++++ b/src/api/touch_calibration_wrapper.cpp
+@@ -7,6 +7,8 @@
+ #include "helix_display_telemetry.h"
+ #include "pointer_frame_hook.h"
+ 
++#include "lvgl/src/indev/lv_indev_private.h" // pointer.act_obj: no public getter outside dispatch
++
+ #include <spdlog/fmt/fmt.h>
+ #include <spdlog/spdlog.h>
+ 
+@@ -140,6 +142,57 @@
+     helix_display_telemetry_error("display", "touch-range-declared-too-narrow", detail.c_str());
+ }
+ 
++/// The hold-to-calibrate gesture (set_calibration_hold_handler). LVGL thread only.
++struct CalibrationHold {
++    std::function<bool()> handler;
++    bool down = false;          ///< A press is being timed
++    uint32_t down_since = 0;    ///< When it started
++    uint32_t last_pressed = 0;  ///< Last read that reported a press
++    bool fired = false;         ///< Fired; waiting for a quiet panel to re-arm
++};
++CalibrationHold s_hold;
++
++/// Time a press for the hold gesture. Runs on every read, ahead of LVGL's
++/// processing of it, so ending the press here keeps it from reaching a widget.
++void track_calibration_hold(lv_indev_t* indev, const lv_indev_data_t* data) {
++    if (!s_hold.handler) {
++        return;
++    }
++    const uint32_t now = lv_tick_get();
++    if (data->state == LV_INDEV_STATE_PRESSED) {
++        if (!s_hold.down) {
++            s_hold.down = true;
++            s_hold.down_since = now;
++        }
++        s_hold.last_pressed = now;
++    } else if (s_hold.down && lv_tick_diff(now, s_hold.last_pressed) >= kCalibrationHoldGapMs) {
++        s_hold.down = false;
++    }
++
++    if (s_hold.fired) {
++        if (!s_hold.down && lv_tick_diff(now, s_hold.last_pressed) >= kCalibrationHoldRearmMs) {
++            s_hold.fired = false;
++        }
++        return;
++    }
++    if (!s_hold.down || data->state != LV_INDEV_STATE_PRESSED ||
++        lv_tick_diff(now, s_hold.down_since) < kCalibrationHoldMs) {
++        return;
++    }
++    s_hold.fired = true;
++    if (!s_hold.handler()) {
++        return;
++    }
++    spdlog::info("[TouchCal] Screen held {} s: opening touch calibration",
++                 kCalibrationHoldMs / 1000);
++    // The widget under the finger loses the press now (a jog pad stops its hold
++    // repeat on PRESS_LOST), and the release that follows is not a click.
++    if (lv_obj_t* obj = indev->pointer.act_obj) {
++        lv_obj_send_event(obj, LV_EVENT_PRESS_LOST, indev);
++    }
++    lv_indev_wait_release(indev);
++}
++
+ /// A driver point with the calibration in @p ctx applied. The point is PANEL space,
+ /// ahead of lv_display_rotate_point(); the affine was solved against logical,
+ /// post-rotation targets, so it is placed rather than applied directly.
+@@ -196,6 +249,8 @@
+         }
+     }
+ 
++    track_calibration_hold(indev, data);
++
+     // Apply affine calibration if valid (for both PRESSED and RELEASED states)
+     if (ctx->calibration.valid) {
+         helix::Point raw{static_cast<int>(data->point.x), static_cast<int>(data->point.y)};
+@@ -214,6 +269,11 @@
+     }
+ }
+ 
++void set_calibration_hold_handler(std::function<bool()> handler) {
++    s_hold = CalibrationHold{};
++    s_hold.handler = std::move(handler);
++}
++
+ lv_point_t map_touch_point_to_screen(lv_indev_t* indev, lv_point_t driver_point) {
+     Point point{static_cast<int>(driver_point.x), static_cast<int>(driver_point.y)};
+     // One calibrated touch indev per process (see s_active_ctx), and a multi-touch
+--- a/src/application/application.cpp
++++ b/src/application/application.cpp
+@@ -152,6 +152,7 @@
+ #include "ui_theme_editor_overlay.h"
+ #include "ui_tile_rung.h"
+ #include "ui_toast_manager.h"
++#include "touch_calibration_wrapper.h"
+ #include "ui_touch_calibration_overlay.h"
+ #include "ui_utils.h"
+ #include "ui_wizard.h"
+@@ -890,6 +891,27 @@
+             }
+         }
+ 
++        // A press held 10 s anywhere opens touch calibration: the touch screen is
++        // the only input, so a calibration that does not fit the panel must be
++        // fixable without hitting anything in particular. Any screen, wizard
++        // included; not while calibration is already open.
++        helix::set_calibration_hold_handler([this]() {
++            DisplayManager* dm = DisplayManager::instance();
++            if (!m_screen || (dm && !dm->supports_touch_calibration()) ||
++                helix::ui::get_touch_calibration_overlay().is_visible()) {
++                return false;
++            }
++            lv_async_call(
++                [](void* screen) {
++                    auto& overlay = helix::ui::get_touch_calibration_overlay();
++                    if (!overlay.is_visible()) {
++                        overlay.show(static_cast<lv_obj_t*>(screen), nullptr);
++                    }
++                },
++                m_screen);
++            return true;
++        });
++
+         // Phase 12: Run wizard if needed
+         if (run_wizard()) {
+             // Wizard is active - it handles its own flow
+@@ -2539,6 +2561,7 @@
+ // ============================================================================
+ 
+ void Application::shutdown() {
++    helix::set_calibration_hold_handler(nullptr);
+     // Guard against multiple calls (destructor + explicit shutdown)
+     if (m_shutdown_complete) {
+         return;
