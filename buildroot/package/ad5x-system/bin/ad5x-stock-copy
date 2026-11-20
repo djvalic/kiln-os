@@ -7,6 +7,7 @@
 # usage: ad5x-stock-copy usershare [--if-changed]
 #        ad5x-stock-copy usb
 #        ad5x-stock-copy DIR
+#        ad5x-stock-copy usershare|usb|DIR --space-check [--with-boot]
 #   usershare  the usershare partition (p6, stock's own programs; the copy
 #              goes into its folder kiln-stock-backup), only when at least
 #              64 MiB stay free there. --if-changed: nothing to do when the
@@ -15,12 +16,31 @@
 #   usb        the first USB stick the recovery OS has mounted
 #              (/run/ad5x/usb/...): its top folder's kiln-stock-backup
 #   DIR        DIR/kiln-stock-backup
+#   --space-check  only the room test below (usershare mounted read-only),
+#              nothing written: "stock-copy: room OK ..." (0) or
+#              "stock-copy: FAILED ..." (1). --with-boot: count a boot.img
+#              too when the source has none yet (ad5x-bootloader-install's
+#              check: its step 0 saves one before it runs this)
 #
 # The files: /data/ad5x/stock's kernel.img, rootfs.squashfs, SHA256SUMS,
 # MANIFEST.txt, and this printer's first MiB boot.img with boot.img.sha256
 # and boot.img.info when they are there (saved before Kiln's boot loader).
 # The source is checked first (SHA256SUMS, boot.img.sha256), copied into
-# kiln-stock-backup.new, the copy checked, then renamed over the old one.
+# kiln-stock-backup/.new, the copy checked, then each file renamed over
+# the old one (SHA256SUMS last). Only kiln-stock-backup/ is ever written:
+# nothing else on usershare (stock's programs, MAC, config) is touched.
+# A boot.img already in kiln-stock-backup stays when the source has none
+# that checks (a data partition wiped since, or stock saved again after
+# Kiln's boot loader went in, can't save it again): kept only when it is
+# whole (its boot.img.sha256 checks, 1 MiB) and holds Flashforge's SPL
+# (INGE, U-Boot SPL 2013.07 at 0x4400, as slot.sh's boot_loader tells).
+# Room: the new copy is made next to the old one (which goes only once the
+# new one checks), and on usershare 64 MiB stay free for stock after it.
+# Without room for both, the old copy's kernel.img, rootfs.squashfs,
+# SHA256SUMS (first) and MANIFEST.txt are removed before the copy, but only
+# when the old copy isn't the only place with a boot.img that checks (the
+# source has one, or the old one doesn't check): otherwise it is refused
+# and the old copy stays whole. A boot.img is never removed to make room.
 # Last line: "stock-copy: OK DIR", "stock-copy: nothing to do" or
 # "stock-copy: FAILED ...".
 # AD5X_SYS, AD5X_DEV, AD5X_DATA, AD5X_RUN, AD5X_MOUNTS (tests).
@@ -42,12 +62,29 @@ part() {	# GPT name -> device (sysfs PARTNAME)
 sums() {	# what identifies the copy: both sum files
 	cat "$SRC/SHA256SUMS" "$SRC/boot.img.sha256" 2>/dev/null | sha256sum | cut -d' ' -f1
 }
+# ff_boot DIR: DIR/boot.img is a whole first MiB of Flashforge's boot loader:
+# its boot.img.sha256 checks, 1 MiB, INGE at 0, Flashforge's SPL banner in
+# 0x4400-0xA3FF (slot.sh's boot_loader "flashforge")
+ff_boot() {
+	[ -f "$1/boot.img" ] && [ -f "$1/boot.img.sha256" ] || return 1
+	( cd "$1" && sha256sum -c boot.img.sha256 >/dev/null 2>&1 ) || return 1
+	[ "$(wc -c < "$1/boot.img" | tr -d ' ')" = 1048576 ] && [ "$(head -c 4 "$1/boot.img")" = INGE ] &&
+		tail -c +17409 "$1/boot.img" | head -c 24576 | tr -c ' -~' '\n' | grep -q '^U-Boot SPL 2013\.07'
+}
 
-target=$1 ifchanged=
-[ "${2:-}" = --if-changed ] && ifchanged=1
+target=$1 ifchanged= spacecheck= withboot=
 case "$target" in
-''|-h|--help) sed -n '2,29p' "$0"; [ -n "$target" ]; exit $? ;;
+''|-h|--help) sed -n '2,/^# AD5X_SYS/p' "$0"; [ -n "$target" ]; exit $? ;;
 esac
+shift
+for a in "$@"; do
+	case "$a" in
+	--if-changed) ifchanged=1 ;;
+	--space-check) spacecheck=1 ;;
+	--with-boot) withboot=1 ;;
+	*) echo "stock-copy: unknown option $a" >&2; exit 2 ;;
+	esac
+done
 
 # the source, checked
 [ -f "$SRC/kernel.img" ] && [ -f "$SRC/rootfs.squashfs" ] && [ -f "$SRC/SHA256SUMS" ] ||
@@ -63,8 +100,12 @@ if [ -f "$SRC/boot.img" ] && [ -f "$SRC/boot.img.sha256" ]; then
 		echo "stock-copy: boot.img doesn't match boot.img.sha256: left out"
 	fi
 fi
+srcboot=
+case " $files " in *" boot.img "*) srcboot=1 ;; esac
 need=0
 for f in $files; do need=$((need + $(wc -c < "$SRC/$f"))); done
+# --with-boot: a boot.img (1 MiB) with its .sha256 and .info to come
+[ -n "$withboot" ] && [ -z "$srcboot" ] && need=$((need + 1048576 + 1024)) && srcboot=1
 need=$((need / 1024 + 1))
 
 M= DEST=
@@ -72,13 +113,14 @@ cleanup() { [ -n "$M" ] && { umount "$M" 2>/dev/null; rmdir "$M" 2>/dev/null; };
 trap cleanup EXIT
 case "$target" in
 usershare)
-	if [ -n "$ifchanged" ] && [ "$(cat "$MARK" 2>/dev/null)" = "$(sums)" ]; then
+	if [ -n "$ifchanged" ] && [ -z "$spacecheck" ] && [ "$(cat "$MARK" 2>/dev/null)" = "$(sums)" ]; then
 		echo "stock-copy: nothing to do (the usershare copy has these files)"; exit 0
 	fi
 	dev=$(part usershare) || fail "no usershare partition"
 	M=$AD5X_RUN/stock-copy-usershare
+	[ -n "$spacecheck" ] && M=$AD5X_RUN/stock-copy-usershare-ro.$$
 	mkdir -p "$M"
-	mount -t ext4 -o noatime "$dev" "$M" 2>/dev/null || { rmdir "$M"; M=; fail "can't mount usershare ($dev)"; }
+	mount -t ext4 -o "${spacecheck:+ro,}noatime" "$dev" "$M" 2>/dev/null || { rmdir "$M"; M=; fail "can't mount usershare ($dev)"; }
 	DEST=$M ;;
 usb)
 	DEST=$(awk -v p="$AD5X_RUN/usb/" 'index($2, p) == 1 { print $2; exit }' "$AD5X_MOUNTS")
@@ -90,14 +132,58 @@ usb)
 *)	[ -d "$target" ] || fail "no folder $target"
 	DEST=$target ;;
 esac
-# room: the copy, plus (on usershare) what stock needs to keep
-have=$(df -k "$DEST" 2>/dev/null | awk 'NR == 2 { print $4 }')
-old=$(du -sk "$DEST/$NAME" 2>/dev/null | cut -f1)
-extra=0; [ "$target" = usershare ] && extra=$KEEP_FREE_KB
-[ -n "$have" ] && [ $((have + ${old:-0})) -ge $((need + extra)) ] ||
-	fail "$DEST has ${have:-?} KiB free, the copy needs $need KiB$([ $extra != 0 ] && echo " and $extra KiB stay free for stock")"
+D=$DEST/$NAME N=$DEST/$NAME/.new
+[ -L "$D" ] && fail "$D is a link, not a folder"
+# kb PATH: the files' own sizes in KiB, rounded down (what removing them
+# gives back at least on ext4); not du's blocks, which a compressing file
+# system (a test machine) reports far smaller than the files
+kb() { find "$1" -type f 2>/dev/null | while read -r f; do wc -c < "$f"; done | awk '{ s += $1 } END { print int(s / 1024) }'; }
+# room (above): ROOM next (the new copy next to the old one) or make (the
+# old copy's big files go first); false with ROOM_WHY
+BIG="SHA256SUMS kernel.img rootfs.squashfs MANIFEST.txt"
+room() {
+	local have old extra big f
+	ROOM= ROOM_WHY=
+	have=$(df -k "$DEST" 2>/dev/null | awk 'NR == 2 { print $4 }')
+	case "$have" in ''|*[!0-9]*) ROOM_WHY="can't tell how much is free on $DEST"; return 1 ;; esac
+	old=$(kb "$D"); old=${old:-0}
+	extra=0; [ "$target" = usershare ] && extra=$KEEP_FREE_KB
+	if [ $((have + old)) -lt $((need + extra)) ]; then
+		ROOM_WHY="$DEST has $have KiB free, the copy needs $need KiB$([ $extra != 0 ] && echo " and $extra KiB stay free for stock")"
+		return 1
+	fi
+	[ "$have" -ge "$need" ] && { ROOM=next; return 0; }
+	# what the old copy's big files and a leftover .new give back
+	big=$(kb "$N"); big=${big:-0}
+	for f in $BIG; do [ -f "$D/$f" ] && big=$((big + $(kb "$D/$f"))); done
+	if [ $((have + big)) -lt "$need" ]; then
+		ROOM_WHY="$DEST has $have KiB free, the new copy needs $need KiB (next to the old one's files: no room)"
+		return 1
+	fi
+	if [ -z "$srcboot" ] && ff_boot "$D"; then
+		ROOM_WHY="$DEST has $have KiB free, the new copy needs $need KiB next to the old one, and the old copy holds the only boot.img that checks: it is left whole"
+		return 1
+	fi
+	ROOM=make
+}
+room || fail "$ROOM_WHY"
+if [ -n "$spacecheck" ]; then
+	if [ "$ROOM" = next ]; then echo "stock-copy: room OK ($need KiB, next to the old copy)"
+	else echo "stock-copy: room OK ($need KiB, once the old copy's kernel.img and rootfs.squashfs are removed first)"; fi
+	exit 0
+fi
 
-N=$DEST/$NAME.new
+# Everything below is written inside $DEST/$NAME only
+if [ "$ROOM" = make ]; then
+	# SHA256SUMS first: a copy cut short from here on never passes as
+	# whole; the --if-changed mark goes too (the copy is to be made again)
+	echo "stock-copy: no room for the new copy next to the old one: the old kernel.img and rootfs.squashfs removed first (boot.img stays)"
+	rm -f "$MARK"
+	for f in $BIG; do rm -f "$D/$f"; done
+	rm -rf "$N"
+	sync
+fi
+mkdir -p "$D" || fail "can't make $D"
 rm -rf "$N"
 mkdir -p "$N" || fail "can't make $N"
 for f in $files; do
@@ -108,7 +194,32 @@ sync
 ( cd "$N" && sha256sum -c SHA256SUMS >/dev/null 2>&1 &&
   { [ ! -f boot.img.sha256 ] || sha256sum -c boot.img.sha256 >/dev/null 2>&1; } ) ||
 	{ rm -rf "$N"; fail "the copy in $N reads back wrong"; }
-rm -rf "$DEST/$NAME" && mv "$N" "$DEST/$NAME" && sync || fail "renaming $N"
+# the old copy's boot.img: kept when the new copy has none and it is a
+# whole one of Flashforge's boot loader; dropped only when it isn't
+keep=
+case " $files " in
+*" boot.img "*) ;;
+*)	if ff_boot "$D"; then
+		keep=1
+		echo "stock-copy: the source has no boot.img that checks; the one in $D is kept (Flashforge's SPL, its sha256 checks)"
+	elif [ -e "$D/boot.img" ]; then
+		echo "stock-copy: the old boot.img in $D doesn't check or isn't Flashforge's: dropped"
+	fi ;;
+esac
+# the old files the new copy doesn't have out, then the new ones renamed
+# over the old ones, SHA256SUMS last: a copy cut short in between has the
+# old SHA256SUMS, which the new files don't match, so it never passes as
+# whole
+old_files="SHA256SUMS kernel.img rootfs.squashfs MANIFEST.txt"
+[ -z "$keep" ] && old_files="$old_files boot.img boot.img.sha256 boot.img.info"
+for f in $old_files; do
+	case " $files " in *" $f "*) ;; *) rm -f "$D/$f" ;; esac
+done
+for f in $files; do
+	[ "$f" = SHA256SUMS ] && continue
+	mv -f "$N/$f" "$D/$f" || fail "renaming $N/$f"
+done
+mv -f "$N/SHA256SUMS" "$D/SHA256SUMS" && rmdir "$N" && sync || fail "renaming $N/SHA256SUMS"
 [ "$target" = usershare ] && sums > "$MARK" && sync
-echo "stock-copy: OK $DEST/$NAME ($(echo $files | wc -w) files, $need KiB)"
+echo "stock-copy: OK $D ($(echo $files | wc -w) files, $need KiB$([ -n "$keep" ] && echo ", the old boot.img kept"))"
 exit 0

@@ -58,6 +58,8 @@ Each patch must be acceptable to a mainline reviewer:
 6. Display: a DRM driver for the DPU, the LVDS PHY, the KX070 panel on
    `panel-lvds`: done.
 7. SMP (second XBurst2 core): done.
+8. eFuse (the SoC information that names the X2600 variant), read-only:
+   done.
 
 ## Status
 
@@ -119,6 +121,21 @@ through Klipper, Happy Hare and the IFS, every layer, no kernel warnings.
 - **Wi-Fi:** with the secondary cache fix below, rtw88 brings `wlan0` up in
   every boot, survives repeated down/up, and scans, with no rtw88 errors
   (6 boots). Without it about one register read in 500 came back stale.
+- **eFuse (0083-0088):** `jz4780-efuse` gains the X2600, whose controller
+  addresses the array in words, powers it down between reads and needs
+  the redundancy row read after each power-up (X2000 manual, ch. 29; the
+  same controller). `/sys/bus/nvmem/devices/jz4780-efuse0/nvmem` is the
+  120 bytes the controller can read, root only (the chip ID is in words
+  0-4); the cell `socinfo@6b` holds the SoC information. On printer 2
+  (2026-11-18, 7.3.4 booted from U-Boot's prompt): the cell reads
+  `00 80 01 00 18`, 0x18000 twice (X2600E, DDR3, 256 MiB: what the SPL
+  prints), 50 parallel reads of the whole array identical, no timeouts,
+  the array left powered down, the klipper user refused; AHB2 300 MHz
+  gives RD_ADJ 1, RD_STROBE 3 (34 cycles, as Ingenic's code). Writing is
+  not supported. 0088 (built with `W=1`, not yet on the printer) makes the
+  driver refuse reads past the 120 bytes, which the nvmem core bounds for
+  sysfs only (not for cells or `nvmem_device_read()`); past word 0x3f the
+  word address would wrap to word 0.
 - **SMP:** both cores run. The core control unit (CCU) starts the second
   one and carries the IPIs (a mailbox per core, CPU interrupt line 3);
   each core takes its own OST timer, peripheral interrupts stay on CPU 0.

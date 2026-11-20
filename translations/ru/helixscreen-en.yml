@@ -2,6 +2,7 @@ locale: en
 translations:
   '%d-%d': '%d-%d'
   '%d-%d°C': '%d-%d°C'
+  ' (maker 0x{:02X})': ' (maker 0x{:02X})'
   ' (timed out)': ' (timed out)'
   ' frames': ' frames'
   ' left': ' left'
@@ -67,6 +68,9 @@ translations:
   + New: + New
   +{} more: +{} more
   ', also {}': ', also {}'
+  ', core {}': ', core {}'
+  ', {:.1f} GiB': ', {:.1f} GiB'
+  ', {} MiB': ', {} MiB'
   '- Check [resonance_tester] in printer.cfg': '- Check [resonance_tester] in printer.cfg'
   '- Ensure ADXL345 is connected': '- Ensure ADXL345 is connected'
   '- Try Measure Noise first': '- Try Measure Noise first'
@@ -3096,6 +3100,7 @@ translations:
   Proceed: Proceed
   # Source: abort_progress_modal.xml:20
   Processing...: Processing...
+  Processor: Processor
   Product: Product
   Profile deleted: Profile deleted
   Profile name (e.g., default): Profile name (e.g., default)
@@ -4715,6 +4720,8 @@ translations:
   X axis applied, but Y axis failed: X axis applied, but Y axis failed
   X axis done, starting Y...: X axis done, starting Y...
   X is at its limit ({}mm): X is at its limit ({}mm)
+  'X2600, variant unknown ({})': 'X2600, variant unknown ({})'
+  'X2600{}, variant unknown{}': 'X2600{}, variant unknown{}'
   'X:': 'X:'
   XY: XY
   Y: Y
@@ -4802,6 +4809,7 @@ translations:
   e.g. Jet Black: e.g. Jet Black
   e.g. NAME=my_var VALUE=123: e.g. NAME=my_var VALUE=123
   e.g. Polymaker: e.g. Polymaker
+  eMMC: eMMC
   eSpooler Mode: eSpooler Mode
   eSpooler, clog detection, and sensor settings: eSpooler, clog detection, and sensor settings
   elapsed: elapsed
@@ -4909,6 +4917,7 @@ translations:
   '{} Issues Detected': '{} Issues Detected'
   '{} LED strips available': '{} LED strips available'
   '{} MCUs': '{} MCUs'
+  '{} MiB {}': '{} MiB {}'
   '{} Tools': '{} Tools'
   '{} and {}': '{} and {}'
   '{} and {} are both mapped here': '{} and {} are both mapped here'
@@ -4993,6 +5002,7 @@ translations:
   '{} — response timed out': '{} — response timed out'
   '{} → {}: no filament loaded.': '{} → {}: no filament loaded.'
   "{}'s nozzle is still heating": "{}'s nozzle is still heating"
+  '{}, size unknown': '{}, size unknown'
   '{}, {}': '{}, {}'
   "{}: the tag names Spoolman spool #{}, which doesn't exist": "{}: the tag names Spoolman spool #{}, which doesn't exist"
   '{}:{:02} elapsed': '{}:{:02} elapsed'
@@ -5015,6 +5025,59 @@ translations:
   'Cancel sent. The printer stops its start sequence at the next safe point.': 'Cancel sent. The printer stops its start sequence at the next safe point.'
   # Moonraker's warnings on the screen (patch 0059)
   'Printer warning': 'Printer warning'
+  # Reboot and Shutdown through Kiln's update agent (patch 0071)
+  'Can''t restart the printer: {}': 'Can''t restart the printer: {}'
+  'Can''t shut down the printer: {}': 'Can''t shut down the printer: {}'
+  # Extended memory on Settings > System and its bell notice (patch 0074)
+  'Extended memory': 'Extended memory'
+  'Use all 512 MiB. Not needed; off by default. Takes effect after a restart.': 'Use all 512 MiB. Not needed; off by default. Takes effect after a restart.'
+  'Extended memory changes at the next start.': 'Extended memory changes at the next start.'
+  'Extended memory was turned off: the printer didn''t finish starting with it.': 'Extended memory was turned off: the printer didn''t finish starting with it.'
+  'Needs a boot loader update to take effect.': 'Needs a boot loader update to take effect.'
+  'Extended memory available': 'Extended memory available'
+  'This printer has 512 MiB of memory. Kiln OS uses 256 MiB by default, the same on every AD5X. You can switch Extended memory on in Settings > System. It isn''t needed; it is off by default.': 'This printer has 512 MiB of memory. Kiln OS uses 256 MiB by default, the same on every AD5X. You can switch Extended memory on in Settings > System. It isn''t needed; it is off by default.'
+  'Restart now?': 'Restart now?'
+  # Reboot or Shutdown asked one at a time on Kiln OS (patch 0075)
+  'Restart the printer?': 'Restart the printer?'
+  'Shut down the printer?': 'Shut down the printer?'
+  'The printer can''t be used until it has started again.': 'The printer can''t be used until it has started again.'
+  'The printer stays off until you switch it on again.': 'The printer stays off until you switch it on again.'
+  # IFS firmware switch on Settings > Devices (patches 0076, 0077)
+  'IFS firmware': 'IFS firmware'
+  'Stock': 'Stock'
+  'Switch to Stock': 'Switch to Stock'
+  'Switch to Klipper': 'Switch to Klipper'
+  'Switch': 'Switch'
+  'Switch the IFS to stock firmware?': 'Switch the IFS to stock firmware?'
+  'Switch the IFS to Klipper firmware?': 'Switch the IFS to Klipper firmware?'
+  'Writes Flashforge''s firmware from this printer''s own backup. Klipper stops for 1 to 4 minutes. Plugins that need Klipper firmware on the IFS (Happy Hare) are skipped until you switch back.': 'Writes Flashforge''s firmware from this printer''s own backup. Klipper stops for 1 to 4 minutes. Plugins that need Klipper firmware on the IFS (Happy Hare) are skipped until you switch back.'
+  'Writes the Klipper firmware that comes with Kiln OS. Klipper stops for 1 to 4 minutes.': 'Writes the Klipper firmware that comes with Kiln OS. Klipper stops for 1 to 4 minutes.'
+  'Switching IFS firmware…': 'Switching IFS firmware…'
+  'Don''t switch the printer off.': 'Don''t switch the printer off.'
+  'Stopping Klipper…': 'Stopping Klipper…'
+  'Writing…': 'Writing…'
+  'Unplug the IFS cable and plug it back in': 'Unplug the IFS cable and plug it back in'
+  'Checking the IFS…': 'Checking the IFS…'
+  'Starting Klipper…': 'Starting Klipper…'
+  'IFS firmware switched': 'IFS firmware switched'
+  'IFS firmware switch refused': 'IFS firmware switch refused'
+  'IFS firmware switch failed': 'IFS firmware switch failed'
+  'IFS firmware switch': 'IFS firmware switch'
+  'IFS on stock firmware.': 'IFS on stock firmware.'
+  'IFS on Klipper firmware.': 'IFS on Klipper firmware.'
+  'IFS on stock firmware: {} answers.': 'IFS on stock firmware: {} answers.'
+  'IFS on Klipper firmware: {} answers.': 'IFS on Klipper firmware: {} answers.'
+  'Kiln''s IFS driver runs it. Plugins that need Klipper firmware on the IFS are skipped until you switch back.': 'Kiln''s IFS driver runs it. Plugins that need Klipper firmware on the IFS are skipped until you switch back.'
+  'Plugins that need it run again.': 'Plugins that need it run again.'
+  'No result. See /data/ad5x/kiln-log/agent.log.': 'No result. See /data/ad5x/kiln-log/agent.log.'
+  'Waiting for Klipper…': 'Waiting for Klipper…'
+  'The IFS runs Klipper firmware.': 'The IFS runs Klipper firmware.'
+  'The IFS runs Flashforge''s firmware.': 'The IFS runs Flashforge''s firmware.'
+  'The IFS doesn''t answer as either firmware. Switch it to one of them.': 'The IFS doesn''t answer as either firmware. Switch it to one of them.'
+  'Last switch: {}': 'Last switch: {}'
+  'Can''t switch during a print.': 'Can''t switch during a print.'
+  'Klipper did not start again. See klippy.log and ad5x-mcu status.': 'Klipper did not start again. See klippy.log and ad5x-mcu status.'
+  'The switch did not finish. See /data/ad5x/kiln-log/agent.log.': 'The switch did not finish. See /data/ad5x/kiln-log/agent.log.'
   # Kiln's tour (patch 0058, tour_steps_kiln.cpp)
   'Welcome to Kiln OS': 'Welcome to Kiln OS'
   'Here''s a quick tour of the screen, so you can find things fast.': 'Here''s a quick tour of the screen, so you can find things fast.'
@@ -5033,6 +5096,7 @@ translations:
   'Screen, sound, connection, and the printer''s own settings: Run Setup Wizard, Nozzle Size, Filament Auto-Refill, Plugins. Replay this tour from Help & About.': 'Screen, sound, connection, and the printer''s own settings: Run Setup Wizard, Nozzle Size, Filament Auto-Refill, Plugins. Replay this tour from Help & About.'
   ', corners {:+.3f} to {:+.3f}': ', corners {:+.3f} to {:+.3f}'
   ', not fully settled': ', not fully settled'
+  'Ad5xFilament': 'Ad5xFilament'
   'Ad5xFinish': 'Ad5xFinish'
   'Ad5xIfs': 'Ad5xIfs'
   'Ad5xMesh': 'Ad5xMesh'
@@ -5080,6 +5144,7 @@ translations:
   'Calibration stopped. Heaters off, nothing saved.': 'Calibration stopped. Heaters off, nothing saved.'
   'Can''t boot into recovery: {}': 'Can''t boot into recovery: {}'
   'Can''t calibrate now': 'Can''t calibrate now'
+  'Can''t return to Flashforge firmware: {}': 'Can''t return to Flashforge firmware: {}'
   'Change the nozzle size to {}?': 'Change the nozzle size to {}?'
   'Changing filament': 'Changing filament'
   'Changing the nozzle size... Klipper will restart.': 'Changing the nozzle size... Klipper will restart.'
@@ -5189,9 +5254,12 @@ translations:
   'Purge box': 'Purge box'
   'Remove {}?': 'Remove {}?'
   'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': 'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)'
+  'Restart into the recovery OS to put Flashforge''s own firmware back': 'Restart into the recovery OS to put Flashforge''s own firmware back'
   'Restarting into the recovery OS...': 'Restarting into the recovery OS...'
   'Retracting filament': 'Retracting filament'
   'Retracting {}': 'Retracting {}'
+  'Return to Flashforge firmware': 'Return to Flashforge firmware'
+  'Return to Flashforge firmware?': 'Return to Flashforge firmware?'
   'Run Again': 'Run Again'
   'Run Setup Wizard': 'Run Setup Wizard'
   'Run the hotend PID tune and the first-layer Z offset test now? (The bed doesn''t need retuning.)': 'Run the hotend PID tune and the first-layer Z offset test now? (The bed doesn''t need retuning.)'
@@ -5235,6 +5303,7 @@ translations:
   'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.': 'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.'
   'The nozzle size can''t change during a print': 'The nozzle size can''t change during a print'
   'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.'
+  'The printer restarts into the recovery OS. There, check what it found and tap Return to Flashforge to start. Nothing is changed before that tap.': 'The printer restarts into the recovery OS. There, check what it found and tap Return to Flashforge to start. Nothing is changed before that tap.'
   'The results of the tuning so far. Check them, then Save.': 'The results of the tuning so far. Check them, then Save.'
   'The results so far, before Save': 'The results so far, before Save'
   'The temperature to measure, from a cold bed': 'The temperature to measure, from a cold bed'
@@ -5272,3 +5341,57 @@ translations:
   '{}  centre {:+.3f} mm': '{}  centre {:+.3f} mm'
   '{} °C — {} (centre moved {:.2f} mm)': '{} °C — {} (centre moved {:.2f} mm)'
   '{}, set in local.cfg': '{}, set in local.cfg'
+  # Setup wizard: the filament step, the live view of a running step, the Z offset
+  # plan and the step's prompts (patches 0084, 0085)
+  'Set the material in each slot with filament; the tests heat to it. Auto finds which slot is in the toolhead and unloads it, or pick the slot yourself.': 'Set the material in each slot with filament; the tests heat to it. Auto finds which slot is in the toolhead and unloads it, or pick the slot yourself.'
+  'Toolhead: slot {} was in it, now unloaded': 'Toolhead: slot {} was in it, now unloaded'
+  'Toolhead: slot {}': 'Toolhead: slot {}'
+  'Toolhead: slot {}, {}': 'Toolhead: slot {}, {}'
+  'Toolhead: filament from an unknown slot': 'Toolhead: filament from an unknown slot'
+  'Toolhead: empty': 'Toolhead: empty'
+  'Checking the printer': 'Checking the printer'
+  'Testing the fans': 'Testing the fans'
+  'Testing the heaters': 'Testing the heaters'
+  'Tuning the nozzle heater': 'Tuning the nozzle heater'
+  'Tuning the bed heater': 'Tuning the bed heater'
+  'Cleaning the nozzle': 'Cleaning the nozzle'
+  'Probing the bed': 'Probing the bed'
+  'Measuring vibrations on X': 'Measuring vibrations on X'
+  'Measuring vibrations on Y': 'Measuring vibrations on Y'
+  'Setting the slot materials': 'Setting the slot materials'
+  'Finding the slot in the toolhead': 'Finding the slot in the toolhead'
+  'Moving to the purge box': 'Moving to the purge box'
+  'Loading slot {}': 'Loading slot {}'
+  'Unloading slot {}': 'Unloading slot {}'
+  'Estimating the Z offset': 'Estimating the Z offset'
+  'Preparing the test print': 'Preparing the test print'
+  'Purging the nozzle': 'Purging the nozzle'
+  'Printing the test patch': 'Printing the test patch'
+  'Printing test patch {}': 'Printing test patch {}'
+  'Waiting for you': 'Waiting for you'
+  'Saving': 'Saving'
+  'Letting the bed cool': 'Letting the bed cool'
+  'Calibrating the bed soak': 'Calibrating the bed soak'
+  'Slot {}, {}, {}/{} °C': 'Slot {}, {}, {}/{} °C'
+  '{}, {}/{} °C': '{}, {}/{} °C'
+  'No temperatures for {}: using PLA temperatures': 'No temperatures for {}: using PLA temperatures'
+  'Material unknown: using PLA temperatures': 'Material unknown: using PLA temperatures'
+  'Abort and set it in the Filament step if this is wrong.': 'Abort and set it in the Filament step if this is wrong.'
+  'Auto (find it)': 'Auto (find it)'
+  'None (empty)': 'None (empty)'
+  'The IFS slots aren''t known yet.': 'The IFS slots aren''t known yet.'
+  'Printer Setup: Filament': 'Printer Setup: Filament'
+  'The material in each slot and the slot in the toolhead': 'The material in each slot and the slot in the toolhead'
+  'Filament in the toolhead': 'Filament in the toolhead'
+  'Remove the test print from the bed': 'Remove the test print from the bed'
+  'The Z offset is saved. Take the test print off the bed so the next steps don''t probe or print on it, then tap Done.': 'The Z offset is saved. Take the test print off the bed so the next steps don''t probe or print on it, then tap Done.'
+  'No slot cleared the toolhead. Cut the filament at the toolhead if it isn''t cut, pull it out at the top by hand, then tap Retry.': 'No slot cleared the toolhead. Cut the filament at the toolhead if it isn''t cut, pull it out at the top by hand, then tap Retry.'
+  'Remove the test print from the bed before you retry.': 'Remove the test print from the bed before you retry.'
+  'Use the filament in the toolhead as it is': 'Use the filament in the toolhead as it is'
+  'Toolhead: strand in the tube, slot unknown': 'Toolhead: strand in the tube, slot unknown'
+  'Toolhead: filament kept as it is': 'Toolhead: filament kept as it is'
+  'Slot {} · {}': 'Slot {} · {}'
+  'A strand is still in the tube: name the slot first': 'A strand is still in the tube: name the slot first'
+  'Which slot is in the toolhead?': 'Which slot is in the toolhead?'
+  'Kiln can''t tell which slot''s filament is in the toolhead. Look at the tubes: tap the slot whose filament goes into the toolhead. Nothing is fed until you choose.': 'Kiln can''t tell which slot''s filament is in the toolhead. Look at the tubes: tap the slot whose filament goes into the toolhead. Nothing is fed until you choose.'
+  'I pulled it out by hand': 'I pulled it out by hand'

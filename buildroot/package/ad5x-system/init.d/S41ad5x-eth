@@ -2,6 +2,7 @@
 # Wired network: the MAC stock assigns (usershare /MAC, stock /usr/prog/MAC),
 # then DHCP or a static address from /data/ad5x/network.conf (see
 # /usr/lib/ad5x/network.sh). In USB test mode stock has already done this.
+# Main OS: only on the old network path (S40ad5x-network); recovery OS: always.
 
 # Files this creates are readable by klipper and www-data, whoever started
 # it (a root SSH session may run with umask 077; issue #31)
@@ -10,6 +11,10 @@ umask 022
 case "$1" in
 start)
 	[ -n "$AD5X_USB" ] && exit 0
+	# NetworkManager runs the network at this start (the main OS's
+	# S40ad5x-network chose it, docs/network.md). The recovery OS has no
+	# S40 and no such file: there this always runs.
+	[ "$(cat /run/ad5x-network/mode 2>/dev/null)" = nm ] && exit 0
 	for u in /sys/class/block/*/uevent; do
 		grep -qx "PARTNAME=usershare" "$u" 2>/dev/null || continue
 		dev=/dev/$(sed -n 's/^DEVNAME=//p' "$u")

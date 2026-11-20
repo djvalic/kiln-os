@@ -1,0 +1,94 @@
+From 662ec4226feb329a7f5e7e67fcccd69abc54dca7 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 14:52:50 -0500
+Subject: [PATCH 51/51] mips: jz47xx: x2600: SPL: No eFuse TRIM1 read before
+ the DDR setup
+
+Before the DDR setup the SPL read an eFuse word
+(x2600_efuse_trim1_overrides(), from the SPL clock and DDR3 patch) and,
+with its bit 8 or 9 set, switched the DDR chip's ODT off (DDRC_CFG
+bit 2) or auto self-refresh off. It read the wrong word: EFUCTRL's ADDR
+field (bits 26:21) takes a word address, and the code shifted TRIM1's
+byte address 0x61 into it. ADDR became 0x21 and bit 27, which is
+reserved, was set too; with a length of 4 the read returned CHIPKEY
+words 0x21-0x24, not TRIM1 (word 0x18). The read never powered the
+eFuse down and waited for RD_DONE without a timeout.
+
+Neither Flashforge's stock SPL, which does not touch the eFuse at all,
+nor Ingenic's SDK boot loader does anything like this. In Ingenic's
+efuse.h TRIM1 is Hamming-coded, so even at the right word bits 8 and 9
+would be check bits, not switches.
+
+The function, its call and its defines go. The eFuse clock gate opened
+in x2600_clk_init() stays: x2600_socid() reads the eFuse after it (the
+SoC info, words 0x1a-0x1b, with a timeout, powered down after).
+
+On the boards tested so far these bits read 0: the "SPL: efuse:" lines
+never appeared in a log, so ODT and auto self-refresh were already as
+the DDR table sets them, and nothing changes there. A board whose
+CHIPKEY words had them set would have had its DDR set up unlike stock;
+it now gets the table's values like every other.
+---
+ arch/mips/mach-jz47xx/x2600/sdram.c | 32 -----------------------------
+ 1 file changed, 32 deletions(-)
+
+diff --git a/arch/mips/mach-jz47xx/x2600/sdram.c b/arch/mips/mach-jz47xx/x2600/sdram.c
+index de999d83..623f9ad5 100644
+--- a/arch/mips/mach-jz47xx/x2600/sdram.c
++++ b/arch/mips/mach-jz47xx/x2600/sdram.c
+@@ -113,14 +113,6 @@
+ #define DDRP_TRAINING_DSACE_START BIT(0)
+ #define DDRP_TRAINING_DSCSE_BP	BIT(1)
+ 
+-/* eFuse: TRIM1 can force chip ODT and auto self-refresh off */
+-#define EFUSE			((void __iomem *)0xb3480000)
+-#define EFUSE_CTRL		0x00
+-#define EFUSE_CFG		0x04
+-#define EFUSE_STATE		0x08
+-#define EFUSE_DATA0		0x0c
+-#define EFUSE_TRIM1_ADDR	0x61
+-
+ /*
+  * The DDR parameters, struct ddr_reg_value of Ingenic's X2600 boot loader,
+  * as Flashforge's SPL carries them: name to remap[] byte for byte as in the
+@@ -367,29 +359,6 @@ static void x2600_ddr_clk_set(void)
+ 
+ /* ---- DDR (ddr_innophy.c, ddr_innophy_x2600.c) ---- */
+ 
+-static void x2600_efuse_trim1_overrides(void)
+-{
+-	u32 trim1;
+-
+-	writel((0x2 << 24) | (0x5 << 16), EFUSE + EFUSE_CFG);
+-	writel(0, EFUSE + EFUSE_CTRL);
+-	writel((EFUSE_TRIM1_ADDR << 21) | ((4 - 1) << 16) | BIT(0),
+-	       EFUSE + EFUSE_CTRL);
+-	while (!(readl(EFUSE + EFUSE_STATE) & BIT(0)))
+-		;
+-	trim1 = readl(EFUSE + EFUSE_DATA0);
+-	writel(0, EFUSE + EFUSE_STATE);
+-
+-	if (trim1 & BIT(8)) {
+-		ddr.ddrc_cfg &= ~BIT(2);
+-		puts("SPL: efuse: DDR chip ODT off\n");
+-	}
+-	if (trim1 & BIT(9)) {
+-		ddr.ddrc_autosr_en = 0;
+-		puts("SPL: efuse: DDR auto self-refresh off\n");
+-	}
+-}
+-
+ static void ddrp_cfg(void)
+ {
+ 	phy_wr(0, DDRP_DQ_WIDTH_H);
+@@ -550,7 +519,6 @@ int x2600_sdram_init(void)
+ 	}
+ 	printf("SPL: DDR3 %s, %u MHz\n", ddr.name, ddr.freq / 1000000);
+ 
+-	x2600_efuse_trim1_overrides();
+ 	x2600_ddr_clk_set();
+ 
+ 	/* PHY in reset with dfi_reset_n low while it's configured */
+-- 
+2.56.0
+

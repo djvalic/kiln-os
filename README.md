@@ -16,6 +16,13 @@ and a small recovery OS for updates and rescue.
 > "Adventurer 5X" are their trademarks. Use at your own risk: this replaces
 > the printer's firmware.
 
+## Other printers
+
+Kiln OS supports the Flashforge AD5X only, and 1.x stays that way: I don't
+have the other printers to build and test on. A port to another printer is
+welcome as a fork; after v1.0 I'd consider taking one in if someone who owns
+that printer builds and tests every release.
+
 ## Status
 
 Runs daily on one AD5X (0.6 mm nozzle). It was installed on that printer
@@ -100,8 +107,9 @@ start-up, next to Flashforge's system. Kiln OS replaces that system:
   Bambufy's AD5X profiles prints unchanged: `START_PRINT`, `END_PRINT`,
   `_GOTO_TRASH`, the nopoop purge modes and Bambufy's `_NOPOOP` map to
   this system's macros ([docs/zmod-compat.md](docs/zmod-compat.md)).
-  There is one difference: in prime-only mode the prime happens at the
-  purge box, not over the print, so the part gets no bead.
+  In prime-only mode the prime happens over the print from layer 2, as on
+  zMod, when the head is clear of the labelled objects; otherwise (and on
+  layer 1) it happens at the purge box, so the part gets no bead.
 - **Moving over keeps your settings.** On a printer that ran zMod, the
   first boot reads zMod's plugin settings and enables the matching plugins
   ([docs/plugins.md](docs/plugins.md)). zMod's files stay where they are.

@@ -1,0 +1,6 @@
+# Sourced by Buildroot's /etc/init.d/S45NetworkManager (docs/network.md).
+# NetworkManager starts only when S40ad5x-network chose it for this start;
+# on the old path (wpa_supplicant, udhcpc) and in USB test mode (stock runs
+# the network) the script ends here.
+[ -n "$AD5X_USB" ] && exit 0
+[ "$(cat /run/ad5x-network/mode 2>/dev/null)" = nm ] || exit 0

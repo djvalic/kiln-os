@@ -56,6 +56,8 @@ static const struct {
 	[PATH_TOUCH_NAME]   = { "PATH_TOUCH_NAME",   "TSC2007 Touchscreen" },
 	[PATH_FBDEV]        = { "PATH_FBDEV",        "/dev/fb0" },
 	[PATH_SETTINGS]     = { "PATH_SETTINGS",     "/data/ad5x/helixscreen/config/settings.json" },
+	/* lib/recovery.sh rc_install_state: state= step= steps= file= pid= */
+	[PATH_AUTO_INSTALL] = { "PATH_AUTO_INSTALL", "/run/ad5x/auto-install" },
 };
 
 const char *rui_name(rui_entry e)

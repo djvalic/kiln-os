@@ -93,6 +93,20 @@ RECONNECT_INTERVAL = 10.
 MCU_FEED_STEP_TIME = .5
 # Toolhead runout sensor stays off this long after a pre-feed (seconds)
 RUNOUT_SETTLE_TIME = 2.
+# IFS_FIND_HEAD_SLOT: the extruder-only retract goes in steps this long
+# (mm), the toolhead sensor read after each (it reports about every 0.3 s)
+FIND_STEP = 5.
+# IFS_FIND_HEAD_SLOT outcomes (printer.ifs find_result, the wizard's prompt):
+# found: the slot, unloaded; pick: the extruder alone clears the toolhead
+# sensor on this printer, so pulling a lane can't tell the slot: the strand
+# was put back, the user names the slot; tube: a strand sits in the tube
+# above the sensor (as pick, but it did not come back; or the find failed
+# or was stopped after the strand had left the sensor): loads are refused
+# until the slot is named (SLOT=n) or IFS_SET_CHANNEL CHANNEL=0 says it was
+# pulled out; none: no slot cleared the sensor (pull it out by hand);
+# error: anything else stopped it (IFS_STOP, a fault); "" none run, or a
+# refusal before anything moved
+FIND_RESULTS = ("found", "pick", "tube", "none", "error")
 
 # Swap tuning (IFS_TUNE, QuickSwap-like; ideas from ninjamida/quickswap-5x,
 # MIT, no code used). Feed speeds tried, in mm/min; the sweep starts at
@@ -114,6 +128,19 @@ class IfsError(Exception):
     def __init__(self, msg, fault=True):
         Exception.__init__(self, msg)
         self.fault = fault
+
+class HeadNotClear(IfsError):
+    """A lane pulled back its whole unload length and the toolhead sensor
+    still sees filament (_retract_until_clear)."""
+
+# printer.ifs.loaded_source: how Kiln knows the slot in the nozzle. "kiln":
+# a load or swap of Kiln's own (also a channel saved before this field
+# existed); "user": named (IFS_SET_CHANNEL CHANNEL=n, IFS_FIND_HEAD_SLOT
+# SLOT=n); "adopted": only a guess at startup (_adopt_loaded); "" nothing
+# loaded. Saved as ifs_loaded_source, only "user" and "adopted" (absent or
+# None: "kiln")
+LOADED_SOURCES = ("kiln", "user", "adopted")
+SAVED_SOURCES = ("user", "adopted")
 
 def decode_activity(state):
     """FFS_state -> (activity name, channel or 0); (None, None) if unknown."""
@@ -318,6 +345,18 @@ class IFS:
         # slot material's temperature (MATERIAL_TEMPS, temp_<type>), else
         # default_temp. The old target is restored afterwards.
         self.default_temp = config.getfloat('default_temp', 220., above=0.)
+        # IFS_FIND_HEAD_SLOT (filament in the toolhead from a slot Kiln doesn't
+        # know, e.g. loaded by the stock firmware before the install): the
+        # nozzle temperature when not every slot it may try has a material.
+        # 240 suits PLA and PETG: the find cuts the strand and pulls only the
+        # cold part above the cutter, so the nozzle needs to be past
+        # min_extrude_temp (the extruder backs off and retracts with the
+        # lane) and soft enough that the extruder's back-off doesn't tear a
+        # PETG tip (PETG prints at 230-250); for PLA, 240 is the top of its
+        # range for the minute the find takes. Slots with a material use
+        # their temperature (the hottest of them, as a swap heats).
+        self.find_temp = config.getfloat('find_temp', 240., above=0.)
+        self.find_settle = config.getfloat('find_settle', .4, minval=0.)
         self.material_temps = dict(MATERIAL_TEMPS)
         for opt in config.get_prefix_options('temp_'):
             self.material_temps[opt[5:].upper()] = config.getfloat(
@@ -422,6 +461,8 @@ class IFS:
         self.retry_timer = None
         self.version = None
         self.channel = 0          # channel loaded to the toolhead, 0 = none
+        self.channel_source = ""  # LOADED_SOURCES, "" with channel 0
+        self.saved_source = None  # ifs_loaded_source as variables.cfg has it
         # Per slot: material type, colour '#RRGGBB', temperature override
         self.materials = [{'type': None, 'color': None, 'temp': None}
                           for c in CHANNELS]
@@ -464,6 +505,30 @@ class IFS:
         self.tune_progress = None     # 0..1 while IFS_TUNE runs
         self.first_swap_pending = False  # next swap in a print is its first
         self.tune_unloaded = 0        # lane the last IFS_TUNE cut out of the head
+        self.head_found = 0           # slot the last IFS_FIND_HEAD_SLOT found
+        self.find_result = ""         # FIND_RESULTS of the last one, "" none
+        # A find started and has not ended with the toolhead's slot known
+        # (saved: ifs_find_open): the selected lane is then the last one
+        # tried, not the loaded one, so the startup check adopts nothing
+        self.find_open = False
+        # A strand of an unknown slot sits in the tube above the toolhead
+        # sensor (find result "tube", a find or unload that failed after
+        # the strand left the sensor; saved: ifs_tube_blocked): loads,
+        # unloads, tuning and pre-feeds are refused until the slot is named
+        # (IFS_FIND_HEAD_SLOT SLOT=n pulls it back) or IFS_SET_CHANNEL
+        # CHANNEL=0 says it was pulled out by hand
+        self.tube_blocked = False
+        # Its slot when known (a failed unload, a find that had found it;
+        # not saved: after a restart the refusal asks for the slot), 0 not
+        self.tube_slot = 0
+        # During a find: None before the cut, then the slot whose strand
+        # moved (0 not known yet); after a failure it says whether a strand
+        # may be left above the toolhead sensor
+        self.find_strand = None
+        # During an unload (IFS_UNLOAD, a swap's first half): the slot
+        # whose strand the cut and unload are moving, 0 none; after a
+        # failure it says whether that strand may be left in the tube
+        self.unload_strand = 0
         self.tune_message = ""
         self.last_feed = 0.           # mm fed by the last measured feed
         self.mcu_stop_at = None       # MCU: mm moved when the stop fired
@@ -485,7 +550,7 @@ class IFS:
                     "IFS_SET_MATERIAL", "IFS_MATERIALS", "IFS_PREFEED",
                     "IFS_TUNE", "IFS_TUNE_SPEED", "IFS_TUNE_LOAD",
                     "IFS_TUNE_UNLOAD", "IFS_TUNE_RESET", "IFS_SET_FLUSH",
-                    "IFS_AUTO_REFILL", "IFS_MAP_MODE"):
+                    "IFS_AUTO_REFILL", "IFS_MAP_MODE", "IFS_FIND_HEAD_SLOT"):
             self.gcode.register_command(cmd, getattr(self, "cmd_" + cmd),
                                         desc=getattr(self, "cmd_%s_help" % cmd))
     # Serial link
@@ -582,6 +647,10 @@ class IFS:
             self.channel = 0
         if self.channel not in CHANNELS:
             self.channel = 0
+        src = v.get('ifs_loaded_source')
+        self.saved_source = src if src in SAVED_SOURCES else None
+        self.channel_source = (self.saved_source or "kiln") \
+            if self.channel else ""
         mats = v.get('ifs_materials')
         colors = v.get('ifs_colors')
         if isinstance(mats, (list, tuple)) and len(mats) == len(CHANNELS):
@@ -617,6 +686,8 @@ class IFS:
             self.map_mode = mm
         zp = v.get('ifs_zmod_prev')
         self.zmod_prev = zp if zp in MAP_MODES else None
+        self.find_open = v.get('ifs_find_open') is True
+        self.tube_blocked = v.get('ifs_tube_blocked') is True
         self.tuned = {
             'speed': num('ifs_speed'),
             'unload_dist': num('ifs_unload_dist'),
@@ -905,7 +976,7 @@ class IFS:
         with no print running or paused, and only while no G-code command
         runs (its mutex, taken before self.mutex as a command does)."""
         if (not self.prefeed or self.busy or self.printer.is_shutdown()
-                or self._printing(eventtime)):
+                or self._printing(eventtime) or self.tube_blocked):
             return
         if not self.is_mcu_mode and self.fd is None:
             return
@@ -1045,6 +1116,8 @@ class IFS:
             'version': self.version,
             'busy': self.busy,
             'channel': self.channel,
+            # How the slot in the nozzle is known (LOADED_SOURCES, "")
+            'loaded_source': self.channel_source,
             'state': st.get('FFS_state'),
             'selected': selected,
             'inserted': [bool(inserted >> (c - 1) & 1) for c in CHANNELS],
@@ -1072,6 +1145,11 @@ class IFS:
             'refill_backups': self._refill_backups(),
             'refill_notice': self.refill_notice,
             'tool_map': {str(t): self.tool_map[t] for t in TOOLS},
+            # IFS_FIND_HEAD_SLOT (not part of FX's contract): the last
+            # outcome (FIND_RESULTS, "" none), its slot, a blocked tube
+            'find_result': self.find_result,
+            'head_found': self.head_found,
+            'tube_blocked': self.tube_blocked,
             # Swap tuning (not part of FX's contract): tuned values, None
             # where the [ifs] defaults apply; progress while IFS_TUNE runs
             'tune': {
@@ -1168,14 +1246,40 @@ class IFS:
                 self.head_sensor,), fault=False)
         value = adc.get_last_value()[1]
         return value <= self.head_below or value >= self.head_above
+    def head_state(self):
+        """The toolhead sensor for callers that must not guess (the setup
+        wizard, IFS_FIND_HEAD_SLOT): True / False, None when there is no
+        head_sensor or it has not reported yet."""
+        if self.head_sensor is None:
+            return None
+        qa = self.printer.lookup_object('query_adc', None)
+        adc = qa.adc.get(self.head_sensor) if qa is not None else None
+        if adc is None:
+            return None
+        t, value = adc.get_last_value()
+        if not t:
+            return None
+        return value <= self.head_below or value >= self.head_above
     def _adopt_loaded(self):
         """First status after startup, with no ifs_loaded saved (a lane
         loaded under zMod leaves it unset, issue #13): when the IFS has a
         lane selected with a spool in it and the head sensor sees filament,
-        that lane is in the nozzle. Record it as Kiln's loaded channel."""
+        that lane is probably in the nozzle. Recorded as loaded, but as a
+        guess (loaded_source "adopted", saved): the selected lane is only
+        the last one the IFS moved (stock, zMod, or an unload of Kiln's own
+        that failed), not proof. The first unload of it checks it (_unload:
+        pulling it must clear the toolhead sensor, else nothing is recorded
+        and the error says so), a print starting with that slot loads it
+        again (_tool_change), IFS_FIND_HEAD_SLOT and the setup wizard find
+        the slot instead of trusting it."""
         self.adopt_pending = False
         chan = self.last_status.get('chan', 0)
         if self.channel or not chan:
+            return
+        if self.find_open or self.tube_blocked:
+            # The selection is the last lane IFS_FIND_HEAD_SLOT tried
+            logging.info("ifs: no lane adopted at startup: a find of the "
+                         "toolhead's slot did not finish")
             return
         if chan not in mask_channels(self.last_status.get('silk_state')):
             return
@@ -1187,10 +1291,12 @@ class IFS:
         if head:
             logging.info("ifs: adopted channel %d (filament at the toolhead "
                          "at startup)", chan)
-            self._set_channel(chan)
-            self.gcode.respond_info("IFS: slot %d is in the nozzle (loaded "
-                                    "before startup), recorded as loaded"
-                                    % (chan,))
+            self._set_channel(chan, "adopted")
+            self.gcode.respond_info(
+                "IFS: slot %d recorded as loaded, a guess: filament at the "
+                "toolhead at startup and the IFS points at slot %d. Its "
+                "first unload checks it; IFS_FIND_HEAD_SLOT finds the slot "
+                "for sure" % (chan, chan))
 
     def _wait_loaded(self, chan):
         """Wait for a load to reach the toolhead, then send F112 to stop
@@ -1415,9 +1521,11 @@ class IFS:
                 "MANUAL_STEPPER STEPPER=%s ENABLE=0" % (self.feeder_name,))
             raise
         return moved
-    def _retract_until_clear(self, chan, length, speed, what, extrude=False):
+    def _retract_until_clear(self, chan, length, speed, what, extrude=False,
+                             must_clear=True):
         """F11 a lane until the head sensor clears (then F112). Returns the
-        mm retracted (time x speed); raises if the sensor never clears.
+        mm retracted (time x speed); raises if the sensor never clears
+        (must_clear=False: returns None instead, for IFS_FIND_HEAD_SLOT).
         MCU mode: the mm retracted when it cleared (the queued moves pull
         a little further). EXTRUDE: the extruder retracts with it."""
         self._track("unloading", "unloading", chan)
@@ -1427,7 +1535,10 @@ class IFS:
                 -length, speed, lambda: self._head_has_filament() is False,
                 what, self.unload_timeout, extrude)
             if not clear and self._head_has_filament():
-                raise IfsError("%s: filament still in the toolhead" % (what,))
+                if not must_clear:
+                    return None
+                raise HeadNotClear("%s: filament still in the toolhead"
+                                   % (what,))
             return self.mcu_stop_at if clear else moved
         self._unload_start(chan, length, speed)
         end = start + self.unload_timeout
@@ -1446,8 +1557,10 @@ class IFS:
                         what, st.get('stall_state', 0)))
                 if st['FFS_state'] == STATE_READY and now > start:
                     if self._head_has_filament():
-                        raise IfsError("%s: filament still in the toolhead"
-                                       % (what,))
+                        if not must_clear:
+                            return None
+                        raise HeadNotClear(
+                            "%s: filament still in the toolhead" % (what,))
                     return length
                 if now >= end:
                     raise self._timeout_error(what, st)
@@ -1580,9 +1693,13 @@ class IFS:
                            RETRACT=0 if mcu else 1)
         cleared = None
         if self.head_sensor is not None:
-            cleared = self._retract_until_clear(chan, length,
-                                                self.unload_speed, what,
-                                                extrude=mcu)
+            try:
+                cleared = self._retract_until_clear(chan, length,
+                                                    self.unload_speed, what,
+                                                    extrude=mcu)
+            except HeadNotClear as e:
+                self._adopted_disproved(chan, e)
+                raise
         else:
             self._unload_start(chan, length, self.unload_speed, extrude=mcu)
         toolhead.wait_moves()
@@ -1663,14 +1780,60 @@ class IFS:
                                self.prefeed_speed)
         self._clear_inserted(chan)
         self._release(chan)
-    def _set_channel(self, chan):
+    def _adopted_disproved(self, chan, err):
+        """An unload of a slot only adopted at startup pulled its lane the
+        whole unload length and the toolhead sensor still sees filament:
+        the filament there is another slot's. Nothing is recorded as loaded
+        then (a load refuses while the toolhead is full, a find or the user
+        names the slot), and the error says why. A slot Kiln loaded keeps
+        its record after the same failure (a strand that didn't cut or
+        sticks)."""
+        if self.channel != chan or self.channel_source != "adopted":
+            return
+        logging.info("ifs: adopted channel %d is not in the toolhead (its "
+                     "unload left the sensor full): dropped", chan)
+        self._set_channel(0)
+        err.args = ("%s; slot %d was only a guess from startup (the IFS "
+                    "pointed at it), and pulling it back did not clear the "
+                    "toolhead: the filament there is from another slot. "
+                    "Nothing is recorded as loaded now: IFS_FIND_HEAD_SLOT "
+                    "finds the slot, or IFS_SET_CHANNEL CHANNEL=n names it"
+                    % (err.args[0], chan),)
+    def _set_channel(self, chan, source="kiln"):
         # ifs_loaded: the lane in the nozzle, 0 = none (FX's variable, read
         # by HelixScreen). Written once a load or unload has succeeded.
+        # source: LOADED_SOURCES (printer.ifs.loaded_source); a guess or a
+        # user's word is saved before the channel, a load of Kiln's own
+        # after it: a power cut between the two leaves the slot marked a
+        # guess, never a guess marked as Kiln's. With nothing loaded the
+        # saved source is left as it is (read only with a channel)
+        source = source if chan else ""
+        keep = source if source in SAVED_SOURCES else None
+        if keep is not None and keep != self.saved_source:
+            self.saved_source = keep
+            self._save_variable('ifs_loaded_source', keep)
         self.channel = chan
+        self.channel_source = source
         self._save_variable('ifs_loaded', chan)
+        if chan and keep != self.saved_source:
+            self.saved_source = keep
+            self._save_variable('ifs_loaded_source', keep)
+        self._close_find(tube=not chan)
         # For plugins (docs/plugin-api.md): the slot now in the nozzle
         self.printer.send_event("ifs:loaded", chan)
         self._refill_check_backup(chan)
+    def _close_find(self, tube=True):
+        """The toolhead's slot is known again (a load, an unload,
+        IFS_SET_CHANNEL): no open find. TUBE: nothing blocks the tube
+        either (only with nothing loaded: the strand pulled back out of the
+        tube, or out by hand)."""
+        if self.find_open:
+            self.find_open = False
+            self._save_variable('ifs_find_open', None)
+        if tube and self.tube_blocked:
+            self.tube_blocked = False
+            self.tube_slot = 0
+            self._save_variable('ifs_tube_blocked', None)
     def _flush_volume(self, old, new):
         """Flush volume for a change from channel old to new, or None if
         either colour is unknown."""
@@ -1714,10 +1877,13 @@ class IFS:
         waiting for queued moves (for commands that don't move the toolhead
         and must work at any time: stop, reset). op= (OPERATIONS) and
         target= (its slot) are printer.ifs operation/target_channel while it
-        runs; without op it is no operation (a query, a raw command)."""
+        runs; without op it is no operation (a query, a raw command).
+        keep_stop=True: a stop already requested counts (the second _run
+        of one command: a stop during its first one ends it too)."""
         # A stop pressed while the queued moves of an earlier command run
         # counts for this one: the flag is cleared before the wait, not after
-        self.stop_requested = False
+        if not kw.get('keep_stop'):
+            self.stop_requested = False
         if kw.get('wait', True):
             toolhead = self.printer.lookup_object('toolhead')
             toolhead.wait_moves()
@@ -1747,6 +1913,14 @@ class IFS:
                     if reset:
                         msg += " (reset failed: %s)" % (reset,)
                     raise self.gcode.error(msg)
+                except Exception:
+                    # A G-code error inside (a cold extrude after an abort
+                    # held the heater off, a template's command): the same
+                    # clean-up, so the runout sensor and the G-code state
+                    # come back (abort_gcode) and the IFS stops
+                    self._reset_after_error()
+                    self._abort_swap()
+                    raise
                 self._clear_error()
                 return result
         finally:
@@ -1780,10 +1954,12 @@ class IFS:
         status = toolhead.get_status(self.reactor.monotonic())
         if not all(a in status.get('homed_axes', '') for a in "xyz"):
             raise self.gcode.error("IFS: home the printer first (G28)")
-    def _heat(self, gcmd, chans):
+    def _heat(self, gcmd, chans, fallback=None):
         """Make the nozzle hot enough to move filament. With TEMP= heat to
         that; otherwise only when the target is below min_extrude_temp
         (idle): to the hottest slot material of chans, else default_temp.
+        fallback: when a slot of chans has no material, at least this
+        (IFS_FIND_HEAD_SLOT: any of them may be the one in the nozzle).
         Only sets the target (M104): the operation waits for it
         (_ensure_hot) just before its first extruder move, so the nozzle
         heats while the IFS selects and feeds (not stock: stock waits
@@ -1798,8 +1974,10 @@ class IFS:
             if target >= heater.min_extrude_temp:
                 return None
             temps = [self._slot_temp(c) for c in chans if c]
-            temps = [t for t in temps if t]
-            temp = max(temps) if temps else self.default_temp
+            known = [t for t in temps if t]
+            if fallback is not None and len(known) < len(temps):
+                known.append(fallback)
+            temp = max(known) if known else self.default_temp
         gcmd.respond_info("IFS: heating the nozzle to %.0f" % (temp,))
         self.gcode.run_script_from_command("M104 S%g" % (temp,))
         self.heat_wait = temp
@@ -1817,10 +1995,44 @@ class IFS:
             self.gcode.run_script_from_command("M104 S%g" % (target,))
     def _with_heat(self, gcmd, chans, func, *args, **kw):
         restore = self._heat(gcmd, chans)
+        self.unload_strand = 0
         try:
             self._run(func, *args, **kw)
+        except self.gcode.error as e:
+            note = self._unload_left_in_tube()
+            if note:
+                raise gcmd.error("%s; %s" % (e, note))
+            raise
         finally:
+            self.unload_strand = 0
             self._restore_heat(restore)
+    def _unload_left_in_tube(self):
+        """After a failed or stopped unload (IFS_UNLOAD, IFS_EJECT, a
+        swap's first half; the IFS reset by then): when the cut and unload
+        had started and the toolhead sensor now reads empty, the slot's
+        strand has left the toolhead but may not have been pulled all the
+        way back: the next swap would see an empty toolhead, skip its
+        unload and feed into it. Nothing is loaded now, and the tube is
+        blocked as after IFS_FIND_HEAD_SLOT's "tube". The toolhead still
+        full (or no sensor): the slot stays recorded. Returns the note for
+        the error ("" none)."""
+        chan, self.unload_strand = self.unload_strand, 0
+        if not chan or self.tube_blocked or self.channel != chan:
+            return ""
+        if self.find_settle:
+            # A fresh reading, after the moves the reset ended
+            self.reactor.pause(self.reactor.monotonic() + self.find_settle)
+        if self.head_state() is not False:
+            return ""
+        self._set_channel(0)
+        self.tube_blocked, self.tube_slot = True, chan
+        self._save_variable('ifs_tube_blocked', True)
+        logging.info("ifs: unload of slot %d failed with the toolhead "
+                     "empty: tube blocked", chan)
+        return ("the toolhead sensor is clear now: slot %d's strand may "
+                "still sit in the tube above it. IFS_FIND_HEAD_SLOT SLOT=%d "
+                "pulls it back; pulled out by hand: IFS_SET_CHANNEL "
+                "CHANNEL=0" % (chan, chan))
     def _get_channel(self, gcmd, name='CHANNEL'):
         return gcmd.get_int(name, minval=CHANNELS[0], maxval=CHANNELS[-1])
     # G-code commands
@@ -1945,8 +2157,28 @@ class IFS:
             motors[motor], cur)))
     cmd_IFS_SET_CHANNEL_help = "Tell the module which channel is loaded"
     def cmd_IFS_SET_CHANNEL(self, gcmd):
-        self._set_channel(gcmd.get_int('CHANNEL', minval=0,
-                                       maxval=CHANNELS[-1]))
+        # CHANNEL=0 also ends a blocked tube (IFS_FIND_HEAD_SLOT): the user
+        # pulled the strand out by hand. A slot can't be loaded then: the
+        # strand would still sit in the tube for the next swap to feed into
+        chan = gcmd.get_int('CHANNEL', minval=0, maxval=CHANNELS[-1])
+        if chan:
+            self._refuse_blocked(gcmd)
+        self._set_channel(chan, "user")
+    def _refuse_blocked(self, gcmd):
+        if not self.tube_blocked:
+            return
+        if self.tube_slot:
+            raise gcmd.error(
+                "IFS: slot %d's filament sits in the tube above the toolhead "
+                "sensor (an unload or find that did not finish): "
+                "IFS_FIND_HEAD_SLOT SLOT=%d pulls it back; pulled out by "
+                "hand: IFS_SET_CHANNEL CHANNEL=0"
+                % (self.tube_slot, self.tube_slot))
+        raise gcmd.error(
+            "IFS: filament from an unknown slot sits in the tube above "
+            "the toolhead sensor: IFS_FIND_HEAD_SLOT SLOT=n (the slot it "
+            "is from) pulls it back; pulled out by hand: IFS_SET_CHANNEL "
+            "CHANNEL=0")
     # Slot materials
     cmd_IFS_SET_COLOR_help = "Set a channel's spool colour (#RRGGBB)"
     def cmd_IFS_SET_COLOR(self, gcmd):
@@ -2344,6 +2576,7 @@ class IFS:
                             "(as stock does for a new spool)")
     def cmd_IFS_PREFEED(self, gcmd):
         chan = self._get_channel(gcmd)
+        self._refuse_blocked(gcmd)
         if chan == self.channel:
             raise gcmd.error("IFS_PREFEED: channel %d is loaded in the "
                              "toolhead" % (chan,))
@@ -2374,10 +2607,16 @@ class IFS:
             # old strand there.
             self._track("cutting", "unloading", old)
             self._ensure_hot()
+            # An abort during the heat wait (heater held off) ends it here,
+            # before the cut's extruder move
+            self._check_stop("swap")
             extra = {'AT_PRINT': 1} if at_print else {}
+            # The strand moves from the cut on (_unload_left_in_tube)
+            self.unload_strand = old
             self._run_template(self.cut_template, OLD=old, NEW=new, **extra)
             toolhead.wait_moves()
             self._unload(old)
+            self.unload_strand = 0
             self._set_channel(0)
         self._select(new)
         self._load(new, self.load_length, self.load_speed)
@@ -2556,6 +2795,8 @@ class IFS:
         toolhead = self.printer.lookup_object('toolhead')
         self._track("cutting", "unloading", chan)
         self._run_template(self.before_template, OLD=chan, NEW=0)
+        # A failure puts the fan, sensor and G-code state back (abort_gcode)
+        self.swap_open = (chan, 0)
         try:
             if self._head_has_filament() is False:
                 logging.info("ifs: toolhead empty, skipping cut of channel %d",
@@ -2563,9 +2804,13 @@ class IFS:
             else:
                 self._track("cutting", "unloading", chan)
                 self._ensure_hot()
+                self._check_stop("unload channel %d" % (chan,))
+                # The strand moves from the cut on (_unload_left_in_tube)
+                self.unload_strand = chan
                 self._run_template(self.cut_template, OLD=chan, NEW=0)
                 toolhead.wait_moves()
                 self._unload(chan)
+                self.unload_strand = 0
         except Exception as err:
             if not self.stop_requested:
                 try:
@@ -2582,6 +2827,7 @@ class IFS:
         self._set_channel(0)
         self._release(chan)
         self._run_template(self.after_template, OLD=chan, NEW=0)
+        self.swap_open = None
     def _eject(self, chan):
         """Pull an idle lane out of the IFS (spool change), then release."""
         self._select(chan)
@@ -2591,7 +2837,11 @@ class IFS:
         self._release(chan)
     def _tool_change(self, gcmd, new):
         old = self.channel
-        if new == old and not gcmd.get_int('FORCE', 0):
+        self._refuse_blocked(gcmd)
+        # A slot only adopted at startup is loaded again (cut, unload: its
+        # check, load, purge): what is in the nozzle may be another slot's
+        if new == old and not gcmd.get_int('FORCE', 0) \
+                and self.channel_source != "adopted":
             if self._in_print():
                 # The print's first tool is already in the nozzle (the
                 # start purge cleared it): nothing left to purge
@@ -2626,6 +2876,11 @@ class IFS:
     cmd_IFS_UNLOAD_help = ("Take the filament out of the nozzle (cut, unload); "
                            "the lane stays threaded: [SLOT=] [TEMP=]")
     def cmd_IFS_UNLOAD(self, gcmd):
+        # A strand in the tube: the toolhead sensor reads empty, so the
+        # unload would only record "nothing loaded" and lift the block. The
+        # slot here may be a guess (UNLOAD_FILAMENT, the screen send the
+        # IFS's selected lane), so no lane is pulled on its word
+        self._refuse_blocked(gcmd)
         slot = gcmd.get_int('SLOT', self.channel, minval=0,
                             maxval=CHANNELS[-1])
         if not slot:
@@ -2652,6 +2907,327 @@ class IFS:
             raise gcmd.error("IFS_EJECT: the toolhead holds filament from an "
                              "unknown slot; IFS_UNLOAD SLOT=n first")
         self._run(self._eject, slot, op="eject", target=slot)
+    # The slot in the toolhead, when Kiln doesn't know it (IFS_FIND_HEAD_SLOT)
+    def _find_candidates(self):
+        """Slots to try, from a fresh status: those with filament at the
+        IFS, the one the IFS has selected first (most likely the loaded
+        one)."""
+        st = self._run(self._query_status, wait=False)
+        present = mask_channels(st.get('silk_state'))
+        first = st.get('chan', 0)
+        if first in present:
+            present = [first] + [c for c in present if c != first]
+        return present
+    def _lane_move(self, chan, length, speed, what):
+        """Move the selected lane LENGTH mm (negative: back), lane only, no
+        sensor stop; done when it returns. Serial: a stall (the IFS's fault
+        state) raises: the strand is not where it should be."""
+        if self.is_mcu_mode:
+            self._mcu_move(length, speed, what, self.load_timeout)
+            self.gcode.run_script_from_command(
+                "MANUAL_STEPPER STEPPER=%s ENABLE=0" % (self.feeder_name,))
+            return
+        self._command("F%d C%d L%s S%s" % (
+            10 if length > 0 else 11, chan, self._fmt(abs(length)),
+            self._fmt(speed)))
+        end = self.reactor.monotonic() + self.load_timeout
+        while True:
+            self._check_stop(what)
+            st = self._query_status()
+            if st['FFS_state'] == STATE_FAULT:
+                raise IfsError("%s faulted (stall %d): the strand did not move"
+                               % (what, st.get('stall_state', 0)))
+            if st['FFS_state'] == STATE_READY:
+                return
+            now = self.reactor.monotonic()
+            if now >= end:
+                raise self._timeout_error(what, st)
+            self.reactor.pause(now + self.poll_interval)
+    def _head_settled(self):
+        """The toolhead sensor after the moves so far have ended and it
+        has reported again."""
+        self.printer.lookup_object('toolhead').wait_moves()
+        if self.find_settle:
+            self.reactor.pause(self.reactor.monotonic() + self.find_settle)
+        return self._head_has_filament()
+    def _extruder_clears(self, length):
+        """Find, phase 1: retract the extruder alone (no lane is held) in
+        FIND_STEP steps, up to LENGTH mm, reading the toolhead sensor after
+        each. Returns the mm retracted when the sensor cleared, else None
+        (the cut end is out of the extruder gears then)."""
+        done = 0.
+        while done < length - 1e-6:
+            self._check_stop("find the slot in the toolhead")
+            step = min(FIND_STEP, length - done)
+            self.gcode.run_script_from_command("M83\nG1 E-%s F%s" % (
+                self._fmt(round(step, 3)), self._fmt(self.unload_speed)))
+            done += step
+            if self._head_settled() is False:
+                return done
+        return None
+    def _find_head_slot(self, chans):
+        """IFS_FIND_HEAD_SLOT, with the nozzle hot and the strand cut:
+        1. The extruder alone retracts the unload length (tuned, else
+           unload_length), no lane held. If that clears the toolhead
+           sensor, the sensor sits between the cutter and the extruder
+           gears and no lane pull can tell the slot (the extruder moves the
+           strand by itself): the strand is fed back where it was and the
+           user names the slot ("pick"; "tube" if it didn't come back).
+        2. Otherwise the cut end has left the gears, and only its own lane
+           can move it: each slot of chans in turn is pulled back that far,
+           lane only. A slot that doesn't clear the sensor is fed back the
+           same length (a stall there stops the find). The one that clears
+           it is fed back up to the sensor (it must bring filament back)
+           and then gets the normal unload (pull until clear, tube
+           pull-back, release).
+        Returns the slot; raises otherwise (find_result says why)."""
+        toolhead = self.printer.lookup_object('toolhead')
+        length = self._unload_len()
+        what = "find the slot in the toolhead"
+        self._track("cutting", "unloading", 0)
+        self._run_template(self.before_template, OLD=0, NEW=0)
+        # A failure puts the fan, sensor and G-code state back (abort_gcode)
+        self.swap_open = (0, 0)
+        tried = 0
+        self.find_strand = None
+        try:
+            self._ensure_hot()
+            # An abort during the heat wait (heater held off) ends it here
+            self._check_stop(what)
+            # From the cut on the strand moves: a failure may leave it above
+            # the toolhead sensor (_strand_left_in_tube)
+            self.find_strand = 0
+            self._run_template(self.cut_template, OLD=0, NEW=0)
+            toolhead.wait_moves()
+            # No lane may hold the strand while the extruder pulls it
+            held = self.mcu_selected if self.is_mcu_mode \
+                else self.last_status.get('chan', 0)
+            if held or self.is_mcu_mode:
+                self._release(held or CHANNELS[0])
+            self._track("unloading", "unloading", 0)
+            back = self._extruder_clears(length)
+            if back is not None:
+                self.gcode.run_script_from_command("M83\nG1 E%s F%s" % (
+                    self._fmt(round(back, 3)), self._fmt(self.unload_speed)))
+                if self._head_settled():
+                    self.find_result = "pick"
+                    raise IfsError(
+                        "the extruder alone clears the toolhead sensor on "
+                        "this printer, so pulling the slots can't tell "
+                        "which one is in the toolhead: name the slot "
+                        "(IFS_SET_CHANNEL CHANNEL=n), or pull the filament "
+                        "out by hand", fault=False)
+                self.find_result = "tube"
+                self.tube_blocked = True
+                self._save_variable('ifs_tube_blocked', True)
+                raise IfsError(
+                    "the extruder alone moved the filament past the toolhead "
+                    "sensor and it did not come back: it sits in the tube "
+                    "above the sensor, slot unknown. IFS_FIND_HEAD_SLOT "
+                    "SLOT=n (the slot it is from) pulls it back; pulled out "
+                    "by hand: IFS_SET_CHANNEL CHANNEL=0", fault=False)
+            found = 0
+            for chan in chans:
+                what = "find the slot in the toolhead: slot %d" % (chan,)
+                self._check_stop(what)
+                tried = chan
+                self.target_channel = chan
+                self._select(chan)
+                cleared = self._retract_until_clear(
+                    chan, length, self.unload_speed, what, must_clear=False)
+                toolhead.wait_moves()
+                self._wait_ready(self.unload_timeout, what)
+                if cleared is None and self._head_settled():
+                    logging.info("ifs: find: slot %d pulled back %g mm, the "
+                                 "toolhead sensor still sees filament",
+                                 chan, length)
+                    # Back where it was (a stall here: it isn't)
+                    self._track("feeding", "loading", chan)
+                    self._lane_move(chan, length, self.unload_speed,
+                                    "feed slot %d back" % (chan,))
+                    continue
+                # This slot's strand left the sensor: a failure from here on
+                # leaves it in the tube above it
+                self.find_strand = chan
+                self._track("feeding", "loading", chan)
+                if not self._feed_until_head(chan, length + 10.,
+                                             self.unload_speed, what):
+                    self.find_result = "error"
+                    raise IfsError(
+                        "the toolhead sensor cleared while slot %d was pulled "
+                        "back, but slot %d does not bring filament back to "
+                        "it; nothing is recorded: check the toolhead and the "
+                        "tube" % (chan, chan), fault=False)
+                found = chan
+                break
+            if not found:
+                self.find_result = "none"
+                raise IfsError(
+                    "no slot cleared the toolhead sensor (tried %s, %g mm "
+                    "each): pull the filament out of the toolhead by hand "
+                    "(cut the tip first if it is not cut), then try again"
+                    % (", ".join(str(c) for c in chans), length), fault=False)
+            logging.info("ifs: find: slot %d is the one in the toolhead",
+                         found)
+            self._unload(found)
+        except Exception:
+            if not self.find_result or self.find_result == "found":
+                self.find_result = "error"
+            if tried and not self.stop_requested:
+                try:
+                    self._release(tried)
+                except Exception as e:
+                    logging.warning("ifs: release channel %d after a failed "
+                                    "find: %s", tried, e)
+            raise
+        self.find_result = "found"
+        self.find_strand = None
+        self._set_channel(0)
+        self._release(found)
+        self._run_template(self.after_template, OLD=found, NEW=0)
+        self.swap_open = None
+        return found
+    def _strand_left_in_tube(self):
+        """After a failed or stopped find (the IFS reset by then): when the
+        strand had moved (the cut on) and the toolhead sensor now reads
+        empty, the cut strand sits in the tube above it, where the next
+        load or pre-feed would push into it. Block the tube as the "tube"
+        result does. Returns the note for the error ("" none)."""
+        slot, self.find_strand = self.find_strand, None
+        if slot is None or self.tube_blocked:
+            return ""
+        if self.find_settle:
+            # A fresh reading, after the moves the reset ended
+            self.reactor.pause(self.reactor.monotonic() + self.find_settle)
+        if self.head_state() is not False:
+            return ""
+        self.find_result = "tube"
+        self.tube_blocked, self.tube_slot = True, slot
+        self._save_variable('ifs_tube_blocked', True)
+        logging.info("ifs: find failed with the strand (slot %s) above the "
+                     "toolhead sensor: tube blocked", slot or "unknown")
+        if slot:
+            return ("the toolhead sensor is clear now: slot %d's strand "
+                    "sits in the tube above it. IFS_FIND_HEAD_SLOT SLOT=%d "
+                    "pulls it back; pulled out by hand: IFS_SET_CHANNEL "
+                    "CHANNEL=0" % (slot, slot))
+        return ("the toolhead sensor is clear now: the strand sits in the "
+                "tube above it, slot unknown. IFS_FIND_HEAD_SLOT SLOT=n (the "
+                "slot it is from) pulls it back; pulled out by hand: "
+                "IFS_SET_CHANNEL CHANNEL=0")
+    def _tube_unload(self, chan):
+        """IFS_FIND_HEAD_SLOT SLOT=n with the tube blocked: the user says
+        the strand above the toolhead sensor is slot n's. Pull lane n back
+        the unload length plus the tube pull-back (no sensor can see it),
+        release it."""
+        what = "pull slot %d back from the tube" % (chan,)
+        self._select(chan)
+        self._lane_move(chan, -(self._unload_len() + self._tube_len()),
+                        self.unload_speed, what)
+        self._set_channel(0)
+        self._release(chan)
+        self.find_result = "found"
+    cmd_IFS_FIND_HEAD_SLOT_help = (
+        "Filament in the toolhead from a slot Kiln doesn't know: find the "
+        "slot and unload it: [TEMP=]; SLOT=n names it instead (a strand "
+        "left in the tube is pulled back)")
+    def cmd_IFS_FIND_HEAD_SLOT(self, gcmd):
+        # Nothing of an earlier find is read as this one's result
+        self.head_found = 0
+        self.find_result = ""
+        slot = gcmd.get_int('SLOT', 0, minval=0, maxval=CHANNELS[-1])
+        if not self.is_mcu_mode and self.fd is None:
+            raise gcmd.error("IFS: not connected")
+        ps = self.printer.lookup_object('print_stats', None)
+        if ps is not None and ps.get_status(self.reactor.monotonic()).get(
+                'state') in ("printing", "paused"):
+            raise gcmd.error("IFS_FIND_HEAD_SLOT: not during a print")
+        if slot and self.tube_blocked:
+            try:
+                self._run(self._tube_unload, slot, op="unload", target=slot)
+            except self.gcode.error:
+                self.find_result = "error"
+                raise
+            self.head_found = slot
+            gcmd.respond_info("IFS: slot %d pulled back from the tube" % (slot,))
+            return
+        if slot:
+            # Filament in the toolhead (or not): the user names its slot
+            self._set_channel(slot, "user")
+            self.head_found = slot
+            self.find_result = "found"
+            gcmd.respond_info("IFS: slot %d recorded as in the toolhead"
+                              % (slot,))
+            return
+        if self.head_sensor is None:
+            raise gcmd.error("IFS_FIND_HEAD_SLOT needs the toolhead sensor "
+                             "(head_sensor in [ifs])")
+        if self.tube_blocked:
+            self.find_result = "tube"
+            if self.tube_slot:
+                raise gcmd.error(
+                    "IFS_FIND_HEAD_SLOT: the tube above the toolhead sensor "
+                    "holds slot %d's filament: give SLOT=%d"
+                    % (self.tube_slot, self.tube_slot))
+            raise gcmd.error("IFS_FIND_HEAD_SLOT: the tube above the toolhead "
+                             "sensor holds filament from an unknown slot: "
+                             "give SLOT=n (the slot it is from)")
+        head = self.head_state()
+        if head is None:
+            raise gcmd.error("IFS_FIND_HEAD_SLOT: the toolhead sensor has "
+                             "no reading yet; try again")
+        if not head:
+            # Pulled out by hand after a find that didn't end: nothing
+            # whose slot is unknown is left (the tube isn't blocked here).
+            # A slot only adopted at startup isn't in it either
+            self._close_find(tube=False)
+            if self.channel and self.channel_source == "adopted":
+                self._set_channel(0)
+            gcmd.respond_info("IFS: the toolhead is empty")
+            return
+        # A slot only adopted at startup is a guess: found like an unknown
+        # one (tried first)
+        guess = self.channel if self.channel_source == "adopted" else 0
+        if self.channel and not guess:
+            self.head_found = self.channel
+            gcmd.respond_info("IFS: slot %d is in the toolhead (known)"
+                              % (self.channel,))
+            return
+        self._require_homed()
+        chans = self._find_candidates()
+        if guess in chans:
+            chans = [guess] + [c for c in chans if c != guess]
+        if not chans:
+            raise gcmd.error("IFS_FIND_HEAD_SLOT: no slot has filament at "
+                             "the IFS: pull the filament out of the toolhead "
+                             "by hand (cut the tip first), then try again")
+        if guess:
+            # The find records what it finds; failing, nothing is loaded
+            # (the guess is not put back: the slot stays unknown)
+            logging.info("ifs: find: adopted channel %d dropped, tried "
+                         "first", guess)
+            self._set_channel(0)
+        if not self.find_open:
+            self.find_open = True
+            self._save_variable('ifs_find_open', True)
+        restore = self._heat(gcmd, chans, fallback=self.find_temp)
+        try:
+            # keep_stop: an abort during the slot query above counts
+            found = self._run(self._find_head_slot, chans, op="unload",
+                              target=0, keep_stop=True)
+        except self.gcode.error as e:
+            if not self.find_result:
+                self.find_result = "error"
+            note = self._strand_left_in_tube()
+            if note:
+                raise gcmd.error("%s; %s" % (e, note))
+            raise
+        finally:
+            self.find_strand = None
+            self._restore_heat(restore)
+        self.head_found = found
+        gcmd.respond_info("IFS: slot %d was in the toolhead; unloaded"
+                          % (found,))
     # Swap tuning (QuickSwap-like). Measures feed speed, each lane's
     # distance to the toolhead sensor and the unload length, from the head
     # sensor's timing (time x speed, so about +-5 mm at 1200 mm/min).
@@ -2885,6 +3461,7 @@ class IFS:
         """CHANNEL=, else every slot with filament in the IFS (fresh F13)."""
         if not self.is_mcu_mode and self.fd is None:
             raise gcmd.error("IFS: not connected")
+        self._refuse_blocked(gcmd)
         if self.head_sensor is None:
             raise gcmd.error("IFS tuning needs the toolhead sensor "
                              "(head_sensor in [ifs])")

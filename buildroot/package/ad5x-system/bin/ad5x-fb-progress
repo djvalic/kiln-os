@@ -1,0 +1,250 @@
+#!/usr/bin/env python3
+"""Keep something moving on the panel while the boards are written.
+
+usage: ad5x-fb-progress --state FILE ASSETS [FBDEV [SYSFS_DIR]]
+
+ad5x-mcu has already drawn mcu-updating.jpg (ad5x-fb-show); this redraws
+only parts of it, five times a second, in the first frame of FBDEV
+(default /dev/fb0), in the framebuffer's format (SYSFS_DIR's
+bits_per_pixel and stride, packed by ad5x-fb-show's own code):
+  - the ring around the badge turns (ASSETS/ring.png's frames);
+  - the line under the title says what is happening and, when the
+    flasher shows one, its percentage ("Writing the toolhead board: 63%");
+  - a bar: that percentage, or a segment that moves while there is none;
+  - the time since this started ("2:14").
+FILE says what is happening, one line "STEP [LOG]", read at every tick
+(ad5x-mcu replaces it at each step): STEP picks ASSETS/label-STEP.png,
+LOG is the flasher's output, whose last "NN%" is the percentage (a LOG
+older than FILE counts as none yet). ASSETS is the directory
+make_install_screens.py --boards writes (layout.json and its pictures):
+Pillow here has no FreeType, so all text comes pre-made.
+
+Cheap by design: niced to 19, every picture packed once (the ring's 16
+frames, the moving bar's positions); a tick reads FILE, stats LOG and
+writes a few hundred bytes per changed row with pwrite. It never stops the
+flashing: it exits when its parent does, on SIGTERM (ad5x-mcu's
+progress_stop, before the next screen), after 30 minutes, or at once
+(exit 1, nothing written) when the framebuffer or ASSETS aren't usable.
+"""
+import json
+import os
+import re
+import sys
+import time
+
+W, H = 800, 480
+HZ = 5
+MAX_RUN = 30 * 60
+SEG = 120                       # the moving segment, px
+PCT = re.compile(rb"(\d{1,3})%")
+
+
+def fail(msg):
+    sys.stderr.write("ad5x-fb-progress: %s\n" % msg)
+    sys.exit(1)
+
+
+def fb_show():
+    """ad5x-fb-show next to this file, as a module (its packing code)."""
+    import importlib.machinery
+    import importlib.util
+    sys.dont_write_bytecode = True    # read-only /usr/bin: no __pycache__
+    here = os.path.dirname(os.path.realpath(__file__))
+    loader = importlib.machinery.SourceFileLoader(
+        "ad5x_fb_show", os.path.join(here, "ad5x-fb-show"))
+    mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(mod)
+    return mod
+
+
+class Panel:
+    """The first frame of the framebuffer; regions written row by row."""
+
+    def __init__(self, path, bpp, stride, show):
+        self.bpp, self.stride, self.show = bpp, stride, show
+        self.px = bpp // 8
+        # No O_CREAT: without a framebuffer, no stray file
+        self.fd = os.open(path, os.O_WRONLY)
+
+    def pack(self, im, x, y):
+        """An RGB picture for (x, y): a list of (offset, bytes) per row."""
+        data = self.show.pack(im, self.bpp)
+        n = im.width * self.px
+        return [((y + i) * self.stride + x * self.px, data[i * n:(i + 1) * n])
+                for i in range(im.height)]
+
+    def put(self, rows):
+        for off, b in rows:
+            os.pwrite(self.fd, b, off)
+
+
+def mtime(path):
+    try:
+        return os.stat(path).st_mtime
+    except OSError:
+        return None
+
+
+def percent(log, since):
+    """The last "NN%" in LOG's tail, None without one (or an old LOG)."""
+    t = mtime(log)
+    if t is None or (since is not None and t < since):
+        return None
+    try:
+        with open(log, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 256))
+            m = PCT.findall(f.read())
+    except OSError:
+        return None
+    if not m:
+        return None
+    return min(100, int(m[-1]))
+
+
+def main(argv):
+    if len(argv) < 4 or len(argv) > 6 or argv[1] != "--state":
+        sys.stderr.write(__doc__)
+        return 2
+    state, assets = argv[2], argv[3]
+    fb = argv[4] if len(argv) > 4 else "/dev/fb0"
+    sysdir = argv[5] if len(argv) > 5 else "/sys/class/graphics/" + os.path.basename(fb)
+    parent = os.getppid()
+    try:
+        os.nice(19)
+    except OSError:
+        pass
+    try:
+        bpp = int(open(sysdir + "/bits_per_pixel").read().strip())
+        stride = int(open(sysdir + "/stride").read().strip())
+    except (OSError, ValueError) as e:
+        fail("no framebuffer format in %s (%s)" % (sysdir, e))
+    if bpp not in (16, 32) or stride < W * bpp // 8:
+        fail("%s: %d bpp, stride %d: not supported" % (fb, bpp, stride))
+    from PIL import Image, ImageDraw
+    try:
+        lay = json.load(open(os.path.join(assets, "layout.json")))
+        pic = lambda name: Image.open(os.path.join(assets, name)).convert("RGB")
+        rl = lay["ring"]
+        ring = pic(rl["file"])
+        labels = {k: pic(v) for k, v in lay["label"]["files"].items()}
+        lglyph, tglyph = pic(lay["label"]["glyphs"]), pic(lay["time"]["glyphs"])
+        ground, track, fill = (tuple(lay[k]) for k in ("ground", "track", "fill"))
+        lb, bb, tb = lay["label"], lay["bar"], lay["time"]
+        for part in (rl, lb, bb, tb):
+            if part["y"] < 0 or part["y"] + part["h"] > H:
+                raise ValueError("a part outside the panel")
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        fail("%s: %s" % (assets, e))
+    try:
+        panel = Panel(fb, bpp, stride, fb_show())
+    except OSError as e:
+        fail("%s: %s" % (fb, e))
+
+    # Everything that only depends on the tick, packed once
+    rings = [panel.pack(ring.crop((rl["w"] * i, 0, rl["w"] * (i + 1), rl["h"])), rl["x"], rl["y"])
+             for i in range(rl["frames"])]
+
+    def cap(colour):
+        """The bar's round end at 4x, scaled: smooth edges without FreeType."""
+        t = bb["thick"]
+        im = Image.new("RGB", (t * 4, t * 4), ground)
+        ImageDraw.Draw(im).ellipse([0, 0, t * 4 - 1, t * 4 - 1], fill=colour)
+        return im.resize((t, t), Image.LANCZOS)
+    caps = {track: cap(track), fill: cap(fill)}
+
+    def pill(im, a, b, colour):
+        """A rounded bar from x a to b (band coordinates)."""
+        t, top = bb["thick"], bb["top"] - bb["y"]
+        if b - a < t:
+            b = a + t
+        c = caps[colour]
+        im.paste(c.crop((0, 0, t // 2, t)), (a, top))
+        im.paste(c.crop((t // 2, 0, t, t)), (b - t + t // 2, top))
+        if b - a > t:
+            im.paste(colour, (a + t // 2, top, b - t // 2, top + t))
+
+    x0, x1 = bb["x0"], bb["x1"]
+
+    def bar(pct, pos):
+        im = Image.new("RGB", (W, bb["h"]), ground)
+        pill(im, x0, x1, track)
+        if pct is not None:
+            if pct > 0:
+                pill(im, x0, x0 + max(bb["thick"], (x1 - x0) * pct // 100), fill)
+        else:
+            a = x0 + pos
+            pill(im, a, min(x1, a + SEG), fill)
+        return panel.pack(im, 0, bb["y"])
+    span = x1 - x0 - SEG
+    moving = [bar(None, span * i // (HZ * 4)) for i in range(HZ * 4 + 1)]
+    moving += moving[-2:0:-1]          # there and back: 8 s a round
+
+    def text(base, sheet, index, s, h):
+        """base (a label picture or None) and s from the glyph sheet,
+        centred in a band h high."""
+        parts = [base] if base is not None else []
+        for ch in s:
+            if ch in index:
+                x, w = index[ch]
+                parts.append(sheet.crop((x, 0, x + w, h)))
+        im = Image.new("RGB", (W, h), ground)
+        x = (W - sum(p.width for p in parts)) // 2
+        for p in parts:
+            im.paste(p, (max(0, x), 0))
+            x += p.width
+        return im
+
+    start = time.monotonic()
+    tick = 0
+    shown = {}
+    last_state = (None, None)
+
+    def update(key, value, make):
+        if shown.get(key) != value:
+            panel.put(make())
+            shown[key] = value
+
+    while True:
+        if os.getppid() != parent:
+            return 0                   # ad5x-mcu is gone: no more drawing
+        now = time.monotonic()
+        if now - start > MAX_RUN:
+            return 0
+        st_t = mtime(state)
+        if st_t != last_state[0]:
+            try:
+                words = open(state).read().split()
+            except OSError:
+                words = []
+            last_state = (st_t, words)
+        words = last_state[1]
+        step = words[0] if words and words[0] in labels else None
+        pct = percent(words[1], st_t) if len(words) > 1 else None
+
+        panel.put(rings[tick % len(rings)])
+        update("label", (step, pct), lambda: panel.pack(
+            text(labels[step], lglyph, lb["index"], ": %d%%" % pct if pct is not None else "",
+                 lb["h"]), 0, lb["y"]) if step else [])
+        if pct is None:
+            panel.put(moving[tick % len(moving)])
+            shown["bar"] = None
+        else:
+            update("bar", pct, lambda: bar(pct, 0))
+        secs = int(now - start)
+        update("time", secs, lambda: panel.pack(
+            text(None, tglyph, tb["index"], "%d:%02d" % (secs // 60, secs % 60), tb["h"]),
+            0, tb["y"]))
+        tick += 1
+        # a fifth of a second a tick; never a burst to catch up
+        time.sleep(min(1.0 / HZ, max(0.05, now + 1.0 / HZ - time.monotonic())))
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv))
+    except KeyboardInterrupt:
+        sys.exit(130)
+    except Exception as e:     # noqa: BLE001
+        # best effort: anything that fails ends the drawing, nothing else
+        fail("%s: %s" % (type(e).__name__, e))

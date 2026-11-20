@@ -8,15 +8,29 @@
 # --replace-stock" (stock's root and kernel saved to /data/ad5x/stock first,
 # read-back check, slot A keeps the printer's own kernel). At most 3 tries;
 # log in /data/ad5x/install/install.log.
+# The install state (/data/ad5x/install/state, written by the installer)
+# becomes "done" once the install is finished: here after that write, or,
+# when the installer wrote slot A itself (stock ran from slot B; the
+# recovery OS then installed this main OS), at this main OS's first
+# complete start (S99ad5x-booted's start-up marker and the flag on this
+# slot, lib/slot.sh start_done). The installer refuses a new install on
+# stock after "flag-set" (the new system didn't come up), not after "done".
+# AD5X_LIB overrides /usr/lib/ad5x (tools/test_kernel_fallback.sh).
 
 # Files this creates are readable by klipper and www-data, whoever started
 # it (a root SSH session may run with umask 077; issue #31)
 umask 022
 
-. /usr/lib/ad5x/slot.sh
+. ${AD5X_LIB:-/usr/lib/ad5x}/slot.sh
 I=/data/ad5x/install
 case "$1" in
 start)
+	if [ "$SLOT" = B ] && [ ! -f $I/recovery.squashfs ] &&
+	   [ "$(sed -n 's/^state=//p' $I/state 2>/dev/null)" = flag-set ] && start_done; then
+		echo "state=done" > $I/state && sync
+		echo "=== $(date) main OS started: installation complete" >> $I/install.log
+		echo "install-recovery: installation complete"
+	fi
 	[ "$SLOT" = B ] && [ -f $I/recovery.squashfs ] && [ -f $I/recovery.sha256 ] || exit 0
 	[ "$(read_flag)" = ota:kernel2 ] || { echo "install-recovery: start-up not complete, later"; exit 0; }
 	n=$(cat $I/recovery.tries 2>/dev/null || echo 0)

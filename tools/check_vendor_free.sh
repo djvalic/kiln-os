@@ -59,7 +59,11 @@ UPSTREAM = ("usr/prog/Python-", "usr/prog/klipper/", "usr/prog/moonraker/",
             "etc/wpa_supplicant.conf", "etc/inittab", "etc/fstab", "etc/issue",
             "etc/init.d/rcS", "etc/init.d/rcK", "etc/init.d/S01", "etc/init.d/S02",
             "etc/init.d/S20urandom", "etc/init.d/S40network", "etc/init.d/S50dropbear",
-            "etc/init.d/S30dbus", "etc/init.d/S41dhcpcd", "etc/mdev.conf")
+            "etc/init.d/S30dbus", "etc/init.d/S41dhcpcd", "etc/mdev.conf",
+            # D-Bus's system.conf and the packages' policies (wpa_supplicant's
+            # system.d file), readline's inputrc (Buildroot's): unchanged
+            # upstream files, in the image since NetworkManager (PR #53)
+            "etc/dbus-1/", "etc/inputrc")
 MIN_HASH_SIZE = 64
 
 args = sys.argv[1:]

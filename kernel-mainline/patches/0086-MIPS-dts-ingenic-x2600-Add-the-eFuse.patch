@@ -1,0 +1,46 @@
+From 0f40c437d8e854df1042bbcf9cebea5d8e55bc13 Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Tue, 17 Nov 2026 19:15:14 -0700
+Subject: [PATCH] MIPS: dts: ingenic: x2600: Add the eFuse
+
+Describe the eFuse controller, and the cell holding the SoC information:
+20 bits that name the X2600 variant and the DDR in its package, followed
+by the same 20 bits again as a check.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ arch/mips/boot/dts/ingenic/x2600.dtsi | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/arch/mips/boot/dts/ingenic/x2600.dtsi b/arch/mips/boot/dts/ingenic/x2600.dtsi
+index ceaed8f93..c50c37150 100644
+--- a/arch/mips/boot/dts/ingenic/x2600.dtsi
++++ b/arch/mips/boot/dts/ingenic/x2600.dtsi
+@@ -358,6 +358,24 @@ msc1: mmc@13460000 {
+ 		status = "disabled";
+ 	};
+ 
++	efuse: efuse@13480000 {
++		compatible = "ingenic,x2600-efuse";
++		reg = <0x13480000 0x2c>;
++
++		clocks = <&cgu X2600_CLK_EFUSE>;
++
++		nvmem-layout {
++			compatible = "fixed-layout";
++			#address-cells = <1>;
++			#size-cells = <1>;
++
++			/* the variant and the DDR in the package, twice */
++			socinfo: socinfo@6b {
++				reg = <0x6b 0x5>;
++			};
++		};
++	};
++
+ 	mac: ethernet@134b0000 {
+ 		compatible = "ingenic,x2600-mac", "ingenic,x1000-mac", "snps,dwmac";
+ 		reg = <0x134b0000 0x2000>;
+-- 
+2.43.0
+

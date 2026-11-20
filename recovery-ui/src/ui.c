@@ -11,9 +11,12 @@
 #include "lang.h"
 #include <stdarg.h>
 
+#include <errno.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -233,6 +236,7 @@ static void page_network(void);
 static void page_logs(void);
 static void page_power(void);
 static void page_job(void);
+static void page_auto(void);
 
 static void dlg_close(void);
 
@@ -457,10 +461,22 @@ static struct {
 	unsigned last_seq, last_swu;
 	unsigned swu_seq_at_start, swu_result_at_start;
 	char *pending;		/* command waiting for a status query to end */
+	const char *done_text;	/* shown for a last line "result: done..." (set
+				 * right after start_job_x; read when it ends) */
 } jb;
 
 static void status_kick(bool slots);
 static bool status_busy(void);
+
+/* text has the whole line LINE */
+static bool text_has_line(const char *text, const char *line)
+{
+	size_t n = strlen(line);
+	for (const char *l = text; l && *l; l = strchr(l, '\n') ? strchr(l, '\n') + 1 : NULL)
+		if (!strncmp(l, line, n) && (l[n] == '\n' || l[n] == 0 || l[n] == '\r'))
+			return true;
+	return false;
+}
 
 static void start_job_x(job_kind kind, const char *title, const char *what, const char *cmd,
 			bool cancelable, bool reboots, bool critical, job_after after)
@@ -1330,9 +1346,10 @@ static void rs_fill(void)
 	rs.sel = rs.n == 1 ? 0 : -1;
 	lv_obj_clean(rs.list);
 	for (int i = 0; i < rs.n; i++) {
-		char sub[200], sz[32];
+		char sub[200], sz[32], np[64];
 		human_size(rs.sets[i].size, sz, sizeof(sz));
-		snprintf(sub, sizeof(sub), "%d partitions  \xc2\xb7  %s", rs.sets[i].nparts, sz);
+		snprintf(np, sizeof(np), tr(RS_N_PARTITIONS), rs.sets[i].nparts);
+		snprintf(sub, sizeof(sub), "%s  \xc2\xb7  %s", np, sz);
 		row_item(rs.list, rs.sets[i].label, sub, on_rs_row, i);
 	}
 	if (!rs.n) {
@@ -1390,16 +1407,22 @@ static void page_restore(void)
 /* ------------------------------------------- return to Flashforge page */
 
 /* ad5x-return-stock --check runs in the background when the page opens (and
- * after Check): its "source:", "target:", "spl_option:" and "result:" lines
- * fill the page; Return to Flashforge is enabled only when the result is
- * "ready" (or "ready to go on" after a stop: Continue). Check shows the
- * whole check as a job. The return itself is a job that writes the eMMC
- * ("don't switch off"); after it, Shut down. */
+ * after Check): its "source:", "target:", "config:" (include lines of
+ * stock's printer.cfg it switches off: zMod leftovers), "spl_option:" and
+ * "result:" lines fill the page. The first three are English; the codes
+ * next to them ("source_kind:" with "source_file:", "target_kind:",
+ * "config_kind:" with "config_lines:") give the page's own translation, the
+ * English line only when a code is unknown. Return to Flashforge is enabled only when
+ * the result is "ready" (or "ready to go on" after a stop: Continue). Check
+ * shows the whole check as a job. The return itself is a job that writes
+ * the eMMC ("don't switch off"); after it, Shut down. */
 static struct {
-	lv_obj_t *status, *files, *after, *spl, *go, *check, *save;
+	lv_obj_t *status, *files, *after, *cfg, *spl, *go, *check, *save;
 	capture *cap;
-	char source[200], target[240], why[240];
-	bool spl_offer, ready, resume, done_already, checked;
+	char source[200], target[240], config[240], why[240];
+	char source_kind[16], source_file[200], target_kind[24], config_kind[16];
+	int config_lines;
+	bool spl_offer, ready, resume, done_already, checked, cfg_failed;
 } rt;
 
 static void rt_free(lv_event_t *e)
@@ -1446,9 +1469,20 @@ static bool rt_line(const char *text, const char *key, char *out, size_t cap)
 static void rt_parse(const char *t)
 {
 	char res[240] = "", v[16] = "";
-	rt.source[0] = rt.target[0] = rt.why[0] = 0;
+	rt.source[0] = rt.target[0] = rt.config[0] = rt.why[0] = 0;
+	rt.source_kind[0] = rt.source_file[0] = rt.target_kind[0] = rt.config_kind[0] = 0;
+	rt.config_lines = 0;
 	rt_line(t, "source", rt.source, sizeof(rt.source));
+	rt_line(t, "source_kind", rt.source_kind, sizeof(rt.source_kind));
+	rt_line(t, "source_file", rt.source_file, sizeof(rt.source_file));
 	rt_line(t, "target", rt.target, sizeof(rt.target));
+	rt_line(t, "target_kind", rt.target_kind, sizeof(rt.target_kind));
+	rt_line(t, "config", rt.config, sizeof(rt.config));
+	rt_line(t, "config_kind", rt.config_kind, sizeof(rt.config_kind));
+	if (rt_line(t, "config_lines", v, sizeof(v)))
+		rt.config_lines = atoi(v);
+	/* an earlier run couldn't change stock's printer.cfg (it went on) */
+	rt.cfg_failed = text_has_line(t, "config_failed: yes");
 	rt.spl_offer = rt_line(t, "spl_option", v, sizeof(v)) && !strcmp(v, "yes");
 	rt_line(t, "result", res, sizeof(res));
 	rt.ready = !strncmp(res, "ready", 5);
@@ -1465,19 +1499,59 @@ static void rt_parse(const char *t)
 	rt.checked = true;
 }
 
+/* The source in the screen's language (the English "source:" line when
+ * its source_kind is unknown) */
+static const char *rt_source_text(char *buf, size_t cap)
+{
+	const char *k = rt.source_kind;
+	if (!strcmp(k, "stock"))
+		snprintf(buf, cap, "%s", tr(RS_RS_SRC_STOCK));
+	else if (!strcmp(k, "usershare"))
+		snprintf(buf, cap, "%s", tr(RS_RS_SRC_USERSHARE));
+	else if (!strcmp(k, "copy") && rt.source_file[0])
+		snprintf(buf, cap, tr(RS_RS_SRC_COPY), rt.source_file);
+	else if (!strcmp(k, "backup") && rt.source_file[0])
+		snprintf(buf, cap, tr(RS_RS_SRC_BACKUP), rt.source_file);
+	else if (!strcmp(k, "package") && rt.source_file[0])
+		snprintf(buf, cap, tr(RS_RS_SRC_PACKAGE), rt.source_file);
+	else
+		snprintf(buf, cap, "%s", rt.source);
+	return buf;
+}
+
 static void rt_show(void)
 {
-	char t[480];
+	char t[480], v[240];
 	if (rt.source[0])
-		iconed(t, sizeof(t), LV_SYMBOL_DRIVE, "  ", tr(RS_RS_FILES), rt.source);
+		iconed(t, sizeof(t), LV_SYMBOL_DRIVE, "  ", tr(RS_RS_FILES), rt_source_text(v, sizeof(v)));
 	else
 		iconed(t, sizeof(t), LV_SYMBOL_DRIVE, "  ", "%s", rt.checked ? tr(RS_RS_NO_FILES) : "");
 	lv_label_set_text(rt.files, t);
+	const char *tk = rt.target_kind;
+	const char *after = !strcmp(tk, "kiln-spl") ? tr(RS_RS_AFTER_KILN)
+			  : !strcmp(tk, "flashforge-spl") ? tr(RS_RS_AFTER_FFSPL)
+			  : !strcmp(tk, "flashforge") ? tr(RS_RS_AFTER_FF) : rt.target;
 	if (rt.target[0])
-		iconed(t, sizeof(t), LV_SYMBOL_RIGHT, "  ", tr(RS_RS_AFTER), rt.target);
+		iconed(t, sizeof(t), LV_SYMBOL_RIGHT, "  ", tr(RS_RS_AFTER), after);
 	else
 		t[0] = 0;
 	lv_label_set_text(rt.after, t);
+	const char *ck = rt.config_kind;
+	if (rt.cfg_failed)
+		iconed(t, sizeof(t), LV_SYMBOL_WARNING, "  ", "%s", tr(RS_RS_CFG_FAILED));
+	else if (rt.config[0] && rt.config_lines > 0 && !strcmp(ck, "zmod"))
+		iconed(t, sizeof(t), LV_SYMBOL_EDIT, "  ", tr(RS_RS_CFG_ZMOD), rt.config_lines);
+	else if (rt.config[0] && rt.config_lines > 0 && !strcmp(ck, "missing"))
+		iconed(t, sizeof(t), LV_SYMBOL_EDIT, "  ", tr(RS_RS_CFG_MISSING), rt.config_lines);
+	else if (rt.config[0] && rt.config_lines > 0 && !strcmp(ck, "mixed"))
+		iconed(t, sizeof(t), LV_SYMBOL_EDIT, "  ", tr(RS_RS_CFG_MIXED), rt.config_lines);
+	else if (rt.config[0])
+		iconed(t, sizeof(t), LV_SYMBOL_EDIT, "  ", tr(RS_RS_CONFIG), rt.config);
+	else
+		t[0] = 0;
+	lv_label_set_text(rt.cfg, t);
+	lv_obj_set_style_text_color(rt.cfg, rt.cfg_failed ? C_WARN : C_MUTED, 0);
+	show(rt.cfg, rt.cfg_failed || rt.config[0] != 0);
 	show(rt.spl, rt.spl_offer && !rt.done_already);
 	if (!rt.checked)
 		return;
@@ -1513,8 +1587,10 @@ static void rt_refresh(void)
 static void return_now(void)
 {
 	const char *v[] = { "SPL", rt_spl() ? "--flashforge-spl" : "", NULL };
-	char *c = cmd_expand(CMD_RETURN_STOCK, v);
-	start_job_x(JK_CMD, tr(RS_RS_RUNNING), rt.source, c, false, false, true, AFTER_POWEROFF);
+	char *c = cmd_expand(CMD_RETURN_STOCK, v), src[240];
+	start_job_x(JK_CMD, tr(RS_RS_RUNNING), rt_source_text(src, sizeof(src)), c, false, false,
+		    true, AFTER_POWEROFF);
+	jb.done_text = tr(RS_RS_DONE_ALREADY);
 	free(c);
 }
 
@@ -1565,10 +1641,16 @@ static void page_return(void)
 	lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
 	lv_obj_set_style_pad_all(c, 16, 0);
 	lv_obj_set_style_pad_row(c, 8, 0);
+	/* a longer translation (or every line at once) can be taller than the
+	 * card: it scrolls, so the boot loader box stays reachable */
+	lv_obj_add_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+	lv_obj_set_scroll_dir(c, LV_DIR_VER);
 	lv_obj_add_event_cb(c, rt_free, LV_EVENT_DELETE, NULL);
 	wrap_label(c, tr(RS_RS_TEXT), F20, C_TEXT);
 	rt.files = wrap_label(c, "", F16, C_MUTED);
 	rt.after = wrap_label(c, "", F16, C_MUTED);
+	rt.cfg = wrap_label(c, "", F16, C_MUTED);
+	show(rt.cfg, false);
 	rt.status = wrap_label(c, "", F20B, C_MUTED);
 	rt.spl = lv_checkbox_create(c);
 	lv_checkbox_set_text(rt.spl, tr(RS_RS_SPL_BOX));
@@ -1701,6 +1783,7 @@ static void bl_install_now(void)
 {
 	char *c = cmd_expand(CMD_BOOTLOADER_INSTALL, NULL);
 	start_job_x(JK_CMD, tr(RS_BL_RUNNING), "", c, false, false, true, AFTER_REBOOT);
+	jb.done_text = tr(RS_BL_INSTALLED);
 	free(c);
 }
 
@@ -2093,11 +2176,30 @@ static void page_power(void)
 
 static struct {
 	lv_obj_t *status, *step, *bar, *pct, *spin, *log, *logtext, *cancel, *done, *boot;
-	lv_obj_t *banner;
+	lv_obj_t *banner, *elapsed;
 	char *buf;
 	bool ended;
+	long t0;		/* when the page began (elapsed time) */
 	job_after after;	/* what the after-button does */
 } jp;
+
+/* The time a long page has been running, "2:14", next to its spinner: a
+ * step that takes minutes still visibly moves, and the number stays when
+ * it ends (how long it took). Monotonic: the clock may jump with NTP. */
+static long mono_s(void)
+{
+	struct timespec t;
+	clock_gettime(CLOCK_MONOTONIC, &t);
+	return (long)t.tv_sec;
+}
+
+static void set_elapsed(lv_obj_t *l, long t0)
+{
+	long s = mono_s() - t0;
+	if (s < 0)
+		s = 0;
+	lv_label_set_text_fmt(l, "%ld:%02ld", s / 60, s % 60);
+}
 
 #define JOB_VIEW_CAP 8192
 
@@ -2202,6 +2304,8 @@ static void job_refresh(void)
 		lv_label_set_text(jp.pct, "");
 	}
 	show(jp.spin, running);
+	if (running && !jp.ended)
+		set_elapsed(jp.elapsed, jp.t0);
 
 	if (running) {
 		if (!jp.ended)
@@ -2251,8 +2355,16 @@ static void job_refresh(void)
 		for (const char *p = t; *p; p = strchr(p, '\n') ? strchr(p, '\n') + 1 : p + strlen(p))
 			if (*p != '\n')
 				last = p;
-		if (last)
+		if (last && ok && jb.done_text && !strncmp(last, "result: done", 12))
+			lv_label_set_text(jp.step, jb.done_text);	/* in the screen's language */
+		else if (last)
 			lv_label_set_text_fmt(jp.step, "%.*s", (int)strcspn(last, "\n"), last);
+		/* Return to Flashforge firmware went on without its printer.cfg
+		 * edit (ad5x-return-stock's "config_failed: yes"): said here */
+		if (text_has_line(t, "config_failed: yes")) {
+			set_iconed(jp.step, LV_SYMBOL_WARNING, "  ", "%s", tr(RS_RS_CFG_FAILED));
+			lv_obj_set_style_text_color(jp.step, C_WARN, 0);
+		}
 	}
 	show(jp.spin, false);
 	show(jp.cancel, false);
@@ -2298,6 +2410,8 @@ static void page_job(void)
 	lv_obj_set_style_arc_color(jp.spin, C_ACCENT, LV_PART_INDICATOR);
 	jp.status = label(r, tr(RS_WORKING), F24B, C_TEXT);
 	lv_obj_set_flex_grow(jp.status, 1);
+	jp.elapsed = label(r, "0:00", F20, C_MUTED);
+	jp.t0 = mono_s();
 	jp.pct = label(r, "", F24B, C_TEXT);
 	jp.step = label(jp.banner, "", F20, C_MUTED);
 	lv_label_set_long_mode(jp.step, LV_LABEL_LONG_MODE_DOTS);
@@ -2335,6 +2449,241 @@ static void page_job(void)
 	cur_refresh = job_refresh;
 }
 
+/* -------------------------------------------------- automatic install */
+
+/* ad5x-recovery-auto installing an update at start-up: the first start
+ * after the install stick (the main OS from /data/ad5x/update), or an
+ * update the main OS staged. It runs in the background, without the UI;
+ * its state file (PATH_AUTO_INSTALL, lib/recovery.sh rc_install_state:
+ * state= check|write|restart|failed, step=, steps=, file=, pid=) opens
+ * this page over any other, so the screen says what is going on and not
+ * to switch off. Step 2's percentage is SWUpdate's. A check or write
+ * whose process is gone is dropped; a failure stays until Done. */
+typedef struct {
+	char state[16];
+	unsigned step, steps;
+	char file[128];
+	long pid;
+	ino_t ino;		/* the file is replaced (mv) at each change */
+	time_t mtime;
+} auto_inst;
+
+static struct {
+	ino_t ino;		/* a failure dismissed with Done */
+	time_t mtime;
+	bool set;
+} au_dismissed;
+
+static bool auto_read(auto_inst *a)
+{
+	memset(a, 0, sizeof(*a));
+	const char *p = rui_get(PATH_AUTO_INSTALL);
+	FILE *f = fopen(p, "r");
+	if (!f)
+		return false;
+	struct stat st;
+	if (!fstat(fileno(f), &st)) {
+		a->ino = st.st_ino;
+		a->mtime = st.st_mtime;
+	}
+	char line[256];
+	while (fgets(line, sizeof(line), f)) {
+		line[strcspn(line, "\n")] = 0;
+		if (!strncmp(line, "state=", 6))
+			snprintf(a->state, sizeof(a->state), "%s", line + 6);
+		else if (!strncmp(line, "step=", 5))
+			a->step = (unsigned)strtoul(line + 5, NULL, 10);
+		else if (!strncmp(line, "steps=", 6))
+			a->steps = (unsigned)strtoul(line + 6, NULL, 10);
+		else if (!strncmp(line, "file=", 5))
+			snprintf(a->file, sizeof(a->file), "%s", line + 5);
+		else if (!strncmp(line, "pid=", 4))
+			a->pid = strtol(line + 4, NULL, 10);
+	}
+	fclose(f);
+	if (!a->steps)
+		a->steps = 3;
+	if (a->step < 1 || a->step > a->steps)
+		a->step = 1;
+	return a->state[0] != 0;
+}
+
+/* The page is wanted: an install running (its process alive), restarting,
+ * or a failure not yet dismissed */
+static bool auto_wanted(const auto_inst *a)
+{
+	if (!a->state[0])
+		return false;
+	if (!strcmp(a->state, "failed"))
+		return !(au_dismissed.set && au_dismissed.ino == a->ino &&
+			 au_dismissed.mtime == a->mtime);
+	if (!strcmp(a->state, "restart"))
+		return true;
+	return a->pid > 0 && (kill((pid_t)a->pid, 0) == 0 || errno == EPERM);
+}
+
+static bool auto_active(auto_inst *a)
+{
+	return auto_read(a) && auto_wanted(a);
+}
+
+static struct {
+	lv_obj_t *banner, *spin, *status, *pct, *bar, *file, *warn, *warn_title, *warn_text;
+	lv_obj_t *done, *elapsed;
+	auto_inst shown;
+	bool ended;
+	long t0;		/* when this install's page began */
+} au;
+
+static void on_auto_done(lv_event_t *e)
+{
+	(void)e;
+	au_dismissed.ino = au.shown.ino;
+	au_dismissed.mtime = au.shown.mtime;
+	au_dismissed.set = true;
+	slog("install result seen (Done)");
+	go(page_home);
+}
+
+static void auto_refresh(void)
+{
+	auto_inst a;
+	if (!auto_active(&a)) {
+		if (!au.ended)
+			go(page_home);
+		return;
+	}
+	if (au.ended) {
+		/* The failure stays until Done, unless ad5x-recovery-auto goes
+		 * on with the next file (drop folder, an autoupdate stick): a
+		 * new state file (rc_install_state renames a fresh one in), or
+		 * no longer "failed", is that install: its page again, with
+		 * "Don't switch off" while it writes */
+		if (a.ino != au.shown.ino || a.mtime != au.shown.mtime ||
+		    strcmp(a.state, "failed"))
+			go(page_auto);
+		return;
+	}
+	au.shown = a;
+	swu_state ss;
+	swu_get(&ss);
+	bool failed = !strcmp(a.state, "failed");
+	bool restart = !strcmp(a.state, "restart");
+	bool write = !strcmp(a.state, "write");
+	/* SWUpdate already writing while the state still says check: write */
+	if (!failed && !restart && ss.active && ss.status != SWU_IDLE)
+		write = true;
+	enum rui_str what = restart ? RS_AUTO_STEP_RESTART : write ? RS_AUTO_STEP_WRITE
+		: RS_AUTO_STEP_CHECK;
+	unsigned step = restart ? 3 : write ? 2 : a.step;
+	if (step > a.steps)
+		step = a.steps;
+	lv_label_set_text_fmt(au.file, "%s", a.file);
+
+	if (failed) {
+		au.ended = true;
+		lv_obj_set_style_bg_color(au.banner, lv_color_hex(0x4B3D48), 0);
+		lv_obj_set_style_border_color(au.banner, C_DANGER, 0);
+		set_iconed(au.status, LV_SYMBOL_CLOSE, "  ", "%s", tr(RS_AUTO_FAILED));
+		lv_obj_set_style_text_color(au.status, C_DANGER, 0);
+		lv_label_set_text(au.pct, "");
+		show(au.spin, false);
+		show(au.bar, false);
+		lv_obj_set_style_border_color(au.warn, C_BORDER, 0);
+		lv_label_set_text(au.warn_title, "");
+		show(au.warn_title, false);
+		lv_label_set_text(au.warn_text, tr(RS_AUTO_FAILED_TEXT));
+		show(au.done, true);
+		slog("automatic install failed: %s", a.file);
+		return;
+	}
+
+	char t[256];
+	snprintf(t, sizeof(t), tr(RS_AUTO_STEP_FMT), step, a.steps, tr(what));
+	lv_label_set_text(au.status, t);
+	int pct = -1;
+	if (restart)
+		pct = 100;
+	else if (write && ss.active && ss.overall >= 0)
+		pct = ss.overall > 100 ? 100 : ss.overall;
+	if (pct >= 0) {
+		show(au.bar, true);
+		lv_bar_set_value(au.bar, pct, LV_ANIM_OFF);
+		lv_label_set_text_fmt(au.pct, "%d%%", pct);
+	} else {
+		show(au.bar, false);
+		lv_label_set_text(au.pct, "");
+	}
+	show(au.spin, !restart);
+	set_elapsed(au.elapsed, au.t0);
+	lv_label_set_text(au.warn_text, tr(restart ? RS_AUTO_RESTART_TEXT : RS_AUTO_DONT_OFF_TEXT));
+}
+
+static void page_auto(void)
+{
+	memset(&au, 0, sizeof(au));
+	lv_obj_t *body = page_frame(tr(RS_AUTO_TITLE), false);
+
+	au.banner = card(body);
+	lv_obj_set_size(au.banner, lv_pct(100), LV_SIZE_CONTENT);
+	lv_obj_set_flex_flow(au.banner, LV_FLEX_FLOW_COLUMN);
+	lv_obj_set_style_pad_row(au.banner, 10, 0);
+	lv_obj_set_style_pad_all(au.banner, 16, 0);
+	lv_obj_set_style_border_width(au.banner, 2, 0);
+	lv_obj_set_style_border_color(au.banner, C_ACCENT, 0);
+	lv_obj_t *r = box(au.banner, LV_FLEX_FLOW_ROW);
+	lv_obj_set_size(r, lv_pct(100), LV_SIZE_CONTENT);
+	lv_obj_set_flex_align(r, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+	lv_obj_set_style_pad_column(r, 14, 0);
+	au.spin = lv_spinner_create(r);
+	lv_obj_set_size(au.spin, 36, 36);
+	lv_obj_set_style_arc_width(au.spin, 4, LV_PART_MAIN);
+	lv_obj_set_style_arc_width(au.spin, 4, LV_PART_INDICATOR);
+	lv_obj_set_style_arc_color(au.spin, C_ACCENT, LV_PART_INDICATOR);
+	au.status = label(r, "", F24B, C_TEXT);
+	lv_obj_set_flex_grow(au.status, 1);
+	lv_label_set_long_mode(au.status, LV_LABEL_LONG_MODE_WRAP);
+	au.elapsed = label(r, "0:00", F20, C_MUTED);
+	au.t0 = mono_s();
+	au.pct = label(r, "", F24B, C_TEXT);
+	au.bar = lv_bar_create(au.banner);
+	lv_obj_set_size(au.bar, lv_pct(100), 22);
+	lv_bar_set_range(au.bar, 0, 100);
+	lv_obj_set_style_bg_color(au.bar, C_BORDER, LV_PART_MAIN);
+	lv_obj_set_style_bg_color(au.bar, C_ACCENT, LV_PART_INDICATOR);
+	lv_obj_set_style_radius(au.bar, 8, LV_PART_MAIN);
+	lv_obj_set_style_radius(au.bar, 8, LV_PART_INDICATOR);
+	show(au.bar, false);
+	au.file = label(au.banner, "", F16, C_MUTED);
+	lv_label_set_long_mode(au.file, LV_LABEL_LONG_MODE_DOTS);
+	lv_obj_set_width(au.file, lv_pct(100));
+
+	/* Don't switch off: large, in the warning colour */
+	au.warn = card(body);
+	lv_obj_set_width(au.warn, lv_pct(100));
+	lv_obj_set_flex_grow(au.warn, 1);
+	lv_obj_set_flex_flow(au.warn, LV_FLEX_FLOW_COLUMN);
+	lv_obj_set_flex_align(au.warn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+	lv_obj_set_style_pad_row(au.warn, 12, 0);
+	lv_obj_set_style_pad_all(au.warn, 18, 0);
+	lv_obj_set_style_border_width(au.warn, 2, 0);
+	lv_obj_set_style_border_color(au.warn, C_WARN, 0);
+	char t[160];
+	au.warn_title = label(au.warn, iconed(t, sizeof(t), LV_SYMBOL_WARNING, "  ", "%s",
+					     tr(RS_AUTO_DONT_OFF)), F28B, C_WARN);
+	au.warn_text = wrap_label(au.warn, tr(RS_AUTO_DONT_OFF_TEXT), F20, C_TEXT);
+	lv_obj_set_style_text_align(au.warn_text, LV_TEXT_ALIGN_CENTER, 0);
+
+	lv_obj_t *row = box(body, LV_FLEX_FLOW_ROW);
+	lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
+	lv_obj_set_flex_align(row, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+	au.done = button(row, LV_SYMBOL_OK, tr(RS_DONE), 0, on_auto_done, NULL);
+	lv_obj_set_width(au.done, 200);
+	show(au.done, false);
+	slog("automatic install: showing its progress");
+	cur_refresh = auto_refresh;
+}
+
 /* ------------------------------------------------------------------ tick */
 
 static void tick(lv_timer_t *t)
@@ -2343,10 +2692,28 @@ static void tick(lv_timer_t *t)
 	/* An update started elsewhere (browser upload on :8080): follow it */
 	swu_state s;
 	swu_get(&s);
+	/* An install at start-up (ad5x-recovery-auto): its page, which
+	 * follows SWUpdate itself, over any other (not over a job started
+	 * here) */
+	auto_inst ai;
+	bool auto_on = auto_active(&ai);
+	/* Installing or restarting: SWUpdate's events are its own. A failure
+	 * not yet dismissed isn't: a browser upload then gets its page */
+	bool auto_busy = auto_on && strcmp(ai.state, "failed");
+	if (auto_on && cur_page != page_auto && !job_running() &&
+	    (auto_busy || cur_page != page_job))
+		go(page_auto);
 	static unsigned seen;
 	if (s.seq != seen) {
 		seen = s.seq;
-		if (s.active && cur_page != page_job && !job_running()) {
+		if (s.active && !auto_busy && cur_page != page_job && !job_running()) {
+			if (auto_on) {
+				/* the upload replaces the failure: seen */
+				au_dismissed.ino = ai.ino;
+				au_dismissed.mtime = ai.mtime;
+				au_dismissed.set = true;
+				slog("install result put aside for a browser upload");
+			}
 			memset(&jb, 0, sizeof(jb));
 			jb.kind = JK_WEB;
 			snprintf(jb.title, sizeof(jb.title), "%s", tr(RS_UPDATE));
@@ -2392,6 +2759,111 @@ static void click(lv_obj_t *o)
 {
 	lv_obj_send_event(o, LV_EVENT_CLICKED, NULL);
 	settle(100);
+}
+
+/* Write ad5x-recovery-auto's state file as rc_install_state does */
+static void auto_put(const char *state, unsigned step, long pid)
+{
+	const char *p = rui_get(PATH_AUTO_INSTALL);
+	char tmp[600];
+	snprintf(tmp, sizeof(tmp), "%s.new", p);
+	FILE *f = fopen(tmp, "w");
+	if (!f)
+		return;
+	fprintf(f, "state=%s\nstep=%u\nsteps=3\nfile=ad5x-main-v1.0.0.zip\npid=%ld\n",
+		state, step, pid);
+	fclose(f);
+	rename(tmp, p);
+}
+
+static int auto_shots(void (*shot)(const char *name))
+{
+	int fails = 0;
+	const char *p = rui_get(PATH_AUTO_INSTALL);
+	char dir[600];
+	snprintf(dir, sizeof(dir), "%s", p);
+	char *sl = strrchr(dir, '/');
+	if (sl) {
+		*sl = 0;
+		mkdir(dir, 0755);
+	}
+#define AUTO_CHECK(cond, what) do { \
+		if (cond) { slog("shots: ok   %s", what); } \
+		else { slog("shots: FAIL %s", what); fails++; } } while (0)
+	go(page_home);
+	settle(200);
+	auto_put("check", 1, (long)getpid());
+	settle(400);
+	AUTO_CHECK(cur_page == page_auto, "an install at start-up opens its page");
+	shot("25-auto-check");
+	swu_inject(SWU_START, SWU_SRC_LOCAL, 0, 0, 0, "", NULL);
+	swu_inject(SWU_RUN, SWU_SRC_LOCAL, 2, 1, 40, "rootfs.squashfs", NULL);
+	auto_put("write", 2, (long)getpid());
+	settle(400);
+	AUTO_CHECK(cur_page == page_auto, "SWUpdate's progress stays on the install page");
+	shot("26-auto-write");
+	swu_inject(SWU_SUCCESS, SWU_SRC_LOCAL, 2, 2, 100, "rootfs.squashfs", NULL);
+	swu_inject(SWU_IDLE, SWU_SRC_LOCAL, 0, 0, 0, "", NULL);
+	auto_put("restart", 3, (long)getpid());
+	settle(400);
+	shot("27-auto-restart");
+	auto_put("check", 1, 999999999L);
+	settle(400);
+	AUTO_CHECK(cur_page == page_home, "an install whose process is gone: back home");
+	auto_put("failed", 1, 999999999L);
+	settle(400);
+	AUTO_CHECK(cur_page == page_auto, "a failed install opens the page");
+	shot("28-auto-failed");
+	click(au.done);
+	settle(300);
+	AUTO_CHECK(cur_page == page_home, "Done: home, and it stays there");
+
+	/* A failure, then ad5x-recovery-auto goes on with the next file (the
+	 * drop folder's next one, an autoupdate stick): its progress and
+	 * "Don't switch off" replace the failure */
+	auto_put("failed", 1, (long)getpid());
+	settle(400);
+	AUTO_CHECK(cur_page == page_auto && au.ended, "a failure, before the next file");
+	auto_put("check", 1, (long)getpid());
+	settle(600);
+	AUTO_CHECK(cur_page == page_auto && !au.ended &&
+		   !lv_obj_has_flag(au.warn_title, LV_OBJ_FLAG_HIDDEN) &&
+		   lv_obj_has_flag(au.done, LV_OBJ_FLAG_HIDDEN),
+		   "the next file after a failure: its progress, Don't switch off");
+	shot("28b-auto-next-check");
+	swu_inject(SWU_START, SWU_SRC_LOCAL, 0, 0, 0, "", NULL);
+	swu_inject(SWU_RUN, SWU_SRC_LOCAL, 2, 1, 60, "rootfs.squashfs", NULL);
+	auto_put("write", 2, (long)getpid());
+	settle(400);
+	AUTO_CHECK(cur_page == page_auto && !au.ended, "the next file writing: its page");
+	shot("28c-auto-next-write");
+	swu_inject(SWU_FAILURE, SWU_SRC_LOCAL, 2, 1, 60, "rootfs.squashfs", NULL);
+	swu_inject(SWU_IDLE, SWU_SRC_LOCAL, 0, 0, 0, "", NULL);
+	auto_put("failed", 2, 999999999L);
+	settle(400);
+	AUTO_CHECK(cur_page == page_auto && au.ended &&
+		   !lv_obj_has_flag(au.done, LV_OBJ_FLAG_HIDDEN),
+		   "the next file failing too: the failure again, with Done");
+
+	/* A browser upload while a failure is not dismissed: the upload's
+	 * page, and it stays (the failure counts as seen) */
+	swu_inject(SWU_START, SWU_SRC_WEBSERVER, 0, 0, 0, "", NULL);
+	swu_inject(SWU_DOWNLOAD, SWU_SRC_WEBSERVER, 0, 0, 0, "", NULL);
+	settle(400);
+	AUTO_CHECK(cur_page == page_job && jb.kind == JK_WEB,
+		   "a browser upload over an undismissed failure: its page");
+	swu_inject(SWU_RUN, SWU_SRC_WEBSERVER, 3, 1, 50, "kernel.uimage", NULL);
+	settle(600);
+	AUTO_CHECK(cur_page == page_job, "the browser upload's page stays");
+	swu_inject(SWU_SUCCESS, SWU_SRC_WEBSERVER, 3, 3, 100, "rootfs.squashfs", NULL);
+	swu_inject(SWU_IDLE, SWU_SRC_WEBSERVER, 0, 0, 0, "", NULL);
+	settle(400);
+	go(page_home);
+	settle(400);
+	AUTO_CHECK(cur_page == page_home, "after the upload: home, the failure not back");
+	unlink(p);
+#undef AUTO_CHECK
+	return fails;
 }
 
 int ui_run_shots(void (*shot)(const char *name))
@@ -2494,6 +2966,38 @@ int ui_run_shots(void (*shot)(const char *name))
 	wait_job();
 	shot("16d-return-done");
 
+	/* stock's printer.cfg couldn't be changed: the return went on (the
+	 * sim's ad5x-return-stock says so when sim-cfg-failed is there) */
+	{
+		char cf[600];
+		snprintf(cf, sizeof(cf), "%s", rui_get(PATH_AUTO_INSTALL));
+		char *sl = strrchr(cf, '/');
+		if (sl) {
+			snprintf(sl + 1, sizeof(cf) - (size_t)(sl + 1 - cf), "sim-cfg-failed");
+			*sl = 0;
+			mkdir(cf, 0755);
+			*sl = '/';
+		}
+		FILE *f = fopen(cf, "w");
+		if (f)
+			fclose(f);
+		go(page_return);
+		for (int i = 0; i < 100 && rt.cap; i++)
+			settle(20);
+		settle(200);
+		if (rt.cfg_failed && !lv_obj_has_flag(rt.cfg, LV_OBJ_FLAG_HIDDEN)) {
+			slog("shots: ok   printer.cfg not changed: the return page says so");
+		} else {
+			slog("shots: FAIL printer.cfg not changed: not on the return page");
+			fails++;
+		}
+		shot("16e-return-cfg-failed");
+		return_now();
+		wait_job();
+		shot("16f-return-done-cfg-failed");
+		unlink(cf);
+	}
+
 	go(page_network);
 	settle(600);
 	shot("17-network");
@@ -2560,5 +3064,10 @@ int ui_run_shots(void (*shot)(const char *name))
 	go(page_home);
 	settle(300);
 	shot("24-home-again");
+
+	/* An install at start-up (ad5x-recovery-auto's state file): its page
+	 * opens by itself, takes SWUpdate's progress (not the browser-upload
+	 * page), and a failure stays until Done */
+	fails += auto_shots(shot);
 	return fails;
 }

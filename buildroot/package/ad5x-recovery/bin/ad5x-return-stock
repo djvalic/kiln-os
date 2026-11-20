@@ -57,12 +57,70 @@
 #      a whole SPL or none, never a header in front of half an SPL; the
 #      GPT is never written)
 #   7. stock's own board update armed (Update, UpdateM on usershare) and
-#      the install state set so the Kiln OS install stick works again
+#      the install state set so the Kiln OS install stick works again;
+#      with Kiln's SPL staying, boot.img also into usershare's
+#      kiln-stock-backup/ when it isn't there (the way back to
+#      Flashforge's boot loader then outlives a wipe of /data); and
+#      [include] lines in stock's printer.cfg that stock's Klipper can't
+#      load switched off (zMod leftovers, below); Kiln's record of the IFS
+#      slot in the toolhead dropped from Kiln's variables.cfg (below, never
+#      stops the return either). The boot.img copy and
+#      the printer.cfg edit are tried at every run that gets to step 7
+#      and never stop the return: one that fails is said loudly, logged,
+#      recorded in the state (usboot=failed, cfg=failed; printer.cfg is
+#      then left exactly as it was) and step 7 counts as done; --check
+#      reports it ("config_failed: yes" for the screen) and a later --yes
+#      tries it again. Being held in this recovery OS is worse than
+#      stock's Klipper stopping at a missing include, which the owner can
+#      fix in printer.cfg.
 #   8. the boot flag -> slot B, read back
 # Slot A keeps this recovery OS (and Kiln's 6.6 in p1): if slot B's kernel
 # is ever bad, Kiln's SPL starts slot A instead; stock's own updater writes
 # slot A with its next update anyway. With Flashforge's boot loader in the
 # first MiB (no Kiln boot loader) steps 1, 5 and 6 don't apply.
+#
+# boot.img (this printer's first MiB from before Kiln's boot loader), for
+# Flashforge's SPL and its unused U-Boot bytes, the first that matches:
+# /data/ad5x/stock, the chosen source's, usershare's kiln-stock-backup/, a
+# USB stick's kiln-stock-backup/. One from outside /data is copied to /tmp
+# first (a stick may be pulled).
+#
+# Stock's printer.cfg: stock's Klipper reads /usr/data/config/printer.cfg
+# (config/printer.cfg on this data partition) and stops at start-up
+# ("Unable to open config file", no temperatures, no IFS) when an
+# [include] there names a file that isn't there. zMod (ghzserg's mod)
+# adds such lines (./mod/..., ./mod_data/...), which stay after zMod's own
+# folder (/usr/data/zmod) is gone: its links into it are dead and its
+# mod_data files hold zMod-only sections. Step 7 switches off exactly the
+# [include] lines whose file is missing, and with zMod gone those into
+# mod/ and mod_data/: "#kiln-off (Return to Flashforge: WHY) " in front,
+# which Klipper skips. The old file is kept next to it
+# (printer.cfg.before-kiln-return), every other line and the SAVE_CONFIG
+# block stay byte for byte (checked before the file is replaced), and a
+# second run finds nothing to do. Wildcards and paths outside /usr/data are
+# left alone. The plan lists the lines ("config:" for the screen). If the
+# file can't be written, it stays as it was and the return goes on (step 7
+# above).
+#
+# Kiln's variables.cfg (/data/ad5x/printer_data/config, Klipper's
+# save_variables file, kept for a later install of Kiln OS) names the IFS
+# slot Kiln last loaded into the nozzle. Stock loads and unloads with its
+# own record, so once stock runs Kiln's is unknowable: step 7 drops it
+# (ifs_loaded, its old name ifs_channel, ifs_loaded_source) and the notes
+# of an unfinished slot search (ifs_find_open, ifs_tube_blocked). Kiln OS
+# installed again then knows no slot and finds the one in the toolhead
+# (IFS_FIND_HEAD_SLOT, the setup wizard). Only those [Variables] lines go,
+# every other line stays byte for byte; the new file is written next to
+# it, checked, then renamed over it; a second run finds nothing to do. The
+# installer does the same when it finds Kiln's data from before
+# (tools/install/ad5x-install.sh, ifs_forget, the same code).
+#
+# Lines for the recovery screen (it shows them in its own language, so
+# each English line has a fixed code next to it): "source:" with
+# "source_kind: stock|usershare|copy|backup|package" and "source_file:"
+# (the folder, backup or package name; none for stock and usershare),
+# "target:" with "target_kind: kiln-spl|flashforge-spl|flashforge",
+# "config:" with "config_kind: zmod|missing|mixed" and "config_lines: N".
 #
 # A usershare that Kiln OS's PC tool made after the factory's was lost
 # (tools/ad5x_usershare.py, KILN-GENERATED.txt) is warned about: stock's
@@ -113,7 +171,7 @@ while [ $# -gt 0 ]; do
 	--source) src_arg=$2; shift ;;
 	--flashforge-spl) ffspl=1 ;;
 	--stop-after) stop_after=$2; shift ;;
-	-h|--help) sed -n '2,74p' "$0"; exit 0 ;;
+	-h|--help) sed -n '2,/^# AD5X_RECOVERY_LIB/p' "$0"; exit 0 ;;
 	*) sed -n '2,32p' "$0" >&2; exit 1 ;;
 	esac
 	shift
@@ -240,6 +298,8 @@ if [ "$mode" = status ]; then
 	echo "slot A: kernel $k1, rootfs $(rc_slot_holds rootfs)"
 	echo "boot flag: $fl"
 	echo "record: ${st:-none}$([ -n "$(stval source)" ] && echo " (source $(stval source))")"
+	[ "$(stval cfg)" = failed ] && echo "printer.cfg: couldn't be changed at the return (left as it was)"
+	[ "$(stval usboot)" = failed ] && echo "boot.img: couldn't be copied to usershare at the return (it is in /data/ad5x/stock)"
 	if [ "$st" = started ]; then w=unfinished
 	elif [ "$h4" = stock ] && [ "$k3" = stock ] && [ -z "$UB_HAVE" ] && [ "$fl" = ota:kernel2 ]; then
 		w="stock on $LOADER's boot loader"
@@ -388,12 +448,13 @@ sums_ok() {
 }
 # A stock copy (/data/ad5x/stock or kiln-stock-backup): kernel.img,
 # rootfs.squashfs, SHA256SUMS; boot.img (+ .sha256) if there
-try_copy() {	# DIR DESC
+try_copy() {	# DIR DESC KIND
 	[ -f "$1/kernel.img" ] && [ -f "$1/rootfs.squashfs" ] && [ -f "$1/SHA256SUMS" ] ||
 		{ WHY="no kernel.img, rootfs.squashfs and SHA256SUMS"; return 1; }
 	sums_ok "$1" SHA256SUMS kernel.img rootfs.squashfs || return 1
 	check_set "$1/kernel.img" "$1/rootfs.squashfs" || return 1
-	SK=$1/kernel.img SR=$1/rootfs.squashfs SDESC=$2
+	SK=$1/kernel.img SR=$1/rootfs.squashfs SDESC=$2 SKIND=$3 SFILE=
+	[ "$3" = copy ] && SFILE=$1
 	[ -f "$1/boot.img" ] && BOOT_CANDS="$BOOT_CANDS $1/boot.img"
 	return 0
 }
@@ -407,6 +468,7 @@ try_backup() {	# DIR
 	sums_ok "$1" SHA256SUMS $k $r || return 1
 	check_set "$1/$k" "$1/$r" || return 1
 	SK=$1/$k SR=$1/$r SDESC="the install stick's backup ${1##*/} (stock from slot $sl)"
+	SKIND=backup SFILE=${1##*/}
 	[ -f "$1/boot.img" ] && sums_ok "$1" SHA256SUMS boot.img && BOOT_CANDS="$BOOT_CANDS $1/boot.img"
 	WHY=
 	return 0
@@ -474,6 +536,7 @@ try_tgz() {	# FILE
 	fi
 	check_set "$C/kernel.img" "$C/rootfs.squashfs" || return 1
 	SK=$C/kernel.img SR=$C/rootfs.squashfs SDESC="Flashforge's update package ${F##*/}"
+	SKIND=package SFILE=${F##*/}
 	return 0
 }
 usershare_mount() {	# usershare read-only, once (unmounted at exit)
@@ -487,18 +550,184 @@ usb_tops() {	# the top folders of mounted USB sticks
 	[ -n "$(rc_usb_mounts)" ] || ad5x-usb mount 3 >/dev/null 2>&1
 	rc_usb_mounts
 }
+
+# ------------------------------------------------------------- stock's printer.cfg
+SCFG_DIR=$AD5X_DATA/config
+SCFG=$SCFG_DIR/printer.cfg
+CFG_MARK="#kiln-off"
+TAB=$(printf '\t')
+# sp_exists PATH: PATH as stock sees it (/usr/data/... is this data
+# partition) exists: 0; missing: 1; can't tell (it leads outside
+# /usr/data, e.g. a link into /usr/prog): 2. Links are followed with
+# /usr/data mapped, so zMod's links into /usr/data/zmod count as missing
+# when that folder is gone, whatever this system has at /usr/data.
+sp_exists() {
+	local p cur c t l r n oifs
+	p=$1 n=0
+	while :; do
+		case "$p" in /usr/data|/usr/data/) return 0 ;; /usr/data/*) ;; *) return 2 ;; esac
+		cur=/usr/data
+		set -f; oifs=$IFS; IFS=/; set -- ${p#/usr/data/}; IFS=$oifs; set +f
+		while [ $# -gt 0 ]; do
+			c=$1; shift
+			case "$c" in
+			''|.) continue ;;
+			..) cur=${cur%/*}
+			    case "$cur" in /usr/data|/usr/data/*) continue ;; *) return 2 ;; esac ;;
+			esac
+			l=$AD5X_DATA${cur#/usr/data}/$c
+			if [ -L "$l" ]; then
+				n=$((n + 1)); [ $n -le 20 ] || return 1
+				t=$(readlink "$l")
+				case "$t" in /*) p=$t ;; *) p=$cur/$t ;; esac
+				for r in "$@"; do p=$p/$r; done
+				continue 2
+			elif [ -e "$l" ]; then
+				cur=$cur/$c
+			else
+				return 1
+			fi
+		done
+		return 0
+	done
+}
+# cfg_scan: the [include] lines of stock's printer.cfg that step 7 switches
+# off, in $T/cfg.todo ("N<TAB>WHY<TAB>LINE"); 0 when there are any. As
+# Klipper reads a line: the comment cut at '#', then "[HEADER]" from the
+# start, HEADER "include SPEC". $T/cfg.zmod: zMod's lines left alone
+# because zMod's folder is there.
+cfg_scan() {
+	local zm l n line spec sp norm why
+	: > "$T/cfg.todo"; : > "$T/cfg.zmod"
+	[ -f "$SCFG" ] && [ ! -L "$SCFG" ] || return 1
+	zm=; [ -d "$AD5X_DATA/zmod" ] || zm=gone
+	grep -n '^\[include ' "$SCFG" 2>/dev/null > "$T/cfg.inc"
+	while IFS= read -r l; do
+		n=${l%%:*} line=${l#*:}
+		spec=$(printf '%s\n' "$line" | sed 's/#.*//; s/\r$//')
+		case "$spec" in *']'*) ;; *) continue ;; esac
+		spec=$(printf '%s\n' "$spec" | sed 's/^\[include //; s/\][^]]*$//; s/^[[:space:]]*//; s/[[:space:]]*$//')
+		[ -n "$spec" ] || continue
+		case "$spec" in /*) sp=$spec ;; *) sp=/usr/data/config/$spec ;; esac
+		norm=$(printf '%s\n' "$sp" | sed 's#//*#/#g; s#/\./#/#g; s#/\./#/#g')
+		why=
+		case "$norm" in
+		/usr/data/config/mod/*|/usr/data/config/mod_data/*)
+			if [ -n "$zm" ]; then why="zMod is gone"
+			else printf '%s\t%s\n' "$n" "$line" >> "$T/cfg.zmod"; fi ;;
+		esac
+		if [ -z "$why" ]; then
+			case "$spec" in
+			*'*'*|*'?'*|*'['*) ;;	# a wildcard: Klipper takes none found
+			*) sp_exists "$sp"; [ $? = 1 ] && why="its file is missing" ;;
+			esac
+		fi
+		[ -n "$why" ] && printf '%s\t%s\t%s\n' "$n" "$why" "$line" >> "$T/cfg.todo"
+	done < "$T/cfg.inc"
+	[ -s "$T/cfg.todo" ]
+}
+# cfg_says: what step 7 does to stock's printer.cfg, in a few words (the
+# recovery screen shows it after "Flashforge's printer.cfg:")
+cfg_kind() {	# zmod (all zMod's), missing (all missing files) or mixed
+	if ! cut -f2 "$T/cfg.todo" | grep -qv '^zMod is gone$'; then echo zmod
+	elif ! cut -f2 "$T/cfg.todo" | grep -q '^zMod is gone$'; then echo missing
+	else echo mixed; fi
+}
+cfg_says() {
+	local nl
+	nl=$(wc -l < "$T/cfg.todo" | tr -d ' ')
+	case $(cfg_kind) in
+	zmod) echo "$nl zMod include line(s) to switch off (zMod is gone; the old file is kept)" ;;
+	missing) echo "$nl include line(s) to switch off (their files are missing; the old file is kept)" ;;
+	*) echo "$nl include line(s) to switch off (zMod's, or their files are missing; the old file is kept)" ;;
+	esac
+}
+# cfg_fix: the lines of cfg_scan switched off. The old file first copied
+# (printer.cfg.before-kiln-return, -2, ... : an earlier copy is never
+# replaced), the new one written next to it and checked (taking the marks
+# off again gives the old file byte for byte), then renamed over it. When
+# that fails printer.cfg is as it was and the copy is removed again.
+cfg_fix() {
+	local b i nf n why line
+	cfg_scan || return 0
+	b=$SCFG_DIR/printer.cfg.before-kiln-return i=2
+	while [ -e "$b" ] || [ -L "$b" ]; do b=$SCFG_DIR/printer.cfg.before-kiln-return-$i; i=$((i + 1)); done
+	cp -p "$SCFG" "$b" && sync && cmp -s "$SCFG" "$b" || { rm -f "$b"; return 1; }
+	awk -F"$TAB" -v m="$CFG_MARK" '{ printf "%ss/^/%s (Return to Flashforge: %s) /\n", $1, m, $2 }' "$T/cfg.todo" > "$T/cfg.sed"
+	awk -F"$TAB" -v m="$CFG_MARK" '{ printf "%ss/^%s ([^)]*) //\n", $1, m }' "$T/cfg.todo" > "$T/cfg.unsed"
+	nf=$SCFG.kiln-new
+	rm -f "$nf" 2>/dev/null
+	if cp -p "$SCFG" "$nf" && sed -f "$T/cfg.sed" "$SCFG" > "$nf" && sync &&
+	   sed -f "$T/cfg.unsed" "$nf" | cmp -s - "$SCFG" && ! cmp -s "$nf" "$SCFG"; then
+		:
+	else
+		# printer.cfg untouched: no copy of it left behind either
+		rm -f "$nf" "$b" 2>/dev/null; return 1
+	fi
+	mv -f "$nf" "$SCFG" && sync || { rm -f "$nf" 2>/dev/null; cmp -s "$SCFG" "$b" && rm -f "$b"; return 1; }
+	while IFS="$TAB" read -r n why line; do
+		say "  stock's printer.cfg, line $n switched off ($why): $line"
+	done < "$T/cfg.todo"
+	say "  the old printer.cfg kept as ${b#$AD5X_DATA/}"
+	ad5x-bootlog "return-stock: printer.cfg: $(wc -l < "$T/cfg.todo" | tr -d ' ') include line(s) switched off" 2>/dev/null
+	! cfg_scan
+}
+# ------------------------------------------------------------- Kiln's IFS record
+KVARS=$AD5X_DATA/ad5x/printer_data/config/variables.cfg
+# ifs_forget FILE [check]: the [Variables] lines IFS_FORGET names (and
+# their continuation lines) out of FILE, a Klipper save_variables file.
+# Prints the names dropped (check: the names it would drop, nothing
+# written). 0 done or nothing to do, 1 FILE left as it was. The same in
+# tools/install/ad5x-install.sh.
+IFS_FORGET="ifs_loaded ifs_channel ifs_loaded_source ifs_find_open ifs_tube_blocked"
+ifs_forget() {
+	local f nf t n n0 n1 n2
+	f=$1 nf=$1.kiln-new t=$T/ifs-forget
+	[ -f "$f" ] && [ ! -L "$f" ] || return 0
+	awk -v names="$IFS_FORGET" -v gone="$t" '
+	BEGIN { n = split(names, a, " "); for (i = 1; i <= n; i++) del[a[i]] = 1; printf "" > gone }
+	{
+		l = $0; sub(/\r$/, "", l); d = 0
+		if (l ~ /^\[/) {
+			s = l; sub(/^\[[ \t]*/, "", s); sub(/[ \t]*\].*$/, "", s); sec = tolower(s); c = 0
+		} else if (c && l ~ /^[ \t]/ && l ~ /[^ \t]/) {
+			d = 1
+		} else {
+			c = 0
+			if (sec == "variables" && l ~ /^[^ \t]/) {
+				k = l; sub(/[ \t]*[=:].*$/, "", k); k = tolower(k)
+				if (k in del) { d = 1; c = 1; print "@" k > gone }
+			}
+		}
+		if (d) print "-" > gone
+		else print $0
+	}' "$f" > "$t.keep" || { rm -f "$t" "$t.keep"; return 1; }
+	n=$(sed -n 's/^@//p' "$t" | tr '\n' ' ' | sed 's/ $//')
+	if [ -z "$n" ]; then rm -f "$t" "$t.keep"; return 0; fi
+	if [ "${2:-}" = check ]; then echo "$n"; rm -f "$t" "$t.keep"; return 0; fi
+	n0=$(awk 'END { print NR }' "$f") n1=$(awk 'END { print NR }' "$t.keep") n2=$(grep -c '^-' "$t")
+	if [ -e "$nf" ] && [ ! -f "$nf" ]; then rm -f "$t" "$t.keep"; return 1; fi
+	rm -f "$nf" 2>/dev/null
+	if [ "$n0" = $((n1 + n2)) ] && cp -p "$f" "$nf" && cat "$t.keep" > "$nf" && sync &&
+	   cmp -s "$t.keep" "$nf" && mv -f "$nf" "$f" && sync; then
+		rm -f "$t" "$t.keep"; echo "$n"; return 0
+	fi
+	rm -f "$t" "$t.keep" "$nf" 2>/dev/null
+	return 1
+}
+
 # try SPEC: one source; prints what was tried
-SK= SR= SDESC= SSPEC= BOOT_CANDS= tried=
+SK= SR= SDESC= SKIND= SFILE= SSPEC= BOOT_CANDS= tried=
 try() {
 	local ts r
 	ts=$1 WHY=
 	case "$ts" in
-	stock) try_copy "$AD5X_DATA/ad5x/stock" "the stock copy saved on this printer (/data/ad5x/stock)" ;;
-	usershare) if usershare_mount; then try_copy "$us_mnt/$MARK" "the stock copy on the usershare partition"
+	stock) try_copy "$AD5X_DATA/ad5x/stock" "the stock copy saved on this printer (/data/ad5x/stock)" stock ;;
+	usershare) if usershare_mount; then try_copy "$us_mnt/$MARK" "the stock copy on the usershare partition" usershare
 		   else WHY="usershare doesn't mount"; false; fi ;;
 	*.tgz|*.TGZ) try_tgz "$ts" ;;
 	*) if [ -f "$ts/MANIFEST.txt" ] && grep -q '^running root: ' "$ts/MANIFEST.txt"; then try_backup "$ts"
-	   else try_copy "$ts" "the stock copy in $ts"; fi ;;
+	   else try_copy "$ts" "the stock copy in $ts" copy; fi ;;
 	esac
 	r=$?
 	if [ $r = 0 ]; then SSPEC=$ts; else tried="$tried
@@ -526,6 +755,9 @@ if [ -n "$found" ]; then
 	ok "stock files: $SDESC"
 	ok "  kernel '$(uimage_name "$SK")', $KLEN bytes; root $RLEN bytes (stock squashfs)"
 	say "source: $SDESC"
+	# the same for the screen, which says it in its own language
+	say "source_kind: $SKIND"
+	[ -z "$SFILE" ] || say "source_file: $SFILE"
 else
 	bad "no Flashforge stock files found. Tried:${tried:- nothing}"
 	say "  Put Flashforge's update file (AD5X-*.tgz, from Flashforge's website) on a USB stick and check again"
@@ -544,21 +776,43 @@ fi
 # boot.img for Flashforge's SPL (and its unused U-Boot bytes at 0xA400):
 # this printer's own first MiB, Flashforge's SPL, the same GPT, this
 # board's DDR table (ddr_matches), equal to the disk outside Kiln's ranges
-BOOT=
+# in this order: /data/ad5x/stock, the source's, usershare's copy, then
+# (only when none of those matches) a USB stick's copy
+BOOT= BOOT_SHOWN=
 [ -f "$AD5X_DATA/ad5x/stock/boot.img" ] && BOOT_CANDS="$AD5X_DATA/ad5x/stock/boot.img $BOOT_CANDS"
-if [ "$LOADER" = kiln ] && [ -n "$disk_ok" ]; then
+boot_pick() {	# CANDIDATE...: the first that matches -> BOOT
+	local b end
 	end=${UB_END:-$UB_OFF}
-	for b in $BOOT_CANDS; do
+	for b in "$@"; do
+		[ -f "$b" ] || continue
 		[ "$(fsize "$b")" = $MIB ] || continue
 		if [ -f "$b.sha256" ]; then [ "$(sha "$b")" = "$(cut -d' ' -f1 "$b.sha256")" ] || continue; fi
 		banner "$b" | grep -q '^U-Boot SPL 2013\.07' || continue
 		rc_boot_check "$b" >/dev/null 2>&1 || continue
 		diff_outside "$b" "$REF" "$end" || continue
 		ddr_matches "$b" || continue
-		BOOT=$b; break
+		BOOT=$b; return 0
 	done
+	return 1
+}
+if [ "$LOADER" = kiln ] && [ -n "$disk_ok" ]; then
+	us_boot=
+	usershare_mount && us_boot=$us_mnt/$MARK/boot.img
+	if ! boot_pick $BOOT_CANDS $us_boot; then
+		usb_boot=
+		for m in $(usb_tops); do usb_boot="$usb_boot $m/$MARK/boot.img"; done
+		boot_pick $usb_boot
+	fi
+	BOOT_SHOWN=$BOOT
+	# one from outside /data (usershare, a stick): a copy in /tmp, with its sha256 file
+	case "$BOOT" in
+	''|"$AD5X_DATA"/*) ;;
+	*)	mkdir -p "$T/boot" && cp "$BOOT" "$T/boot/boot.img" &&
+		{ [ ! -f "$BOOT.sha256" ] || cp "$BOOT.sha256" "$T/boot/boot.img.sha256"; } &&
+		cmp -s "$BOOT" "$T/boot/boot.img" && BOOT=$T/boot/boot.img || BOOT= ;;
+	esac
 	if [ -n "$BOOT" ]; then
-		ok "this printer's Flashforge boot loader ($BOOT): matches the disk; offered (--flashforge-spl)"
+		ok "this printer's Flashforge boot loader ($BOOT_SHOWN): matches the disk; offered (--flashforge-spl)"
 		say "spl_option: yes"
 	else
 		note "no saved Flashforge first MiB that matches this disk: Kiln's SPL stays (it starts stock as Flashforge's does)"
@@ -574,11 +828,14 @@ PLAN_SPL=kiln
 if [ "$LOADER" = kiln ]; then
 	if [ -n "$ffspl" ]; then
 		say "target: Flashforge's firmware in the main slot, and Flashforge's own boot loader back; this recovery stays in slot A"
+		say "target_kind: flashforge-spl"
 	else
 		say "target: Flashforge's firmware in the main slot, started by Kiln's boot loader as Flashforge's would (its second stage, U-Boot, removed); this recovery stays in slot A"
+		say "target_kind: kiln-spl"
 	fi
 else
 	say "target: Flashforge's firmware in the main slot (Flashforge's boot loader stays); this recovery stays in slot A"
+	say "target_kind: flashforge"
 fi
 # An unfinished return with Flashforge's SPL chosen goes on with it
 if [ "$(stval state)" = started ] && [ "$(stval spl)" = flashforge ] && [ -z "$ffspl" ] && [ "$LOADER" = kiln ]; then
@@ -587,6 +844,54 @@ if [ "$(stval state)" = started ] && [ "$(stval spl)" = flashforge ] && [ -z "$f
 		note "the unfinished return chose Flashforge's boot loader too: going on with it"
 	fi
 fi
+
+# boot.img into usershare's kiln-stock-backup/ at step 7: Kiln's SPL stays
+# and usershare has no copy of this boot.img yet
+US_BOOT=
+us_has_boot() {	# usershare's kiln-stock-backup/ holds this boot.img
+	usershare_mount && [ -f "$us_mnt/$MARK/boot.img" ] && cmp -s "$us_mnt/$MARK/boot.img" "$BOOT"
+}
+if [ -n "$BOOT" ] && [ -z "$ffspl" ] && [ "$LOADER" = kiln ]; then
+	if us_has_boot; then
+		ok "boot.img: usershare's kiln-stock-backup has it too (the way back to Flashforge's boot loader after a wipe of /data)"
+	else
+		US_BOOT=1
+		if [ "$(stval usboot)" = failed ]; then
+			note "boot.img: not on usershare; the last try to copy it there failed (the return went on); step 7 tries again"
+		else
+			note "boot.img: not on usershare yet; step 7 copies it into usershare's kiln-stock-backup/ (the way back to Flashforge's boot loader after a wipe of /data)"
+		fi
+	fi
+fi
+# stock's printer.cfg (step 7)
+if cfg_scan; then
+	note "stock's printer.cfg (/usr/data/config/printer.cfg): stock's Klipper can't load these [include] lines; step 7 switches them off, the old file kept as printer.cfg.before-kiln-return:"
+	while IFS="$TAB" read -r n why line; do
+		say "          line $n: $line ($why)"
+	done < "$T/cfg.todo"
+	say "config: $(cfg_says)"
+	say "config_kind: $(cfg_kind)"
+	say "config_lines: $(wc -l < "$T/cfg.todo" | tr -d ' ')"
+	if [ "$(stval cfg)" = failed ]; then
+		note "stock's printer.cfg couldn't be changed at the last try: it was left as it was and the return went on; --yes tries again"
+		# for the page; --yes says it at its end, after its own try
+		[ "$mode" = yes ] || say "config_failed: yes"
+	fi
+elif [ -L "$SCFG" ]; then
+	note "stock's printer.cfg is a link: left as it is"
+elif [ -f "$SCFG" ] && [ ! -s "$T/cfg.zmod" ]; then
+	ok "stock's printer.cfg: every [include] there loads"
+fi
+if [ -s "$T/cfg.zmod" ]; then
+	note "stock's printer.cfg has zMod's include lines and zMod's folder is still on the data partition (/data/zmod): left as they are"
+	while IFS="$TAB" read -r n line; do
+		say "          line $n: $line"
+	done < "$T/cfg.zmod"
+fi
+
+# Kiln's record of the IFS slot in the toolhead (step 7)
+kv=$(ifs_forget "$KVARS" check)
+[ -n "$kv" ] && note "Kiln's variables.cfg names the IFS slot in the toolhead ($kv): step 7 drops it (stock loads and unloads with its own record; Kiln OS installed again finds the slot)"
 
 # ------------------------------------------------------------- the steps
 # done_N: step N is done on the disk (or doesn't apply)
@@ -613,12 +918,35 @@ done_6() {
 	[ -z "$ffspl" ] && return 0
 	read_range "$DISK" 0 $((UB_OFF / 512)) "$T/spl" && head -c $UB_OFF "$BOOT" | cmp -s - "$T/spl"
 }
-done_7() { [ "$(stval boards)" = armed ]; }
+# step 7: the boards armed; boot.img on usershare and printer.cfg's lines
+# off, or their try failed (recorded: they never hold the return). This
+# run's own results count too (ARMED, CFG_FAILED, USBOOT_FAILED): a data
+# partition too full to write printer.cfg can't take the state either
+ARMED= CFG_FAILED= USBOOT_FAILED=
+done_7() {
+	[ -n "$ARMED" ] || [ "$(stval boards)" = armed ] || return 1
+	if cfg_scan; then [ -n "$CFG_FAILED" ] || [ "$(stval cfg)" = failed ] || return 1; fi
+	if [ -n "$US_BOOT" ] && ! us_has_boot; then
+		[ -n "$USBOOT_FAILED" ] || [ "$(stval usboot)" = failed ] || return 1
+	fi
+	return 0
+}
+# what step 7 left undone, for the plan's "done"
+done_7_left() {
+	local w
+	w=
+	cfg_scan && [ "$(stval cfg)" = failed ] && w="stock's printer.cfg couldn't be changed (left as it was)"
+	[ -n "$US_BOOT" ] && [ "$(stval usboot)" = failed ] && ! us_has_boot && w="${w:+$w; }boot.img not copied to usershare"
+	[ -n "$w" ] && echo " ($w; --yes tries again)"
+	return 0
+}
 done_8() { [ "$(rc_read_flag)" = ota:kernel2 ]; }
 NAME_1="Kiln's U-Boot out of 0xA400" NAME_2="U-Boot's settings in ota cleared"
 NAME_3="rootfs2 (p4) <- stock root" NAME_4="kernel2 (p3) <- stock kernel"
 NAME_5="kernel (p1) <- stock kernel" NAME_6="Flashforge's boot loader (SPL)"
 NAME_7="stock's board update armed, install state set" NAME_8="boot flag -> slot B"
+[ -n "$US_BOOT" ] && NAME_7="$NAME_7, boot.img to usershare"
+[ -s "$T/cfg.todo" ] && NAME_7="$NAME_7, $(wc -l < "$T/cfg.todo" | tr -d ' ') line(s) of stock's printer.cfg switched off"
 applies() {
 	case "$1" in
 	1) [ "$LOADER" = kiln ] ;;
@@ -633,9 +961,13 @@ if [ "$nfail" = 0 ]; then
 	for n in 1 2 3 4 5 6 7 8; do
 		eval "nm=\$NAME_$n"
 		if ! applies $n; then continue
-		elif done_$n; then say "  $n. $nm: done"; ndone=$((ndone + 1))
+		elif done_$n; then say "  $n. $nm: done$([ $n = 7 ] && done_7_left)"; ndone=$((ndone + 1))
 		else say "  $n. $nm"; todo="$todo $n"; fi
 	done
+	# step 7's parts that failed before: --yes tries them again
+	if [ "$mode" = yes ] && [ -n "$(done_7_left)" ]; then
+		case " $todo " in *" 7 "*) ;; *) todo=$(for n in $todo 7; do echo $n; done | sort -n | tr '\n' ' ') ;; esac
+	fi
 fi
 say ""
 if [ "$nfail" != 0 ]; then
@@ -645,7 +977,7 @@ fi
 if [ -z "$todo" ]; then
 	# all on the disk: the record says so too (a power cut right after the flag)
 	[ "$(stval state)" = started ] && stset state done
-	say "result: done: Flashforge's stock system is in slot B and the boot flag points at it. Switch the printer off and on"
+	say "result: done: Flashforge's stock system is in slot B and the boot flag points at it. Switch the printer off and on$(cfg_scan && [ "$(stval cfg)" = failed ] && echo ". Stock's printer.cfg couldn't be changed: see above")"
 	exit 0
 fi
 if [ "$mode" != yes ]; then
@@ -771,41 +1103,124 @@ step_6() {
 # disk, the SPL's header sector zeroed first and written last, each read
 # back (lib/bootloader.sh)
 put_spl() { BL_TMP=$T bl_put_spl "$1" "$DISK"; }
-arm_boards() {	# stock's own board update at its first start (Update, UpdateM)
-	local m c r
+# us_rw: usershare read-write for a moment at US_RW (us_rw_end ends it):
+# the read-only mount (the stock files may come from there) remounted, or
+# a mount of its own
+US_RW=
+us_rw() {
 	if [ -n "$us_mnt" ]; then
-		# mounted read-only: the stock files come from there; rw for a moment
-		m=$us_mnt
-		mount -o remount,rw "$m" 2>/dev/null || return 1
+		US_RW=$us_mnt
+		mount -o remount,rw "$US_RW" 2>/dev/null || { US_RW=; return 1; }
 	else
-		m=$AD5X_RUN/return-stock-us-rw
-		mkdir -p "$m"
-		mount -t ext4 "$P6" "$m" 2>/dev/null || { rmdir "$m"; return 1; }
+		US_RW=$AD5X_RUN/return-stock-us-rw
+		mkdir -p "$US_RW"
+		mount -t ext4 "$P6" "$US_RW" 2>/dev/null || { rmdir "$US_RW"; US_RW=; return 1; }
 	fi
-	c=$(ls -d "$m"/PROGRAM/control/[0-9]* 2>/dev/null | awk -F/ '{ split($NF, v, ".");
+}
+us_rw_end() {
+	sync
+	if [ "$US_RW" = "$us_mnt" ]; then mount -o remount,ro "$US_RW" 2>/dev/null
+	else umount "$US_RW"; rmdir "$US_RW" 2>/dev/null; fi
+	US_RW=
+	return 0
+}
+arm_boards() {	# stock's own board update at its first start (Update, UpdateM)
+	local c r
+	us_rw || return 1
+	c=$(ls -d "$US_RW"/PROGRAM/control/[0-9]* 2>/dev/null | awk -F/ '{ split($NF, v, ".");
 		printf "%06d%06d%06d %s\n", v[1], v[2], v[3], $0 }' | sort | tail -n 1 | cut -d' ' -f2)
 	r=1
 	[ -n "$c" ] && [ -f "$c/AD5X.bin" ] && touch "$c/Update" "$c/UpdateM" && r=0
-	sync
-	if [ "$m" = "$us_mnt" ]; then mount -o remount,ro "$m" 2>/dev/null
-	else umount "$m"; rmdir "$m" 2>/dev/null; fi
+	us_rw_end
 	return $r
 }
+# boot_to_us M: boot.img (with boot.img.sha256 and .info) into M/kiln-stock-backup/
+# (usershare mounted read-write at M), only there, only when 64 MiB stay
+# free for stock; temporary names, boot.img renamed last, read back
+boot_to_us() {
+	local d nb have
+	d=$1/$MARK
+	[ -L "$d" ] && return 1
+	[ -f "$d/boot.img" ] && cmp -s "$d/boot.img" "$BOOT" && return 0
+	have=$(df -k "$1" 2>/dev/null | awk 'NR == 2 { print $4 }')
+	[ -n "$have" ] && [ "$have" -ge $((65536 + 1100)) ] || return 1
+	mkdir -p "$d" || return 1
+	nb=$d/.boot.img.new
+	rm -f "$nb" "$nb.sha256" "$nb.info"
+	cp "$BOOT" "$nb" && echo "$(sha "$BOOT")  boot.img" > "$nb.sha256" &&
+		echo "Flashforge's boot loader: $(banner "$BOOT")" > "$nb.info" && sync &&
+		cmp -s "$BOOT" "$nb" &&
+		mv -f "$nb.info" "$d/boot.img.info" && mv -f "$nb.sha256" "$d/boot.img.sha256" &&
+		mv -f "$nb" "$d/boot.img" && sync || { rm -f "$nb" "$nb.sha256" "$nb.info"; return 1; }
+	say "  boot.img copied to usershare's $MARK/ (the way back to Flashforge's boot loader after a wipe of /data)"
+}
+# step_7_more: boot.img onto usershare and stock's printer.cfg, tried at
+# every step 7; neither fails the step (step 7 above)
+step_7_more() {
+	local r n why line
+	if [ -n "$US_BOOT" ] && ! us_has_boot; then
+		r=1
+		if us_rw; then boot_to_us "$US_RW"; r=$?; us_rw_end; fi
+		if [ $r = 0 ] && us_has_boot; then
+			stset usboot done
+		else
+			USBOOT_FAILED=1
+			stset usboot failed
+			note "boot.img couldn't be copied to usershare's $MARK/ (it stays in /data/ad5x/stock); the return goes on, a later run tries again"
+			ad5x-bootlog "return-stock: boot.img not copied to usershare" 2>/dev/null
+		fi
+	fi
+	# stock's printer.cfg: the [include] lines stock's Klipper can't load off
+	if cfg_scan; then
+		if cfg_fix; then
+			stset cfg done
+		else
+			CFG_FAILED=1
+			stset cfg failed
+			say "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+			say "!! stock's printer.cfg couldn't be changed ($SCFG): it is left as it was."
+			say "!! The return goes on without it. Stock's Klipper may stop at start-up until"
+			say "!! these [include] lines are removed from it or commented out (a # in front):"
+			cfg_scan
+			while IFS="$TAB" read -r n why line; do
+				say "!!   line $n: $line ($why)"
+			done < "$T/cfg.todo"
+			say "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+			ad5x-bootlog "return-stock: printer.cfg couldn't be changed (left as it was)" 2>/dev/null
+		fi
+	elif [ "$(stval cfg)" = failed ]; then
+		stset cfg done
+	fi
+	return 0
+}
 step_7() {
-	if arm_boards; then
-		say "  stock's board update armed: at its first start stock writes its own board firmware back"
-	else
-		note "couldn't arm stock's board update (usershare): if the boards keep Kiln OS's Klipper, docs/mcu-flashing.md"
+	if [ "$(stval boards)" != armed ]; then
+		if arm_boards; then
+			say "  stock's board update armed: at its first start stock writes its own board firmware back"
+		else
+			note "couldn't arm stock's board update (usershare): if the boards keep Kiln OS's Klipper, docs/mcu-flashing.md"
+		fi
+		# Kiln OS's record of its eboard flash no longer holds
+		rm -f "$AD5X_DATA/ad5x/mcu/eboard"
+		# Nor its record of the IFS slot in the toolhead (never stops the
+		# return; before boards=armed: a stop here does it again)
+		if kv=$(ifs_forget "$KVARS"); then
+			[ -n "$kv" ] && say "  Kiln's variables.cfg: the IFS slot record dropped ($kv)"
+		else
+			note "Kiln's variables.cfg couldn't be changed (left as it was): Kiln OS installed again may take a wrong IFS slot as loaded; its installer tries again"
+			ad5x-bootlog "return-stock: variables.cfg couldn't be changed (left as it was)" 2>/dev/null
+		fi
+		# The Kiln OS install stick installs again without ad5x-install-retry
+		if [ -d "$AD5X_DATA/ad5x/install" ]; then
+			echo "state=returned" > "$AD5X_DATA/ad5x/install/state"
+			echo "$(date '+%Y-%m-%d %H:%M:%S') Kiln OS removed (Return to Flashforge firmware, $SDESC): a new install is accepted" \
+				>> "$AD5X_DATA/ad5x/install/install.log"
+		fi
+		stset boards armed
 	fi
-	# Kiln OS's record of its eboard flash no longer holds
-	rm -f "$AD5X_DATA/ad5x/mcu/eboard"
-	# The Kiln OS install stick installs again without ad5x-install-retry
-	if [ -d "$AD5X_DATA/ad5x/install" ]; then
-		echo "state=returned" > "$AD5X_DATA/ad5x/install/state"
-		echo "$(date '+%Y-%m-%d %H:%M:%S') Kiln OS removed (Return to Flashforge firmware, $SDESC): a new install is accepted" \
-			>> "$AD5X_DATA/ad5x/install/install.log"
-	fi
-	stset boards armed
+	ARMED=1
+	step_7_more
+	done_7
 }
 step_8() {
 	say "  boot flag -> slot B"
@@ -834,5 +1249,10 @@ stset state done
 rm -f "$RS/before-spl.img"
 ad5x-bootlog "return-stock: done" 2>/dev/null
 prog 100 "Done"
-say "result: done. Switch the printer off and on: Flashforge's firmware starts"
+cfgw=
+if [ -n "$CFG_FAILED" ] || { [ "$(stval cfg)" = failed ] && cfg_scan; }; then
+	say "config_failed: yes"
+	cfgw=". Stock's printer.cfg couldn't be changed: remove the [include] lines listed above if stock's Klipper doesn't start"
+fi
+say "result: done. Switch the printer off and on: Flashforge's firmware starts$cfgw"
 exit 0

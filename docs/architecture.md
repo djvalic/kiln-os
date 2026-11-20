@@ -109,12 +109,13 @@ the files it reads and writes: [boot-order.md](boot-order.md).
 | Screen in the browser | `ad5x-fbstream` streams the displayed framebuffer (through DRM on 7.3, else `/dev/fb0`) with touch | `buildroot/package/ad5x-system/src/ad5x-fbstream.c` | `S65ad5x-screen` |
 | Update agent | Root loop that carries out what Moonraker and Klipper ask for: install an update or a daily package, restart Moonraker, start, stop or restart a service (Fluidd's service buttons, Moonraker's `kiln_agent` provider), retry the kernel, boot recovery, run a plugin's root scripts | `S68ad5x-update-agent`, `bin/ad5x-update` | `S68ad5x-update-agent` |
 | Plugin root scripts | The update agent runs a plugin's `root/install.sh`, `update.sh`, `uninstall.sh` when Klipper asks (enabled with `ROOT=1`, updated, disabled); the boot runner starts the boot scripts plugins left in `/data/ad5x/plugins-root/init.d` ([plugin-root-hooks.md](plugin-root-hooks.md)) | `lib/plugin-root.sh`, `S69ad5x-plugin-boot`, `klipper/extras/ad5x_plugins.py` | `S68ad5x-update-agent`, `S69ad5x-plugin-boot` |
+| Network | NetworkManager (Ethernet, Wi-Fi, `nmcli` for HelixScreen) with connections made from `network.conf` and `wpa_supplicant.conf` at every start and Wi-Fi networks written back; the old `wpa_supplicant`/`udhcpc` way as a choice and safety net ([network.md](network.md)) | `S40ad5x-network`, `lib/ad5x_network.py`, `board/ad5x/rootfs-overlay/etc/NetworkManager/`, `board/ad5x/network-nm.sh`; the old way `S41ad5x-eth`, `S42ad5x-wifi`, `lib/network.sh` | `S40ad5x-network`, `S45NetworkManager` (or `S41`/`S42`) |
 | SSH | Dropbear, root login | board overlay `S50dropbear` | `S50dropbear` |
 
 Kiln's own shell tools (`ad5x-update`, `ad5x-kernel`, `ad5x-mcu`,
 `ad5x-vendor`, `ad5x-restore-stock`, ...) are in
 `buildroot/package/ad5x-system/bin/`, and the helpers they share
-(`slot.sh`, `kernel.sh`, `network.sh`, `apps.sh`, `logs.sh`) in
+(`slot.sh`, `kernel.sh`, `network.sh`, `ad5x_network.py`, `apps.sh`, `logs.sh`) in
 `buildroot/package/ad5x-system/lib/`. A few runtime programs are Python
 files in `tools/` that the image installs (`boot_eboard.py`,
 `flash_iap.py`, `flash_n32.py`, `mcu_version.py`, `ad5x_unit_cfg.py`;

@@ -47,10 +47,14 @@ status|"")
 	# history: "UPTIME slot S RELEASE failed|failed: WHY|unfinished: WHY|
 	# retried: WHY"
 	# (UPTIME: at the jump, not when it failed; records from before issue #42
-	# end in "failed" and say neither why nor when)
+	# end in "failed" and say neither why nor when). The recovery OS adds
+	# its own lines ("recovery OS: ..."): shown as they are when newest,
+	# and never read as a start record.
 	if [ -f $D/history ]; then
-		tail -1 $D/history | {
-			read -r _ _ slot r what
+		h=$(tail -1 $D/history)
+		case "$h" in "recovery OS: "*) echo "$h" ;; esac
+		grep -v '^recovery OS: ' $D/history | tail -1 | {
+			read -r _ _ slot r what || exit 0
 			case "$what" in
 			unfinished:*) k="last unfinished start" ;;
 			retried:*) k="last retry" ;;

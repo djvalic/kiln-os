@@ -68,6 +68,7 @@ install_q_text	Install %s into the main OS slot (B)? The system there now is rep
 install_q_text2	SWUpdate checks the signature, then writes slot B. Don't switch the printer off until it says done.
 checking_update	Checking update
 no_update_fmt	No .swu or .zip update found.\nCopy one to %s or to the top folder of a USB stick, or upload it from a browser.
+swu_staged	staged
 upload_hint	Or upload from a browser:  http://%s:8080
 upload_hint_nonet	Or upload from a browser on port 8080 (no network yet)
 mounting	Mounting
@@ -87,6 +88,7 @@ also_userdata	Also userdata (5.8 GB, slow)
 restore_title	Restore from USB
 pick_backup	Pick a backup on the left.
 partitions_to_write	Partitions to write back:
+n_partitions	%d partitions
 greyed_out	Greyed out: recovery's own slot and the boot area (command line only).
 restore_dry_run	Restore (dry run)
 restoring	Restoring
@@ -109,7 +111,20 @@ stock_backup_first	Back up first to keep this system. You'll be asked twice befo
 rs_title	Return to Flashforge firmware
 rs_text	Puts Flashforge's own firmware back into the main slot and starts it. Kiln OS in the main slot is removed. This recovery stays as a safety net.
 rs_files	Flashforge files: %s
+rs_src_stock	the stock copy saved on this printer (/data/ad5x/stock)
+rs_src_usershare	the stock copy on the usershare partition
+rs_src_copy	the stock copy in %s
+rs_src_backup	the install stick's backup %s
+rs_src_package	Flashforge's update package %s
 rs_after	After it: %s
+rs_after_kiln	Flashforge's firmware in the main slot, started by Kiln's boot loader as Flashforge's would (its second stage, U-Boot, removed); this recovery stays in slot A
+rs_after_ffspl	Flashforge's firmware in the main slot, and Flashforge's own boot loader back; this recovery stays in slot A
+rs_after_ff	Flashforge's firmware in the main slot (Flashforge's boot loader stays); this recovery stays in slot A
+rs_config	Flashforge's printer.cfg: %s
+rs_cfg_zmod	Flashforge's printer.cfg: %d zMod include line(s) to switch off (zMod is gone; the old file is kept)
+rs_cfg_missing	Flashforge's printer.cfg: %d include line(s) to switch off (their files are missing; the old file is kept)
+rs_cfg_mixed	Flashforge's printer.cfg: %d include line(s) to switch off (zMod's, or their files are missing; the old file is kept)
+rs_cfg_failed	Flashforge's printer.cfg couldn't be changed and was left as it was. The return went on, but Flashforge's Klipper may not start until the [include] lines for missing files (zMod's) are removed.
 rs_checking	Looking for Flashforge's files…
 rs_ready	Ready. Nothing is written before you tap Return to Flashforge.
 rs_resume	A return was stopped before it finished (for example by a power cut). Tap Continue to finish it.
@@ -199,3 +214,13 @@ job_done	%s: done
 job_stopped	%s: stopped
 update_failed	Update failed (see log)
 job_failed	%s: failed (exit %d)
+auto_title	Installing Kiln OS
+auto_step_fmt	Step %u of %u: %s
+auto_step_check	Unpacking and checking the update
+auto_step_write	Writing Kiln OS
+auto_step_restart	Restarting into Kiln OS
+auto_dont_off	Don't switch the printer off
+auto_dont_off_text	This takes a few minutes. The printer restarts by itself when it is done.
+auto_restart_text	Kiln OS starts next. Its first start takes a few minutes more.
+auto_failed	Kiln OS was not installed
+auto_failed_text	The update failed. The printer stays in the recovery OS. Logs > Updates says why.

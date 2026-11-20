@@ -36,7 +36,8 @@ BR2_ROOTFS_DEVICE_CREATION_DYNAMIC_EUDEV=y
 # eboard, ttyS7 weighing board.
 BR2_TARGET_GENERIC_GETTY_PORT="ttyS0"
 BR2_TARGET_GENERIC_GETTY_BAUDRATE_115200=y
-# eth0 is set up by S41ad5x-eth (stock MAC, DHCP)
+# eth0 and wlan0: NetworkManager, or the old path S41ad5x-eth (stock MAC,
+# DHCP) and S42ad5x-wifi (S40ad5x-network chooses, docs/network.md)
 BR2_TARGET_TZ_INFO=y
 BR2_ROOTFS_USERS_TABLES="$(BR2_EXTERNAL_AD5X_PATH)/board/ad5x/users.table"
 BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_AD5X_PATH)/board/ad5x/rootfs-overlay"
@@ -64,6 +65,17 @@ BR2_PACKAGE_WPA_SUPPLICANT=y
 BR2_PACKAGE_WPA_SUPPLICANT_NL80211=y
 BR2_PACKAGE_WPA_SUPPLICANT_CLI=y
 BR2_PACKAGE_WPA_SUPPLICANT_PASSPHRASE=y
+# NetworkManager runs the network (docs/network.md): Ethernet and Wi-Fi,
+# DHCP with its internal client, nmcli for HelixScreen's NetworkManager
+# backend. wpa_supplicant stays: NetworkManager drives it over D-Bus, and
+# the old path (S42ad5x-wifi) runs it as before. Nothing else: no
+# ModemManager, PPP, OVS, nmtui, polkit or TLS library (no gnutls/NSS:
+# crypto=null, only 802.1X certificates would need one); unused parts
+# dropped in board/ad5x/post-build.sh. The recovery OS has none of it.
+BR2_PACKAGE_WPA_SUPPLICANT_DBUS=y
+BR2_PACKAGE_DBUS=y
+BR2_PACKAGE_NETWORK_MANAGER=y
+BR2_PACKAGE_NETWORK_MANAGER_CLI=y
 BR2_PACKAGE_IW=y
 BR2_PACKAGE_WIRELESS_REGDB=y
 BR2_PACKAGE_CHRONY=y

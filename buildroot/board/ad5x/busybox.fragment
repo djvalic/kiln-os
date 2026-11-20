@@ -9,3 +9,7 @@ CONFIG_FEATURE_SWAPON_PRI=y
 # doesn't run (docs/memory.md)
 # CONFIG_CROND is not set
 # CONFIG_CRONTAB is not set
+# inotifyd: S40ad5x-network writes the Wi-Fi networks NetworkManager saves
+# back to /data/ad5x/wpa_supplicant.conf as soon as it saves them
+# (docs/network.md)
+CONFIG_INOTIFYD=y

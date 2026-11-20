@@ -81,7 +81,13 @@ start)
 	# of their own (up to a multiple of the CPU count), each keeping its
 	# freed memory; Moonraker's worker threads made 6 extra ones, about
 	# 3.5 MiB (docs/memory.md). Two: the main one and one shared.
+	# DBUS_SYSTEM_BUS_ADDRESS: no system bus for Moonraker. The main OS
+	# runs dbus-daemon for NetworkManager now (docs/network.md), but
+	# nothing Moonraker does here uses the bus (the kiln_agent provider,
+	# patch 0006): with this its dbus_manager stays as before, without
+	# dbus_fast in memory (patch 0009).
 	HOME=/home/klipper TMPDIR=$MTMP MALLOC_ARENA_MAX=2 \
+	DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/ad5x-no-bus-for-moonraker \
 		start-stop-daemon -S -b -m -p $PID -c klipper \
 		-x /usr/bin/python3 -- $MROOT/moonraker/moonraker.py \
 		-d $PD -c $TOP $V

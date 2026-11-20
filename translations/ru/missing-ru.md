@@ -1,15 +1,16 @@
 # Russian translation: what is missing or untranslated
 
-Kiln OS's touch screen is HelixScreen v1.1.0-rc.1 with Kiln's patches. This list was made on 2026-11-11 from
+Kiln OS's touch screen is HelixScreen v1.1.0-rc.1 with Kiln's patches. This list was made on 2026-11-11 and
+brought up to date on 2026-11-19 with Kiln's HelixScreen patches up to 0085. It was made from
 [helixscreen-ru.yml](helixscreen-ru.yml) and [helixscreen-en.yml](helixscreen-en.yml) in this folder, and from
 the recovery screen's [en.txt](../../recovery-ui/i18n/en.txt) and [ru.txt](../../recovery-ui/i18n/ru.txt).
 
 ## Summary
 
-- `helixscreen-en.yml` has 4923 keys. `helixscreen-ru.yml` has the same 4923 keys: none is missing.
-- 111 Russian values are the same as the English text. They are names, units and numbers that stay as they are, and `Pressure Advance`, which stays English on purpose (section 4).
+- `helixscreen-en.yml` has 5040 keys. `helixscreen-ru.yml` has the same 5040 keys: none is missing.
+- 112 Russian values are the same as the English text. They are names, units and numbers that stay as they are, and `Pressure Advance`, which stays English on purpose (section 4).
 - 7 more values have no Cyrillic but differ from English on purpose (for example `AMS` reads `IFS`, `WiFi` reads `Wi-Fi`).
-- 248 keys belong to Kiln OS's own screens. I wrote their Russian myself, so they need a native speaker's check most (section 5). 14 of them are new since the last list: Boot into recovery, Log detail, the two Auto-Refill rows of the IFS settings, and SELECTOR and HUB on the IFS drawing. 5 more are new since then: the IFS messages that said AMS in English (section 5); their Russian is the one the AMS messages already had.
+- 365 keys belong to Kiln OS's own screens. I wrote their Russian myself, so they need a native speaker's check most (section 5). 14 of them are new since the last list: Boot into recovery, Log detail, the two Auto-Refill rows of the IFS settings, and SELECTOR and HUB on the IFS drawing. 5 more are new since then: the IFS messages that said AMS in English (section 5); their Russian is the one the AMS messages already had. 54 more are new with patches 0071 to 0077 (section 5): Reboot and Shutdown asking one action at a time, Return to Flashforge firmware, Extended memory, and the IFS firmware switch. 3 more are new with patches 0078 and 0079: the eMMC row of Settings > About, and 7 with patches 0081 and 0082: the Processor row next to it (section 5). 52 more are new with patches 0084 and 0085: the setup wizard's Filament step, what a running step is doing (action, temperatures, time), the Z offset test's slot and temperatures, "Remove the test print from the bed", and naming the slot in the toolhead when Kiln can't tell it (section 5), and one more step name for the logs, `Ad5xFilament`. Patch 0080 changed some Russian wording (section 2).
 - 41 keys are new in HelixScreen v1.1.0-rc.1, and the 41 that came with v1.1.0-beta.18 are still unchecked. HelixScreen ships Russian for all of them, so nothing shows in English, but nobody here has checked that Russian yet (section 7). rc.1 also removed 9 older keys whose texts it rewrote (the HelixPrint plugin reasons and the tour).
 - A few open questions and texts that are still English on the screen (section 1).
 - Recovery screen: all 155 lines of `ru.txt` have a first Russian version that needs checking (section 6).
@@ -28,10 +29,18 @@ the recovery screen's [en.txt](../../recovery-ui/i18n/en.txt) and [ru.txt](../..
 
 - Status lines that come from the printer itself (Klipper), not from the screen: for example the progress text of a
   wizard step and the bed heat soak test lines. These are English in every language for now.
+- The print start steps on the print status screen (patch 0067) show the printer's own words, for example
+  `Heating bed and nozzle`, `Checking Z` or `Prime line`. They come from Kiln's print start, not from this file.
 
 **Recovery screen:** a first Russian version to check (section 6).
 
 ## 2. Fixed so far
+
+### HelixScreen patch 0080 and the recovery screen
+
+- Stock firmware is `стоковая прошивка` everywhere, as in the IFS firmware switch: `Restart into the recovery OS to put Flashforge's own firmware back` = `... вернуть стоковую прошивку Flashforge`, and the recovery screen's `родная` lines (section 6) say `стоковая` (`стоковый загрузчик` for the boot loader).
+- The Return to Flashforge firmware dialog names the recovery screen's button as it reads, `Вернуть Flashforge` (in English `Return to Flashforge`). The English key changed with it (section 5).
+- Extended memory: a printer restart is `перезагрузка`, as in Reboot and Shutdown: `Restart now?` = `Перезагрузить сейчас?`, `... после перезагрузки.` The notice now also says `по умолчанию она выключена`, as the English does.
 
 ### After Kiln OS v0.0.60
 
@@ -84,7 +93,7 @@ documentation does too, and the stock Flashforge screen has no such setting. Say
 
 Fine as they are:
 
-- Names and abbreviations: `ABS`, `ADXL`, `AFC`, `Allwinner`, `Android logcat`, `BEACON`, `Bluetooth`, `Brother PT (Bluetooth)`, `Brother QL`, `Brother QL (Bluetooth)`, `CARTOGRAPHER`, `CPU`, `"CPU: "`, `Klipper: {}`, `Creality CFS`, `Creality K1`, `Creality K2 Plus`, `Elegoo Centauri Carbon`, `Ethernet`, `FlashForge Adventurer 5M`, `FlashForge Adventurer 5X`, `FlashForge Creator 5`, `FlashForge Creator 5 Pro`, `FlashForge IFS`, `Flowguard`, `HE`, `HELIXSCREEN`, `HEPA`, `Happy Hare MMU`, `HelixScreen`, `IP:`, `Kalico`, `Klipper`, `"Klipper: "`, `LOT-2024-001`, `MAC:`, `MCU`, `"MCU: "`, `MPC`, `MakeID (Bluetooth)`, `Moonraker`, `"Moonraker: "`, `Niimbot (Bluetooth)`, `OD`, `OK`, `OS`, `PA`, `PETG`, `PID`, `PLA`, `Phomemo (Bluetooth)`, `Phomemo M110`, `Polymaker`, `QGL`, `RAM`, `RH`, `RSS`, `RSS:`, `Raspberry Pi`, `Raspberry Pi (32-bit)`, `Shake&Tune`, `Snapmaker SnapSwap`, `Snapmaker U1`, `Spoolman`, `Sysfs`, `TPU`, `USB`, `WPA/WPA2`, `WPA3`, `Wi-Fi`, `Wi-Fi {}`, `XY`
+- Names and abbreviations: `ABS`, `ADXL`, `AFC`, `Allwinner`, `Android logcat`, `BEACON`, `Bluetooth`, `Brother PT (Bluetooth)`, `Brother QL`, `Brother QL (Bluetooth)`, `CARTOGRAPHER`, `CPU`, `"CPU: "`, `Klipper: {}`, `Creality CFS`, `Creality K1`, `Creality K2 Plus`, `Elegoo Centauri Carbon`, `eMMC`, `Ethernet`, `FlashForge Adventurer 5M`, `FlashForge Adventurer 5X`, `FlashForge Creator 5`, `FlashForge Creator 5 Pro`, `FlashForge IFS`, `Flowguard`, `HE`, `HELIXSCREEN`, `HEPA`, `Happy Hare MMU`, `HelixScreen`, `IP:`, `Kalico`, `Klipper`, `"Klipper: "`, `LOT-2024-001`, `MAC:`, `MCU`, `"MCU: "`, `MPC`, `MakeID (Bluetooth)`, `Moonraker`, `"Moonraker: "`, `Niimbot (Bluetooth)`, `OD`, `OK`, `OS`, `PA`, `PETG`, `PID`, `PLA`, `Phomemo (Bluetooth)`, `Phomemo M110`, `Polymaker`, `QGL`, `RAM`, `RH`, `RSS`, `RSS:`, `Raspberry Pi`, `Raspberry Pi (32-bit)`, `Shake&Tune`, `Snapmaker SnapSwap`, `Snapmaker U1`, `Spoolman`, `Sysfs`, `TPU`, `USB`, `WPA/WPA2`, `WPA3`, `Wi-Fi`, `Wi-Fi {}`, `XY`
 - Numbers, units and placeholders only: `%d-%d`, `%d-%d°C`, `%d mm/s`, `--°C`, `...`, `0°`, `170-300 °C`, `180°`, `270°`, `50W`, `5V`, `90°`, `A`, `X`, `X:`, `Y`, `Y:`, `Z`, `Z:`, `Z: 0.000`, `{} ({})`, `{} · {}`, `{} · {} · {}`, `{}, {}`
 - Internal step names (only in log files, never on the screen): `InputShaper`, `Ad5xFinish`, `Ad5xIfs`, `Ad5xMesh`, `Ad5xNozzle`, `Ad5xPid`, `Ad5xSelfcheck`, `Ad5xShaper`, `Ad5xSoak`, `Ad5xSummary`, `Ad5xTimezone`, `Ad5xTrash`, `Ad5xZoffset`
 
@@ -99,11 +108,14 @@ Different from English on purpose, no Cyrillic:
 
 ## 5. Kiln OS's own screens
 
-248 keys come from Kiln OS, not from HelixScreen. All but two are at the end of `helixscreen-ru.yml`, after
-`~{:.1f} Hz / turn` (in `helixscreen-en.yml` after the line `# Kiln OS (AD5X) strings from the Kiln HelixScreen
-patches`), starting with `, corners {:+.3f} to {:+.3f}`. The other two are the chamber light lines
-near the top (`Chamber light off when the screen sleeps` and the one after it). Keep IFS as IFS: it is the name of
-the filament unit. (The 12 `Ad5x...` step names there are only used in log files; leave them.)
+365 keys come from Kiln OS, not from HelixScreen. All but twelve are near the end of `helixscreen-ru.yml`: the
+blocks that start with a `# ... (patch 00xx)` comment line, from `# Kiln's tour (patch 0058, tour_steps_kiln.cpp)`
+on, and the alphabetical list after `~{:.1f} Hz / turn`, starting with `, corners {:+.3f} to {:+.3f}` (in
+`helixscreen-en.yml` all of them come after the line `# Kiln OS (AD5X) strings from the Kiln HelixScreen
+patches`). The other twelve are the chamber light lines
+near the top (`Chamber light off when the screen sleeps` and the one after it) and the ten eMMC and Processor
+strings of Settings > About, each at its alphabetical place (section 5 lists them). Keep IFS as IFS: it is the name of
+the filament unit. (The 13 `Ad5x...` step names there are only used in log files; leave them.)
 
 <details><summary>Setup wizard (64)</summary>
 
@@ -633,6 +645,282 @@ the filament unit. (The 12 `Ad5x...` step names there are only used in log files
 
 </details>
 
+<details><summary>Reboot and Shutdown: Advanced and the home screen tile (6)</summary>
+
+- `Restart the printer?`
+  = `Перезагрузить принтер?`
+- `Shut down the printer?`
+  = `Выключить принтер?`
+- `The printer can't be used until it has started again.`
+  = `Принтером нельзя пользоваться, пока он не запустится снова.`
+- `The printer stays off until you switch it on again.`
+  = `Принтер останется выключенным, пока вы снова его не включите.`
+- `Can't restart the printer: {}`
+  = `Не удалось перезагрузить принтер: {}`
+- `Can't shut down the printer: {}`
+  = `Не удалось выключить принтер: {}`
+
+</details>
+
+<details><summary>Settings > System: Return to Flashforge firmware (5)</summary>
+
+- `Can't return to Flashforge firmware: {}`
+  = `Не удалось вернуть прошивку Flashforge: {}`
+- `Restart into the recovery OS to put Flashforge's own firmware back`
+  = `Перезапуск в систему восстановления, чтобы вернуть стоковую прошивку Flashforge`
+- `Return to Flashforge firmware`
+  = `Вернуть прошивку Flashforge`
+- `Return to Flashforge firmware?`
+  = `Вернуть прошивку Flashforge?`
+- `The printer restarts into the recovery OS. There, check what it found and tap Return to Flashforge to start. Nothing is changed before that tap.`
+  = `Принтер перезапустится в систему восстановления. Там проверьте, что она нашла, и нажмите «Вернуть Flashforge», чтобы начать. До этого нажатия ничего не меняется.`
+
+  «Вернуть Flashforge» is the recovery screen's button (`rs_go`); keep the two the same.
+
+</details>
+
+<details><summary>Settings > System: Extended memory (8)</summary>
+
+- `Extended memory`
+  = `Расширенная память`
+- `Use all 512 MiB. Not needed; off by default. Takes effect after a restart.`
+  = `Использовать все 512 МБ. Не обязательно; по умолчанию выключено. Вступает в силу после перезагрузки.`
+- `Extended memory changes at the next start.`
+  = `Изменение расширенной памяти вступит в силу при следующем запуске.`
+- `Extended memory was turned off: the printer didn't finish starting with it.`
+  = `Расширенная память выключена: с ней принтер не смог завершить запуск.`
+- `Needs a boot loader update to take effect.`
+  = `Вступит в силу после обновления загрузчика.`
+- `Extended memory available`
+  = `Доступна расширенная память`
+- `This printer has 512 MiB of memory. Kiln OS uses 256 MiB by default, the same on every AD5X. You can switch Extended memory on in Settings > System. It isn't needed; it is off by default.`
+  = `В принтере 512 МБ, а Kiln OS на всех AD5X по умолчанию использует 256 МБ. Расширенную память можно включить в Настройки > Система. Это не обязательно; по умолчанию она выключена.`
+- `Restart now?`
+  = `Перезагрузить сейчас?`
+
+</details>
+
+<details><summary>Settings > Devices: IFS firmware (35)</summary>
+
+- `IFS firmware`
+  = `Прошивка IFS`
+- `Stock`
+  = `Стоковая`
+- `Switch to Stock`
+  = `Перейти на стоковую`
+- `Switch to Klipper`
+  = `Перейти на Klipper`
+- `Switch`
+  = `Сменить`
+- `Switch the IFS to stock firmware?`
+  = `Перевести IFS на стоковую прошивку?`
+- `Switch the IFS to Klipper firmware?`
+  = `Перевести IFS на прошивку Klipper?`
+- `Writes Flashforge's firmware from this printer's own backup. Klipper stops for 1 to 4 minutes. Plugins that need Klipper firmware on the IFS (Happy Hare) are skipped until you switch back.`
+  = `Будет записана прошивка Flashforge из резервной копии этого принтера. Klipper остановится на 1–4 минуты. Плагины, которым нужна прошивка Klipper на IFS (Happy Hare), не будут запускаться, пока вы не переключите IFS обратно.`
+- `Writes the Klipper firmware that comes with Kiln OS. Klipper stops for 1 to 4 minutes.`
+  = `Будет записана прошивка Klipper, которая входит в Kiln OS. Klipper остановится на 1–4 минуты.`
+- `Switching IFS firmware…`
+  = `Смена прошивки IFS…`
+- `Don't switch the printer off.`
+  = `Не выключайте принтер.`
+- `Stopping Klipper…`
+  = `Остановка Klipper…`
+- `Writing…`
+  = `Запись…`
+- `Unplug the IFS cable and plug it back in`
+  = `Отключите кабель IFS и подключите его снова`
+- `Checking the IFS…`
+  = `Проверка IFS…`
+- `Starting Klipper…`
+  = `Запуск Klipper…`
+- `IFS firmware switched`
+  = `Прошивка IFS сменена`
+- `IFS firmware switch refused`
+  = `Смена прошивки IFS отклонена`
+- `IFS firmware switch failed`
+  = `Не удалось сменить прошивку IFS`
+- `IFS firmware switch`
+  = `Смена прошивки IFS`
+- `IFS on stock firmware.`
+  = `IFS работает на стоковой прошивке.`
+- `IFS on Klipper firmware.`
+  = `IFS работает на прошивке Klipper.`
+- `IFS on stock firmware: {} answers.`
+  = `IFS работает на стоковой прошивке: отвечает версия {}.`
+- `IFS on Klipper firmware: {} answers.`
+  = `IFS работает на прошивке Klipper: отвечает версия {}.`
+- `Kiln's IFS driver runs it. Plugins that need Klipper firmware on the IFS are skipped until you switch back.`
+  = `Им управляет драйвер IFS в Kiln. Плагины, которым нужна прошивка Klipper на IFS, не запускаются, пока вы не переключите IFS обратно.`
+- `Plugins that need it run again.`
+  = `Плагины, которым она нужна, снова запускаются.`
+- `No result. See /data/ad5x/kiln-log/agent.log.`
+  = `Нет результата. См. /data/ad5x/kiln-log/agent.log.`
+- `Waiting for Klipper…`
+  = `Ожидание Klipper…`
+- `The IFS runs Klipper firmware.`
+  = `IFS работает на прошивке Klipper.`
+- `The IFS runs Flashforge's firmware.`
+  = `IFS работает на прошивке Flashforge.`
+- `The IFS doesn't answer as either firmware. Switch it to one of them.`
+  = `IFS не отвечает ни на одной из прошивок. Переведите его на одну из них.`
+- `Last switch: {}`
+  = `Последняя смена прошивки: {}`
+- `Can't switch during a print.`
+  = `Во время печати прошивку сменить нельзя.`
+- `Klipper did not start again. See klippy.log and ad5x-mcu status.`
+  = `Klipper не запустился снова. См. klippy.log и ad5x-mcu status.`
+- `The switch did not finish. See /data/ad5x/kiln-log/agent.log.`
+  = `Смена прошивки не завершилась. См. /data/ad5x/kiln-log/agent.log.`
+
+</details>
+
+<details><summary>Settings > About: eMMC (3)</summary>
+
+The row reads, for example, `eMMC: A31M8C (производитель 0xEC), PRV 0x30, 58.2 ГБ`. The name and `PRV` stay as they are.
+
+- `eMMC`
+  = `eMMC`
+- ` (maker 0x{:02X})`
+  = ` (производитель 0x{:02X})`
+- `, {:.1f} GiB`
+  = `, {:.1f} ГБ`
+
+</details>
+
+<details><summary>Settings > About: Processor (7)</summary>
+
+The row reads, for example, `X2600E, 256 МБ DDR3, SoC ID 0x18000, ядро 0.0`. Chip names, `DDR2`/`DDR3` and
+`SoC ID` stay as they are. Without the eFuse (6.6 kernel) it reads `X2600, 256 МБ, вариант неизвестен`.
+
+- `Processor`
+  = `Процессор`
+- `{} MiB {}`
+  = `{} МБ {}`
+- `, {} MiB`
+  = `, {} МБ`
+- `, core {}`
+  = `, ядро {}`
+- `{}, size unknown`
+  = `{}, размер неизвестен`
+- `X2600, variant unknown ({})`
+  = `X2600, вариант неизвестен ({})`
+- `X2600{}, variant unknown{}`
+  = `X2600{}, вариант неизвестен{}`
+
+</details>
+
+<details><summary>Setup wizard: Filament step, a running step, Z offset test (52)</summary>
+
+The last block of `helixscreen-ru.yml` (`# Setup wizard: the filament step, ...`). The action lines (Heating, Probing the bed, ...) show one at a time above the status line while a step runs, so they should be short; the temperatures line reads, for example, `Сопло 180/240 °C  ·  Стол 58/70 °C  ·  1:05`.
+
+- `Set the material in each slot with filament; the tests heat to it. Auto finds which slot is in the toolhead and unloads it, or pick the slot yourself.`
+  = `Укажите материал в каждом слоте с филаментом: тесты нагревают сопло под него. «Авто» само находит слот, который в печатающей головке, и выгружает его; можно выбрать слот и вручную.`
+- `Toolhead: slot {} was in it, now unloaded`
+  = `Печатающая головка: в ней был слот {}, теперь выгружен`
+- `Toolhead: slot {}`
+  = `Печатающая головка: слот {}`
+- `Toolhead: slot {}, {}`
+  = `Печатающая головка: слот {}, {}`
+- `Toolhead: filament from an unknown slot`
+  = `Печатающая головка: филамент из неизвестного слота`
+- `Toolhead: empty`
+  = `Печатающая головка: пусто`
+- `Checking the printer`
+  = `Проверка принтера`
+- `Testing the fans`
+  = `Проверка вентиляторов`
+- `Testing the heaters`
+  = `Проверка нагревателей`
+- `Tuning the nozzle heater`
+  = `Настройка нагревателя сопла`
+- `Tuning the bed heater`
+  = `Настройка нагревателя стола`
+- `Cleaning the nozzle`
+  = `Очистка сопла`
+- `Probing the bed`
+  = `Проверка стола датчиком`
+- `Measuring vibrations on X`
+  = `Измерение вибраций по X`
+- `Measuring vibrations on Y`
+  = `Измерение вибраций по Y`
+- `Setting the slot materials`
+  = `Сохранение материалов слотов`
+- `Finding the slot in the toolhead`
+  = `Поиск слота в печатающей головке`
+- `Moving to the purge box`
+  = `Перемещение к лотку для отходов`
+- `Loading slot {}`
+  = `Загрузка слота {}`
+- `Unloading slot {}`
+  = `Выгрузка слота {}`
+- `Estimating the Z offset`
+  = `Оценка смещения по Z`
+- `Preparing the test print`
+  = `Подготовка тестовой печати`
+- `Purging the nozzle`
+  = `Продувка сопла`
+- `Printing the test patch`
+  = `Печать тестового образца`
+- `Printing test patch {}`
+  = `Печать тестового образца {}`
+- `Waiting for you`
+  = `Ожидает вашего действия`
+- `Saving`
+  = `Сохранение`
+- `Letting the bed cool`
+  = `Остывание стола`
+- `Calibrating the bed soak`
+  = `Калибровка прогрева стола`
+- `Slot {}, {}, {}/{} °C`
+  = `Слот {}, {}, {}/{} °C`
+- `{}, {}/{} °C`
+  = `{}, {}/{} °C`
+- `No temperatures for {}: using PLA temperatures`
+  = `Для {} нет температур: используются температуры PLA`
+- `Material unknown: using PLA temperatures`
+  = `Материал неизвестен: используются температуры PLA`
+- `Abort and set it in the Filament step if this is wrong.`
+  = `Если это неверно, прервите и укажите материал на шаге «Филамент».`
+- `Auto (find it)`
+  = `Авто (найти)`
+- `None (empty)`
+  = `Нет (пусто)`
+- `The IFS slots aren't known yet.`
+  = `Слоты IFS пока неизвестны.`
+- `Printer Setup: Filament`
+  = `Настройка принтера: филамент`
+- `The material in each slot and the slot in the toolhead`
+  = `Материал в слотах и слот в печатающей головке`
+- `Filament in the toolhead`
+  = `Филамент в печатающей головке`
+- `Remove the test print from the bed`
+  = `Уберите тестовую печать со стола`
+- `The Z offset is saved. Take the test print off the bed so the next steps don't probe or print on it, then tap Done.`
+  = `Смещение по Z сохранено. Снимите тестовую печать со стола, чтобы следующие шаги не проверяли и не печатали по ней, затем нажмите «Готово».`
+- `No slot cleared the toolhead. Cut the filament at the toolhead if it isn't cut, pull it out at the top by hand, then tap Retry.`
+  = `Ни один слот не освободил печатающую головку. Обрежьте филамент у головки, если он не обрезан, вытяните его сверху рукой и нажмите «Повторить».`
+- `Remove the test print from the bed before you retry.`
+  = `Перед повтором уберите тестовую печать со стола.`
+- `Use the filament in the toolhead as it is`
+  = `Использовать филамент в печатающей головке как есть`
+- `Toolhead: strand in the tube, slot unknown`
+  = `Печатающая головка: филамент остался в трубке, слот неизвестен`
+- `Toolhead: filament kept as it is`
+  = `Печатающая головка: филамент оставлен как есть`
+- `Slot {} · {}`
+  = `Слот {} · {}`
+- `A strand is still in the tube: name the slot first`
+  = `В трубке остался филамент: сначала укажите его слот`
+- `Which slot is in the toolhead?`
+  = `Какой слот в печатающей головке?`
+- `Kiln can't tell which slot's filament is in the toolhead. Look at the tubes: tap the slot whose filament goes into the toolhead. Nothing is fed until you choose.`
+  = `Kiln не может определить, филамент какого слота в печатающей головке. Посмотрите на трубки и нажмите слот, филамент которого идёт в печатающую головку. Пока вы не выберете, ничего не подаётся.`
+- `I pulled it out by hand`
+  = `Филамент вытянут вручную`
+
+</details>
+
 ## 6. Recovery screen (recovery-ui/i18n/ru.txt)
 
 The recovery screen is Kiln OS's rescue system. It uses the touch screen's language setting. Its strings are in
@@ -653,7 +941,8 @@ The lines I am least sure of:
 - `recovery_row` = `Версия`: the row shows the recovery's release number. `Восстановление` does not fit the 120 px label.
 - `update_one` / `update_many` = `обновление` / `обновл.`: the screen has only these two forms after a number, so the
   second is shortened to fit both 2-4 (обновления) and 5+ (обновлений).
-- Stock firmware = `родная прошивка`, as in zMod's Russian wiki ("Родная прошивка").
+- Stock firmware = `стоковая прошивка`, the same word as on the touch screen (IFS firmware switch, Return to Flashforge
+  firmware); the boot loader is `стоковый загрузчик`. Until patch 0080 this screen said `родная прошивка`.
 - Recovery = `Восстановление`, and Restore from a backup = `Восстановить` / `Восстановление копии`.
 - Dry run = `Проба`, and `Boot main OS` = `Запустить ОС`: the long forms (`Пробный запуск`, `Запустить основную ОС`) do
   not fit their buttons.
@@ -697,9 +986,9 @@ The lines I am least sure of:
 - `restore_now`: `Restore now`
   = `Восстановить`
 - `restore_stock`: `Restore stock`
-  = `Вернуть родную`
+  = `Вернуть стоковую`
 - `restore_stock_fw_btn`: `Restore stock firmware…`
-  = `Вернуть родную прошивку…`
+  = `Вернуть стоковую прошивку…`
 - `start_backup`: `Start backup`
   = `Начать копирование`
 - `dry_run`: `Dry run`
@@ -869,23 +1158,23 @@ The lines I am least sure of:
 - `stock_dry_run`: `Stock restore (dry run)`
   = `Возврат прошивки (проба)`
 - `restoring_stock`: `Restoring stock firmware`
-  = `Возврат родной прошивки`
+  = `Возврат стоковой прошивки`
 - `restore_stock_q`: `Restore stock firmware?`
-  = `Вернуть родную прошивку?`
+  = `Вернуть стоковую прошивку?`
 - `stock_q_text`: `Writes the saved stock Flashforge system into the main slot (B) and makes it the one that starts. Kiln OS in slot B is replaced.`
-  = `Записывает сохранённую родную систему Flashforge в основной слот (B) и делает её системой для запуска. Kiln OS в слоте B будет заменена.`
+  = `Записывает сохранённую стоковую систему Flashforge в основной слот (B) и делает её системой для запуска. Kiln OS в слоте B будет заменена.`
 - `stock_q_text2`: `Slot B will be overwritten with the stock firmware. Keep the printer powered until it is done.`
-  = `Слот B будет перезаписан родной прошивкой. Не выключайте принтер до конца.`
+  = `Слот B будет перезаписан стоковой прошивкой. Не выключайте принтер до конца.`
 - `stock_saved_note`: `A saved stock system was found in /data/ad5x/stock.`
-  = `Сохранённая родная система найдена в /data/ad5x/stock.`
+  = `Сохранённая стоковая система найдена в /data/ad5x/stock.`
 - `stock_none_note`: `No saved stock system in /data/ad5x/stock: it is made by ad5x-update --replace-stock when Kiln OS is installed.`
-  = `В /data/ad5x/stock нет сохранённой родной системы: её создаёт ad5x-update --replace-stock при установке Kiln OS.`
+  = `В /data/ad5x/stock нет сохранённой стоковой системы: её создаёт ad5x-update --replace-stock при установке Kiln OS.`
 - `restore_stock_firmware`: `Restore stock firmware`
-  = `Вернуть родную прошивку`
+  = `Вернуть стоковую прошивку`
 - `stock_back_title`: `Back to Flashforge's firmware`
   = `Возврат к прошивке Flashforge`
 - `stock_text`: `Writes the stock system saved on the printer when Kiln OS was installed back into the main slot (B), checks it, and points the boot flag at it. This recovery stays as it is.`
-  = `Записывает родную систему, сохранённую на принтере при установке Kiln OS, обратно в основной слот (B), проверяет её и направляет на неё флаг загрузки. Система восстановления остаётся как есть.`
+  = `Записывает стоковую систему, сохранённую на принтере при установке Kiln OS, обратно в основной слот (B), проверяет её и направляет на неё флаг загрузки. Система восстановления остаётся как есть.`
 - `stock_backup_first`: `Back up first to keep this system. You'll be asked twice before anything is written.`
   = `Сначала сделайте резервную копию, чтобы сохранить эту систему. Перед записью вас спросят дважды.`
 

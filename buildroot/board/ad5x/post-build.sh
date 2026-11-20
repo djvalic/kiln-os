@@ -5,6 +5,7 @@
 #   (BR2_AD5X_BUNDLE_VENDOR=y or AD5X_VENDOR_FREE=0) copies the stock driver
 #   modules and board tools from the local firmware download.
 # - Drops Buildroot's S50nginx and sample pages: S63nginx starts nginx.
+# - NetworkManager's state on /data, unused parts of it dropped (network-nm.sh).
 # - Makes Klipper's prebuilt c_helper.so newer than its sources, so klippy
 #   doesn't try to rebuild it (the printer has no compiler).
 # - Compiles Klipper and Moonraker to bytecode: the root is read-only, so
@@ -31,6 +32,12 @@ bundle_stock "$TARGET"
 
 rm -f "$TARGET/etc/init.d/S50nginx" "$TARGET/etc/logrotate.d/nginx"
 rm -rf "$TARGET/usr/html"
+
+# NetworkManager (docs/network.md): its state on /data (the root is
+# read-only; S40ad5x-network makes the directory, the connections are in
+# /run), and room in the 100 MiB slot: parts nothing here uses
+. "$BR2_EXTERNAL_AD5X_PATH/board/ad5x/network-nm.sh"
+nm_target "$TARGET"
 
 # Room in the 100 MiB slot: Python libraries' test suites, type stubs and C
 # headers, numpy's Fortran wrapper generator and pip's bundled wheel

@@ -8,11 +8,11 @@ with any system update ("Public and internal names" below).
 
 ## Version
 
-Current: **1.8**.
+Current: **1.9**.
 
 - In Klipper: `printer.ad5x_plugins.api_version` (also printed by
   `LIST_PLUGINS`).
-- On the system: `AD5X_PLUGIN_API="1.8"` in `/usr/lib/os-release`
+- On the system: `AD5X_PLUGIN_API="1.9"` in `/usr/lib/os-release`
   (`/etc/os-release`), for scripts.
 - In the code: `PLUGIN_API_VERSION` in `klipper/extras/ad5x_plugins.py`
   (the build copies it to os-release). `tools/test_plugin_api_doc.py`
@@ -60,7 +60,8 @@ they are loaded".
 | 1.5 | 2026-11-07 | v0.0.49 | A plugin that drives the IFS (`owns_ifs`), packages in `extras/`, `printer.load_object()` finding plugin modules; and everything the 1.4 releases added after v0.0.7 that this page now lists (tool map mode, Z offset estimate, IFS operation status, swap abort template, ...) |
 | 1.6 | 2026-11-13 | v0.1.0-rc1 | Root scripts like zMod's plugins have (`root/install.sh`, `update.sh`, `uninstall.sh`, `docs/plugin-root-hooks.md`), `ENABLE_PLUGIN ROOT=1`, `INSTALL_PLUGIN ROOT=1`, `printer.ad5x_plugins` `available.<name>.root` and `root_installed`, the job actions `root install`/`root update`/`root uninstall`; warnings when two plugins bring the same Moonraker component, `python/` package or Klipper section ("Names"); `kiln_` and `ad5x_` module, component, section and macro names refused for plugins that are not Kiln's own ("Names"); Moonraker's `[machine] provider: kiln_agent` (service restarts, "Moonraker"). The named root actions are removed ("Changes") |
 | 1.7 | 2026-11-16 | v1.0.0-rc3 | Klipper module names with capitals (`extras/AFC_lane.py`; names that differ only in case count as one, also for the `kiln_`/`ad5x_` rule); `plugin.json` `module_dirs`: more Klipper module folders inside the plugin (a checkout of another project), imported when needed as Klipper imports its own ("Plugin layout", "Module folders"); `INSTALL_PLUGIN` and `UPDATE_PLUGIN` fetch the plugin's git submodules, https only ("Submodules"); `BED_MESH_CALIBRATE`, `LINE_PURGE` and `VORON_PURGE` skipped after `PRINT_START`'s mesh / prime line (or the same step already run) in the same print, `FORCE=1` (issue #73) |
-| 1.8 | Unreleased | (next release) | Extended memory mode on printers with 512 MiB (`docs/memory.md`): the macro `KILN_MEMORY_MODE [ENABLE=0\|1]` (macros/ `system.cfg`), Moonraker's `GET`/`POST /machine/kiln_os/memory` and `POST /machine/kiln_os/memory_notice_seen` and the feature name `memory_mode` (`docs/api.md`); the IFS firmware switch: Moonraker's `GET`/`POST /machine/kiln_os/ifs_firmware`, the feature name `ifs_firmware` and the owner's opt-in `/data/ad5x/ifs-switch.enable` ("A plugin that drives the IFS"); bed screws: `[screws_tilt_adjust]`, `SCREWS_TILT_CALCULATE` with tare and the macro `BED_LEVEL_SCREWS_TUNE` (macros/ `quick_actions.cfg`, issue #69) |
+| 1.8 | 2026-11-18 | v1.0.0-rc4 | Extended memory mode on printers with 512 MiB (`docs/memory.md`): the macro `KILN_MEMORY_MODE [ENABLE=0\|1]` (macros/ `system.cfg`), Moonraker's `GET`/`POST /machine/kiln_os/memory` and `POST /machine/kiln_os/memory_notice_seen` and the feature name `memory_mode` (`docs/api.md`); the IFS firmware switch: Moonraker's `GET`/`POST /machine/kiln_os/ifs_firmware`, the feature name `ifs_firmware` and the owner's opt-in `/data/ad5x/ifs-switch.enable` ("A plugin that drives the IFS"); bed screws: `[screws_tilt_adjust]`, `SCREWS_TILT_CALCULATE` with tare and the macro `BED_LEVEL_SCREWS_TUNE` (macros/ `quick_actions.cfg`, issue #69) |
+| 1.9 | 2026-11-18 | (next release) | The setup wizard's filament step (`SETUP_WIZARD_STEP STEP=filament`, `MATERIAL_<n>=`, `HEAD=`), `printer.ad5x_setup` `action`, `action_arg`, `step_started`, `prompt`, `filament`, `zoffset_plan`; `IFS_FIND_HEAD_SLOT`, `printer.ifs` `find_result`, `head_found`, `tube_blocked`, `loaded_source` (a slot only adopted at startup is a guess: `IFS_SWAP` to it loads it again, its unload is checked, the find and the wizard don't trust it). A Z offset step ends after a second `accept` (the test print is off the bed) |
 
 **1.5\*** marks the few items that came with a later 1.5 release:
 `LOG_MODE` and `printer.ad5x_log` (v0.0.53), `printer.ad5x_soak.cancel`
@@ -466,16 +467,16 @@ printer` before calling one.
 | Command | Parameters | What | Since |
 |---|---|---|---|
 | `T0`-`T3` | | Load the slot the tool map names (macros in `ifs.cfg`) | 1.0 |
-| `IFS_SWAP` | `CHANNEL=` `[TEMP=]` `[FLUSH=mm]` `[ROUNDS=]` `[PURGE=0\|1]` | Change to a slot | 1.0 |
+| `IFS_SWAP` | `CHANNEL=` `[TEMP=]` `[FLUSH=mm]` `[ROUNDS=]` `[PURGE=0\|1]` | Change to a slot. To the loaded slot: nothing to do, unless `printer.ifs.loaded_source` is `adopted` (then loaded again, 1.9) | 1.0 |
 | `IFS_LOAD` | `SLOT=` `[TEMP=]` `[PURGE=0\|1]` | Load a slot, unloading the loaded one first | 1.0 |
-| `IFS_UNLOAD` | `[SLOT=]` `[TEMP=]` | Cut and unload; the lane stays threaded | 1.0 |
+| `IFS_UNLOAD` | `[SLOT=]` `[TEMP=]` | Cut and unload; the lane stays threaded. Refused while `printer.ifs.tube_blocked` (1.9) | 1.0 |
 | `IFS_EJECT` | `SLOT=` | Pull a slot's filament out of the IFS (unloads the nozzle first when it is the loaded one) | 1.0 |
 | `IFS_PREFEED` | `CHANNEL=` (not the loaded one) | Feed a new spool up to the IFS, as stock does | 1.0 |
 | `IFS_MAP_TOOL` | `TOOL=` `SLOT=`, or `RESET=1` | Tool map for this print | 1.0 |
 | `IFS_MAP_MODE` | `[MODE=fixed\|loaded]` `[ZMOD=1]` | Tool map mode, saved: fixed (`T0`-`T3` -> slots 1-4) or loaded (tools use the slots with filament); `ZMOD=1` puts the mode back at the print's end (zmod-compat's `START_PRINT`); shows it without `MODE` | 1.5 |
 | `IFS_SET_MATERIAL` | `SLOT=` `[TYPE=]` `[COLOR=]` `[TEMP=]` | Slot material | 1.0 |
 | `IFS_SET_COLOR` | `CHANNEL=` `COLOR=` | Slot colour | 1.0 |
-| `IFS_SET_CHANNEL` | `CHANNEL=` (0 = none loaded) | Tell the module what is loaded | 1.0 |
+| `IFS_SET_CHANNEL` | `CHANNEL=` (0 = none loaded) | Tell the module what is loaded (`loaded_source` `user`, 1.9). While `tube_blocked` only `CHANNEL=0` (pulled out by hand), which lifts it (1.9) | 1.0 |
 | `IFS_STATUS`, `IFS_MATERIALS`, `IFS_STOP`, `IFS_RESET_DRIVER` | | Show state / materials, stop feeding, recover after a fault | 1.0 |
 | `IFS_AUTO_REFILL` | `[ENABLE=0\|1]` (1.2) `[MATCH=exact\|similar\|any]` (1.4) | Auto-refill on runout | 1.2 |
 | `IFS_PURGE_TEST`, `IFS_PURGE_RESULT`, `IFS_SET_FLUSH` | `IFS_SET_FLUSH LENGTH=` or `RESET=1` | Purge tuning | 1.0 |
@@ -483,6 +484,7 @@ printer` before calling one.
 | `IFS_TUNE_SPEED`, `IFS_TUNE_LOAD` | `[CHANNEL=]` | One tuning step: the feed speed / each slot's load distance | 1.0 |
 | `IFS_TUNE_UNLOAD` | `[CHANNEL=]` (loads it first when nothing is loaded) `[TUBE=1]` | One tuning step: the unload length | 1.0 |
 | `IFS_TUNE_RESET` | | Forget the tuning | 1.0 |
+| `IFS_FIND_HEAD_SLOT` | `[TEMP=]` `[SLOT=n]` | Filament in the toolhead from a slot Kiln doesn't know (loaded before the install): cut; retract the extruder alone the unload length; if that cleared the toolhead sensor the slot can't be found this way (the strand goes back, `find_result` `pick`, or `tube` if it stayed above the sensor); else pull each slot with filament back that far, lane only, feeding a wrong one back, until one clears the sensor; that one is fed back to the sensor to confirm, then unloaded. Heats like `IFS_UNLOAD`, to at least `[ifs] find_temp` (240) when a slot it may try has no material. Nothing moves when the toolhead is empty or the slot is known (Kiln loaded it or the user named it: a slot only adopted at startup, `loaded_source` `adopted`, is found like an unknown one, tried first). No slot clears: an error (pull the filament out by hand). A failure or stop after the strand left the sensor sets `tube_blocked` (`find_result` `tube`; the error names the slot when it was known). `SLOT=n`: the user names the slot (recorded as loaded; with `tube_blocked`, lane n is pulled back out of the tube) | 1.9 |
 
 Swap templates in `[ifs]` a plugin may replace (same parameters). A
 later definition replaces a whole template. Templates must not call
@@ -518,14 +520,14 @@ bounding box; else at the box.
 
 | Command | Parameters | What | Since |
 |---|---|---|---|
-| `RESUME_INTERRUPTED` | `CONFIRM=1` | Continue the print a power cut ended | 1.2 |
+| `RESUME_INTERRUPTED` | `CONFIRM=1` | Continue the print a power cut ended (refused while `printer.ifs.tube_blocked`, 1.9) | 1.2 |
 | `CLEAR_INTERRUPTED` | | Forget it | 1.2 |
 
 ### Setup wizard and plugins
 
 | Command | Parameters | What | Since |
 |---|---|---|---|
-| `SETUP_WIZARD_STEP` | `STEP=selfcheck\|pid\|mesh\|shaper\|ifs\|trash\|zoffset\|soak\|summary\|finish`, `ACTION=start\|abort\|adjust\|accept\|wizard`; 1.4: `STEP=pid HEATERS=extruder\|bed\|both` | One wizard step (`docs/setup-wizard.md`); API endpoint `ad5x_setup/control` | 1.0 |
+| `SETUP_WIZARD_STEP` | `STEP=selfcheck\|pid\|mesh\|shaper\|ifs\|trash\|zoffset\|soak\|summary\|finish`, `ACTION=start\|abort\|adjust\|accept\|wizard`; 1.4: `STEP=pid HEATERS=extruder\|bed\|both`; 1.9: `STEP=filament` `[MATERIAL_<n>=]` `[HEAD=<n>\|0\|KEEP\|AUTO]`, `STEP=zoffset HEAD=KEEP`, `ACTION=accept` also confirms the prompt `clear_bed` (a Z offset step now needs two accepts: the offset, then the bed cleared) | One wizard step (`docs/setup-wizard.md`); API endpoint `ad5x_setup/control` | 1.0 |
 | `SETUP_WIZARD` | | Run the wizard again on the screen (macros/ `quick_actions.cfg`; `SETUP_WIZARD_STEP ACTION=wizard` does the same) | 1.0 |
 | `ENABLE_PLUGIN`, `DISABLE_PLUGIN` | `NAME=` `[RESTART=0]`; 1.6: `ENABLE_PLUGIN ROOT=1`, needed for a plugin with root scripts (`docs/plugin-root-hooks.md`) | Switch a plugin | 1.0 |
 | `LIST_PLUGINS` | | The plugins and the API version | 1.0 |
@@ -568,9 +570,9 @@ step.
 
 | Object | Fields | Since |
 |---|---|---|
-| `printer.ifs` | `connected`, `version`, `busy`, `channel` (loaded, 0 none), `state`, `selected`, `inserted[4]`, `colors[4]`, `silk[4]`, `stall[4]` (raw per-slot sensor counts as the IFS reports them, for diagnostics), `channel_count`, `active_channel`, `loaded_channels`, `pending_insert_channels`, `activity`, `activity_channel`, `error`, `tool_map` (`"0"`-`"3"` -> slot), `tune` (`speed`, `load_dist` (`"1"`-`"4"`), `unload_dist`, `tube_unload`, `running`, `progress`, `message`; tuned values, null where the `[ifs]` defaults apply); 1.2: `auto_refill`, `refill` (last auto-refill message); 1.4: `refill_match`, `refill_backups` (`"1"`-`"4"` -> the slots that would take over, nearest colour first; `[]` none), `refill_notice` (a print loaded a slot with no backup; "" otherwise); 1.5: `map_mode` (`fixed`/`loaded`), `mode` (`mcu`/`serial`), `operation`, `phase`, `target_channel`, `error_channel`, `tune.flush` (`docs/helixscreen-integration.md`, section 0) | 1.0 |
+| `printer.ifs` | `connected`, `version`, `busy`, `channel` (loaded, 0 none), `state`, `selected`, `inserted[4]`, `colors[4]`, `silk[4]`, `stall[4]` (raw per-slot sensor counts as the IFS reports them, for diagnostics), `channel_count`, `active_channel`, `loaded_channels`, `pending_insert_channels`, `activity`, `activity_channel`, `error`, `tool_map` (`"0"`-`"3"` -> slot), `tune` (`speed`, `load_dist` (`"1"`-`"4"`), `unload_dist`, `tube_unload`, `running`, `progress`, `message`; tuned values, null where the `[ifs]` defaults apply); 1.2: `auto_refill`, `refill` (last auto-refill message); 1.4: `refill_match`, `refill_backups` (`"1"`-`"4"` -> the slots that would take over, nearest colour first; `[]` none), `refill_notice` (a print loaded a slot with no backup; "" otherwise); 1.5: `map_mode` (`fixed`/`loaded`), `mode` (`mcu`/`serial`), `operation`, `phase`, `target_channel`, `error_channel`, `tune.flush` (`docs/helixscreen-integration.md`, section 0); 1.9: `find_result` (the last `IFS_FIND_HEAD_SLOT`: `found`, `pick`, `tube`, `none`, `error`; "" none), `head_found` (its slot, 0 none), `tube_blocked` (a strand sits in the tube above the toolhead sensor, after a `tube` result, or a find or an unload (`IFS_UNLOAD`, a swap's first half) that failed or was stopped after the strand had left the sensor (nothing recorded as loaded then): loads, `IFS_UNLOAD`, `IFS_SET_CHANNEL CHANNEL=n`, tuning and pre-feeds are refused until `IFS_FIND_HEAD_SLOT SLOT=n` pulls lane n back or `IFS_SET_CHANNEL CHANNEL=0` says it was pulled out by hand), `loaded_source` (how `channel` is known: `kiln` a load of Kiln's own, also a channel saved before 1.9; `user` named with `IFS_SET_CHANNEL` or `IFS_FIND_HEAD_SLOT SLOT=n`; `adopted` only a guess at startup (no slot saved, filament at the toolhead, the IFS pointing at it); "" nothing loaded; saved, kept across restarts. An `adopted` slot: `IFS_SWAP` to it loads it again, its first unload must clear the toolhead sensor or nothing is recorded as loaded, `IFS_FIND_HEAD_SLOT` finds the slot (that one first), the setup wizard treats it as unknown) | 1.0 |
 | `printer.ifs_materials` | `available`, `channel_count`, `slots` (`"1"`-`"4"`: `type`, `color`, `temp`), `loaded`, `temperatures` | 1.0 |
-| `printer.ad5x_setup` | `step`, `state`, `message`, `progress`, `results`, `checks`, `pending_save`, `zoffset`; 1.5: `estimate` (the Z offset step uses `Z_OFFSET_ESTIMATE`: setup.cfg `zoffset_estimate`) (`docs/setup-wizard.md`) | 1.0 |
+| `printer.ad5x_setup` | `step`, `state`, `message`, `progress`, `results`, `checks`, `pending_save`, `zoffset`; 1.5: `estimate` (the Z offset step uses `Z_OFFSET_ESTIMATE`: setup.cfg `zoffset_estimate`); 1.9: `action` (what the step does now, a short key; "" idle), `action_arg` (its slot or patch number, 0 none), `step_started` (Unix time the step started, 0 none), `prompt` (null, `clear_bed`, `head_unknown`, `pick_slot`), `filament` (`present`, `materials`, `head`, `head_source` (`loaded`, `user`, `found`, `unknown`, `kept`, `tube`, `empty`), `head_filament`; null without Kiln's IFS module), `zoffset_plan` (`slot`, `material`, `nozzle`, `bed`, `guess`, `source`; null before the Z offset step) (`docs/setup-wizard.md`) | 1.0 |
 | `printer.ad5x_weight` | `connected`, `weight` | 1.0 |
 | `printer.ad5x_config` | `notices` (lines of `config-updates.txt`), `backups` (`macros/*.bak-*`) | 1.1 |
 | `printer.ad5x_resume` | `available`, `file`, `z`, `time` (an interrupted print) | 1.2 |

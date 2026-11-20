@@ -8,6 +8,15 @@
  *                           write them (between "--state--"/"--records--")
  *   bootlogic_cli parse     a 512-byte sector on stdin: "state ok|bad" and
  *                           "records ok|bad" with the fields
+ *   bootlogic_cli format    records as "key value" lines on stdin
+ *                           (failed_own failed_mainline failed_mem
+ *                           fallbacks reason): "left_out N", then the
+ *                           512-byte sector ad5x_records_format() writes
+ *   bootlogic_cli sector MAGIC
+ *                           "KEY VALUE" lines on stdin ("\\n" in a value: a
+ *                           newline), each given to ad5x_sec_add() after
+ *                           MAGIC (its "\n" added): "left_out N", then the
+ *                           512-byte sector
  *   bootlogic_cli slotaname NAME
  *                           "ok" when p1's kernel named NAME may start the
  *                           recovery OS (ad5x_slot_a_kernel_ok), else "no"
@@ -146,6 +155,57 @@ static int parse(void)
 	return 0;
 }
 
+static void put_sector(unsigned int left_out, const char *buf)
+{
+	printf("left_out %u\n", left_out);
+	fwrite(buf, 1, AD5X_REC_SIZE, stdout);
+}
+
+static int format(void)
+{
+	char line[1024], *v, buf[AD5X_REC_SIZE];
+	struct ad5x_records rec;
+
+	memset(&rec, 0, sizeof(rec));
+	while (fgets(line, sizeof(line), stdin)) {
+		line[strcspn(line, "\n")] = '\0';
+		v = strchr(line, ' ');
+		v = v ? (*v = '\0', v + 1) : line + strlen(line);
+#define F(name) if (!strcmp(line, #name)) { \
+	snprintf(rec.name, sizeof(rec.name), "%s", v); continue; }
+		F(failed_own) F(failed_mainline) F(failed_mem) F(reason)
+		if (!strcmp(line, "fallbacks")) {
+			rec.fallbacks = strtoul(v, NULL, 10);
+			continue;
+		}
+		fprintf(stderr, "unknown key %s\n", line);
+		return 2;
+	}
+	put_sector(ad5x_records_format(&rec, buf), buf);
+	return 0;
+}
+
+static int sector(const char *magic)
+{
+	char line[2048], m[64], *v, *e, buf[AD5X_REC_SIZE];
+	struct ad5x_sec s;
+
+	snprintf(m, sizeof(m), "%s\n", magic);
+	ad5x_sec_start(&s, buf, m);
+	while (fgets(line, sizeof(line), stdin)) {
+		line[strcspn(line, "\n")] = '\0';
+		v = strchr(line, ' ');
+		v = v ? (*v = '\0', v + 1) : line + strlen(line);
+		while ((e = strstr(v, "\\n"))) {
+			*e = '\n';
+			memmove(e + 1, e + 2, strlen(e + 2) + 1);
+		}
+		ad5x_sec_add(&s, line, v);
+	}
+	put_sector(ad5x_sec_finish(&s), buf);
+	return 0;
+}
+
 static int rescue(int argc, char **argv)
 {
 	char buf[AD5X_REC_SIZE], out[AD5X_REC_SIZE];
@@ -196,6 +256,10 @@ int main(int argc, char **argv)
 		return decide();
 	if (argc == 2 && !strcmp(argv[1], "parse"))
 		return parse();
+	if (argc == 2 && !strcmp(argv[1], "format"))
+		return format();
+	if (argc == 3 && !strcmp(argv[1], "sector"))
+		return sector(argv[2]);
 	if (argc == 4 && !strcmp(argv[1], "nc"))
 		return nc(atoi(argv[2]), atoi(argv[3]));
 	if ((argc == 2 || argc == 3) && !strcmp(argv[1], "rescue"))
@@ -204,7 +268,8 @@ int main(int argc, char **argv)
 		printf("%s\n", ad5x_slot_a_kernel_ok(argv[2]) ? "ok" : "no");
 		return 0;
 	}
-	fprintf(stderr, "usage: bootlogic_cli decide|parse|slotaname NAME|"
+	fprintf(stderr, "usage: bootlogic_cli decide|parse|format|sector MAGIC|"
+		"slotaname NAME|"
 		"rescue [N]|nc FILE INPUT\n");
 	return 2;
 }

@@ -7,7 +7,7 @@ screen, and the recovery screen is one more file next to it. You don't need to b
 
 | File | What it is |
 |---|---|
-| `helixscreen-ru.yml` | The Russian text of the touch screen, exactly as Kiln OS builds it today (HelixScreen v1.1.0-rc.1 with my patches). This is the file to edit. |
+| `helixscreen-ru.yml` | The Russian text of the touch screen, exactly as Kiln OS builds it today (HelixScreen v1.1.0-rc.1 with my patches, up to patch 0085). This is the file to edit. |
 | `helixscreen-en.yml` | The English text, with the same keys. Only for reference, please don't edit it. |
 | `missing-ru.md` | What is still open or English, sorted by screen: choices to check, texts that are probably too long, characters the screen can't draw, my own Kiln screens that need a native speaker's check, and the recovery screen. |
 | [`../../recovery-ui/i18n/ru.txt`](../../recovery-ui/i18n/ru.txt) | The recovery screen's Russian text. All lines have a first Russian version that I wrote; please check and correct it. Its English is in [`en.txt`](../../recovery-ui/i18n/en.txt) in the same folder. |
@@ -63,5 +63,5 @@ PyYAML, `pip install pyyaml`):
 python3 -c "import sys, yaml; d = yaml.safe_load(open(sys.argv[1], encoding='utf-8')); print('OK,', len(d['translations']), 'keys')" helixscreen-ru.yml
 ```
 
-It prints `OK, 4923 keys`. An error message names the line
+It prints `OK, 5040 keys`. An error message names the line
 to fix.

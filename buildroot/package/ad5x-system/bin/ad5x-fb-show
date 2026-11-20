@@ -15,6 +15,7 @@ nothing is written, the reason goes to stderr and the exit code is 1.
 
 Used by S07ad5x-board (boot logo) and ad5x-mcu (board update screens) on
 Kiln's kernels; the stock kernel draws with cmd_jpeg_display instead.
+ad5x-fb-progress packs its pictures with pack() below.
 tools/make_logo.py --raw packs S02ad5x-logo's pre-rendered frames with
 frame() below. Not used by the recovery OS.
 """
@@ -34,24 +35,36 @@ def read_int(path):
         return int(f.read().strip())
 
 
+# rgb565's lookup tables, made once (ad5x-fb-progress packs many small
+# pictures; a lambda would be called 256 times for each)
+R_HI = [v & 0xf8 for v in range(256)]
+G_HI = [v >> 5 for v in range(256)]
+G_LO = [(v << 3) & 0xe0 for v in range(256)]
+B_LO = [v >> 3 for v in range(256)]
+
+
 def rgb565(im):
     """RGB image -> little-endian RGB565 bytes (Pillow 12 has no packer
     for it): low byte GGGBBBBB, high byte RRRRRGGG."""
     from PIL import Image, ImageChops
     r, g, b = im.split()
-    hi = ImageChops.add(r.point(lambda v: v & 0xf8), g.point(lambda v: v >> 5))
-    lo = ImageChops.add(g.point(lambda v: (v << 3) & 0xe0), b.point(lambda v: v >> 3))
+    hi = ImageChops.add(r.point(R_HI), g.point(G_HI))
+    lo = ImageChops.add(g.point(G_LO), b.point(B_LO))
     return Image.merge("LA", (lo, hi)).tobytes()
+
+
+def pack(im, bpp):
+    """An RGB image's pixels at bpp, line after line, no padding."""
+    if bpp == 32:
+        return im.tobytes("raw", "BGRX")
+    if bpp == 16:
+        return rgb565(im)
+    raise ValueError("%d bits per pixel not supported" % bpp)
 
 
 def frame(im, bpp, stride):
     """The first frame's bytes for an 800x480 RGB image."""
-    if bpp == 32:
-        data = im.tobytes("raw", "BGRX")
-    elif bpp == 16:
-        data = rgb565(im)
-    else:
-        raise ValueError("%d bits per pixel not supported" % bpp)
+    data = pack(im, bpp)
     line = W * bpp // 8
     if stride < line:
         raise ValueError("stride %d is less than %d pixels (%d bytes)" % (stride, W, line))

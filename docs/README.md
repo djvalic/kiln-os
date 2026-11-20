@@ -20,9 +20,11 @@ not yet in the public copy on GitHub.
 - [setup-wizard.md](setup-wizard.md): the first-boot setup wizard on the touch screen (design and contract).
 - [plugins.md](plugins.md): switching plugins on and off, installing them.
 - [zmod-compat.md](zmod-compat.md): printing G-code made for zMod and Bambufy.
+- [zmod-and-kiln-os.md](zmod-and-kiln-os.md): how Kiln OS differs from zMod, and what it owes to it.
 - [orcaslicer.md](orcaslicer.md): OrcaSlicer with Kiln OS.
 - [sound.md](sound.md): the speaker, chimes, `M300` and MIDI files.
 - [logs.md](logs.md): where the logs are and how to get more detail.
+- [network.md](network.md): Ethernet and Wi-Fi with NetworkManager, the files you edit, the old way and the safety net.
 - [memory.md](memory.md): 256 MiB and 512 MiB boards, and what Kiln OS changes at start-up for each.
 - [ifs-troubleshooting.md](ifs-troubleshooting.md): when the IFS drops off.
 

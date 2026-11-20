@@ -1,0 +1,243 @@
+From e2c88508569bc9ff6806533a9b382fb116689e2b Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 03:27:39 -0500
+Subject: [PATCH 52/52] ad5x: Records and state never written past their sector
+
+The state and records sectors in "ota" (0x90000, 0x90200) were each
+written by one snprintf() of all their lines, then the crc32 line at
+the length it returned, with AD5X_REC_SIZE - n as the room. Nothing
+checked that length: snprintf() returns the length the text would have
+had, so a format longer than the sector would have put the crc32 line
+past the buffer with a size that wrapped around. With every field at
+its longest the records come to 486 of 512 bytes today; a field added
+later could have gone over.
+
+The sectors are now written a line at a time (ad5x_sec_start, _add,
+_add_uint, _finish). A line goes in whole or not at all: only when it is
+shorter than the parsers' 192 bytes (AD5X_LINE_MAX), has no newline in
+it, and leaves room for the crc32 line and a NUL after it. A line that
+doesn't fit is left out and counted; the lines after it still go in if
+they fit, and the crc32 line is always written. So the sector always
+parses for U-Boot and for the main OS's lib/uboot.sh (and the recovery
+OS's sed), only without that key, which every reader takes as "-". The
+formatters return the count, and ad5x_commit() says so on the console.
+
+For the records and state as they are nothing changes: the same bytes
+as before (tools/test_bootlogic.py checks both, the longest records
+too, and a future field that doesn't fit).
+---
+ board/flashforge/ad5x/ad5x.c      |  6 +-
+ board/flashforge/ad5x/bootlogic.c | 93 +++++++++++++++++++++++--------
+ board/flashforge/ad5x/bootlogic.h | 38 ++++++++++++-
+ 3 files changed, 108 insertions(+), 29 deletions(-)
+
+diff --git a/board/flashforge/ad5x/ad5x.c b/board/flashforge/ad5x/ad5x.c
+index c13dedf8..1b770fa9 100644
+--- a/board/flashforge/ad5x/ad5x.c
++++ b/board/flashforge/ad5x/ad5x.c
+@@ -733,11 +733,13 @@ static int ad5x_commit(const struct ad5x_decision *d)
+ 		return -EIO;
+ 	}
+ 	if (d->rec_changed) {
+-		ad5x_records_format(&d->rec, buf);
++		if (ad5x_records_format(&d->rec, buf))
++			printf("ad5x: records: a line didn't fit the sector, left out\n");
+ 		ret |= ad5x_write_sector(AD5X_RECORDS_LBA, buf);
+ 	}
+ 	if (d->state_changed) {
+-		ad5x_state_format(&d->state, buf);
++		if (ad5x_state_format(&d->state, buf))
++			printf("ad5x: state: a line didn't fit the sector, left out\n");
+ 		ret |= ad5x_write_sector(AD5X_STATE_LBA, buf);
+ 	}
+ 	if (d->write_flag)
+diff --git a/board/flashforge/ad5x/bootlogic.c b/board/flashforge/ad5x/bootlogic.c
+index 7221861e..1c59ad01 100644
+--- a/board/flashforge/ad5x/bootlogic.c
++++ b/board/flashforge/ad5x/bootlogic.c
+@@ -136,39 +136,84 @@ static unsigned int parse_uint(const char *s)
+ 	return v;
+ }
+ 
+-static void finish(char *buf, unsigned int n)
++void ad5x_sec_start(struct ad5x_sec *s, char *buf, const char *magic)
+ {
+-	unsigned int crc = ad5x_crc32(0, buf, n);
++	memset(buf, 0, AD5X_REC_SIZE);
++	s->buf = buf;
++	s->n = strlen(magic);
++	s->left_out = 0;
++	if (s->n + AD5X_CRC_LINE_LEN >= AD5X_REC_SIZE) {
++		s->n = 0;	/* never: an empty sector rather than a bad one */
++		s->left_out++;
++		return;
++	}
++	memcpy(buf, magic, s->n);
++}
++
++void ad5x_sec_add(struct ad5x_sec *s, const char *key, const char *val)
++{
++	unsigned int kl = strlen(key), vl = strlen(val);
+ 
+-	snprintf(buf + n, AD5X_REC_SIZE - n, "crc32 %08x\n", crc);
++	/*
++	 * whole lines only, each shorter than AD5X_LINE_MAX (the parsers'
++	 * limit), one line each, and room left for the crc32 line and a NUL
++	 */
++	if (!s->n || !kl || kl >= AD5X_LINE_MAX || vl >= AD5X_LINE_MAX ||
++	    kl + 1 + vl >= AD5X_LINE_MAX || strchr(key, ' ') ||
++	    strchr(key, '\n') || strchr(val, '\n') ||
++	    s->n + kl + 1 + vl + 1 + AD5X_CRC_LINE_LEN >= AD5X_REC_SIZE) {
++		s->left_out++;
++		return;
++	}
++	memcpy(s->buf + s->n, key, kl);
++	s->buf[s->n + kl] = ' ';
++	memcpy(s->buf + s->n + kl + 1, val, vl);
++	s->buf[s->n + kl + 1 + vl] = '\n';
++	s->n += kl + 1 + vl + 1;
+ }
+ 
+-void ad5x_state_format(const struct ad5x_state *st, char *buf)
++void ad5x_sec_add_uint(struct ad5x_sec *s, const char *key, unsigned int v)
+ {
+-	int n;
++	char num[12];
+ 
+-	memset(buf, 0, AD5X_REC_SIZE);
+-	n = snprintf(buf, AD5X_REC_SIZE,
+-		     STATE_MAGIC "tries %u\nkernel %s\nrelease %s\nmem %s\n",
+-		     st->tries, ad5x_kernel_name(st->kernel),
+-		     st->release[0] ? st->release : "-",
+-		     st->mem_ext ? "ext" : "std");
+-	finish(buf, n);
++	snprintf(num, sizeof(num), "%u", v);
++	ad5x_sec_add(s, key, num);
+ }
+ 
+-void ad5x_records_format(const struct ad5x_records *rec, char *buf)
++unsigned int ad5x_sec_finish(struct ad5x_sec *s)
+ {
+-	int n;
++	if (s->n)	/* ad5x_sec_add() left the room for it */
++		snprintf(s->buf + s->n, AD5X_REC_SIZE - s->n, "crc32 %08x\n",
++			 ad5x_crc32(0, s->buf, s->n));
++	return s->left_out;
++}
+ 
+-	memset(buf, 0, AD5X_REC_SIZE);
+-	n = snprintf(buf, AD5X_REC_SIZE,
+-		     RECORDS_MAGIC "failed-own %s\nfailed-mainline %s\n"
+-		     "failed-mem %s\nfallbacks %u\nreason %s\n",
+-		     rec->failed_own[0] ? rec->failed_own : "-",
+-		     rec->failed_mainline[0] ? rec->failed_mainline : "-",
+-		     rec->failed_mem[0] ? rec->failed_mem : "-",
+-		     rec->fallbacks, rec->reason[0] ? rec->reason : "-");
+-	finish(buf, n);
++unsigned int ad5x_state_format(const struct ad5x_state *st, char *buf)
++{
++	struct ad5x_sec s;
++
++	ad5x_sec_start(&s, buf, STATE_MAGIC);
++	ad5x_sec_add_uint(&s, "tries", st->tries);
++	ad5x_sec_add(&s, "kernel", ad5x_kernel_name(st->kernel));
++	ad5x_sec_add(&s, "release", st->release[0] ? st->release : "-");
++	ad5x_sec_add(&s, "mem", st->mem_ext ? "ext" : "std");
++	return ad5x_sec_finish(&s);
++}
++
++unsigned int ad5x_records_format(const struct ad5x_records *rec, char *buf)
++{
++	struct ad5x_sec s;
++
++	ad5x_sec_start(&s, buf, RECORDS_MAGIC);
++	ad5x_sec_add(&s, "failed-own",
++		     rec->failed_own[0] ? rec->failed_own : "-");
++	ad5x_sec_add(&s, "failed-mainline",
++		     rec->failed_mainline[0] ? rec->failed_mainline : "-");
++	ad5x_sec_add(&s, "failed-mem",
++		     rec->failed_mem[0] ? rec->failed_mem : "-");
++	ad5x_sec_add_uint(&s, "fallbacks", rec->fallbacks);
++	ad5x_sec_add(&s, "reason", rec->reason[0] ? rec->reason : "-");
++	return ad5x_sec_finish(&s);
+ }
+ 
+ /*
+@@ -179,7 +224,7 @@ static int parse(const char *buf, const char *magic,
+ 		 void (*fn)(void *obj, const char *key, const char *val),
+ 		 void *obj)
+ {
+-	char line[AD5X_REASON_LEN + 32];
++	char line[AD5X_LINE_MAX];
+ 	unsigned int pos, len, crc, i;
+ 	const char *sp;
+ 
+diff --git a/board/flashforge/ad5x/bootlogic.h b/board/flashforge/ad5x/bootlogic.h
+index 75bf5b87..7694bbf2 100644
+--- a/board/flashforge/ad5x/bootlogic.h
++++ b/board/flashforge/ad5x/bootlogic.h
+@@ -24,6 +24,13 @@
+  *                     (kernel/extended-memory-failed); U-Boot drops it
+  *                     itself once a start after it has been confirmed.
+  *
++ * The formatters never write past the sector: a line goes in whole or not
++ * at all (ad5x_sec_add), room for the crc32 line and a NUL is kept, and a
++ * line left out is counted, so every reader (this parser, the main OS's
++ * lib/uboot.sh, the recovery OS) always finds a sector that parses, only
++ * without that key. With every field at its longest the records take 486
++ * of the 512 bytes.
++ *
+  * Bytes 0-11 (boot flag), 64-72 KiB (boot trace) and the environment
+  * (512 KiB and 544 KiB, 32 KiB each) are elsewhere in the partition.
+  */
+@@ -35,6 +42,9 @@
+ #define AD5X_REL_LEN		64	/* release strings, NUL included */
+ #define AD5X_REASON_LEN		160
+ #define AD5X_MEM_LEN		96	/* failed-mem's reason, NUL included */
++/* a text sector's lines are shorter ('\n' not counted) */
++#define AD5X_LINE_MAX		(AD5X_REASON_LEN + 32)
++#define AD5X_CRC_LINE_LEN	15	/* "crc32 XXXXXXXX\n" */
+ #define AD5X_MAX_TRIES		250	/* saturates: never wraps to 0 */
+ #define AD5X_WDT_MAX_S		1431	/* the watchdog's longest timeout */
+ 
+@@ -138,12 +148,34 @@ unsigned int ad5x_wdt_seconds(const struct ad5x_inputs *in,
+  */
+ int ad5x_slot_a_kernel_ok(const char *name);
+ 
+-/* text sectors: buf is AD5X_REC_SIZE bytes */
+-void ad5x_state_format(const struct ad5x_state *st, char *buf);
++/*
++ * Text sectors: buf is AD5X_REC_SIZE bytes. The formatters return the
++ * number of lines left out because they didn't fit (0 normally).
++ */
++unsigned int ad5x_state_format(const struct ad5x_state *st, char *buf);
+ int ad5x_state_parse(const char *buf, struct ad5x_state *st);
+-void ad5x_records_format(const struct ad5x_records *rec, char *buf);
++unsigned int ad5x_records_format(const struct ad5x_records *rec, char *buf);
+ int ad5x_records_parse(const char *buf, struct ad5x_records *rec);
+ 
++/*
++ * Writing a text sector: ad5x_sec_start() zeroes @buf and puts @magic (its
++ * own line, '\n' included) first; ad5x_sec_add() appends "KEY VALUE\n"
++ * only when the whole line fits, is shorter than AD5X_LINE_MAX and has no
++ * newline in it, with AD5X_CRC_LINE_LEN bytes and a NUL still free after
++ * it; otherwise it leaves the line out and counts it. ad5x_sec_finish()
++ * writes the crc32 line and returns that count.
++ */
++struct ad5x_sec {
++	char *buf;
++	unsigned int n;		/* bytes written so far */
++	unsigned int left_out;	/* lines that didn't fit */
++};
++
++void ad5x_sec_start(struct ad5x_sec *s, char *buf, const char *magic);
++void ad5x_sec_add(struct ad5x_sec *s, const char *key, const char *val);
++void ad5x_sec_add_uint(struct ad5x_sec *s, const char *key, unsigned int v);
++unsigned int ad5x_sec_finish(struct ad5x_sec *s);
++
+ /* a release string from a file: first line, unsafe characters as '_' */
+ void ad5x_release_clean(char *dst, const char *src, unsigned int len);
+ 
+-- 
+2.56.0
+

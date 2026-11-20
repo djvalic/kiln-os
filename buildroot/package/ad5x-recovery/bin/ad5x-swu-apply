@@ -60,6 +60,9 @@ if [ -n "$check" ]; then
 	echo "swu-apply: FAILED check"; exit 1
 fi
 
+# the recovery screen's install page (ad5x-recovery-auto's installs):
+# unpacked and checked, now SWUpdate writes
+rc_install_state write
 if [ -S /tmp/sockinstctrl ] && pidof swupdate >/dev/null; then
 	swupdate-client -v "$SWU"; rc=$?
 else

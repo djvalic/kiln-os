@@ -24,7 +24,9 @@
 #                  It also covers an X2600E (256 MiB; Kiln's SPL sets
 #                  it up, but has not run from eMMC on one yet). A chip
 #                  it can't tell (bl_variant unknown) is refused anyway
-#   --fingerprint  read only: the board's fingerprint as #68's snippet prints it
+#   --fingerprint  read only: the board's fingerprint as #68's snippet prints
+#                  it (of the disk, or under Kiln's boot loader of the saved
+#                  stock first MiB, as --offer finds it)
 #   --status       read only, quick: the boot loader, its build and the one
 #                  this recovery OS carries, a network rescue record in
 #                  LBA 2047, and the install record
@@ -34,7 +36,10 @@
 #                  /data/ad5x/bootloader-offer.enable (opt-in for now) or
 #                  for an install that stopped part-way. upgrade: yes when
 #                  the disk holds Kiln's boot loader of another build and
-#                  this one could replace it (no opt-in file needed)
+#                  this one could replace it (no opt-in file needed). The
+#                  saved stock first MiB: /data's, else (a wiped /data) its
+#                  copy in usershare's or a mounted USB stick's
+#                  kiln-stock-backup/ (usershare mounted read-only for it)
 #   --verify-start at the recovery OS's start (ad5x-recovery-auto): the first
 #                  start after an install is recorded (by Kiln's U-Boot or
 #                  not) and the screen opens the result
@@ -43,9 +48,12 @@
 # Steps, in this order, each read back, the boot flag left on slot A (this
 # recovery OS) all through:
 #   0. the stock first MiB saved: /data/ad5x/stock/boot.img (+ .sha256,
-#      .info) from the disk if it isn't there, and its copy on usershare
-#      (ad5x-stock-copy usershare): Return to Flashforge firmware takes
-#      Flashforge's SPL from there
+#      .info) if it isn't there, from the disk (Flashforge's SPL there), or
+#      else from its copy in usershare's kiln-stock-backup/ or a USB
+#      stick's kiln-stock-backup/ (a wiped /data: checked as the saved one
+#      and against the disk), and its copy on usershare (ad5x-stock-copy
+#      usershare): Return to Flashforge firmware takes Flashforge's SPL
+#      from there
 #   1. Kiln's SPL: the SPL's header sector (34) zeroed, sectors 35-81, the
 #      boot ROM's length at 0x4, then sector 34 last (lib/bootloader.sh's
 #      bl_put_spl). Flashforge's U-Boot at 0xA400 stays; Kiln's SPL doesn't
@@ -114,8 +122,11 @@
 # SD-NAND), writable, not mounted, its partitions where the SPL's table has
 # them, its GPT right and its entries ending by 0x4400 (rc_gpt: at the LBA
 # its header names, 2 or 32 on known boards); the stock first MiB saved
-# (or savable: the disk holds Flashforge's SPL) and the disk the same
-# outside Kiln's ranges, its copy on usershare (or makable); the board on
+# (or savable: the disk holds Flashforge's SPL, or a copy of it that checks
+# is in usershare's or a USB stick's kiln-stock-backup/) and the disk the same
+# outside Kiln's ranges, its copy on usershare (or makable: the stock
+# files in /data/ad5x/stock, and room for them on usershare as step 0's
+# ad5x-stock-copy needs it, its --space-check); the board on
 # the allowlist (or --unsupported-board); an X2600H (512 MiB: MemTotal and
 # the mem= bank at 0x30000000), or an X2600E with --unsupported-board
 # (Kiln's SPL has its table but has not run from eMMC on one yet); a
@@ -179,6 +190,9 @@ cleanup() {
 	return 0
 }
 trap cleanup EXIT
+# a signal ends it through cleanup too (no mount left behind); --yes
+# ignores them once it writes
+trap 'exit 1' HUP INT TERM PIPE
 
 logging=0
 say() {
@@ -220,9 +234,10 @@ emmc_line() {
 	echo "$(cat "$AD5X_SYS/class/block/$dn/device/name" 2>/dev/null) $(cat "$AD5X_SYS/class/block/$dn/size" 2>/dev/null)"
 }
 # boot.img as S99ad5x-booted saves it: 1 MiB, its sha256 file, Flashforge's
-# SPL by its .info and its own bytes, Flashforge's raw U-Boot at 0xA400
+# SPL by its .info and its own bytes, Flashforge's raw U-Boot at 0xA400.
+# FILE: another copy (default $STOCK/boot.img), with FILE.sha256, FILE.info
 boot_img_why() {
-	b=$STOCK/boot.img
+	b=${1:-$STOCK/boot.img}
 	if [ ! -f "$b" ]; then echo "missing"
 	elif [ "$(fsize "$b")" != $BL_MIB ]; then echo "$(fsize "$b") bytes, not 1 MiB"
 	elif [ "$(sha "$b")" != "$(cut -d' ' -f1 "$b.sha256" 2>/dev/null)" ]; then echo "its sha256 differs from boot.img.sha256"
@@ -235,6 +250,69 @@ boot_img_why() {
 	return 1
 }
 st_open() { echo "$1" > "$AD5X_RUN/bootloader.open" 2>/dev/null; }
+# usershare (read-only, while needed; cleanup unmounts it at any exit). The
+# read-only modes (--offer, --fingerprint) mount it at a folder of their
+# own (US_DIR.PID): one can run while an install has usershare mounted
+US_DIR=$AD5X_RUN/bootloader-usershare
+case "$mode" in offer|fingerprint) US_DIR=$US_DIR.$$ ;; esac
+usershare_mount() {
+	[ -n "$us_mnt" ] && return 0
+	us_mnt=$US_DIR
+	mkdir -p "$us_mnt"
+	mount -t ext4 -o ro "$P6" "$us_mnt" 2>/dev/null || { rmdir "$us_mnt"; us_mnt=; return 1; }
+}
+usershare_umount() { [ -n "$us_mnt" ] && umount "$us_mnt" 2>/dev/null && rmdir "$us_mnt" 2>/dev/null; us_mnt=; }
+# find_alt [mounted]: the stock first MiB's copy elsewhere, for when
+# $STOCK/boot.img is gone or bad (a wiped /data): usershare's
+# kiln-stock-backup/, then a USB stick's kiln-stock-backup/, the first that
+# checks as S99ad5x-booted saves it (boot_img_why), copied to $T/alt (with
+# .sha256 and .info): ALT, ALT_FROM; false when there is none. usershare is
+# unmounted again before it returns. "mounted": only the sticks mounted
+# already (ad5x-recovery-auto mounts them at start), none mounted here
+find_alt() {
+	ALT= ALT_FROM= fa_c=
+	if usershare_mount && boot_img_why "$us_mnt/$MARK/boot.img" >/dev/null; then
+		fa_c=$us_mnt/$MARK/boot.img ALT_FROM="usershare's $MARK/"
+	else
+		[ "$1" = mounted ] || [ -n "$(rc_usb_mounts)" ] || ad5x-usb mount 3 >/dev/null 2>&1
+		for fa_m in $(rc_usb_mounts); do
+			boot_img_why "$fa_m/$MARK/boot.img" >/dev/null || continue
+			fa_c=$fa_m/$MARK/boot.img ALT_FROM="the USB stick's $MARK/ (${fa_m##*/})"
+			break
+		done
+	fi
+	if [ -n "$fa_c" ]; then
+		mkdir -p "$T/alt" && cp "$fa_c" "$T/alt/boot.img" && cp "$fa_c.sha256" "$T/alt/boot.img.sha256" &&
+			cp "$fa_c.info" "$T/alt/boot.img.info" && boot_img_why "$T/alt/boot.img" >/dev/null &&
+			ALT=$T/alt/boot.img
+	fi
+	usershare_umount
+	[ -n "$ALT" ] || { ALT_FROM=; return 1; }
+}
+# ro_boot CUR (the disk's first MiB): the stock first MiB for the read-only
+# modes, in the install's order: $STOCK/boot.img when it checks, else its
+# copy elsewhere (find_alt, sticks mounted already) when it is this
+# printer's: the disk's outside Kiln's ranges (bl_spl_class: its GPT, with
+# this printer's GUIDs), as the install checks it. RB=, RB_FROM=; looked up
+# once. No cache across runs: --offer runs at ad5x-status --slots only (at
+# the screen's start and after each job, never during one), it mounts
+# usershare only when /data's copy is missing or bad, and a cached answer
+# could outlive the copy it was about (ad5x-stock-copy, Return to
+# Flashforge firmware and a restore rewrite kiln-stock-backup/)
+RB= RB_FROM= rb_done=
+ro_boot() {
+	if [ -z "$rb_done" ]; then
+		rb_done=1
+		if boot_img_why >/dev/null; then RB=$STOCK/boot.img RB_FROM=$STOCK/boot.img
+		elif find_alt mounted; then
+			case "$(bl_spl_class "$1" "$ALT" "$ALT")" in
+			other*) ;;
+			*) RB=$ALT RB_FROM="boot.img in $ALT_FROM" ;;
+			esac
+		fi
+	fi
+	[ -n "$RB" ]
+}
 
 # built WHAT FILE OFF LEN: the build date in the version string WHAT
 # ("U-Boot SPL" or "U-Boot") within LEN bytes of FILE from OFF, as
@@ -347,21 +425,28 @@ fi
 if [ "$mode" = offer ]; then
 	# a plain read (no cache drop): it runs at every ad5x-status --slots
 	offer=no upgrade=no
+	# The stock first MiB (boot.img) comes from ro_boot: /data's saved copy,
+	# else (a wiped /data) its copy in usershare's kiln-stock-backup/ or on
+	# a USB stick mounted already, as the install takes it. It is looked
+	# for only when needed (the cheap checks first): usershare is mounted
+	# read-only for a moment only when /data's copy is missing or bad, and
+	# nothing is written
 	if [ -n "$DISK" ] && dd if="$DISK" of="$T/cur.img" bs=65536 count=16 2>/dev/null &&
 	   [ "$(fsize "$T/cur.img")" = $BL_MIB ]; then
-		# a network rescue record: looked at as boot.img's sector (--yes
-		# clears it with an upgrade)
-		bl_rescue_rec "$T/cur.img" && boot_img_why >/dev/null &&
-			dd if="$STOCK/boot.img" of="$T/cur.img" bs=512 skip=$BL_RESCUE_LBA seek=$BL_RESCUE_LBA count=1 conv=notrunc 2>/dev/null
 		l=$(bl_loader "$T/cur.img") src=
 		if [ "$l" = kiln ] && kiln_ub_at "$T/cur.img"; then
 			echo "bootloader=kiln"
 			# an upgrade: another build, whole over this printer's boot.img
 			# (allowlisted), an X2600H, the images there (no opt-in file:
-			# the owner installed Kiln's boot loader already)
+			# the owner installed Kiln's boot loader already). A network
+			# rescue record: looked at as boot.img's sector (--yes clears
+			# it with an upgrade)
 			if [ "$(rc_slot)" = A ] && ! sdnand && [ -f "$BL_FILES/spl-mmc.img" ] &&
 			   [ -f "$BL_FILES/u-boot-emmc.img" ] && ! files_same "$T/cur.img" &&
-			   boot_img_why >/dev/null && BOOT=$STOCK/boot.img && kiln_whole "$T/cur.img" &&
+			   ro_boot "$T/cur.img" && BOOT=$RB &&
+			   { ! bl_rescue_rec "$T/cur.img" ||
+			     dd if="$BOOT" of="$T/cur.img" bs=512 skip=$BL_RESCUE_LBA seek=$BL_RESCUE_LBA count=1 conv=notrunc 2>/dev/null; } &&
+			   kiln_whole "$T/cur.img" &&
 			   bl_fingerprint "$BOOT" >/dev/null && bl_allowed "$BL_FP_SPL" "$BL_FP_DDR" &&
 			   [ "$BL_VARIANT" = H ]; then
 				upgrade=yes
@@ -369,9 +454,9 @@ if [ "$mode" = offer ]; then
 		else
 			case "$l" in
 			flashforge) echo "bootloader=flashforge"; src=$T/cur.img
-			      [ "$(bl_stval state)" = started ] && boot_img_why >/dev/null && src=$STOCK/boot.img ;;
+			      [ "$(bl_stval state)" = started ] && ro_boot "$T/cur.img" && src=$RB ;;
 			kiln) echo "bootloader=kiln-spl"
-			      [ "$(bl_stval state)" = started ] && boot_img_why >/dev/null && src=$STOCK/boot.img ;;
+			      [ "$(bl_stval state)" = started ] && ro_boot "$T/cur.img" && src=$RB ;;
 			*) echo "bootloader=unknown" ;;
 			esac
 			if [ -n "$src" ] && [ "$(rc_slot)" = A ] && ! sdnand &&
@@ -406,9 +491,11 @@ fingerprint() {	# FILE WHAT: the lines as #68's snippet prints them
 }
 if [ "$mode" = fingerprint ]; then
 	cur_mib "$T/cur.img" || { echo "$ME: can't read the first MiB of ${DISK:-the eMMC}" >&2; exit 1; }
+	# else the saved stock first MiB: /data's, or (a wiped /data) its copy
+	# in usershare's or a mounted USB stick's kiln-stock-backup/ (ro_boot)
 	if [ "$(bl_loader "$T/cur.img")" = flashforge ]; then fingerprint "$T/cur.img" ""
-	elif boot_img_why >/dev/null; then fingerprint "$STOCK/boot.img" "$STOCK/boot.img, the stock first MiB saved before Kiln's boot loader"
-	else echo "$ME: the disk doesn't hold Flashforge's SPL and there is no saved boot.img to read instead" >&2; exit 1; fi
+	elif ro_boot "$T/cur.img"; then fingerprint "$RB" "$RB_FROM, the stock first MiB saved before Kiln's boot loader"
+	else echo "$ME: the disk doesn't hold Flashforge's SPL and there is no saved boot.img to read instead (/data/ad5x/stock, usershare's or a USB stick's $MARK/)" >&2; exit 1; fi
 	exit 0
 fi
 
@@ -479,13 +566,20 @@ else
 	[ -n "$disk_ok" ] && bad "can't read the first MiB"
 	disk_ok=
 fi
+# the stock first MiB's copy elsewhere (find_alt), for when $STOCK/boot.img
+# is gone or bad (a wiped /data). It is compared with the disk as the saved
+# one is, and step 0 puts it back in $STOCK.
+ALT= ALT_FROM=
+[ -n "$disk_ok" ] && ! boot_img_why >/dev/null && find_alt
+BIMG=
+if boot_img_why >/dev/null; then BIMG=$STOCK/boot.img; elif [ -n "$ALT" ]; then BIMG=$ALT; fi
 # a network rescue record in LBA 2047: compared as boot.img's sector (the
 # copy, not the disk), cleared by --yes before anything else (clear_rescue)
 RESCUE=
 if [ -n "$disk_ok" ] && bl_rescue_rec "$CUR"; then
 	RESCUE=$(bl_rescue_says "$CUR")
-	if boot_img_why >/dev/null; then
-		dd if="$STOCK/boot.img" of="$CUR" bs=512 skip=$BL_RESCUE_LBA seek=$BL_RESCUE_LBA count=1 conv=notrunc 2>/dev/null
+	if [ -n "$BIMG" ]; then
+		dd if="$BIMG" of="$CUR" bs=512 skip=$BL_RESCUE_LBA seek=$BL_RESCUE_LBA count=1 conv=notrunc 2>/dev/null
 		note "LBA $BL_RESCUE_LBA holds a network rescue record ($RESCUE): compared as the saved stock first MiB's sector; --yes writes that sector over it first"
 	else
 		bad "LBA $BL_RESCUE_LBA holds a network rescue record ($RESCUE) and no stock first MiB is saved ($STOCK/boot.img): the sector's own bytes are unknown: refused"
@@ -495,8 +589,9 @@ fi
 LOADER=
 [ -n "$disk_ok" ] && LOADER=$(bl_loader "$CUR")
 
-# the stock first MiB (boot.img): saved, or savable from the disk now
-BOOT= SAVE_BOOT=
+# the stock first MiB (boot.img): saved, or savable from the disk (or its
+# copy elsewhere) now
+BOOT= SAVE_BOOT= BOOT_FROM="the disk's first MiB (Flashforge's SPL)"
 if [ -n "$disk_ok" ]; then
 	if why=$(boot_img_why); then
 		BOOT=$STOCK/boot.img
@@ -518,11 +613,22 @@ if [ -n "$disk_ok" ]; then
 			*) ok "stock first MiB saved ($BOOT): the disk's outside Kiln's ranges" ;;
 			esac
 		fi
+	elif [ "$LOADER" = flashforge ] && [ -n "$RESCUE" ] && ! cmp -s "$BIMG" "$CUR"; then
+		# the record's sector was taken from the copy elsewhere, which isn't the disk's
+		bad "no saved stock first MiB ($STOCK/boot.img: $why), a network rescue record in LBA $BL_RESCUE_LBA, and the copy in $ALT_FROM differs from the disk: the sector's own bytes are unknown: refused"
 	elif [ "$LOADER" = flashforge ]; then
 		[ "$why" = missing ] || note "$STOCK/boot.img: $why: saved again from the disk"
 		BOOT=$T/boot.img SAVE_BOOT=1
 		cp "$CUR" "$BOOT"
 		ok "stock first MiB: not saved yet; step 0 saves it from the disk (Flashforge's SPL is there)"
+	elif [ -n "$ALT" ]; then
+		[ "$why" = missing ] || note "$STOCK/boot.img: $why"
+		c=$(bl_spl_class "$CUR" "$ALT" "$ALT")
+		case "$c" in
+		other*) bad "no saved stock first MiB ($STOCK/boot.img: $why), and its copy in $ALT_FROM differs from the disk outside Kiln's ranges (offset $(printf '0x%x' "${c#other }")): another printer's, or the GPT changed: refused" ;;
+		*) ok "stock first MiB: not in $STOCK ($why); its copy in $ALT_FROM is the disk's outside Kiln's ranges: step 0 puts it back in $STOCK"
+		   BOOT=$ALT SAVE_BOOT=1 BOOT_FROM="its copy in $ALT_FROM" ;;
+		esac
 	else
 		bad "no saved stock first MiB ($STOCK/boot.img: $why) and the disk doesn't hold Flashforge's SPL: no way back to Flashforge's boot loader; refused"
 	fi
@@ -530,13 +636,6 @@ fi
 # its copy on usershare (Return to Flashforge firmware takes it from there
 # when /data/ad5x/stock is gone)
 US_OK=
-usershare_mount() {
-	[ -n "$us_mnt" ] && return 0
-	us_mnt=$AD5X_RUN/bootloader-usershare
-	mkdir -p "$us_mnt"
-	mount -t ext4 -o ro "$P6" "$us_mnt" 2>/dev/null || { rmdir "$us_mnt"; us_mnt=; return 1; }
-}
-usershare_umount() { [ -n "$us_mnt" ] && umount "$us_mnt" 2>/dev/null && rmdir "$us_mnt" 2>/dev/null; us_mnt=; }
 us_has_boot() {	# usershare's copy holds this boot.img
 	usershare_mount || return 1
 	[ -n "$BOOT" ] && [ -f "$us_mnt/$MARK/boot.img" ] && cmp -s "$us_mnt/$MARK/boot.img" "$BOOT"
@@ -544,7 +643,16 @@ us_has_boot() {	# usershare's copy holds this boot.img
 if [ -n "$BOOT" ]; then
 	if us_has_boot; then US_OK=1; ok "its copy on usershare ($MARK/boot.img) is the same"
 	elif [ -f "$STOCK/kernel.img" ] && [ -f "$STOCK/rootfs.squashfs" ] && [ -f "$STOCK/SHA256SUMS" ]; then
-		ok "its copy on usershare: not there yet; step 0 makes it (ad5x-stock-copy usershare)"
+		# step 0's ad5x-stock-copy needs room for the new copy next to
+		# any old one (or the old one's big files out first): its own
+		# room test, now, before anything is written
+		usershare_umount
+		sp=$(ad5x-stock-copy usershare --space-check ${SAVE_BOOT:+--with-boot} 2>&1 | tail -n 1)
+		case "$sp" in
+		"stock-copy: room OK"*)
+			ok "its copy on usershare: not there yet; step 0 makes it (ad5x-stock-copy usershare; ${sp#stock-copy: })" ;;
+		*)	bad "its copy on usershare: not there yet, and step 0 can't make it: ${sp#stock-copy: FAILED }: refused (make room on usershare, or save the stock files to a USB stick and remove the old kiln-stock-backup/)" ;;
+		esac
 	else
 		bad "no copy of the stock files on usershare and none can be made ($STOCK has no kernel.img, rootfs.squashfs and SHA256SUMS): refused"
 	fi
@@ -891,7 +999,7 @@ stop_point() {
 }
 step_0() {
 	if [ -n "$SAVE_BOOT" ]; then
-		say "  $STOCK/boot.img <- the disk's first MiB (Flashforge's SPL)"
+		say "  $STOCK/boot.img <- $BOOT_FROM"
 		mkdir -p "$STOCK" || return 1
 		n=$STOCK/.boot.img.new
 		cp "$BOOT" "$n" && echo "$(sha "$n")  boot.img" > "$n.sha256" &&

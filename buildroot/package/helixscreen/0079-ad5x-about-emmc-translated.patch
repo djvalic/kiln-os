@@ -1,0 +1,316 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 16:00:00 -0500
+Subject: [PATCH] ad5x: About's eMMC value translated
+
+The previous patch's eMMC row built its value in English inside
+kiln_hardware, so a Russian screen showed "(maker 0xEC)" in English.
+kiln_hardware now only reads: read_emmc() returns the name, maker ID,
+PRV and size in sectors. The About panel reads it once and turns it
+into text in populate_info_rows() with lv_tr() and the English format
+strings as keys, so the system module needs no LVGL and the row
+follows the language each time About opens. The name and "PRV" stay
+untranslated. The keys are in en.yml and, with Russian values, in
+ru.yml; other languages show English.
+
+Also an eMMC size of 0 sectors is left out instead of "0.0 GiB".
+
+The tests check the fields, and an eMMC without a name, maker or size.
+---
+ include/system/kiln_hardware.h    | 23 +++++++++++++++----
+ include/ui_settings_about.h       |  6 +++++
+ src/system/kiln_hardware.cpp      | 36 ++++++++++++++---------------
+ src/ui/ui_settings_about.cpp      | 38 +++++++++++++++++++++++++------
+ tests/unit/test_kiln_hardware.cpp | 36 ++++++++++++++++++++++++++---
+ translations/en.yml               |  2 ++
+ translations/ru.yml               |  2 ++
+ 7 files changed, 110 insertions(+), 33 deletions(-)
+
+diff --git a/include/system/kiln_hardware.h b/include/system/kiln_hardware.h
+index 8f2a254b..5e7d3693 100644
+--- a/include/system/kiln_hardware.h
++++ b/include/system/kiln_hardware.h
+@@ -9,16 +9,31 @@
+  * (58A398, A31M8C, MMC8GB so far). The About panel shows it.
+  */
+ 
++#include <optional>
+ #include <string>
+ 
+ namespace helix::kiln_hardware {
+ 
++/// What the eMMC row shows
++struct EmmcInfo {
++    std::string name;               ///< the CID's product name ("A31M8C")
++    std::optional<unsigned> maker;  ///< the CID's manufacturer ID (0xEC)
++    std::string prv;                ///< the product revision as sysfs gives it ("0x30"); "" none
++    unsigned long long sectors = 0; ///< 512-byte sectors; 0 unknown
++
++    /// The size in GiB; nullopt when the size is unknown or 0
++    std::optional<double> size_gib() const;
++};
++
+ /**
+- * @brief The eMMC row: "A31M8C (maker 0xEC), PRV 0x30, 58.2 GiB".
++ * @brief The eMMC row's fields, from /sys/block/mmcblk0.
+  *
+- * From /sys/block/mmcblk0; "" when there is no eMMC there. @p root is the
+- * test seam: the files are read below it.
++ * nullopt when there is no eMMC there (no device, an SD card, no name).
++ * This module only reads; the About panel turns the fields into the
++ * translated row text ("A31M8C (maker 0xEC), PRV 0x30, 58.2 GiB"), so
++ * nothing here depends on LVGL. @p root is the test seam: the files are
++ * read below it.
+  */
+-std::string emmc_summary(const std::string& root = "");
++std::optional<EmmcInfo> read_emmc(const std::string& root = "");
+ 
+ } // namespace helix::kiln_hardware
+diff --git a/include/ui_settings_about.h b/include/ui_settings_about.h
+index 82d47b1f..33bddab7 100644
+--- a/include/ui_settings_about.h
++++ b/include/ui_settings_about.h
+@@ -24,8 +24,10 @@
+ #include "overlay_base.h"
+ #include "static_panel_registry.h"
+ #include "subject_managed_panel.h"
++#include "system/kiln_hardware.h"
+ 
+ #include <chrono>
++#include <optional>
+ #include <string>
+ 
+ namespace helix {
+@@ -134,6 +136,10 @@ class AboutSettingsOverlay : public OverlayBase {
+ 
+     // Debounce tracker restart on inadvertent re-open
+     std::chrono::steady_clock::time_point last_deactivate_{};
++
++    // Kiln OS on the AD5X: read once in init_subjects() (the hardware doesn't
++    // change while running), made into translated text in populate_info_rows()
++    std::optional<helix::kiln_hardware::EmmcInfo> kiln_emmc_;
+ };
+ 
+ inline AboutSettingsOverlay& get_about_settings_overlay() {
+diff --git a/src/system/kiln_hardware.cpp b/src/system/kiln_hardware.cpp
+index fc69422e..ea42e622 100644
+--- a/src/system/kiln_hardware.cpp
++++ b/src/system/kiln_hardware.cpp
+@@ -21,35 +21,33 @@ std::string read_trimmed(const std::string& path) {
+ 
+ } // namespace
+ 
+-std::string emmc_summary(const std::string& root) {
++std::optional<double> EmmcInfo::size_gib() const {
++    if (sectors == 0) {
++        return std::nullopt;
++    }
++    return static_cast<double>(sectors) * 512.0 / (1024.0 * 1024.0 * 1024.0);
++}
++
++std::optional<EmmcInfo> read_emmc(const std::string& root) {
+     const std::string block = root + "/sys/block/mmcblk0";
+     const std::string dev = block + "/device";
+     if (read_trimmed(dev + "/type") != "MMC") {
+-        return {};
++        return std::nullopt;
+     }
+-    const std::string name = read_trimmed(dev + "/name");
+-    if (name.empty()) {
+-        return {};
++    EmmcInfo info;
++    info.name = read_trimmed(dev + "/name");
++    if (info.name.empty()) {
++        return std::nullopt;
+     }
+-
+-    std::string text = name;
+     // manfid reads "0x0000ec"
+     const std::string manfid = read_trimmed(dev + "/manfid");
+     if (manfid.size() > 2) {
+-        if (auto id = tio::parse_int<unsigned>(manfid.substr(2), 16)) {
+-            text += fmt::format(" (maker 0x{:02X})", *id);
+-        }
+-    }
+-    const std::string prv = read_trimmed(dev + "/prv");
+-    if (!prv.empty()) {
+-        text += fmt::format(", PRV {}", prv);
++        info.maker = tio::parse_int<unsigned>(manfid.substr(2), 16);
+     }
++    info.prv = read_trimmed(dev + "/prv");
+     // 512-byte sectors
+-    if (auto sectors = tio::parse_int<unsigned long long>(read_trimmed(block + "/size"))) {
+-        text += fmt::format(", {:.1f} GiB", static_cast<double>(*sectors) * 512.0 /
+-                                                (1024.0 * 1024.0 * 1024.0));
+-    }
+-    return text;
++    info.sectors = tio::parse_int<unsigned long long>(read_trimmed(block + "/size")).value_or(0);
++    return info;
+ }
+ 
+ } // namespace helix::kiln_hardware
+diff --git a/src/ui/ui_settings_about.cpp b/src/ui/ui_settings_about.cpp
+index 4d7d1861..d79c3530 100644
+--- a/src/ui/ui_settings_about.cpp
++++ b/src/ui/ui_settings_about.cpp
+@@ -108,15 +108,14 @@ void AboutSettingsOverlay::init_subjects() {
+                                   diag.identity.host_arch.c_str(), "host_arch_value", subjects_);
+ 
+         // Kiln OS on the AD5X: the eMMC (a part that differs between
+-        // boards). The hardware doesn't change while running.
++        // boards). The hardware doesn't change while running, so it is read
++        // once; populate_info_rows() writes the translated text.
+ #if defined(HELIX_KILN_AD5X)
+-        const std::string emmc = helix::kiln_hardware::emmc_summary();
+-#else
+-        const std::string emmc;
++        kiln_emmc_ = helix::kiln_hardware::read_emmc();
+ #endif
+-        UI_MANAGED_SUBJECT_STRING(emmc_value_subject_, emmc_value_buf_, emmc.c_str(),
+-                                  "about_emmc_value", subjects_);
+-        UI_MANAGED_SUBJECT_INT(has_emmc_subject_, emmc.empty() ? 0 : 1, "about_has_emmc",
++        UI_MANAGED_SUBJECT_STRING(emmc_value_subject_, emmc_value_buf_, "", "about_emmc_value",
++                                  subjects_);
++        UI_MANAGED_SUBJECT_INT(has_emmc_subject_, kiln_emmc_ ? 1 : 0, "about_has_emmc",
+                                subjects_);
+     });
+ }
+@@ -304,6 +303,26 @@ void AboutSettingsOverlay::setup_contributor_marquee() {
+ // INFO ROWS
+ // ============================================================================
+ 
++namespace {
++
++// Kiln OS: the eMMC row, "A31M8C (maker 0xEC), PRV 0x30, 58.2 GiB". The words
++// are translated; the identifiers (the name, PRV) are not.
++std::string kiln_emmc_text(const helix::kiln_hardware::EmmcInfo& e) {
++    std::string text = e.name;
++    if (e.maker) {
++        text += fmt::format(fmt::runtime(lv_tr(" (maker 0x{:02X})")), *e.maker);
++    }
++    if (!e.prv.empty()) {
++        text += fmt::format(", PRV {}", e.prv);
++    }
++    if (const auto gib = e.size_gib()) {
++        text += fmt::format(fmt::runtime(lv_tr(", {:.1f} GiB")), *gib);
++    }
++    return text;
++}
++
++} // namespace
++
+ void AboutSettingsOverlay::populate_info_rows() {
+     // Version
+     lv_subject_copy_string(&version_value_subject_, helix_version());
+@@ -317,6 +336,11 @@ void AboutSettingsOverlay::populate_info_rows() {
+         config->get_printer_display_name(config->get_active_printer_id(), lv_tr("Unknown"));
+     lv_subject_copy_string(&printer_value_subject_, printer_name.c_str());
+     spdlog::trace("[{}] Printer: {}", get_name(), printer_name);
++
++    // Kiln OS: the eMMC, in the current language
++    if (kiln_emmc_) {
++        lv_subject_copy_string(&emmc_value_subject_, kiln_emmc_text(*kiln_emmc_).c_str());
++    }
+ }
+ 
+ void AboutSettingsOverlay::fetch_print_hours() {
+diff --git a/tests/unit/test_kiln_hardware.cpp b/tests/unit/test_kiln_hardware.cpp
+index 2ca52436..94fc5314 100644
+--- a/tests/unit/test_kiln_hardware.cpp
++++ b/tests/unit/test_kiln_hardware.cpp
+@@ -43,12 +43,17 @@ struct Root {
+ TEST_CASE("Kiln hardware: the eMMC row", "[kiln][hardware]") {
+     Root r;
+     SECTION("no eMMC: no row") {
+-        CHECK(emmc_summary(r.str()).empty());
++        CHECK_FALSE(read_emmc(r.str()));
+     }
+     SECTION("an SD card is not the eMMC") {
+         r.put("sys/block/mmcblk0/device/type", "SD\n");
+         r.put("sys/block/mmcblk0/device/name", "SD32G\n");
+-        CHECK(emmc_summary(r.str()).empty());
++        CHECK_FALSE(read_emmc(r.str()));
++    }
++    SECTION("an eMMC without a name: no row") {
++        r.put("sys/block/mmcblk0/device/type", "MMC\n");
++        r.put("sys/block/mmcblk0/device/name", "\n");
++        CHECK_FALSE(read_emmc(r.str()));
+     }
+     SECTION("printer 2's A31M8C") {
+         r.put("sys/block/mmcblk0/device/type", "MMC\n");
+@@ -56,6 +61,31 @@ TEST_CASE("Kiln hardware: the eMMC row", "[kiln][hardware]") {
+         r.put("sys/block/mmcblk0/device/manfid", "0x0000ec\n");
+         r.put("sys/block/mmcblk0/device/prv", "0x30\n");
+         r.put("sys/block/mmcblk0/size", "122142720\n");
+-        CHECK(emmc_summary(r.str()) == "A31M8C (maker 0xEC), PRV 0x30, 58.2 GiB");
++        const auto e = read_emmc(r.str());
++        REQUIRE(e);
++        CHECK(e->name == "A31M8C");
++        CHECK(e->maker == 0xECu);
++        CHECK(e->prv == "0x30");
++        CHECK(e->sectors == 122142720ull);
++        // the About panel shows it as 58.2 GiB
++        REQUIRE(e->size_gib());
++        CHECK(*e->size_gib() == Catch::Approx(58.2422).margin(0.0001));
++    }
++    SECTION("no maker, PRV or size: those are left out") {
++        r.put("sys/block/mmcblk0/device/type", "MMC\n");
++        r.put("sys/block/mmcblk0/device/name", "A31M8C\n");
++        r.put("sys/block/mmcblk0/device/manfid", "0x\n");
++        auto e = read_emmc(r.str());
++        REQUIRE(e);
++        CHECK_FALSE(e->maker);
++        CHECK(e->prv.empty());
++        CHECK(e->sectors == 0);
++        CHECK_FALSE(e->size_gib());
++        // a size of 0 is left out too, not shown as 0.0 GiB
++        r.put("sys/block/mmcblk0/size", "0\n");
++        e = read_emmc(r.str());
++        REQUIRE(e);
++        CHECK(e->sectors == 0);
++        CHECK_FALSE(e->size_gib());
+     }
+ }
+diff --git a/translations/en.yml b/translations/en.yml
+index c4a3274f..f98776b3 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -2,6 +2,7 @@ locale: en
+ translations:
+   '%d-%d': '%d-%d'
+   '%d-%d°C': '%d-%d°C'
++  ' (maker 0x{:02X})': ' (maker 0x{:02X})'
+   ' (timed out)': ' (timed out)'
+   ' frames': ' frames'
+   ' left': ' left'
+@@ -67,6 +68,7 @@ translations:
+   + New: + New
+   +{} more: +{} more
+   ', also {}': ', also {}'
++  ', {:.1f} GiB': ', {:.1f} GiB'
+   '- Check [resonance_tester] in printer.cfg': '- Check [resonance_tester] in printer.cfg'
+   '- Ensure ADXL345 is connected': '- Ensure ADXL345 is connected'
+   '- Try Measure Noise first': '- Try Measure Noise first'
+diff --git a/translations/ru.yml b/translations/ru.yml
+index 0dd83607..e6c22df6 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -2,6 +2,7 @@ locale: ru
+ translations:
+   '%d-%d': '%d-%d'
+   '%d-%d°C': '%d-%d°C'
++  ' (maker 0x{:02X})': ' (производитель 0x{:02X})'
+   ' (timed out)': ' (время ожидания истекло)'
+   ' frames': ' кадров'
+   ' left': ' осталось'
+@@ -111,6 +112,7 @@ translations:
+   + New: + Новый
+   +{} more: '+ещё {}'
+   ', also {}': ', также {}'
++  ', {:.1f} GiB': ', {:.1f} ГБ'
+   '- Check [resonance_tester] in printer.cfg': '- Проверьте блок [resonance_tester]
+     в printer.cfg'
+   '- Ensure ADXL345 is connected': '- Убедитесь, что ADXL345 подключен'
+-- 
+2.56.0
+

@@ -149,6 +149,7 @@ kernel() {
 	case "$(uname -r)" in 5.10.*) echo stock ;; *) echo own ;; esac
 }
 show() {	# screen NAME or a JPEG path (best effort; HelixScreen starts later)
+	progress_stop	# nothing draws over the new screen
 	case "$1" in /*) f=$1 ;; *) f=$AD5X_SCREENS/$1.jpg ;; esac
 	echo "$(date '+%F %T') screen ${f##*/}" >> "$LOG" 2>/dev/null
 	[ -f "$f" ] && [ -e "$AD5X_DEV/fb0" ] || return 0
@@ -169,6 +170,64 @@ show() {	# screen NAME or a JPEG path (best effort; HelixScreen starts later)
 		fi
 	fi
 	true
+}
+# Something moving on the board update screen (best effort; the flashing
+# never waits for it and goes on the same if it fails or is missing):
+#   - Kiln's kernels: ad5x-fb-progress redraws parts of mcu-updating.jpg
+#     five times a second: the ring turns, the line says what is being
+#     written with the flasher's percentage (its log's "NN%"), a bar, the
+#     elapsed time. progress STEP [LOG] tells it what happens now
+#     ($AD5X_RUN/mcu-progress);
+#   - stock kernel: mcu-updating.jpg and its frames (mcu-updating-1.jpg ..)
+#     in turn with cmd_jpeg_display, about once a second.
+# progress_stop (show() runs it first, so does the exit trap) ends either
+# and waits for it: nothing draws after it returns. Signals are left as
+# they were; a killed ad5x-mcu leaves nothing drawing: the helper ends
+# when its parent is gone (within a fifth of a second), the loop within
+# about a second, the helper anyway after 30 minutes.
+PROG= PROGSTATE=$AD5X_RUN/mcu-progress
+progress_start() {
+	[ -z "${PROG:-}" ] && [ -e "$AD5X_DEV/fb0" ] || return 0
+	trap progress_stop EXIT
+	mkdir -p "$AD5X_RUN" 2>/dev/null
+	echo check > "$PROGSTATE" 2>/dev/null
+	if [ "$(kernel)" = stock ]; then
+		[ -f "$AD5X_SCREENS/mcu-updating-1.jpg" ] || return 0
+		screen_loop $$ "$AD5X_SCREENS/mcu-updating" >/dev/null 2>&1 &
+		PROG=$!
+	elif command -v ad5x-fb-progress >/dev/null 2>&1 && [ -d "$AD5X_SCREENS/progress" ]; then
+		ad5x-fb-progress --state "$PROGSTATE" "$AD5X_SCREENS/progress" \
+			"$AD5X_DEV/fb0" "$AD5X_SYS/class/graphics/fb0" >/dev/null 2>>"$LOG" &
+		PROG=$!
+	fi
+	[ -z "$PROG" ] || echo "$(date '+%F %T') progress shown (pid $PROG)" >> "$LOG" 2>/dev/null
+	true
+}
+progress_stop() {
+	[ -n "${PROG:-}" ] || return 0
+	kill "$PROG" 2>/dev/null
+	wait "$PROG" 2>/dev/null
+	PROG=
+	rm -f "$PROGSTATE" "$PROGSTATE.tmp"
+}
+progress() {	# STEP [LOG]: check, mainboard, eboard, start, ifs
+	[ -n "${PROG:-}" ] || return 0
+	echo "$*" > "$PROGSTATE.tmp" 2>/dev/null && mv -f "$PROGSTATE.tmp" "$PROGSTATE" 2>/dev/null
+	true
+}
+screen_loop() {	# OWNER BASE: BASE.jpg, BASE-1.jpg .. in turn while OWNER runs
+	# TERM ends it, but never in the middle of a picture: the shell runs
+	# the trap only after cmd_jpeg_display has finished
+	trap 'kill $sp 2>/dev/null; exit 0' TERM
+	sp=
+	while :; do
+		for f in "$2.jpg" "$2"-[0-9]*.jpg; do
+			kill -0 "$1" 2>/dev/null || exit 0
+			[ -f "$f" ] && cmd_jpeg_display "$f" >/dev/null 2>&1
+			sleep 1 & sp=$!
+			wait $sp
+		done
+	done
 }
 klippy_running() {	# Klipper holds both ports: asking a board would break its link
 	ps w 2>/dev/null | grep -v grep | grep -q "klippy/klippy.py"
@@ -242,8 +301,10 @@ arm_stock() {	# stock's own board update at its next start
 flash_mainboard() {
 	tools || return 1
 	say "mainboard: flashing $WANT (ad5x-flash-n32)"
+	progress mainboard "$ST/nations.log"
 	ad5x-flash-n32 -p "$MB" --uid-file "$ST/mainboard.uid" "$AD5X_MCU_FW/mainboard.bin" > "$ST/nations.log" 2>&1
 	rc=$?
+	progress check
 	if [ $rc != 0 ] || ! grep -q "verification succeeded" "$ST/nations.log"; then
 		say "mainboard: flashing failed (exit $rc, $ST/nations.log)"
 		return 1
@@ -257,8 +318,10 @@ flash_mainboard() {
 flash_eboard() {	# the bootloader must be waiting
 	tools || return 1
 	say "eboard: flashing $WANT (ad5x-flash-iap)"
+	progress eboard "$ST/iap.log"
 	ad5x-flash-iap -p "$EB" "$AD5X_MCU_FW/eboard.hex" > "$ST/iap.log" 2>&1
 	rc=$?
+	progress start
 	# ad5x-flash-iap sends 'A' after EOT and wants ACK back. Another reply (R, seen
 	# on the printer 2026-11-04) doesn't say the start failed: the image is written.
 	# After R the bootloader waits again: the application never answered in a
@@ -425,8 +488,10 @@ flash_ifs() {	# HEX WHAT: write HEX to the IFS (WHAT for the log)
 		# into the bootloader; a bootloader that already waits ignores it.
 		# Nothing after EOT (--no-start): the IFS bootloader starts the application
 		# itself, as with stock IFSCommand; an 'A' there left the application erased
+		progress ifs "$ST/ifs.log"
 		ad5x-flash-ifs --f37 --no-start -p "$IFS_PORT" -w 20 "$1" > "$ST/ifs.log" 2>&1
 		rc=$?
+		progress check
 		if [ $rc = 0 ] && grep -q "STM32Write: success" "$ST/ifs.log" && ! grep -q "HD" "$ST/ifs.log"; then
 			# written; flash_ifs_klipper checks the version the IFS then reports
 			return 0
@@ -548,7 +613,7 @@ boot() {
 	arm() {	# before the first write: tools present, stock's way back armed
 		[ -z "$armed" ] || return 0
 		tools || return 1
-		arm_stock; armed=1; show mcu-updating
+		arm_stock; armed=1; show mcu-updating; progress_start
 	}
 	failed= mbflashed=
 	# The mainboard's version and whether the eboard's bootloader waits,

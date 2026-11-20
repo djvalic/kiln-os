@@ -1,0 +1,42 @@
+From 576d59034c12591570f35dc99d00204e8cd73f1f Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Tue, 17 Nov 2026 19:13:22 -0700
+Subject: [PATCH] dt-bindings: nvmem: ingenic,jz4780-efuse: Add the X2600
+
+The X2600 has a later version of the JZ4780's eFuse controller: the same
+registers, but addressed in words, with a power-down bit and a
+redundancy row that must be read before the array. It is not compatible
+with the JZ4780's, so it gets its own compatible.
+
+On the X2600 the clock is the controller's gate, whose parent is AHB2;
+describe the clock so that it covers both.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ .../devicetree/bindings/nvmem/ingenic,jz4780-efuse.yaml      | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/Documentation/devicetree/bindings/nvmem/ingenic,jz4780-efuse.yaml b/Documentation/devicetree/bindings/nvmem/ingenic,jz4780-efuse.yaml
+index e89fd879c..471189e43 100644
+--- a/Documentation/devicetree/bindings/nvmem/ingenic,jz4780-efuse.yaml
++++ b/Documentation/devicetree/bindings/nvmem/ingenic,jz4780-efuse.yaml
+@@ -16,12 +16,15 @@ properties:
+   compatible:
+     enum:
+       - ingenic,jz4780-efuse
++      - ingenic,x2600-efuse
+ 
+   reg:
+     maxItems: 1
+ 
+   clocks:
+-    # Handle for the ahb for the efuse.
++    description:
++      The clock of the bus the eFuse controller is on (AHB2), or its gate.
++      The read timing is derived from its rate.
+     maxItems: 1
+ 
+ required:
+-- 
+2.43.0
+

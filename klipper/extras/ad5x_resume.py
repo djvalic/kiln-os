@@ -279,6 +279,16 @@ class Ad5xResume:
         if ps.get_status(self.reactor.monotonic())['state'] in (
                 "printing", "paused"):
             raise gcmd.error("RESUME_INTERRUPTED: a print is running")
+        ifs = self.printer.lookup_object('ifs', None)
+        if ifs is not None and getattr(ifs, 'tube_blocked', False):
+            # A strand left in the tube by an unload or find that didn't
+            # finish: the script's IFS_SET_CHANNEL would be refused, or
+            # (CHANNEL=0) lift the block with the strand still there
+            raise gcmd.error(
+                "RESUME_INTERRUPTED: filament sits in the IFS tube above the "
+                "toolhead sensor: IFS_FIND_HEAD_SLOT SLOT=n (the slot it is "
+                "from) pulls it back, or IFS_SET_CHANNEL CHANNEL=0 once it "
+                "is pulled out by hand; then resume")
         if not os.path.isfile(st['file']) or \
                 os.path.getsize(st['file']) < st['position']:
             raise gcmd.error("RESUME_INTERRUPTED: %s is gone or changed"

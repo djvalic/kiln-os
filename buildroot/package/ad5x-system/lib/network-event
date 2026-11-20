@@ -1,0 +1,9 @@
+#!/bin/sh
+# inotifyd's handler for NetworkManager's connections (S40ad5x-network,
+# docs/network.md): $1 the events, $2 the directory, $3 the file. A
+# keyfile saved (moved in, NetworkManager writes through a temp file),
+# written or deleted: the Wi-Fi networks back into wpa_supplicant.conf.
+case "$3" in
+*.nmconnection) exec ${AD5X_NET_INIT:-/etc/init.d}/S40ad5x-network sync ;;
+esac
+exit 0

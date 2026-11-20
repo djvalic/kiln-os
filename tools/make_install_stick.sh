@@ -103,7 +103,11 @@ Kiln OS $VERSION, install stick. See docs/install.md.
 1. Copy everything here into the top folder of a FAT32 USB stick.
 2. Printer off. Stick in. Printer on. The screen shows the steps (a few
    minutes; with enough room it first copies the eMMC to the stick, about
-   1.3 GB). It restarts into Kiln OS by itself.
+   1.3 GB). "Done, restarting": take the stick out. It restarts into Kiln OS
+   by itself. If the screen says "Switch off and on", take the stick out
+   and switch the printer off and on: that is safe then.
+   The first start of Kiln OS can show "Installing Kiln OS" for a few
+   minutes: don't switch the printer off then.
 3. Log: ad5x-install.log on the stick.
 Works on the stock firmware, with or without zMod. Never put an AD5X-*.tgz on
 this stick. Back to stock later: ad5x-restore-stock over SSH (docs/install.md).

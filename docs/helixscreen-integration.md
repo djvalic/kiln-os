@@ -23,8 +23,8 @@ for `LW` `https://github.com/Hrybmo/lesswaste/blob/3d42421a6ed020baaa7563c94a56a
 
 ## Our patches
 
-`buildroot/package/helixscreen/*.patch` on HelixScreen v1.1.0-rc.1: 69
-files, `0001` to `0077` (the missing numbers were dropped because upstream
+`buildroot/package/helixscreen/*.patch` on HelixScreen v1.1.0-rc.1: 78
+files, `0001` to `0086` (the missing numbers were dropped because upstream
 has them). `docs/setup-wizard.md` ("HelixScreen side") lists `0001` to
 `0019` with what each does: among them the AD5X setup steps (0001, 0002,
 0003, 0006 time zone), the IFS port sensors (0004), Settings > Plugins
@@ -56,7 +56,7 @@ of the real configs. Not run against HelixScreen itself.
 | save variable `ifs_loaded` | Written by every load/unload/`IFS_SET_CHANNEL` (replaces `ifs_channel`, which is still read once if `ifs_loaded` is absent) |
 | `filament_switch_sensor toolhead` | `[adc_filament_sensor toolhead]` (renamed from `head`) also registers itself under that name: same object, same status, `SET_FILAMENT_SENSOR SENSOR=toolhead` |
 | `IFS_LOAD SLOT=n [TEMP=]` | `IFS_SWAP CHANNEL=n`: cut and unload the loaded lane, load, purge (stock-recorded sequence) |
-| `IFS_UNLOAD [SLOT=n] [TEMP=]` | Cut, unload, pull back 70 mm, `F39`; `SLOT` defaults to `ifs_loaded`; refused if it names a lane other than the loaded one |
+| `IFS_UNLOAD [SLOT=n] [TEMP=]` | Cut, unload, pull back 70 mm, `F39`; `SLOT` defaults to `ifs_loaded`; refused if it names a lane other than the loaded one, and while `printer.ifs.tube_blocked` (a strand left in the tube) |
 | `IFS_EJECT SLOT=n` | Idle lane: `F24`, `F11 L1000 S1200` (until the IFS is ready), `F39`, no heat, no toolhead moves. Loaded lane: `IFS_UNLOAD` first. Refused when the toolhead holds filament of an unknown lane |
 | `T0`-`T3` | `IFS_SWAP CHANNEL={tool_map[n]}`; `PRINT_START TOOL=` goes through the map too |
 | `IFS_MAP_TOOL TOOL= SLOT=` / `RESET=1` | As `FX`: refused without a reading or for a lane without filament |
@@ -511,6 +511,29 @@ To check on the screen (nothing here has run):
 6. Settings > Printer > Run Setup Wizard: confirm, seven steps, Back on the
    first step and Finish on the last return to Settings.
 7. Layout at 800x480: card, buttons and the footer fit; text wraps.
+8. Filament step (patch 0084): the slots with filament show a material
+   dropdown, empty ones say Empty; the dropdowns start at each slot's
+   material; Start with the toolhead on Auto finds an unknown slot (the
+   live view says "Finding the slot in the toolhead"), then shows the
+   result line. Slot n refused with the toolhead empty, None refused with
+   filament in it (message, Retry). "Use the filament in the toolhead as
+   it is" keeps a hand-fed strand; the IFS step then fails asking to pull
+   it out.
+   When the find can't tell the slot (`pick_slot`): the slot buttons show
+   the slots with filament with their material and colour; a slot runs
+   the filament step with that slot, "I pulled it out by hand" with
+   `head=0`; from the Z offset card the filament run shows there, then
+   Start runs the Z offset. With a strand in the tube the filament page
+   warns to name the slot first.
+9. Live view on long steps (PID, mesh, Z offset): the action phrase
+   changes with the step, nozzle and bed now/target update every second,
+   the elapsed time counts up (also on a printer whose clock is not set).
+10. Z offset: the plan line ("Slot 2, PETG, 240/70 °C") appears before the
+    nozzle heats; with no material set it says PLA's temperatures are used.
+    After Accept: "Remove the test print from the bed" and Done; the next
+    step starts only after Done. After an abort with a patch printed: the
+    reminder with Done, which clears it. In Russian, every new text is
+    Russian.
 
 The first draft's contract problem (abort/adjust queued behind a blocking
 G-code) is solved on the Klipper side: steps run in the background and the

@@ -150,14 +150,23 @@ From the stock kernel image and root filesystem (3.1.0 updater):
   system or a stock slot when missing) and loads the stock drivers from
   there, `S07ad5x-board` runs the PC11 heartbeat and the boot logo with
   stock's board tools (`/usr/bin/cmd_*` are wrappers that run them from
-  `/data/ad5x/vendor` with their own libraries), `S42ad5x-wifi` runs
-  wpa_supplicant on `/data/ad5x/wpa_supplicant.conf` (stock's saved
-  networks on the first start; HelixScreen joins and saves networks, its
-  switch turns the radio off; `/data/ad5x/wifi.disable`: no Wi-Fi), `S60ad5x-eboard` starts the
+  `/data/ad5x/vendor` with their own libraries), `S40ad5x-network` starts
+  NetworkManager (`docs/network.md`) with connections made from
+  `/data/ad5x/network.conf` and `/data/ad5x/wpa_supplicant.conf` at every
+  start (stock's saved networks on the first start; HelixScreen joins and
+  saves networks through `nmcli`, written back to `wpa_supplicant.conf`;
+  `/data/ad5x/wifi.disable`: no Wi-Fi), or the old way, `S41ad5x-eth` and
+  `S42ad5x-wifi` with wpa_supplicant and udhcpc (`/data/ad5x/network-legacy`,
+  or on its own when NetworkManager gives no network), `S60ad5x-eboard` starts the
   toolhead board (`tools/boot_eboard.py`), `S61klipper` runs klippy as user
   `klipper` at nice -10, only when `/data/ad5x/klipper.enable` exists:
   `ad5x-mcu boot` (run by `S60ad5x-eboard`) writes the boards' Klipper
   firmware and creates that file once both boards run it.
+- NetworkManager 1.52 with `nmcli`, D-Bus, GLib (`-Os`, `external.mk`) and
+  wpa_supplicant's D-Bus interface, main image only; no ModemManager, PPP,
+  OVS, nmtui, polkit or TLS library, unused parts dropped in
+  `board/ad5x/network-nm.sh` (about 4.7 MB in the slot). The recovery image
+  has none of it.
 - `S41ad5x-eth`: Ethernet with stock's MAC (`usershare` `/MAC`), then DHCP
   or a static address from `/data/ad5x/network.conf` (`MODE=dhcp|static`,
   `ADDRESS=a.b.c.d/nn`, `GATEWAY=`, `DNS="..."`; shared with the recovery OS,

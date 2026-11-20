@@ -67,6 +67,16 @@ IFACE=eth0                # optional
 An invalid static setup falls back to DHCP and logs it. The stock MAC is
 always set first.
 
+The recovery OS stays on `wpa_supplicant` and `udhcpc` (`S41ad5x-eth`,
+`S42ad5x-wifi`, `lib/network.sh`); it has no NetworkManager. The main OS
+runs NetworkManager by default ([network.md](network.md)), but it reads the
+same `network.conf` and `wpa_supplicant.conf` at every start and writes the
+Wi-Fi networks joined, changed or forgotten on the touch screen back into
+`wpa_supplicant.conf`, so the recovery OS joins the same networks. The
+guard in `S41`/`S42` that skips them on the main OS's NetworkManager reads
+`/run/ad5x-network/mode`, which only the main OS's `S40ad5x-network`
+writes: here they always run.
+
 ## Updates (SWUpdate)
 
 SWUpdate 2025.05 (Buildroot package), configured in
@@ -194,13 +204,13 @@ line is machine-checkable. They share `/usr/lib/ad5x-recovery/recovery.sh`.
 | `ad5x-backup [--all] [--no-boot] [--parts "..."] [--dry-run] [DEST]` | Raw images of `boot` (first MiB: GPT, SPL, U-Boot), `kernel rootfs kernel2 rootfs2 ota usershare`, plus `userdata` with `--all` (with /data remounted read-only meanwhile). DEST defaults to the first USB stick. Output `DEST/ad5x-backup-<date>-<n>/`: `NAME.img`, split into 1 GiB pieces `NAME.img.000…` on FAT when ≥ 4 GiB, plus `SHA256SUMS` and `MANIFEST.txt`. Every image is read back and checked | `backup: OK <dir>` |
 | `ad5x-restore [--dry-run] [--i-know] [--set-flag A\|B] [--reboot] SRC PART[=FILE]...` | Write images back. Checks: SHA256SUMS (or `FILE.sha256` next to the image), size (`boot`: exactly 1 MiB, 1048576 bytes; with `INGE` at 0, a GPT header `EFI PART` at 512 whose entries sit where it says (LBA 2, or 32 on some boards) and end before the SPL at 0x4400, both GPT CRCs right, and the SPL table's partitions in it at their start and size, as this disk has them: refused otherwise, even with `--i-know`), squashfs/uImage magic, SPL table, mounted state. `ad5x-restore --i-know /data/ad5x/stock boot` writes back the first MiB the main OS saved (`boot.img`). Read-back after writing. Refuses `kernel`, `rootfs` (this recovery, p1/p2) and `boot` without `--i-know`, and refuses the running slot in any case. `userdata`: `/data` is unmounted first, and the source can't be on it | `restore: OK` |
 | `ad5x-restore-stock [--dry-run] [--no-flag] [--reboot] [DIR]` | With Flashforge's boot loader: writes the stock system saved by the main OS's `ad5x-update --replace-stock` (`/data/ad5x/stock/{rootfs.squashfs,kernel.img,SHA256SUMS}`) into slot B, then sets flag → B. With Kiln's boot loader it runs `ad5x-return-stock` (`--dry-run` = `--check`, DIR = `--source`; `--no-flag` refused) | `restore: OK` |
-| `ad5x-return-stock [--check\|--yes\|--status\|--forget] [--source SRC] [--flashforge-spl]` | Return to Flashforge firmware (below): checks, finds Flashforge's files, puts stock into slot B and makes it start, resuming from what the eMMC holds. Lines `source:`, `target:`, `spl_option:` and `result:` for the touch UI; exit 0 done, 1 refused, 2 checked (no `--yes`), 3 a write failed (flag still on slot A), 4 the boot loader area not as before | `result: done. ...` |
+| `ad5x-return-stock [--check\|--yes\|--status\|--forget] [--source SRC] [--flashforge-spl]` | Return to Flashforge firmware (below): checks, finds Flashforge's files, puts stock into slot B and makes it start, resuming from what the eMMC holds. Lines `source:`, `target:`, `config:`, `config_failed:`, `spl_option:` and `result:` for the touch UI, with fixed codes the UI translates (`source_kind:`, `source_file:`, `target_kind:`, `config_kind:`, `config_lines:`); exit 0 done, 1 refused, 2 checked (no `--yes`), 3 a write failed (flag still on slot A), 4 the boot loader area not as before | `result: done. ...` |
 | `ad5x-bootloader-install [--check\|--yes\|--fingerprint\|--status\|--offer\|--verify-start] [--unsupported-board]` | Kiln's own boot loader, opt-in (`docs/own-boot-loader.md`): checks (board on the allowlist, stock first MiB saved, main OS ready), saves the stock first MiB if needed, writes Kiln's SPL, Kiln's 6.6 into p3 and p1, clears U-Boot's area in `ota`, writes Kiln's U-Boot, each read back, resuming from what the eMMC holds. Lines `board:` and `result:` for the touch UI; `--offer` prints `bootloader=` and `bootloader_offer=` (`ad5x-status --slots`; `yes` for now only with `/data/ad5x/bootloader-offer.enable`, or for an install that stopped part-way); `--unsupported-board` only on a terminal with a typed confirmation. Exit 0 done, 1 refused, 2 checked, 3 a write failed (every system still starts), 4 the boot loader area not as before | `result: done. ...` |
 | `ad5x-ff-decrypt [-p PASSFILE]` | Decrypts a Flashforge `AD5X-*.tgz` (OpenSSL des3, MD5 key derivation) from stdin to stdout; Flashforge's public update password is built in | (exit 0) |
-| `ad5x-stock-copy usershare\|usb\|DIR` | Copies `/data/ad5x/stock` (and `boot.img`) into `kiln-stock-backup/` on usershare, the first mounted stick, or DIR, checked before and after | `stock-copy: OK <dir>` |
+| `ad5x-stock-copy usershare\|usb\|DIR [--space-check [--with-boot]]` | Copies `/data/ad5x/stock` (and `boot.img`) into `kiln-stock-backup/` on usershare, the first mounted stick, or DIR, checked before and after. Writes only inside `kiln-stock-backup/`. A `boot.img` already there stays when the source has none (a whole one with Flashforge's SPL). The new copy is made next to the old one; without room for both, the old copy's `kernel.img`, `rootfs.squashfs`, `SHA256SUMS` and `MANIFEST.txt` go first, but never when the old copy holds the only `boot.img` that checks (then it is refused and the old copy stays whole). `--space-check` only runs that room test (usershare read-only), as `ad5x-bootloader-install --check` does | `stock-copy: OK <dir>` |
 | `ad5x-usb mount [WAIT] \| list \| umount` | Mounts sticks at `/run/ad5x/usb/<dev>`. `list` prints one line per partition: `dev= mnt= fs= swu=a.swu,b.swu autoupdate=0/1 rescue_root=0/1 rescue_boot=0/1 rescue_flash=0/1 return_stock=0/1` | (list output) |
 | `ad5x-usb-rescue boot [--dry-run] [DEV]` / `flash [--dry-run] [--no-reboot] [DIR]` | USB rescue (below) | `rescue: running` / reboot |
-| `ad5x-recovery-auto` | The boot-time actions (drop folder, USB autoupdate, rescue markers). Return to Flashforge firmware comes first: asked for by the main OS (`/data/ad5x/return-stock/request`), by a stick's `kiln-return-to-stock`, or left unfinished, it only writes `/run/ad5x/return-stock.open` (the UI opens the page) and runs nothing else. Normally started by S85 | writes `/run/ad5x/auto.done` |
+| `ad5x-recovery-auto` | The boot-time actions (drop folder, USB autoupdate, rescue markers). Return to Flashforge firmware comes first: asked for by the main OS (`/data/ad5x/return-stock/request`), by a stick's `kiln-return-to-stock`, or left unfinished, it only writes `/run/ad5x/return-stock.open` (the UI opens the page) and runs nothing else. While it installs an update it keeps `/run/ad5x/auto-install` up to date, and the touch screen shows Installing Kiln OS with the step and "Don't switch the printer off". Normally started by S85 | writes `/run/ad5x/auto.done` |
 | `ad5x-bootlog TEXT` | Adds a line to the boot trace (ota at 128 KiB) | |
 
 ### Notes for the touch UI (`ad5x-recovery-ui`)
@@ -409,7 +419,7 @@ until the last; `ad5x-return-stock --check` lists which are done):
 | 4 | kernel2 (p3) <- the stock 5.10 kernel: 4 KiB of zeros, the rest, the header last | |
 | 5 | kernel (p1) <- the stock kernel, the same way | `--flashforge-spl` |
 | 6 | Flashforge's SPL from `boot.img`: the SPL's header sector (0x4400) zeroed, 0x4600-0xA3FF, the boot ROM's length (0x4-0x7), the header sector last (a power cut leaves a whole SPL or none, and with none the boot ROM goes to USB mode); never the GPT. A write that doesn't read back puts Kiln's SPL back | `--flashforge-spl` |
-| 7 | stock's own board update armed (`Update`, `UpdateM` on usershare), Kiln's eboard record dropped, `/data/ad5x/install/state` = `returned` (the install stick works again) | |
+| 7 | stock's own board update armed (`Update`, `UpdateM` on usershare), Kiln's eboard record dropped, `/data/ad5x/install/state` = `returned` (the install stick works again); with Kiln's SPL staying, `boot.img` (+ `.sha256`, `.info`) into usershare's `kiln-stock-backup/` when it isn't there; `[include]` lines of stock's `printer.cfg` that stock's Klipper can't load switched off (below). The `boot.img` copy and the `printer.cfg` edit are tried at every run that reaches step 7 and never stop the return: one that fails is said (loudly for `printer.cfg`), logged, recorded in the state (`usboot=failed`, `cfg=failed`), and the return goes on; a later `--yes` tries it again | |
 | 8 | the boot flag -> slot B, after steps 1-7 are checked once more | |
 
 U-Boot goes first, so Flashforge's 5.10 is never in a slot while Kiln's
@@ -417,11 +427,46 @@ U-Boot is installed. Without `--flashforge-spl` Kiln's SPL stays and starts
 stock from slot B as Flashforge's SPL would (with the stock command line);
 slot A keeps this recovery OS on Kiln's 6.6, which Kiln's SPL starts when
 slot B's kernel doesn't check. `--flashforge-spl` is offered only when
-`boot.img` (this printer's first MiB, saved before Kiln's boot loader;
-`/data/ad5x/stock`, the usershare or stick copy, or the install backup) is
+`boot.img` (this printer's first MiB, saved before Kiln's boot loader; the
+first that matches of `/data/ad5x/stock`, the chosen source, usershare's
+`kiln-stock-backup/`, a stick's `kiln-stock-backup/`) is
 Flashforge's, equals the disk outside Kiln's ranges and has the same DDR
 table as Kiln's SPL on the disk. On a printer with Flashforge's boot loader
 steps 1, 5 and 6 don't apply.
+
+**Stock's printer.cfg** (`/usr/data/config/printer.cfg`, this data
+partition's `config/printer.cfg`): stock's Klipper stops at start-up
+("Unable to open config file") when an `[include]` names a missing file.
+A printer that had zMod keeps zMod's `[include ./mod/...]` and
+`[include ./mod_data/...]` lines after zMod's folder (`/usr/data/zmod`) is
+gone. Step 7 turns exactly these lines into comments
+(`#kiln-off (Return to Flashforge: WHY) [include ...]`): lines whose file
+is missing (links followed as stock sees them), and with zMod gone the
+lines into `mod/` and `mod_data/`. Wildcards and paths outside `/usr/data`
+stay. The old file is kept as `printer.cfg.before-kiln-return` (`-2`, ...
+if one is there), the new one is checked to differ only in those lines
+before it replaces the old one, and a second run finds nothing to do. The
+check lists the lines, and its `config:` line shows on the page. If the
+file can't be written (a full or damaged data partition), it is left
+exactly as it was and the return still finishes: being held in the
+recovery OS would be worse than stock's Klipper stopping at a missing
+include, which you can fix in `printer.cfg`. The output says so in a
+block of `!!` lines with the lines to remove, the log and the state record
+it, and the page and the result screen show "Flashforge's printer.cfg
+couldn't be changed" (`config_failed: yes`).
+
+Kiln's IFS slot record (step 7 too): Kiln's `variables.cfg`
+(`/data/ad5x/printer_data/config`, kept for a later install) names the
+slot Kiln last loaded into the nozzle. Stock loads and unloads with its
+own record, so once stock runs Kiln's no longer holds. Step 7 drops the
+`[Variables]` lines `ifs_loaded`, `ifs_channel` (its old name),
+`ifs_loaded_source` and the notes of an unfinished slot search
+(`ifs_find_open`, `ifs_tube_blocked`); every other line stays byte for
+byte (new file next to it, checked, renamed over it), a second run finds
+nothing to do, and a file that can't be written is left as it was
+without holding the return (a note; the installer tries again). Kiln OS
+installed again then knows no slot and finds the one in the toolhead.
+The check names the lines it would drop.
 
 **Refused, nothing written**, unless: root, the recovery OS in slot A, no
 other job (update, backup, restore, USB rescue, start-up actions), the eMMC
@@ -501,16 +546,19 @@ Noto Sans (subset embedded, `recovery-ui/fonts/`, OFL), buttons at least
 | Install update | USB card; `.swu` files in `/data/ad5x/update/` and the top folder of mounted sticks; the upload URL `http://<ip>:8080`. **Check** runs `ad5x-swu-apply --check`; **Install** (two confirmations) runs `ad5x-swu-apply FILE` |
 | Back up | USB card; switch "Also userdata"; **Dry run** / **Start backup**: `ad5x-backup [--dry-run] [--all] <stick>` (the tool makes `ad5x-backup-<date>-<n>/`) |
 | Restore | USB card; the stick's `ad5x-backup-*` folders (newest first); a checkbox per `NAME.img[.NNN]` in it. `kernel`, `rootfs` (recovery's own slot) and `boot` are greyed out: `ad5x-restore` refuses them without `--i-know`, which is left to the command line. **Check**: `ad5x-restore --dry-run SRC PART...`; **Restore** (two confirmations): `ad5x-restore SRC PART...` |
-| Restore stock (Return to Flashforge firmware) | Runs `ad5x-return-stock --check` when it opens and shows the files it found (`source:`), what the printer ends with (`target:`) and the result (ready, a stopped return to finish, done, or why not). A box "Also put back Flashforge's own boot loader" shows when this printer's saved first MiB matches (`spl_option: yes`). **Check** shows the whole check; **Save files to USB** runs `ad5x-stock-copy usb`; **Return to Flashforge** (two confirmations; **Continue** without asking again after a stop) runs `ad5x-return-stock --yes`, then a Shut down button. It opens by itself at start when the main OS asked for it, a stick has `kiln-return-to-stock`, or a return was left unfinished (`return_stock_open`, `return_stock`); while one is unfinished Boot main OS and Install lead to it |
+| Restore stock (Return to Flashforge firmware) | Runs `ad5x-return-stock --check` when it opens and shows the files it found (`source:`), what the printer ends with (`target:`), the `printer.cfg` lines it switches off (`config:`, zMod leftovers), each in the screen's language from the codes next to them (`source_kind:`, `target_kind:`, `config_kind:`) and the result (ready, a stopped return to finish, done, or why not). A box "Also put back Flashforge's own boot loader" shows when this printer's saved first MiB matches (`spl_option: yes`). **Check** shows the whole check; **Save files to USB** runs `ad5x-stock-copy usb`; **Return to Flashforge** (two confirmations; **Continue** without asking again after a stop) runs `ad5x-return-stock --yes`, then a Shut down button. It opens by itself at start when the main OS asked for it, a stick has `kiln-return-to-stock`, or a return was left unfinished (`return_stock_open`, `return_stock`); while one is unfinished Boot main OS and Install lead to it |
 | Network / SSH | Address, name, `ssh root@<ip>`, upload URL with a QR code, recovery `release`, and what `ad5x-usb list` reports (updates on the stick, rescue system/markers) |
 | Logs | Scrollable, monospace: this session (every command and its output), `/data/ad5x/update/last.log`, `/run/ad5x/swupdate.log`, the system log (`logread`) |
 | Reboot / Power | Boot main OS (`ad5x-boot-main`), Reboot, Shut down (one confirmation each); **Install Kiln's boot loader (experimental)** only when `bootloader_offer=yes` (a board on the allowlist without Kiln's U-Boot, and for now `/data/ad5x/bootloader-offer.enable` there) or an install stopped (`bootloader_install=started`) |
 | Kiln's boot loader | Runs `ad5x-bootloader-install --check` when it opens: the board (`board:`), the result (ready, an install to finish, done, or why not). **Check** shows the whole check; **Install** (two confirmations with the risk; **Continue** after a stop) runs `ad5x-bootloader-install --yes`, then a Reboot button. Opens by itself at the first start after an install (the result: started by Kiln's U-Boot or not) and when an install stopped (`bootloader_open`) |
-| Job | Every command runs here: title, spinner, step text, progress bar, live output, Stop (backups and checks only), then a green or red result with the command's last line ("backup: OK ...", "swu-apply: FAILED ..."), and Boot main OS or Reboot where it fits. Back is disabled while it runs |
+| Job | Every command runs here: title, spinner, elapsed time ("2:14", it stays when the command ends), step text, progress bar, live output, Stop (backups and checks only), then a green or red result with the command's last line ("backup: OK ...", "swu-apply: FAILED ..."), and Boot main OS or Reboot where it fits. Back is disabled while it runs |
+| Installing Kiln OS | Opens by itself while `ad5x-recovery-auto` installs an update at start-up: the first start after the install stick, or an update the main OS staged (drop folder, USB autoupdate). "Step n of 3": 1 unpacking and checking the update, 2 writing Kiln OS (with SWUpdate's percentage), 3 restarting into Kiln OS, with a spinner and the elapsed time. A large "Don't switch the printer off". No buttons while it runs. If the install fails: "Kiln OS was not installed" and a Done button (the reason is in Logs > Updates); when `ad5x-recovery-auto` then goes on with the next file (the drop folder's next one, a USB autoupdate stick), its progress and "Don't switch the printer off" replace the failure. It follows `/run/ad5x/auto-install` (below) |
 
-An update started anywhere else (browser upload, drop folder, USB
-autoupdate) opens the Job screen by itself and follows it on SWUpdate's
-progress socket.
+An update started anywhere else (browser upload) opens the Job screen by
+itself and follows it on SWUpdate's progress socket. An install by
+`ad5x-recovery-auto` opens Installing Kiln OS instead; a failed one still
+on the screen (no Done yet) doesn't hold a browser upload back: its Job
+screen opens, and the failure counts as seen.
 
 **Destructive actions** (install, restore, Return to Flashforge firmware, Kiln's boot loader) ask twice. The
 second dialog swaps the buttons (the confirm button sits where Cancel was,
@@ -545,6 +593,7 @@ environment (for example `AD5X_RUI_CMD_BACKUP='ad5x-backup --no-boot
 | `PATH_OTA`, `PATH_MAIN_ROOTFS` | empty = the GPT partitions `ota` / `rootfs2`, read only as a fallback when `ad5x-status` gives no `flag` / `slot_b` |
 | `PATH_BACKUP_PREFIX` | `ad5x-backup-` |
 | `PATH_TOUCH_NAME`, `PATH_FBDEV` | `TSC2007 Touchscreen`, `/dev/fb0` |
+| `PATH_AUTO_INSTALL` | `/run/ad5x/auto-install`: `ad5x-recovery-auto`'s install, key=value lines `state=` (`check`, `write`, `restart`, `failed`), `step=`, `steps=`, `file=`, `pid=` (`rc_install_state` in `lib/recovery.sh`; `ad5x-swu-apply` moves it to `write` just before SWUpdate starts). A `check` or `write` whose process is gone is ignored |
 
 - Commands run in their own process group (`/bin/sh -c`, stdin
   `/dev/null`, stdout and stderr together); a reader thread collects the

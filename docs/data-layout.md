@@ -8,11 +8,16 @@ an update lives on the data partition.
 - `/data` is the printer's `userdata` partition (p7, ext4, about 5.8 GB),
   stock's `/usr/data`. `S05ad5x-data` mounts it (the recovery OS mounts the
   same partition). Kiln OS keeps its files in **`/data/ad5x/`** and leaves
-  stock's and zMod's files there alone. Updates never touch `/data`.
+  stock's and zMod's files there alone. Updates never touch `/data`. One
+  exception: Return to Flashforge firmware turns zMod's leftover include
+  lines in stock's `config/printer.cfg` into comments (old file kept).
 - `/run` and `/tmp` are tmpfs: empty at every boot.
-- `usershare` (p6, stock's `/usr/prog`) is only ever mounted read-only, to
-  copy stock's root password, MAC address, saved Wi-Fi networks, Wi-Fi
-  driver and per-printer calibration.
+- `usershare` (p6, stock's `/usr/prog`) is mounted read-only, to copy
+  stock's root password, MAC address, saved Wi-Fi networks, Wi-Fi driver
+  and per-printer calibration. Kiln OS writes there only in its own
+  `kiln-stock-backup/` folder (`ad5x-stock-copy`, Return to Flashforge
+  firmware) and stock's board-update marks (`Update`, `UpdateM`, Return to
+  Flashforge firmware).
 
 Paths below are under `/data/ad5x/` unless they start with `/`. "Main" and
 "recovery" say which OS reads or writes a file. Who runs each script, and
@@ -32,7 +37,9 @@ boot or the next start of the service.
 | `mcu.disable` | `ad5x-mcu boot` only starts the eboard and flashes nothing. | absent | `ad5x-mcu` | you |
 | `helixscreen.disable` | HelixScreen does not start. (Older docs say `helixscreen.enable`: the screen is on by default now.) | absent | `S70helixscreen` | you |
 | `helixscreen.drm` | HelixScreen draws through DRM instead of `/dev/fb0`, where the kernel has a DRM device (`/dev/dri/card0`: the opt-in 7.3). Ignored on 6.6 and stock. | absent | `S70helixscreen` | you |
-| `wifi.disable` | No Wi-Fi at all: `wpa_supplicant` does not start, so the screen has nothing to switch on. The screen's own Wi-Fi switch is separate (HelixScreen's `settings.json`, rfkill). | absent | `S42ad5x-wifi` (main and recovery) | you |
+| `wifi.disable` | No Wi-Fi at all: `wpa_supplicant` does not start, and in the main OS on NetworkManager `wlan0` is left unmanaged and down, so the screen has nothing to switch on. The screen's own Wi-Fi switch is separate (HelixScreen's `settings.json`; rfkill, or `nmcli radio wifi` on NetworkManager). | absent | `S42ad5x-wifi` (main and recovery), `S40ad5x-network` (main) | you |
+| `network-legacy` | Main OS: the old network way at every start (`wpa_supplicant` and `udhcpc` from `S41ad5x-eth`/`S42ad5x-wifi`, HelixScreen's `wpa_supplicant` backend) instead of NetworkManager ([network.md](network.md)). The recovery OS always works this way. | absent | `S40ad5x-network` | you |
+| `network-legacy.auto` | Main OS: as `network-legacy`, made by the printer: NetworkManager had no network at a start where one was expected and the old way then had one. Holds the date and the reason; delete it to try NetworkManager again ([network.md](network.md), "Safety net"). | absent | `S40ad5x-network` | `S40ad5x-network` (its check) |
 | `recovery-update.disable` | The main OS never rewrites the recovery OS in slot A. | absent | `S99ad5x-update-recovery` | you |
 | `watchdog.disable` | No hardware watchdog: a hung printer is not restarted on its own (a power cycle is needed, as before). Kiln's U-Boot then starts the kernel with the watchdog stopped, and `S05ad5x-watchdog` starts no feeder (and stops a watchdog that is running anyway). Takes effect at the next boot; `/etc/init.d/S05ad5x-watchdog start` applies it at once (with the feeder stopped first: `stop`). | absent (watchdog on, Kiln's kernels only) | `S05ad5x-watchdog` (main and recovery), U-Boot | you |
 | `recovery/noauto` | The recovery OS installs nothing on its own at boot (no staged update, no USB stick, no rescue marker). | absent | `S85ad5x-auto` (recovery) | you |
@@ -45,8 +52,8 @@ boot or the next start of the service.
 
 | File | What | Read by | Written by |
 |---|---|---|---|
-| `network.conf` | Ethernet: `MODE=dhcp` or `MODE=static`, `ADDRESS=a.b.c.d/nn`, `GATEWAY=`, `DNS="..."`, optional `IFACE=`. An invalid static setup falls back to DHCP. Shared with the recovery OS. | `/usr/lib/ad5x/network.sh` (`S41ad5x-eth`, main and recovery) | you |
-| `wpa_supplicant.conf` | Saved Wi-Fi networks (mode 0600). The first start copies stock's networks. A file it can't read is moved to `wpa_supplicant.conf.bad-<date>` and a new one started. | `S42ad5x-wifi`, `wpa_supplicant` | `S42ad5x-wifi`, `wpa_supplicant` (when the screen saves a network) |
+| `network.conf` | Ethernet: `MODE=dhcp` or `MODE=static`, `ADDRESS=a.b.c.d/nn`, `GATEWAY=`, `DNS="..."`, optional `IFACE=`. An invalid static setup falls back to DHCP. Shared with the recovery OS. The main OS on NetworkManager makes its Ethernet connection from it at every start, read the same way ([network.md](network.md)). | `/usr/lib/ad5x/network.sh` (`S41ad5x-eth`, main and recovery), `S40ad5x-network` (main) | you |
+| `wpa_supplicant.conf` | Saved Wi-Fi networks (mode 0600). The first start copies stock's networks. A file it can't read is moved to `wpa_supplicant.conf.bad-<date>` and a new one started (old way). The main OS on NetworkManager makes its Wi-Fi connections from it at every start and writes networks joined, changed or forgotten on the screen back into it, keeping every line it doesn't change ([network.md](network.md)). | `S42ad5x-wifi`, `wpa_supplicant`, `S40ad5x-network` (main) | `S42ad5x-wifi`, `wpa_supplicant` (when the screen saves a network), `S40ad5x-network` and `lib/ad5x_network.py` (main, NetworkManager's write-back) |
 | `camera.conf` | `CAMERA=off`, `RESOLUTION=`, `FPS=`, per camera `RESOLUTION_2=` etc. Not read if others can write it. | `S64ad5x-camera` | you |
 | `screen.conf` | The screen in the browser: `SCREEN=off`, `FPS=`, `QUALITY=`. | `S65ad5x-screen` | you |
 | `logo.jpg` | Your own boot logo (800x480 JPEG), replaces Kiln's. | `S07ad5x-board`, `ad5x-mcu` (board update screens) | you |
@@ -67,7 +74,7 @@ both paths name the same files.
 | Path | What | Written by |
 |---|---|---|
 | `printer_data/config/` | `printer.cfg`, `unit.cfg`, `local.cfg`, `plugins.cfg`, `moonraker.conf`, `variables.cfg`, `macros/*.cfg` and the generated `plugins-active.cfg` and `moonraker-plugins.conf`; see [config-layout.md](config-layout.md) | `S05ad5x-data` (first-boot copies, `macros/` templates), Klipper, `S61klipper`, `S62moonraker`, you |
-| `printer_data/logs/` | `klippy.log` (and dated copies, at most 5 and 50 MB), `moonraker.log`, `helixscreen.log`, `wifi.log` (+ `.1`); see [logs.md](logs.md) | the services, `S42ad5x-wifi` |
+| `printer_data/logs/` | `klippy.log` (and dated copies, at most 5 and 50 MB), `moonraker.log`, `helixscreen.log`, `wifi.log` (+ `.1`), `network.log` (+ `.1`, main OS); see [logs.md](logs.md) | the services, `S42ad5x-wifi` or `S46ad5x-wifi-log`, `S40ad5x-network` |
 | `printer_data/gcodes/` | Uploaded print files | Moonraker |
 | `printer_data/comms/klippy.sock` | Klipper's API socket | Klipper (`S61klipper` passes the path) |
 | `printer_data/comms/log-mode` | `short` or `extended [until]`: log detail for Moonraker (`-v`) and HelixScreen | Klipper's `LOG_MODE` (`ad5x_log.py`); read by `S62moonraker`, `S70helixscreen` |
@@ -94,8 +101,9 @@ both paths name the same files.
 | `stock/` | The stock system saved before it was replaced: `rootfs.squashfs`, `kernel.img`, their sha256s (`SHA256SUMS`) | installer, `ad5x-update --replace-stock` | `ad5x-restore-stock` (both OSes), `ad5x-vendor` (to refill `vendor/`), `ad5x-status` |
 | `stock/boot.img`, `stock/boot.img.sha256`, `stock/boot.img.info` | The first MiB of the eMMC (the boot ROM's block, the GPT, Flashforge's SPL and its data), saved once, read only, before a boot loader of Kiln's own is ever written there. Its sha256 is in its own file, not in `SHA256SUMS`; `boot.img.info` names the SPL (its banner). Saved only from Flashforge's boot loader (`INGE` at 0, a GPT, `LPSM` at 0x4400, U-Boot SPL 2013.07), not from Kiln's own. Saved again unless `boot.img` is exactly 1 MiB (1048576 bytes) and its sha256 file checks; `ad5x-restore boot` takes only exactly 1 MiB with `INGE`, a GPT (entries where its header says, ending before 0x4400, CRCs right) and the SPL table's partitions. Kept when stock is saved again | `S99ad5x-booted` (main OS in slot B, when missing) | `ad5x-restore --i-know /data/ad5x/stock boot` (recovery OS), you (copy it off the printer) |
 | `mcu/` | Board firmware records and logs: `log`, `eboard`, `ifs`, `mainboard.uid`, `nations.log`, `iap.log`, `ifs.log`, `klipper-enabled`, `.mbver` | `ad5x-mcu` | `ad5x-mcu` (`ad5x-mcu status`), you |
-| `helixscreen/config/settings.json` | HelixScreen's settings (language, Wi-Fi switch, touch calibration, wizard done). Seeded on the first start; an existing file is never replaced. | `S70helixscreen` (first start), HelixScreen | HelixScreen, `S42ad5x-wifi` (Wi-Fi switch), `ad5x-touch-units`, the recovery UI (language) |
+| `helixscreen/config/settings.json` | HelixScreen's settings (language, Wi-Fi switch, touch calibration, wizard done). Seeded on the first start; an existing file is never replaced. | `S70helixscreen` (first start), HelixScreen | HelixScreen, `S42ad5x-wifi` and `S40ad5x-network` (Wi-Fi switch), `ad5x-touch-units`, the recovery UI (language) |
 | `helixscreen/cache/`, `helixscreen/.helixscreen/` | HelixScreen's cache and settings backups | HelixScreen | HelixScreen |
+| `NetworkManager/` | Main OS: NetworkManager's state (DHCP leases, its secret key, timestamps; `/var/lib/NetworkManager` links here), 0700. Its connections are not here (they are made new in `/run` at every start). `NetworkManager.state` and `NetworkManager-intern.conf` are removed at every start. | NetworkManager, `S40ad5x-network` | NetworkManager |
 | `recovery/touch-cal` | Touch range for the recovery UI, "min_x min_y max_x max_y" in stock-kernel units on every kernel (the UI converts it to raw units at use on our kernel) | `ad5x-touch-units --recovery-cal` (`S70helixscreen`) | `S80ad5x-recovery-ui` |
 | `recovery/update.log`, `recovery/update.tries` | Rewriting slot A with this image's recovery OS: log, and "ID tries" | `S99ad5x-update-recovery` | `S99ad5x-update-recovery`, you |
 | `ssh/hostkeys/` | SSH host keys, shared by both OSes (bound at `/run/dropbear`) | dropbear | dropbear |
@@ -126,7 +134,7 @@ Kiln's append-only logs (`update/last.log`, `recovery/update.log`, `mcu/log`,
 | `update/` | Updates staged for the recovery OS (`*.swu`, `*.zip`); after an install `*.done` or `*.failed`; `*.stale`: still staged when the main OS started, so staged before that start and never installed (docs/updates.md, "Staged updates"); `last.log`, `applied.list` (sha256s of USB stick images already installed), `.work/` | `ad5x-update` (main), the installer, `S99ad5x-booted` (`*.stale`), `ad5x-recovery-auto` (recovery) | `ad5x-recovery-auto`, `ad5x-status` (recovery) |
 | `moonraker-tmp/` | Moonraker's temporary folder (`TMPDIR`, owned by `klipper`, 0700): uploads are written here whole, then renamed into `gcodes`; update downloads and components' temp files. Emptied at each Moonraker start | Moonraker | Moonraker |
 | `swupdate-tmp/`, `swupdate-apply.PID/` | Recovery OS: where SWUpdate unpacks a `.swu` before writing it (the daemon's folder; a run of `ad5x-swu-apply` of its own), when the partition has 256 MiB free (else `/tmp`). Emptied at the next start of `S70swupdate` | SWUpdate (`S70swupdate`, `ad5x-swu-apply`) | SWUpdate |
-| `install/` | First install from stock: `recovery.squashfs` + `recovery.sha256` (written into slot A after the first start), `recovery.tries`, `state`, `install.log`, `dl/` | `tools/install/ad5x-install.sh`, `S99ad5x-install-recovery` | `S99ad5x-install-recovery`, `S99ad5x-update-recovery` and `S00ad5x-kernel` (while `recovery.squashfs` exists, slot A still holds stock) |
+| `install/` | First install from stock: `recovery.squashfs` + `recovery.sha256` (written into slot A after the first start), `recovery.tries`, `state` (`flag-set` after the install switched, `done` once the main OS started completely, `returned` after Return to Flashforge firmware), `install.log`, `dl/` | `tools/install/ad5x-install.sh`, `S99ad5x-install-recovery` | `S99ad5x-install-recovery`, `S99ad5x-update-recovery` and `S00ad5x-kernel` (while `recovery.squashfs` exists, slot A still holds stock) |
 
 ## /run (RAM, gone at reboot)
 
@@ -141,7 +149,11 @@ Main OS:
 | `/run/dropbear` | Bind mount of `/data/ad5x/ssh/hostkeys` (`/etc/dropbear` points here) | `S05ad5x-data` | dropbear |
 | `/run/ad5x-sound.conf`, `/run/ad5x-sound/` | `PWM=pwmchip0/pwm13`: where the speaker is (only on Kiln's kernels); the player's pid | `S35ad5x-sound`, `ad5x-sound` | Klipper's `ad5x_sound`, `S70helixscreen` |
 | `/run/ad5x-memory.conf` | `MEM_KB=` (MemTotal), `LOW_MEM=1` under 300000 kB (a 256 MiB board, or a 512 MiB one in standard memory) else `0`, `HW_MEM_MIB=256\|512` (the board's RAM: `ad5x.ram=` from the boot loader, else the bank at 0x30000000, else MemTotal >= 400000 kB), `MEM_MODE=standard\|extended` (`ad5x.memmode=`, else whether that bank is on the command line), `MEM_MODE_FIXED=0\|1` (1: an older Kiln U-Boot started this, `ad5x.uboot=1` without `ad5x.memmode=`; it can't choose the mode, only a boot loader update changes it) (docs/memory.md, `lib/memory.sh`) | `S04ad5x-memory` | `S64ad5x-camera`, Moonraker `kiln_os`, plugins |
-| `/run/resolv.conf` | Name servers of a static `network.conf` | `network.sh` | the resolver |
+| `/run/resolv.conf` | Name servers of a static `network.conf`, or NetworkManager's (`rc-manager=file`, `/etc/resolv.conf` links here) | `network.sh`, NetworkManager | the resolver |
+| `/run/ad5x-network/mode` | Main OS: this start's network stack, `nm` or `legacy` ([network.md](network.md)) | `S40ad5x-network` | `S41ad5x-eth`, `S42ad5x-wifi`, `/etc/default/NetworkManager` (`S45NetworkManager`), `S46ad5x-wifi-log` |
+| `/run/ad5x-network/connections/` | Main OS: NetworkManager's connections (keyfiles, 0600), made from `network.conf` and `wpa_supplicant.conf` at every start; NetworkManager saves joined networks here | `S40ad5x-network` (`lib/ad5x_network.py`), NetworkManager | NetworkManager, the write-back |
+| `/run/ad5x-network/manifest`, `watch.pid`, `sync.lock` | The Wi-Fi networks made at this start (the write-back only takes out these), the `inotifyd` watcher's pid, the write-back's lock | `S40ad5x-network` | `S40ad5x-network`, `lib/ad5x_network.py` |
+| `/run/NetworkManager/` | NetworkManager's runtime files; `conf.d/50-ad5x-wifi-disable.conf` while `wifi.disable` is there. Never made on the old way: HelixScreen takes its NetworkManager backend when this exists | `S40ad5x-network`, `S45NetworkManager`, NetworkManager | NetworkManager, HelixScreen |
 | `/run/ad5x/ifs-mcu/*.cfg` | The IFS's `[mcu ifs]` config, while it answers as Klipper and no plugin drives it | `S61klipper`, `ad5x_plugins.py` | Klipper (`ifs.cfg` includes it) |
 | `/run/ad5x/ifs-klipper` | The IFS answered as Klipper at this start | `S61klipper` | `ad5x_plugins.py` |
 | `/run/moonraker/moonraker.conf` | Moonraker's top config (includes `moonraker-updates.conf`, your `moonraker.conf`, the plugins' list) | `S62moonraker` | Moonraker |
@@ -157,6 +169,7 @@ Recovery OS:
 | `/run/ad5x/swupdate.log` | SWUpdate's log | `S70swupdate` |
 | `/run/ad5x/ui.log` | Touch UI log | `S80ad5x-recovery-ui` |
 | `/run/ad5x/auto.log`, `/run/ad5x/auto.done` | Boot-time install log, and "done" | `ad5x-recovery-auto` |
+| `/run/ad5x/auto-install` | The boot-time install's state for the touch screen's Installing Kiln OS page (`state=`, `step=`, `steps=`, `file=`, `pid=`) | `ad5x-recovery-auto`, `ad5x-swu-apply` |
 | `/run/ad5x/usb/<dev>` | USB stick mounts | `ad5x-usb` |
 | `/run/ad5x/rescue-root` | Root of a system started from a rescue stick | `ad5x-usb-rescue` |
 | `/run/ad5x/ready` | Start-up finished (date) | `S99ad5x-recovery-ready` |
@@ -170,6 +183,8 @@ Recovery OS:
 | `ota` partition at 64 KiB | The boot trace copy, readable after a hang: `dd if=/dev/mmcblk0p5 bs=1024 skip=64 count=8` |
 | `/sys/fs/pstore` | Kiln's kernel's crash log (ramoops), mounted by `S05ad5x-data` |
 | `/data/config/mod_data/` | zMod's files, read once by `S05ad5x-data` to carry plugin choices over. Kiln OS never changes them. |
+| `/data/config/printer.cfg` | Stock's Klipper config. Kiln OS doesn't use it. Return to Flashforge firmware turns `[include]` lines stock's Klipper can't load (zMod leftovers) into comments (`#kiln-off ...`); the old file stays as `printer.cfg.before-kiln-return`. If it can't be written, it is left as it was and the return goes on (`cfg=failed` in `/data/ad5x/return-stock/state`). |
+| usershare `kiln-stock-backup/` | The second copy of `/data/ad5x/stock` (`kernel.img`, `rootfs.squashfs`, `SHA256SUMS`, `MANIFEST.txt`, `boot.img` + `.sha256` + `.info`). `S99ad5x-stock-copy` (main OS), `ad5x-bootloader-install` step 0, and Return to Flashforge firmware (`boot.img` only; a failed copy is recorded as `usboot=failed` and tried again by a later run). A `boot.img` there stays when a newer copy has none. A new copy is made next to the old one; when there is no room for both, the old one's big files go first, unless it holds the only `boot.img` that checks. |
 | `/etc/kiln-version`, `/etc/ad5x-release`, `/etc/ad5x-recovery`, `/etc/ad5x-recovery-id`, `/usr/lib/os-release` | Read-only release marks in the image (version, which OS, recovery content ID, `AD5X_PLUGIN_API`) |
 
 ## Rules for new files

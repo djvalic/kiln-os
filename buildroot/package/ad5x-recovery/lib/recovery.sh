@@ -324,3 +324,27 @@ rc_swu_tmpdir() {
 		echo /tmp
 	fi
 }
+
+# The touch screen's install page ("Installing Kiln OS", recovery UI) while
+# ad5x-recovery-auto installs an update at start-up (the first start after
+# the install stick, or an update the main OS staged): it follows the file
+# $AD5X_AUTO_INSTALL, which ad5x-recovery-auto names for its own installs
+# (default $AD5X_RUN/auto-install). key=value lines: state= check (step 1:
+# unpacking and checking), write (step 2: SWUpdate writes slot B; the
+# screen takes the percentage from SWUpdate), restart (step 3), failed;
+# step= and steps= (3); file= (the update's name); pid= (ad5x-recovery-auto,
+# AD5X_AUTO_PID: the screen drops a check or write whose process is gone).
+# Without AD5X_AUTO_INSTALL nothing is written (installs from the screen or
+# over SSH show their own progress).
+# usage: rc_install_state STATE [FILE]
+rc_install_state() {
+	[ -n "${AD5X_AUTO_INSTALL:-}" ] || return 0
+	sf=$AD5X_AUTO_INSTALL
+	sn=${2:-$(sed -n 's/^file=//p' "$sf" 2>/dev/null)}
+	ss=$(sed -n 's/^step=//p' "$sf" 2>/dev/null)
+	case "$1" in check) ss=1 ;; write) ss=2 ;; restart) ss=3 ;; esac
+	{ echo "state=$1"; echo "step=${ss:-1}"; echo "steps=3"; echo "file=$sn"
+	  echo "pid=${AD5X_AUTO_PID:-$$}"; } > "$sf.new" 2>/dev/null &&
+		mv -f "$sf.new" "$sf" 2>/dev/null
+	true
+}

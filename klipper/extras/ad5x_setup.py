@@ -1,6 +1,7 @@
 # AD5X setup wizard steps (first boot and on demand)
 #
-# SETUP_WIZARD_STEP STEP=<selfcheck|pid|mesh|shaper|ifs|zoffset|finish>
+# SETUP_WIZARD_STEP STEP=<selfcheck|pid|mesh|shaper|filament|ifs|trash|zoffset|
+#                         soak|summary|finish>
 # [ACTION=start|abort|adjust|accept] and the printer.ad5x_setup status
 # object, the contract HelixScreen's AD5X wizard steps use
 # (docs/setup-wizard.md). Not "AD5X_SETUP": Klipper reads a command name
@@ -19,14 +20,39 @@ import logging
 import math
 import os
 import re
+import time
 
 # Order on the screen. The mesh step comes before the Z offset step: the
 # mesh's nozzle scrub doesn't yet work after a Z offset step (the offset
-# is still applied there). The purge box check sits before the Z offset
-# (the test patch purges at the box); the soak calibration takes ~15 min,
-# so it comes after the IFS tuning and before the summary.
-STEPS = ("selfcheck", "pid", "mesh", "shaper", "ifs", "trash", "zoffset",
-         "soak", "summary", "finish")
+# is still applied there). The filament step (slot materials, which slot
+# is in the toolhead) comes before the IFS tuning, which needs the
+# toolhead empty. The purge box check sits before the Z offset (the test
+# patch purges at the box); the soak calibration takes ~15 min, so it
+# comes after the IFS tuning and before the summary.
+STEPS = ("selfcheck", "pid", "mesh", "shaper", "filament", "ifs", "trash",
+         "zoffset", "soak", "summary", "finish")
+
+# printer.ad5x_setup prompt: what the step asks of the user. clear_bed:
+# state waiting_user, "remove the test print from the bed", confirmed with
+# ACTION=accept (also left after a Z offset step that failed or was aborted
+# with a patch printed, as a reminder; accept clears it there too);
+# head_unknown: state failed, the toolhead holds filament no slot with
+# filament at the IFS cleared, pull it out by hand and start the step again;
+# pick_slot: state failed, the slot can't be found on this printer (the
+# extruder alone clears the toolhead sensor) or a strand of an unknown slot
+# sits in the tube above it: the user names the slot (filament step
+# HEAD=<n>), or pulls it out by hand (HEAD=0).
+PROMPTS = ("clear_bed", "head_unknown", "pick_slot")
+
+# PRINT_START's status lines (_PRINT_STATUS, M117) -> printer.ad5x_setup
+# action while the Z offset step's PRINT_START runs
+START_ACTIONS = (("Homing", "homing"), ("Heating", "heating"),
+                 ("Purging", "purging"), ("Cleaning", "cleaning"),
+                 ("Checking Z", "probing"), ("Bed mesh", "probing"),
+                 ("Loading", "loading"))
+
+# Material names the filament step accepts (as ifs.py's parse_material)
+MATERIAL_RE = re.compile(r"^[A-Za-z0-9+_.-]{1,16}$")
 
 # Z offset test patch temperatures per material (nozzle, bed); MATERIAL=
 # picks one, default the loaded IFS slot's type, else PLA.
@@ -122,6 +148,19 @@ class AD5XSetup:
         self.results = {}
         self.checks = []
         self.pending_save = False
+        # What the step does now (short key, see docs/setup-wizard.md) and
+        # its slot or patch number (0 none); action_fn: live, as progress_fn
+        self.action = ""
+        self.action_arg = 0
+        self.action_fn = None
+        self.step_started = 0.      # Unix time the step started, 0 none
+        self.prompt = None          # PROMPTS, None
+        self.zoffset_plan = None    # slot, material, temperatures of the patch
+        # The slot in the toolhead as this wizard run learned it: (slot,
+        # how), how = "user" (HEAD=n), "found" (IFS_FIND_HEAD_SLOT found and
+        # unloaded it), "loaded" (Kiln's IFS module had it)
+        self.head_slot = 0
+        self.head_how = ""
         # Runtime
         self.inline = False         # step runs inside the G-code command
         self.abort_requested = False
@@ -131,6 +170,7 @@ class AD5XSetup:
         self.z_reprint = False
         self.z_start = 0.
         self.z_saved = None
+        self.z_patched = False      # a test patch started printing
         self.gcode.register_command('SETUP_WIZARD_STEP',
                                     self.cmd_SETUP_WIZARD_STEP,
                                     desc=self.cmd_SETUP_WIZARD_STEP_help)
@@ -150,6 +190,17 @@ class AD5XSetup:
                 progress = self.progress_fn()
             except Exception:
                 logging.exception("ad5x_setup: progress")
+        action = self.action
+        if self.action_fn is not None:
+            try:
+                action = self.action_fn(eventtime) or action
+            except Exception:
+                logging.exception("ad5x_setup: action")
+        try:
+            filament = self._filament_status()
+        except Exception:
+            logging.exception("ad5x_setup: filament status")
+            filament = None
         return {
             'step': self.step,
             'state': self.state,
@@ -160,7 +211,80 @@ class AD5XSetup:
             'pending_save': self.pending_save,
             'zoffset': round(self._zoffset(), 4),
             'estimate': self.estimate_enabled,
+            'action': action,
+            'action_arg': self.action_arg,
+            'step_started': self.step_started,
+            'prompt': self.prompt,
+            'filament': filament,
+            'zoffset_plan': (dict(self.zoffset_plan)
+                             if self.zoffset_plan is not None else None),
         }
+    def _filament_status(self):
+        """printer.ad5x_setup.filament: the slots with filament at the IFS,
+        each slot's material, and the slot in the toolhead (cached values:
+        the IFS module's last status and the toolhead sensor's last
+        reading). None without Kiln's IFS module."""
+        ifs = self.printer.lookup_object('ifs', None)
+        if ifs is None:
+            return None
+        silk = ifs.last_status.get('silk_state') or 0
+        present = [c for c in (1, 2, 3, 4) if silk >> (c - 1) & 1]
+        mats = {}
+        for c in (1, 2, 3, 4):
+            m = ifs.materials[c - 1] if len(ifs.materials) >= c else {}
+            mats[str(c)] = m.get('type')
+        head = self._head_full(ifs)
+        slot, how = self._head_now(ifs, head)
+        return {'present': present, 'materials': mats, 'head': slot,
+                'head_source': how, 'head_filament': head}
+    def _head_full(self, ifs):
+        """The toolhead sensor as IFS_FIND_HEAD_SLOT reads it (the IFS
+        module's head_sensor), the adc_filament_sensor only without it:
+        True / False, None when there is no reading. No fallback when the
+        IFS module has a head_sensor: IFS_FIND_HEAD_SLOT reads only that
+        one, and a guess from the other sensor would start a find that
+        refuses (Klipper test mode: no ADC readings)."""
+        if (ifs is not None and hasattr(ifs, 'head_state')
+                and getattr(ifs, 'head_sensor', None) is not None):
+            try:
+                return ifs.head_state()
+            except Exception:
+                return None
+        sensor = self.printer.lookup_object(
+            'adc_filament_sensor %s' % (self.filament_sensor,), None)
+        if sensor is None or sensor.value is None:
+            return None
+        return bool(sensor.get_status(self.reactor.monotonic())[
+            'filament_detected'])
+    def _head_now(self, ifs, head):
+        """(slot, how) for the toolhead now: how is "loaded" or "user"
+        (filament in it, its slot known), "found" (the slot
+        IFS_FIND_HEAD_SLOT found and unloaded, loaded again for the test
+        patch), "unknown" (filament from a slot not known yet), "kept"
+        (filament the IFS doesn't feed, used as it is: HEAD=keep, or no
+        slot has filament), "tube" (a strand of an unknown slot sits in the
+        tube above the sensor) or "empty"."""
+        if getattr(ifs, 'tube_blocked', False):
+            return 0, "tube"
+        chan = self._known_channel(ifs)
+        if chan:
+            if self.head_slot == chan and self.head_how == "user":
+                return chan, "user"
+            return chan, "loaded"
+        if head:
+            return 0, ("kept" if self.head_how == "keep" else "unknown")
+        if self.head_slot and self.head_how == "found":
+            return self.head_slot, "found"
+        return 0, "empty"
+    def _known_channel(self, ifs):
+        """The IFS module's loaded slot when Kiln loaded it or the user
+        named it; 0 for none, and for a slot only adopted at startup
+        (printer.ifs.loaded_source "adopted": the IFS pointed at it and the
+        toolhead had filament, a guess the steps don't build on: they find
+        the slot as for an unknown one)."""
+        if ifs is None or getattr(ifs, 'channel_source', "") == "adopted":
+            return 0
+        return ifs.channel
     def _zoffset(self):
         """The live G-code Z offset during the zoffset step, else the
         saved print Z offset (variables.cfg zoffset)."""
@@ -184,6 +308,10 @@ class AD5XSetup:
             logging.info("ad5x_setup: %s: %s", self.step, message)
         if progress is not None:
             self.progress = progress
+    def _act(self, action, arg=0):
+        """printer.ad5x_setup action/action_arg: what the step does now."""
+        self.action = action
+        self.action_arg = arg
     def _result(self, key, text):
         # New dict: Moonraker only sees changed objects
         results = dict(self.results)
@@ -222,9 +350,9 @@ class AD5XSetup:
             logging.warning("ad5x_setup: can't save results: %s", e)
     # Commands and the API endpoint
     cmd_SETUP_WIZARD_STEP_help = (
-        "Setup wizard step: STEP=selfcheck|pid|trash|zoffset|mesh|shaper|"
-        "ifs|soak|summary|finish [ACTION=start|abort|adjust|accept] "
-        "[DELTA=] [WAIT=1] [ESTIMATE=1]; "
+        "Setup wizard step: STEP=selfcheck|pid|mesh|shaper|filament|ifs|"
+        "trash|zoffset|soak|summary|finish [ACTION=start|abort|adjust|accept] "
+        "[DELTA=] [WAIT=1] [ESTIMATE=1] [MATERIAL_<n>=] [HEAD=<n>|AUTO]; "
         "ACTION=wizard asks the screen to run the wizard again")
     def cmd_SETUP_WIZARD_STEP(self, gcmd):
         action = gcmd.get('ACTION', 'start').lower()
@@ -259,7 +387,9 @@ class AD5XSetup:
                                        "DELTA= must be a number")
             params = {}
             for key in ('material', 'extruder', 'bed', 'keep_bed', 'tube',
-                        'channel', 'heaters', 'estimate', 'force'):
+                        'channel', 'heaters', 'estimate', 'force', 'head',
+                        'material_1', 'material_2', 'material_3',
+                        'material_4'):
                 if web_request.get(key, None) is not None:
                     params[key.upper()] = str(web_request.get(key))
             msg = self._dispatch(step, action, params, delta)
@@ -286,10 +416,17 @@ class AD5XSetup:
                 raise self._refuse("printing", "SETUP_WIZARD_STEP: no setup "
                                    "wizard during a print")
             return self._request_wizard()
+        if (action == 'accept' and self.prompt == "clear_bed"
+                and self.state in ("failed", "aborted")):
+            # The reminder after a Z offset step that stopped with a patch
+            # on the bed: the print is off
+            self.prompt = None
+            return "AD5X setup: bed cleared"
         if action in ('adjust', 'accept'):
             if self.state != "waiting_user" or self.step not in (
                     ("zoffset", "trash") if action == 'accept'
-                    else ("zoffset",)):
+                    else ("zoffset",)) or (action == 'adjust'
+                                           and self.prompt is not None):
                 raise self._refuse("not_waiting", "SETUP_WIZARD_STEP: "
                                    "ACTION=%s works only while the %s is "
                                    "waiting for you" % (
@@ -327,9 +464,13 @@ class AD5XSetup:
                                "Klipper first" % (", ".join(self.held_off),))
         if self.state in ("running", "waiting_user"):
             if (step == "zoffset" and self.step == "zoffset"
-                    and self.state == "waiting_user"):
+                    and self.state == "waiting_user" and self.prompt is None):
                 self.z_reprint = True     # another patch beside the last
                 return
+            if self.prompt == "clear_bed":
+                raise self._refuse("step_running", "SETUP_WIZARD_STEP: the "
+                                   "Z offset is saved: remove the test print "
+                                   "from the bed and accept first")
             raise self._refuse("step_running", "SETUP_WIZARD_STEP: step "
                                "'%s' is still running (ACTION=abort first)"
                                % (self.step,))
@@ -341,6 +482,10 @@ class AD5XSetup:
         self.abort_requested = False
         self.progress = 0.
         self.progress_fn = None
+        self.action_fn = None
+        self._act("")
+        self.prompt = None
+        self.step_started = round(time.time(), 1)
         self._set("Starting", 0.)
         if inline:
             self._run_step(step, params, True)
@@ -374,6 +519,16 @@ class AD5XSetup:
             self._set("Internal error: %s" % (e,))
         finally:
             self.progress_fn = None
+            self.action_fn = None
+            self._act("")
+            if self.state not in ("aborted", "failed") \
+                    and self.prompt == "head_unknown":
+                self.prompt = None
+            if (self.state in ("aborted", "failed") and step == "zoffset"
+                    and self.z_patched):
+                # A patch (or part of one) is on the bed: a retry prints
+                # its first patch on the same spot
+                self.prompt = "clear_bed"
             try:
                 if self.state in ("aborted", "failed"):
                     self._make_safe(step)
@@ -471,6 +626,7 @@ class AD5XSetup:
         return all(a in status['homed_axes'] for a in "xyz")
     def _home(self):
         if not self._homed():
+            self._act("homing")
             self._set("Homing")
             self._gcode("G28")
     def _settings(self, section):
@@ -487,6 +643,7 @@ class AD5XSetup:
         """Set heater targets {name: temp} and wait until each is within
         1 C of it (abortable, unlike M109/M190)."""
         heaters = {n: self._heater(n) for n in targets}
+        self._act("heating")
         for name, temp in targets.items():
             self._gcode("SET_HEATER_TEMPERATURE HEATER=%s TARGET=%g"
                         % (name, temp))
@@ -536,6 +693,7 @@ class AD5XSetup:
             add("MCU %s" % (name.split()[-1],), True,
                 mcu.get_status(now).get('mcu_version', 'connected'))
         # IFS
+        self._act("checking")
         self._set("Checking the IFS")
         ifs = self.printer.lookup_object('ifs', None)
         if ifs is None and self._ifs_owner():
@@ -575,6 +733,7 @@ class AD5XSetup:
             if obj is None:
                 add(label, False, "not configured")
                 continue
+            self._act("fan_test")
             self._set("%s should spin now (%.0f s)" % (label,
                                                        self.check_time))
             rpm = None
@@ -590,6 +749,7 @@ class AD5XSetup:
             else:
                 add(label, rpm > 0, "%.0f rpm" % (rpm,))
         # Homing
+        self._act("homing")
         self._set("Homing")
         try_gcode("Homing", "G28", "X, Y and Z home")
         # Heaters, together: check_time on, then off; rise measured until
@@ -600,6 +760,7 @@ class AD5XSetup:
         tgt_bed = min(max(self.check_bed_temp, t_bed + 15.), 90.)
         max_ext, max_bed = t_ext, t_bed
         start = self.reactor.monotonic()
+        self._act("heater_test")
         try:
             self._gcode("SET_HEATER_TEMPERATURE HEATER=extruder TARGET=%g\n"
                         "SET_HEATER_TEMPERATURE HEATER=heater_bed TARGET=%g"
@@ -663,6 +824,7 @@ class AD5XSetup:
         n = len(heaters)
         for i, (name, label, target) in enumerate(heaters):
             prog = (i / float(n), (i + 1) / float(n))
+            self._act("pid_" + label)
             self._set("PID tuning the %s at %.0f C (takes a few minutes)"
                       % (label, target), prog[0])
             fan = self.pid_fan if name == "extruder" else 0.
@@ -696,6 +858,7 @@ class AD5XSetup:
             # nozzle along it, then the mesh. Plastic left on the tip
             # squashes a little more at every touch, and the probe's
             # samples then exceed samples_tolerance.
+            self._act("cleaning")
             self._set("Cleaning the nozzle on the bed edge", .32)
             # The Z offset from the step before is still applied: clear it for
             # the tap and the scrub, as PRINT_START does (the scrub's height
@@ -703,6 +866,7 @@ class AD5XSetup:
             self._gcode("G90\n_SET_GCODE_OFFSET Z=0\nG1 Z5 F800\nG1 X60 Y-3 F30000\n"
                         "WEIGHT_TARE\nPROBE")
             self._scrub()
+            self._act("probing")
             self._set("Probing the bed", .35)
             self._gcode("BED_MESH_CALIBRATE PROFILE=default")
         except Exception:
@@ -750,6 +914,7 @@ class AD5XSetup:
                 "doesn't have")
         self._home()
         for i, axis in enumerate("XY"):
+            self._act("shaper_" + axis.lower())
             self._set("Measuring vibrations on %s (the printer buzzes)"
                       % (axis,), .05 + .45 * i)
             self._gcode("SHAPER_CALIBRATE AXIS=%s" % (axis,))
@@ -765,6 +930,140 @@ class AD5XSetup:
         (plugin.json owns_ifs), or ""."""
         plugins = self.printer.lookup_object('ad5x_plugins', None)
         return getattr(plugins, 'ifs_owner', "")
+    def _find_head(self, ifs):
+        """The toolhead holds filament from a slot Kiln doesn't know:
+        IFS_FIND_HEAD_SLOT finds it and unloads it. Returns the slot.
+        Failing, the step fails with prompt pick_slot (the user names the
+        slot: the find can't tell on this printer, or a strand sits in the
+        tube) or head_unknown (no slot cleared the sensor: pull it out by
+        hand)."""
+        self._act("finding_slot")
+        self._set("Finding the slot in the toolhead: a short pull of each "
+                  "slot with filament")
+        try:
+            self._gcode("IFS_FIND_HEAD_SLOT")
+        except self.printer.command_error as e:
+            if not self.abort_requested:
+                result = getattr(ifs, 'find_result', "")
+                if result in ("pick", "tube"):
+                    self.prompt = "pick_slot"
+                elif result == "none" or "by hand" in str(e):
+                    self.prompt = "head_unknown"
+            raise
+        slot = getattr(ifs, 'head_found', 0)
+        if not slot:
+            self.prompt = "head_unknown"
+            raise self.printer.command_error(
+                "The toolhead holds filament from an unknown slot: pull it "
+                "out by hand (cut the tip first), then Retry")
+        self.head_slot, self.head_how = slot, "found"
+        return slot
+    def _tube_check(self, ifs):
+        """A strand of an unknown slot in the tube above the toolhead
+        sensor: nothing may load before the user names the slot."""
+        if getattr(ifs, 'tube_blocked', False):
+            self.prompt = "pick_slot"
+            raise self.printer.command_error(
+                "Filament from an unknown slot sits in the tube above the "
+                "toolhead sensor: choose its slot (Filament step), or pull "
+                "it out by hand and choose 'empty'")
+    def _present_slots(self, ifs):
+        st = ifs.get_status(self.reactor.monotonic())
+        return st.get('loaded_channels') or []
+    def _step_filament(self, params):
+        """Slot materials (MATERIAL_<n>=, IFS_SET_MATERIAL) and the slot in
+        the toolhead: HEAD=<n> says which, HEAD=AUTO (default) takes the
+        one Kiln knows or finds it (IFS_FIND_HEAD_SLOT, which also unloads
+        it; the Z offset step loads it again), HEAD=0 says it's empty."""
+        ifs = self.printer.lookup_object('ifs', None)
+        if ifs is None and self._ifs_owner():
+            self._result("filament", "skipped: plugin %s drives the IFS"
+                         % (self._ifs_owner(),))
+            self._set("Filament step skipped", 1.)
+            return
+        if ifs is None:
+            raise self.printer.command_error("No IFS configured")
+        mats = {}
+        for n in (1, 2, 3, 4):
+            val = params.get('MATERIAL_%d' % (n,))
+            if val is None:
+                continue
+            val = str(val).strip()
+            if val and val != "?" and not MATERIAL_RE.match(val):
+                raise self.printer.command_error(
+                    "MATERIAL_%d: '%s' is not a material name" % (n, val))
+            mats[n] = "" if val == "?" else val.upper()
+        head = str(params.get('HEAD', 'AUTO') or 'AUTO').strip().upper()
+        if head not in ('AUTO', 'KEEP', '0', '1', '2', '3', '4'):
+            raise self.printer.command_error(
+                "HEAD is 1-4, 0 (empty), KEEP or AUTO")
+        self._act("setting_materials")
+        for n, val in sorted(mats.items()):
+            self._set("Slot %d: %s" % (n, val or "no material"), .05)
+            self._gcode("IFS_SET_MATERIAL SLOT=%d TYPE=%s" % (n, val))
+        filled = self._head_full(ifs)
+        blocked = getattr(ifs, 'tube_blocked', False)
+        if head == '0':
+            if filled:
+                raise self.printer.command_error(
+                    "HEAD=0, but the toolhead sensor sees filament")
+            if blocked or getattr(ifs, 'find_open', False):
+                # Pulled out by hand: nothing in the toolhead or the tube
+                self._gcode("IFS_SET_CHANNEL CHANNEL=0")
+            self.head_slot, self.head_how = 0, ""
+        elif head == 'KEEP':
+            # Filament the IFS doesn't feed (or not known): used as it is
+            # by the Z offset step; the IFS tuning needs it out
+            self.head_slot, self.head_how = 0, "keep"
+        elif head != 'AUTO':
+            slot = int(head)
+            if blocked:
+                # The strand in the tube is this slot's: pull it back
+                self._home()
+                self._act("unloading", slot)
+                self._gcode("IFS_FIND_HEAD_SLOT SLOT=%d" % (slot,))
+                self.head_slot, self.head_how = slot, "found"
+            else:
+                if filled is False:
+                    raise self.printer.command_error(
+                        "HEAD=%d, but the toolhead sensor sees no filament"
+                        % (slot,))
+                if (ifs.channel != slot or getattr(ifs, 'find_open', False)
+                        or getattr(ifs, 'channel_source', "") == "adopted"):
+                    self._gcode("IFS_SET_CHANNEL CHANNEL=%d" % (slot,))
+                self.head_slot, self.head_how = slot, "user"
+        elif blocked:
+            self._tube_check(ifs)
+        elif filled and self._known_channel(ifs):
+            self.head_slot, self.head_how = ifs.channel, "loaded"
+        elif filled and not self._present_slots(ifs):
+            # No slot has filament at the IFS: nothing to find it with
+            self.head_slot, self.head_how = 0, "keep"
+        elif filled:
+            self._home()
+            self.progress = .1
+            self._find_head(ifs)
+        elif not (self.head_slot and self.head_how == "found"):
+            if (filled is False and not ifs.channel
+                    and getattr(ifs, 'find_open', False)):
+                # Pulled out by hand after a find that didn't end
+                self._gcode("IFS_SET_CHANNEL CHANNEL=0")
+            self.head_slot, self.head_how = 0, ""
+        st = self._filament_status() or {}
+        present = st.get('present') or []
+        names = st.get('materials') or {}
+        slots = ", ".join("%d %s" % (c, names.get(str(c)) or "?")
+                          for c in present) or "none"
+        where = {"loaded": "slot %d", "user": "slot %d (set)",
+                 "found": "slot %d (found, unloaded)"}.get(
+                     st.get('head_source'), "")
+        where = (where % (st.get('head'),) if where
+                 else st.get('head_source') or "empty")
+        if st.get('head_source') == "kept":
+            where = "filament kept as it is"
+        self._result("filament", "slots with filament: %s; toolhead: %s"
+                     % (slots, where))
+        self._set("Filament: toolhead %s" % (where,), 1.)
     def _step_ifs(self, params):
         ifs = self.printer.lookup_object('ifs', None)
         if ifs is None and self._ifs_owner():
@@ -778,17 +1077,20 @@ class AD5XSetup:
         args = "".join(" %s=%s" % (k, params[k]) for k in ("TUBE", "CHANNEL")
                        if params.get(k))
         self._home()
-        # Filament left in the toolhead (from an earlier run): unload it first.
-        # IFS_TUNE only does that when it knows the slot; after a restart it
-        # doesn't, so the step does it here.
-        if ifs._head_has_filament():
-            chan = int(params.get('CHANNEL', 0) or 0) or self._reload_channel()
-            if not chan:
+        # Filament in the toolhead from a slot Kiln doesn't know (loaded by
+        # the stock firmware before the install, or after a restart): find
+        # and unload it first; IFS_TUNE needs the toolhead empty then. A
+        # known slot (Kiln loaded it or the user named it) stays: IFS_TUNE
+        # measures its unload. One only adopted at startup is found too.
+        self._tube_check(ifs)
+        if self._head_full(ifs) and not self._known_channel(ifs):
+            if self.head_how == "keep" or not self._present_slots(ifs):
                 raise self.printer.command_error(
-                    "The toolhead holds filament from an unknown slot: pull it "
-                    "out by hand (cut the tip first), then Retry")
-            self._set("Unloading slot %d from the toolhead" % (chan,), .02)
-            self._gcode("IFS_UNLOAD SLOT=%d" % (chan,))
+                    "The toolhead holds filament the IFS doesn't feed: the "
+                    "IFS tuning needs it out. Pull it out by hand, or skip "
+                    "this step")
+            self._find_head(ifs)
+        self._act("tuning_ifs")
         self._set("Tuning the IFS (QuickSwap-like)", 0.)
         def progress():
             if ifs.tune_message:
@@ -801,22 +1103,45 @@ class AD5XSetup:
             self.progress_fn = None
         self._result("ifs", ifs._tune_summary())
         self._set("IFS tuned", 1.)
+    def _start_action(self, eventtime):
+        """The Z offset step's PRINT_START: its status line (M117) as an
+        action."""
+        ds = self.printer.lookup_object('display_status', None)
+        msg = ""
+        if ds is not None:
+            msg = ds.get_status(eventtime).get('message') or ""
+        for prefix, action in START_ACTIONS:
+            if msg.startswith(prefix):
+                return action
+        return "preparing"
     def _step_zoffset(self, params):
-        mat = (params.get('MATERIAL') or self._loaded_material() or "PLA")
-        nozzle, bed = PATCH_TEMPS.get(mat.upper(), PATCH_TEMPS["PLA"])
-        nozzle = float(params.get('EXTRUDER') or nozzle)
-        bed = float(params.get('BED') or bed)
         zo = self._variables().get('zoffset')
         # No saved value: abort puts zero back, not the patch's start offset
         self.z_saved = dict(zo) if isinstance(zo, dict) else {'z': 0.}
         self.z_deltas = []
         self.z_accept = self.z_reprint = False
-        sensor = self.printer.lookup_object(
-            'adc_filament_sensor %s' % (self.filament_sensor,), None)
-        if sensor is not None and sensor.value is not None and not \
-                sensor.get_status(self.reactor.monotonic())[
-                    'filament_detected']:
-            chan = self._reload_channel()
+        self.z_patched = False
+        self.zoffset_plan = None
+        ifs = self.printer.lookup_object('ifs', None)
+        keep = str(params.get('HEAD', '') or '').strip().upper() == 'KEEP' \
+            or self.head_how == "keep"
+        if ifs is not None:
+            self._tube_check(ifs)
+        full = self._head_full(ifs)
+        empty = full is False
+        chan = self._known_channel(ifs) if not empty else 0
+        if (ifs is not None and full and not chan and not keep
+                and self._present_slots(ifs)):
+            # Filament from a slot Kiln doesn't know: find and unload it,
+            # then load it the normal way (purged, its material known).
+            # HEAD=KEEP, or no slot with filament at the IFS: print with
+            # it as it is. The find heats: the plan is out before, its slot
+            # not known yet
+            self._plan(params, ifs, 0)
+            self._home()
+            empty, chan = True, self._find_head(ifs)
+        elif empty:
+            chan = self._patch_slot()
             if not chan and self._ifs_owner():
                 # Not Kiln's IFS slots: the plugin loads its own way
                 raise self.printer.command_error(
@@ -825,7 +1150,10 @@ class AD5XSetup:
             if not chan:
                 raise self.printer.command_error(
                     "No filament in the toolhead: load a slot first")
+        nozzle, bed = self._plan(params, ifs, chan)
+        if empty:
             # The IFS step leaves the head empty: load the slot it cut out
+            self._act("loading", chan)
             self._set("Loading slot %d" % (chan,), .02)
             self._gcode("IFS_LOAD SLOT=%d" % (chan,))
         # PRINT_START applies the saved offset (and its prime line prints
@@ -833,6 +1161,7 @@ class AD5XSetup:
         start_z = self.patch_start_z
         if params.get('ESTIMATE') and str(params['ESTIMATE']).strip() not in (
                 '', '0'):
+            self._act("estimating")
             start_z = self._estimate_start(nozzle)
         self._gcode('SAVE_VARIABLE VARIABLE=zoffset VALUE="%r"'
                     % ({'z': round(start_z, 4)},))
@@ -840,17 +1169,26 @@ class AD5XSetup:
                   "clean the nozzle, check Z" % (nozzle, bed), .05)
         # LEVEL=0: the centre Z check only. A mesh here probed the whole bed
         # (adaptive without exclude_object labels), which the test patch doesn't need.
-        self._gcode("PRINT_START BED=%g EXTRUDER=%g LEVEL=0" % (bed, nozzle))
+        self._act("preparing")
+        self.action_fn = self._start_action
+        try:
+            self._gcode("PRINT_START BED=%g EXTRUDER=%g LEVEL=0"
+                        % (bed, nozzle))
+        finally:
+            self.action_fn = None
         self.z_start = self._zoffset()
         index = 0
         while True:
             self.state = "waiting_user"
+            self._act("printing_patch", index + 1)
             self._set("Test patch %d: press Closer until the lines touch and "
                       "flatten. Gaps or lifted edges: Closer. Squashed, "
                       "torn lines: Away" % (index + 1,), .5)
+            self.z_patched = True
             for line in self._patch_gcode(index):
                 self._apply_z_deltas()
                 self._gcode(line)
+            self._act("waiting")
             self._set("Check the patch: adjust and print another, or accept",
                       .9)
             end = self.reactor.monotonic() + self.user_timeout
@@ -868,30 +1206,83 @@ class AD5XSetup:
             index += 1
         # Keep it: SET_GCODE_OFFSET (ad5x.cfg's wrapper) saves zoffset
         self.state = "running"
+        self._act("saving")
         self._gcode("SET_GCODE_OFFSET Z=%.4f" % (self._zoffset(),))
         self._gcode("PRINT_END")
+        # Saved: an abort from here on keeps it
+        self.z_saved = None
         saved = self._saved_zoffset()
         self._result("zoffset", "Z offset %.3f mm" % (
             saved if saved is not None else self._zoffset(),))
+        self._clear_bed()
+    def _clear_bed(self):
+        """After printing on the bed: wait until the user has taken the test
+        print off (ACTION=accept), so the next step doesn't probe or print
+        on it. The heaters are off by now. After user_timeout the step ends
+        anyway (WAIT=1 holds the console until then), saying so. An abort
+        here ends the step as done (what it printed for is saved)."""
+        self.z_accept = False
+        self.prompt = "clear_bed"
+        self.state = "waiting_user"
+        self._act("waiting")
+        self._set("Remove the test print from the bed, then continue", .95)
+        end = self.reactor.monotonic() + self.user_timeout
+        try:
+            while not self.z_accept:
+                if self.reactor.monotonic() > end:
+                    self.prompt = None
+                    self.state = "running"
+                    self._set("Saved. No answer for %.0f min: remove the "
+                              "test print from the bed before the next step"
+                              % (self.user_timeout / 60.,), 1.)
+                    return
+                self._pause(.1)
+        except SetupAborted:
+            self._set("Saved; remove the test print from the bed before the "
+                      "next step")
+            self.prompt = None
+            self.state = "running"
+            return
+        self.prompt = None
+        self.state = "running"
         self._set("Z offset saved", 1.)
-    def _reload_channel(self):
-        """Slot to load for the patch: the one IFS_TUNE unloaded, else
-        T0's, if the IFS has filament there."""
+    def _plan(self, params, ifs, chan):
+        """Patch temperatures (nozzle, bed) from MATERIAL=, else slot chan's
+        material, else PLA (a guess); EXTRUDER=/BED= override them.
+        Published as printer.ad5x_setup.zoffset_plan before anything
+        heats (before a find with chan 0, again once it found the
+        slot)."""
+        mat, source = params.get('MATERIAL'), "param"
+        if not mat and ifs is not None and chan:
+            mat, source = ifs.materials[chan - 1].get('type'), "slot"
+        if not mat:
+            mat, source = "PLA", "guess"
+        mat = str(mat).upper()
+        known = mat in PATCH_TEMPS
+        nozzle, bed = PATCH_TEMPS.get(mat, PATCH_TEMPS["PLA"])
+        if not known:
+            source = "guess"
+        nozzle = float(params.get('EXTRUDER') or nozzle)
+        bed = float(params.get('BED') or bed)
+        self.zoffset_plan = {'slot': chan, 'material': mat, 'nozzle': nozzle,
+                             'bed': bed, 'guess': source == "guess",
+                             'source': source}
+        logging.info("ad5x_setup: zoffset plan %s", self.zoffset_plan)
+        return nozzle, bed
+    def _patch_slot(self):
+        """Slot to load for the patch: the one this wizard run found or was
+        told was in the toolhead, else the one IFS_TUNE unloaded, else T0's,
+        else the first with filament (if the IFS has filament there)."""
         ifs = self.printer.lookup_object('ifs', None)
         if ifs is None:
             return 0
         st = ifs.get_status(self.reactor.monotonic())
         loaded = st.get('loaded_channels') or []
-        for chan in (getattr(ifs, 'tune_unloaded', 0),
+        for chan in (self.head_slot, getattr(ifs, 'tune_unloaded', 0),
                      st.get('tool_map', {}).get('0', 0)):
             if chan and chan in loaded:
                 return chan
         return loaded[0] if loaded else 0
-    def _loaded_material(self):
-        ifs = self.printer.lookup_object('ifs', None)
-        if ifs is None or not ifs.channel:
-            return None
-        return ifs.materials[ifs.channel - 1].get('type')
     def _apply_z_deltas(self):
         while self.z_deltas:
             delta, self.z_deltas = self.z_deltas[0], self.z_deltas[1:]
@@ -956,7 +1347,9 @@ class AD5XSetup:
         accept when it's right."""
         self._home()
         self.z_accept = False
+        self._act("moving")
         self._gcode("_TRASH_CHECK")
+        self._act("waiting")
         self.state = "waiting_user"
         self._set("Is the nozzle over the purge box? If not, TRASH_OFFSET "
                   "X= Y=; then accept", .9)
@@ -991,6 +1384,7 @@ class AD5XSetup:
         if self._temp(bed) > 40. and not int(params.get('FORCE', 0) or 0):
             self._gcode_raw("SET_HEATER_TEMPERATURE HEATER=heater_bed TARGET=0")
             end = self.reactor.monotonic() + self.heat_timeout
+            self._act("cooling")
             while self._temp(bed) > 40.:
                 self._set("Waiting for the bed to cool below 40 C (now %.0f C)"
                           % (self._temp(bed),), 0.)
@@ -998,6 +1392,7 @@ class AD5XSetup:
                     raise self.printer.command_error(
                         "The bed did not cool below 40 C in time")
                 self._pause(1.)
+        self._act("soak")
         self._set("Bed soak calibration at 60 C (about 15 minutes)", .05)
         self._gcode("BED_SOAK_CALIBRATE BED=60")
         self._gcode_raw("SET_HEATER_TEMPERATURE HEATER=heater_bed TARGET=0")
@@ -1012,6 +1407,7 @@ class AD5XSetup:
         cf = self.printer.lookup_object('configfile')
         moved = {s: self._autosave(s) for s in TUNING_SECTIONS}
         moved = {s: v for s, v in moved.items() if v}
+        self._act("saving")
         if moved:
             self._set("Writing %s" % (os.path.basename(self.tuning_file),), .3)
             self._write_tuning(moved)

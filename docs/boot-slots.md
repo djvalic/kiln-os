@@ -513,6 +513,13 @@ the size, exactly 1 MiB, the sha256 file, and the content even with
 its GPT as on this disk; reads it back). Copy it off the printer
 too: a boot loader that no longer starts can only be repaired through J28.
 
+A second copy goes to usershare's `kiln-stock-backup/` with the other stock
+files (`S99ad5x-stock-copy`). That copy keeps its `boot.img` when a newer
+copy has none (after a wipe of `/data` it can't be saved again once Kiln's
+SPL is in). Return to Flashforge firmware and `ad5x-bootloader-install`
+look for `boot.img` in `/data/ad5x/stock`, then usershare's
+`kiln-stock-backup/`, then a USB stick's `kiln-stock-backup/`.
+
 ## Kiln's U-Boot: confirmed starts
 
 Kiln's own U-Boot (`u-boot/`, v1.0 work; not installed by anything yet)
@@ -525,8 +532,9 @@ the command line. With that, `S99ad5x-booted` confirms the start at the
 point it marks start-up finished (SSH up, the flag read back on this
 slot): it zeroes the state sector, synced, reads it back, and logs which
 start it confirmed in its output and the boot trace. U-Boot's records
-(`ota` 0x90200: which kernel failed, how many fallbacks, why the last one)
-are logged too and kept until `ad5x-kernel retry`, which zeroes them along
+(`ota` 0x90200: which kernel failed, how many fallbacks, why the last one;
+U-Boot never writes it past its 512 bytes: a line that doesn't fit is left
+out, the sector still parses) are logged too and kept until `ad5x-kernel retry`, which zeroes them along
 with S00's `failed` files; `ad5x-kernel` shows them. A start without
 `ad5x.uboot=1` (Flashforge's SPL, or Kiln's SPL alone) never reads or
 writes those sectors.

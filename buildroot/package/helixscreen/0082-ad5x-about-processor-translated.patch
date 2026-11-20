@@ -1,0 +1,511 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 16:30:00 -0500
+Subject: [PATCH] ad5x: About's Processor value translated
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The previous patch's Processor row built its value in English inside
+kiln_hardware, so a Russian screen showed "Процессор" next to "variant
+unknown". kiln_hardware now only reads and decodes, as for the eMMC:
+read_processor() returns the eFuse's SocInfo (variant, DDR3, RAM size,
+SoC ID), the boot loader's ad5x.ram= size when there is no eFuse, and
+the core revision. The About panel reads it once and turns it into text
+in populate_info_rows() with lv_tr() and the English format strings as
+keys, so the row follows the language each time About opens. Chip
+names, DDR2/DDR3 and "SoC ID" stay untranslated. The keys are in en.yml
+and, with Russian values, in ru.yml; other languages show English.
+
+Also:
+- a variant code of 7 or more (Ingenic lists 0-6, U-Boot's
+  X2600_SOC_KNOWN) shows "X2600, variant unknown (N)", not
+  "X2600 variant N"
+- the nvmem device scan uses directory_iterator's non-throwing
+  increment; it runs on the UI thread
+- the processor value buffer is 160 bytes: Russian text is longer
+  than 96
+- kiln_hardware.h notes that the ad5x.ram= rule is bl_variant's
+  (lib/bootloader.sh), not mem_hw_mib's last-wins, and that the eFuse
+  cell is root-only (kernel patch 0085), so the row falls back if
+  HelixScreen stops running as root
+- kiln_hardware.cpp no longer includes fmt: nothing there formats now
+
+The tests check the fields: unknown variant codes, a cell on the second
+nvmem device, a cell that can't be read (falls back to ad5x.ram=) and
+no cpuinfo.
+---
+ include/system/kiln_hardware.h    | 41 +++++++++++---
+ include/ui_settings_about.h       |  4 +-
+ src/system/kiln_hardware.cpp      | 42 +++++++--------
+ src/ui/ui_settings_about.cpp      | 41 +++++++++++---
+ tests/unit/test_kiln_hardware.cpp | 90 +++++++++++++++++++++++++++----
+ translations/en.yml               |  6 +++
+ translations/ru.yml               |  6 +++
+ 7 files changed, 179 insertions(+), 51 deletions(-)
+
+diff --git a/include/system/kiln_hardware.h b/include/system/kiln_hardware.h
+index bd2bf242..1bd1af9b 100644
+--- a/include/system/kiln_hardware.h
++++ b/include/system/kiln_hardware.h
+@@ -14,6 +14,14 @@
+  * check. Ingenic's 6.6 kernel has no driver for the eFuse; there the variant
+  * is unknown, and the RAM size comes from Kiln's boot loader (ad5x.ram= on
+  * the kernel command line) when it gave one.
++ *
++ * The cell is readable by root only: kernel patch 0085 makes the X2600's
++ * eFuse root-only, since it also holds the chip ID. HelixScreen runs as
++ * root on Kiln OS; if it ever stops doing so, the read fails and the row
++ * falls back to the 6.6 form (variant unknown).
++ *
++ * This module only reads and decodes. The About panel turns the fields into
++ * the translated row text, so nothing here depends on LVGL.
+  */
+ 
+ #include <cstdint>
+@@ -38,30 +46,47 @@ struct SocInfo {
+  */
+ std::optional<SocInfo> decode_socinfo(const std::string& raw);
+ 
+-/// Ingenic's name for the variant ("X2600E", "X2600H", ...), or "X2600 variant N"
++/**
++ * @brief Ingenic's name for the variant ("X2600E", "X2600H", ...).
++ *
++ * "" for codes 7 and up: Ingenic lists 0-6, the same limit as U-Boot's
++ * X2600_SOC_KNOWN (u-boot patch 0029).
++ */
+ std::string variant_name(unsigned variant);
+ 
+ /**
+  * @brief The board's RAM in MiB from ad5x.ram= in @p cmdline.
+  *
+  * 256 or 512; nullopt without one, for other values, or when it is given
+- * twice with different values.
++ * twice with different values. This is deliberately bl_variant's rule in
++ * buildroot/package/ad5x-system/lib/bootloader.sh (any value other than
++ * one 256 or one 512 is unknown), not mem_hw_mib's in lib/memory.sh, where
++ * the last ad5x.ram= wins: the row names the board, so a command line that
++ * disagrees with itself shows no size rather than a guess.
+  */
+ std::optional<unsigned> boot_loader_ram_mib(const std::string& cmdline);
+ 
+ /// The core's revision from /proc/cpuinfo ("0.0" from "... XBurst II V0.0"), or ""
+ std::string core_revision(const std::string& cpuinfo);
+ 
++/// What the processor row shows
++struct ProcessorInfo {
++    /// From the eFuse (Kiln's 7.3 kernel); nullopt without the driver, when
++    /// the cell can't be read, or when its two copies differ
++    std::optional<SocInfo> soc;
++    /// Without the eFuse only: ad5x.ram= from Kiln's boot loader; 0 none
++    unsigned boot_loader_ram_mib = 0;
++    /// The core revision ("0.0"); "" when /proc/cpuinfo doesn't say
++    std::string core;
++};
++
+ /**
+- * @brief The processor row: "X2600E, 256 MiB DDR3, SoC ID 0x18000, core 0.0".
+- *
+- * Without the eFuse: "X2600, 256 MiB, variant unknown, core 0.0", the size
+- * from the boot loader if it gave one.
++ * @brief The processor row's fields.
+  *
+  * @p root is the test seam: the files are read below it (/sys, /proc).
+- * "" when the machine is not an X2600.
++ * nullopt when the machine is not an X2600.
+  */
+-std::string processor_summary(const std::string& root = "");
++std::optional<ProcessorInfo> read_processor(const std::string& root = "");
+ 
+ /// What the eMMC row shows
+ struct EmmcInfo {
+diff --git a/include/ui_settings_about.h b/include/ui_settings_about.h
+index df2da846..4cc9c513 100644
+--- a/include/ui_settings_about.h
++++ b/include/ui_settings_about.h
+@@ -134,7 +134,8 @@ class AboutSettingsOverlay : public OverlayBase {
+     char log_dest_value_buf_[256];
+     char host_arch_value_buf_[64];
+     char about_copyright_buf_[48];
+-    char processor_value_buf_[96];
++    // Room for the translated text (Cyrillic is 2 bytes a letter)
++    char processor_value_buf_[160];
+     char emmc_value_buf_[96];
+ 
+     // Debounce tracker restart on inadvertent re-open
+@@ -142,6 +143,7 @@ class AboutSettingsOverlay : public OverlayBase {
+ 
+     // Kiln OS on the AD5X: read once in init_subjects() (the hardware doesn't
+     // change while running), made into translated text in populate_info_rows()
++    std::optional<helix::kiln_hardware::ProcessorInfo> kiln_processor_;
+     std::optional<helix::kiln_hardware::EmmcInfo> kiln_emmc_;
+ };
+ 
+diff --git a/src/system/kiln_hardware.cpp b/src/system/kiln_hardware.cpp
+index a01fe819..307e0da6 100644
+--- a/src/system/kiln_hardware.cpp
++++ b/src/system/kiln_hardware.cpp
+@@ -3,8 +3,6 @@
+ 
+ #include "text_io.h"
+ 
+-#include <spdlog/fmt/fmt.h>
+-
+ #include <array>
+ #include <cctype>
+ #include <filesystem>
+@@ -30,8 +28,11 @@ std::string read_trimmed(const std::string& path) {
+ std::string read_socinfo_cell(const std::string& root) {
+     std::error_code ec;
+     const std::filesystem::path devices = root + "/sys/bus/nvmem/devices";
+-    for (const auto& dev : std::filesystem::directory_iterator(devices, ec)) {
+-        const auto cell = dev.path() / "cells" / "socinfo@6b,0";
++    // The non-throwing increment: this runs on the UI thread, and a device
++    // that goes away mid-scan must not throw out of the About panel
++    for (auto it = std::filesystem::directory_iterator(devices, ec);
++         !ec && it != std::filesystem::directory_iterator(); it.increment(ec)) {
++        const auto cell = it->path() / "cells" / "socinfo@6b,0";
+         if (auto raw = tio::read_file(cell.string(), 16)) {
+             return *raw;
+         }
+@@ -80,7 +81,7 @@ std::string variant_name(unsigned variant) {
+     if (variant < kNames.size()) {
+         return kNames[variant];
+     }
+-    return fmt::format("X2600 variant {}", variant);
++    return {};
+ }
+ 
+ std::optional<unsigned> boot_loader_ram_mib(const std::string& cmdline) {
+@@ -134,27 +135,22 @@ std::string core_revision(const std::string& cpuinfo) {
+     return stop > v + 2 ? text.substr(v + 2, stop - v - 2) : std::string();
+ }
+ 
+-std::string processor_summary(const std::string& root) {
++std::optional<ProcessorInfo> read_processor(const std::string& root) {
+     if (!is_x2600(root)) {
+-        return {};
++        return std::nullopt;
+     }
+-    const auto cpuinfo = tio::read_file(root + "/proc/cpuinfo", 64 * 1024);
+-    const std::string rev = cpuinfo ? core_revision(*cpuinfo) : std::string();
+-    const std::string core = rev.empty() ? std::string() : fmt::format(", core {}", rev);
+-
+-    if (const auto soc = decode_socinfo(read_socinfo_cell(root))) {
+-        const char* type = soc->ddr3 ? "DDR3" : "DDR2";
+-        const std::string ram = soc->ram_mib ? fmt::format("{} MiB {}", soc->ram_mib, type)
+-                                             : fmt::format("{}, size unknown", type);
+-        return fmt::format("{}, {}, SoC ID 0x{:05x}{}", variant_name(soc->variant), ram, soc->id,
+-                           core);
++    ProcessorInfo info;
++    if (const auto cpuinfo = tio::read_file(root + "/proc/cpuinfo", 64 * 1024)) {
++        info.core = core_revision(*cpuinfo);
+     }
+-
+-    // No eFuse driver (6.6): the size Kiln's boot loader passed, if any
+-    const auto cmdline = tio::read_file(root + "/proc/cmdline", 4096);
+-    const auto mib = cmdline ? boot_loader_ram_mib(*cmdline) : std::nullopt;
+-    const std::string ram = mib ? fmt::format(", {} MiB", *mib) : std::string();
+-    return fmt::format("X2600{}, variant unknown{}", ram, core);
++    info.soc = decode_socinfo(read_socinfo_cell(root));
++    if (!info.soc) {
++        // No eFuse driver (6.6): the size Kiln's boot loader passed, if any
++        if (const auto cmdline = tio::read_file(root + "/proc/cmdline", 4096)) {
++            info.boot_loader_ram_mib = boot_loader_ram_mib(*cmdline).value_or(0);
++        }
++    }
++    return info;
+ }
+ 
+ std::optional<double> EmmcInfo::size_gib() const {
+diff --git a/src/ui/ui_settings_about.cpp b/src/ui/ui_settings_about.cpp
+index ebb69620..9c599883 100644
+--- a/src/ui/ui_settings_about.cpp
++++ b/src/ui/ui_settings_about.cpp
+@@ -109,18 +109,16 @@ void AboutSettingsOverlay::init_subjects() {
+ 
+         // Kiln OS on the AD5X: the X2600 variant and the eMMC (the parts that
+         // differ between boards). The hardware doesn't change while running, so
+-        // it is read once; populate_info_rows() writes the eMMC's translated text.
++        // it is read once; populate_info_rows() writes the translated text.
+ #if defined(HELIX_KILN_AD5X)
+-        const std::string processor = helix::kiln_hardware::processor_summary();
++        kiln_processor_ = helix::kiln_hardware::read_processor();
+         kiln_emmc_ = helix::kiln_hardware::read_emmc();
+-#else
+-        const std::string processor;
+ #endif
+-        UI_MANAGED_SUBJECT_STRING(processor_value_subject_, processor_value_buf_,
+-                                  processor.c_str(), "about_processor_value", subjects_);
++        UI_MANAGED_SUBJECT_STRING(processor_value_subject_, processor_value_buf_, "",
++                                  "about_processor_value", subjects_);
+         UI_MANAGED_SUBJECT_STRING(emmc_value_subject_, emmc_value_buf_, "", "about_emmc_value",
+                                   subjects_);
+-        UI_MANAGED_SUBJECT_INT(has_processor_subject_, processor.empty() ? 0 : 1,
++        UI_MANAGED_SUBJECT_INT(has_processor_subject_, kiln_processor_ ? 1 : 0,
+                                "about_has_processor", subjects_);
+         UI_MANAGED_SUBJECT_INT(has_emmc_subject_, kiln_emmc_ ? 1 : 0, "about_has_emmc",
+                                subjects_);
+@@ -312,6 +310,29 @@ void AboutSettingsOverlay::setup_contributor_marquee() {
+ 
+ namespace {
+ 
++// Kiln OS: the processor row, "X2600E, 256 MiB DDR3, SoC ID 0x18000, core 0.0",
++// or without the eFuse "X2600, 256 MiB, variant unknown, core 0.0". The words
++// are translated; the identifiers (chip names, DDR2/DDR3, SoC ID) are not.
++std::string kiln_processor_text(const helix::kiln_hardware::ProcessorInfo& p) {
++    const std::string core =
++        p.core.empty() ? std::string() : fmt::format(fmt::runtime(lv_tr(", core {}")), p.core);
++    if (p.soc) {
++        std::string name = helix::kiln_hardware::variant_name(p.soc->variant);
++        if (name.empty()) {
++            name = fmt::format(fmt::runtime(lv_tr("X2600, variant unknown ({})")), p.soc->variant);
++        }
++        const char* type = p.soc->ddr3 ? "DDR3" : "DDR2";
++        const std::string ram =
++            p.soc->ram_mib ? fmt::format(fmt::runtime(lv_tr("{} MiB {}")), p.soc->ram_mib, type)
++                           : fmt::format(fmt::runtime(lv_tr("{}, size unknown")), type);
++        return fmt::format("{}, {}, SoC ID 0x{:05x}{}", name, ram, p.soc->id, core);
++    }
++    const std::string ram = p.boot_loader_ram_mib
++                                ? fmt::format(fmt::runtime(lv_tr(", {} MiB")), p.boot_loader_ram_mib)
++                                : std::string();
++    return fmt::format(fmt::runtime(lv_tr("X2600{}, variant unknown{}")), ram, core);
++}
++
+ // Kiln OS: the eMMC row, "A31M8C (maker 0xEC), PRV 0x30, 58.2 GiB". The words
+ // are translated; the identifiers (the name, PRV) are not.
+ std::string kiln_emmc_text(const helix::kiln_hardware::EmmcInfo& e) {
+@@ -344,7 +365,11 @@ void AboutSettingsOverlay::populate_info_rows() {
+     lv_subject_copy_string(&printer_value_subject_, printer_name.c_str());
+     spdlog::trace("[{}] Printer: {}", get_name(), printer_name);
+ 
+-    // Kiln OS: the eMMC, in the current language
++    // Kiln OS: processor and eMMC, in the current language
++    if (kiln_processor_) {
++        lv_subject_copy_string(&processor_value_subject_,
++                               kiln_processor_text(*kiln_processor_).c_str());
++    }
+     if (kiln_emmc_) {
+         lv_subject_copy_string(&emmc_value_subject_, kiln_emmc_text(*kiln_emmc_).c_str());
+     }
+diff --git a/tests/unit/test_kiln_hardware.cpp b/tests/unit/test_kiln_hardware.cpp
+index 0d45b227..18ed641d 100644
+--- a/tests/unit/test_kiln_hardware.cpp
++++ b/tests/unit/test_kiln_hardware.cpp
+@@ -6,6 +6,7 @@
+  * The SoC information comes from the eFuse (Kiln's 7.3 kernel, nvmem cell
+  * socinfo@6b: 20 bits twice), the eMMC from /sys/block/mmcblk0. Values
+  * below are printer 2's: an X2600E with 256 MiB of DDR3 and an A31M8C.
++ * These are the fields; the About panel turns them into translated text.
+  */
+ 
+ #include "system/kiln_hardware.h"
+@@ -49,6 +50,15 @@ struct Root {
+     std::string str() const { return dir.string(); }
+ };
+ 
++// The cell's 5 bytes for a 20-bit SoC ID stored twice
++std::string socinfo_cell(uint32_t id) {
++    const uint64_t bits = uint64_t(id) | (uint64_t(id) << 20);
++    std::string raw;
++    for (int i = 0; i < 5; ++i)
++        raw += static_cast<char>((bits >> (8 * i)) & 0xff);
++    return raw;
++}
++
+ void x2600_board(const Root& r) {
+     r.put("proc/device-tree/compatible",
+           std::string("flashforge,ad5x\0ingenic,x2600\0", 31));
+@@ -71,7 +81,9 @@ TEST_CASE("Kiln hardware: the SoC information decodes", "[kiln][hardware]") {
+     CHECK(variant_name(4) == "X2660");
+     CHECK(variant_name(5) == "X2670");
+     CHECK(variant_name(6) == "X2670M");
+-    CHECK(variant_name(7) == "X2600 variant 7");
++    // 7 and up: not one of Ingenic's (U-Boot's X2600_SOC_KNOWN); the row says unknown
++    CHECK(variant_name(7).empty());
++    CHECK(variant_name(15).empty());
+ }
+ 
+ TEST_CASE("Kiln hardware: a 512 MiB X2600H decodes", "[kiln][hardware]") {
+@@ -123,33 +135,89 @@ TEST_CASE("Kiln hardware: the core revision comes from cpuinfo", "[kiln][hardwar
+     CHECK(core_revision("cpu model\t: Ingenic XBurst II") == "");
+ }
+ 
+-TEST_CASE("Kiln hardware: the processor row", "[kiln][hardware]") {
++TEST_CASE("Kiln hardware: the processor row's fields", "[kiln][hardware]") {
+     Root r;
++    const std::string cell = "sys/bus/nvmem/devices/jz4780-efuse0/cells/socinfo@6b,0";
+     SECTION("not an X2600: no row") {
+         r.put("proc/device-tree/compatible", std::string("rockchip,rk3328\0", 16));
+-        CHECK(processor_summary(r.str()).empty());
++        CHECK_FALSE(read_processor(r.str()));
+     }
+     SECTION("7.3 with the eFuse") {
+         x2600_board(r);
+-        r.put("sys/bus/nvmem/devices/jz4780-efuse0/cells/socinfo@6b,0", kSocinfoX2600E);
+-        CHECK(processor_summary(r.str()) == "X2600E, 256 MiB DDR3, SoC ID 0x18000, core 0.0");
++        r.put(cell, kSocinfoX2600E);
++        // the eFuse wins over the boot loader's word
++        r.put("proc/cmdline", "console=ttyS0,115200n8 ad5x.ram=512\n");
++        const auto p = read_processor(r.str());
++        REQUIRE(p);
++        REQUIRE(p->soc);
++        CHECK(p->soc->id == 0x18000);
++        CHECK(p->soc->variant == 1);
++        CHECK(p->soc->ddr3);
++        CHECK(p->soc->ram_mib == 256);
++        CHECK(p->boot_loader_ram_mib == 0);
++        CHECK(p->core == "0.0");
+     }
+     SECTION("7.3 with an unknown capacity code") {
+         x2600_board(r);
+-        r.put("sys/bus/nvmem/devices/jz4780-efuse0/cells/socinfo@6b,0",
+-              std::string("\x00\x84\x01\x40\x18", 5));
+-        CHECK(processor_summary(r.str()) ==
+-              "X2600E, DDR3, size unknown, SoC ID 0x18400, core 0.0");
++        r.put(cell, std::string("\x00\x84\x01\x40\x18", 5));
++        const auto p = read_processor(r.str());
++        REQUIRE(p);
++        REQUIRE(p->soc);
++        CHECK(p->soc->id == 0x18400);
++        CHECK(p->soc->ddr3);
++        CHECK(p->soc->ram_mib == 0);
++    }
++    SECTION("7.3 with a variant code Ingenic doesn't list") {
++        x2600_board(r);
++        r.put(cell, socinfo_cell(0x78000));
++        const auto p = read_processor(r.str());
++        REQUIRE(p);
++        REQUIRE(p->soc);
++        CHECK(p->soc->variant == 7);
++        CHECK(variant_name(p->soc->variant).empty());
++    }
++    SECTION("the cell is found on whichever nvmem device has it") {
++        x2600_board(r);
++        r.put("sys/bus/nvmem/devices/aaa-other0/nvmem", "x");
++        r.put("sys/bus/nvmem/devices/zzz-efuse0/cells/socinfo@6b,0", socinfo_cell(0x38200));
++        const auto p = read_processor(r.str());
++        REQUIRE(p);
++        REQUIRE(p->soc);
++        CHECK(p->soc->variant == 3);
++        CHECK(p->soc->ram_mib == 512);
++    }
++    SECTION("a cell that can't be read falls back to the boot loader's size") {
++        // as when HelixScreen doesn't run as root (the cell is root-only)
++        x2600_board(r);
++        fs::create_directories(r.dir / cell);
++        r.put("proc/cmdline", "ad5x.ram=512\n");
++        const auto p = read_processor(r.str());
++        REQUIRE(p);
++        CHECK_FALSE(p->soc);
++        CHECK(p->boot_loader_ram_mib == 512);
+     }
+     SECTION("6.6 without an eFuse driver or ad5x.ram=") {
+         x2600_board(r);
+         r.put("proc/cmdline", "console=ttyS0,115200n8 mem=236M@0x0\n");
+-        CHECK(processor_summary(r.str()) == "X2600, variant unknown, core 0.0");
++        const auto p = read_processor(r.str());
++        REQUIRE(p);
++        CHECK_FALSE(p->soc);
++        CHECK(p->boot_loader_ram_mib == 0);
++        CHECK(p->core == "0.0");
+     }
+     SECTION("6.6 with Kiln's boot loader's ad5x.ram=") {
+         x2600_board(r);
+         r.put("proc/cmdline", "console=ttyS0,115200n8 ad5x.ram=256 ad5x.memmode=standard\n");
+-        CHECK(processor_summary(r.str()) == "X2600, 256 MiB, variant unknown, core 0.0");
++        const auto p = read_processor(r.str());
++        REQUIRE(p);
++        CHECK_FALSE(p->soc);
++        CHECK(p->boot_loader_ram_mib == 256);
++    }
++    SECTION("no cpuinfo: no core revision") {
++        r.put("proc/device-tree/compatible", std::string("ingenic,x2600\0", 14));
++        const auto p = read_processor(r.str());
++        REQUIRE(p);
++        CHECK(p->core.empty());
+     }
+ }
+ 
+diff --git a/translations/en.yml b/translations/en.yml
+index e50c8101..5b17720b 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -68,7 +68,9 @@ translations:
+   + New: + New
+   +{} more: +{} more
+   ', also {}': ', also {}'
++  ', core {}': ', core {}'
+   ', {:.1f} GiB': ', {:.1f} GiB'
++  ', {} MiB': ', {} MiB'
+   '- Check [resonance_tester] in printer.cfg': '- Check [resonance_tester] in printer.cfg'
+   '- Ensure ADXL345 is connected': '- Ensure ADXL345 is connected'
+   '- Try Measure Noise first': '- Try Measure Noise first'
+@@ -4718,6 +4720,8 @@ translations:
+   X axis applied, but Y axis failed: X axis applied, but Y axis failed
+   X axis done, starting Y...: X axis done, starting Y...
+   X is at its limit ({}mm): X is at its limit ({}mm)
++  'X2600, variant unknown ({})': 'X2600, variant unknown ({})'
++  'X2600{}, variant unknown{}': 'X2600{}, variant unknown{}'
+   'X:': 'X:'
+   XY: XY
+   Y: Y
+@@ -4913,6 +4917,7 @@ translations:
+   '{} Issues Detected': '{} Issues Detected'
+   '{} LED strips available': '{} LED strips available'
+   '{} MCUs': '{} MCUs'
++  '{} MiB {}': '{} MiB {}'
+   '{} Tools': '{} Tools'
+   '{} and {}': '{} and {}'
+   '{} and {} are both mapped here': '{} and {} are both mapped here'
+@@ -4997,6 +5002,7 @@ translations:
+   '{} — response timed out': '{} — response timed out'
+   '{} → {}: no filament loaded.': '{} → {}: no filament loaded.'
+   "{}'s nozzle is still heating": "{}'s nozzle is still heating"
++  '{}, size unknown': '{}, size unknown'
+   '{}, {}': '{}, {}'
+   "{}: the tag names Spoolman spool #{}, which doesn't exist": "{}: the tag names Spoolman spool #{}, which doesn't exist"
+   '{}:{:02} elapsed': '{}:{:02} elapsed'
+diff --git a/translations/ru.yml b/translations/ru.yml
+index fe41d734..6ebda218 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -112,7 +112,9 @@ translations:
+   + New: + Новый
+   +{} more: '+ещё {}'
+   ', also {}': ', также {}'
++  ', core {}': ', ядро {}'
+   ', {:.1f} GiB': ', {:.1f} ГБ'
++  ', {} MiB': ', {} МБ'
+   '- Check [resonance_tester] in printer.cfg': '- Проверьте блок [resonance_tester]
+     в printer.cfg'
+   '- Ensure ADXL345 is connected': '- Убедитесь, что ADXL345 подключен'
+@@ -4838,6 +4840,8 @@ translations:
+   X axis applied, but Y axis failed: Ось X применена, но ось Y не удалась
+   X axis done, starting Y...: 'Ось X готова, запуск Y...'
+   X is at its limit ({}mm): X на пределе ({}mm)
++  'X2600, variant unknown ({})': 'X2600, вариант неизвестен ({})'
++  'X2600{}, variant unknown{}': 'X2600{}, вариант неизвестен{}'
+   'X:': 'X:'
+   XY: XY
+   Y: Y
+@@ -5042,6 +5046,7 @@ translations:
+   '{} Issues Detected': 'Обнаружено проблем: {}'
+   '{} LED strips available': 'Доступно светодиодных лент: {}'
+   '{} MCUs': '{} MCU'
++  '{} MiB {}': '{} МБ {}'
+   '{} Tools': 'Инструментов: {}'
+   '{} and {}': '{} и {}'
+   '{} and {} are both mapped here': '{} и {} оба назначены сюда'
+@@ -5150,6 +5155,7 @@ translations:
+   '{} — response timed out': '{} — время ожидания ответа истекло'
+   '{} → {}: no filament loaded.': '{} ({}): филамент не загружен.'
+   "{}'s nozzle is still heating": 'Сопло {} всё ещё нагревается'
++  '{}, size unknown': '{}, размер неизвестен'
+   '{}, {}': '{}, {}'
+   "{}: the tag names Spoolman spool #{}, which doesn't exist": '{}: метка указывает катушку Spoolman #{}, которой не существует'
+   '{}:{:02} elapsed': прошло {}:{:02}
+-- 
+2.56.0
+

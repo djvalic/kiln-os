@@ -1,0 +1,133 @@
+#!/bin/sh
+# After NetworkManager (S45), in the background: printer_data/logs/wifi.log
+# (Fluidd shows it) when NetworkManager runs Wi-Fi (docs/network.md). On
+# the old path S42ad5x-wifi writes that log, and this does nothing. Main
+# OS only.
+#
+# The log: kernel and release, the Wi-Fi driver, its settings and
+# firmware, the radio, how many Wi-Fi connections are saved and how many
+# of them are joined automatically (no names or secrets), the network
+# joined (its address, no name; only waited for when there is one to join
+# automatically), power saving. The previous start's log is kept as
+# wifi.log.1.
+#
+# Off: /data/ad5x/wifi.disable leaves wlan0 to no one (S40ad5x-network).
+# HelixScreen's Wi-Fi switch turns the radio off through NetworkManager
+# (nmcli radio wifi off); S40ad5x-network starts NetworkManager with its
+# radio on, and HelixScreen applies its saved switch at its start (patch
+# 0051), as with S42ad5x-wifi.
+#
+# Ported from PR #53 by jolting (Hunter Laux).
+
+# Files this creates are readable by klipper and www-data, whoever started
+# it (a root SSH session may run with umask 077; issue #31)
+umask 022
+
+LOG=/data/ad5x/printer_data/logs/wifi.log
+log() {
+	echo "ad5x-wifi: $*"
+	echo "$(date '+%F %T') $*" >> $LOG 2>/dev/null
+}
+
+driver_info() {
+	drv=$(readlink /sys/class/net/wlan0/device/driver 2>/dev/null)
+	log "wlan0, driver ${drv##*/}"
+	p=/sys/module/rtw88_core/parameters
+	if [ -d $p ]; then
+		s=
+		for f in "$p"/*; do
+			[ -f "$f" ] && s="$s ${f##*/}=$(cat "$f" 2>/dev/null)"
+		done
+		log "rtw88_core:$s"
+	fi
+	fw=$(dmesg 2>/dev/null | grep -m 1 'rtw_.*: Firmware version')
+	[ -n "$fw" ] && log "firmware: ${fw#*Firmware version }"
+	return 0
+}
+
+# Power saving off (issue #37): NetworkManager turns it off for each
+# connection (wifi.powersave = 2, NetworkManager.conf); with it on, the
+# rtw88 8821CU's signal falls to -95 dBm and it drops and rejoins over and
+# over. Turned off here too if it is still on after the join.
+power_save() {
+	ps=$(iw dev wlan0 get power_save 2>/dev/null)
+	case "$ps" in
+	*on)
+		if iw dev wlan0 set power_save off 2>/dev/null; then
+			log "power saving was on after the join; off"
+		else
+			log "power saving on: the driver doesn't take it off"
+		fi
+		;;
+	*off) log "power saving off" ;;
+	*) log "power saving: no answer from iw" ;;
+	esac
+}
+
+check() {
+	mkdir -p ${LOG%/*}
+	[ -s $LOG ] && mv -f $LOG $LOG.1 2>/dev/null
+	: > $LOG 2>/dev/null
+	log "start: kernel $(uname -r), $(head -1 /etc/ad5x-release 2>/dev/null), NetworkManager $(NetworkManager --version 2>/dev/null)"
+	if [ -f /data/ad5x/wifi.disable ]; then
+		log "off (remove /data/ad5x/wifi.disable to use Wi-Fi)"
+		return 0
+	fi
+	i=0
+	while [ ! -d /sys/class/net/wlan0 ] && [ $i -lt 10 ]; do
+		sleep 1; i=$((i + 1))
+	done
+	if [ ! -d /sys/class/net/wlan0 ]; then
+		log "no wlan0 after ${i} s; interfaces: $(ls /sys/class/net | tr '\n' ' ')"
+		log "USB: $(cat /sys/bus/usb/devices/*/product 2>/dev/null | tr '\n' ',')"
+		return 0
+	fi
+	driver_info
+	# NetworkManager answering first: it may still be starting, and a
+	# count asked too early is 0
+	i=0
+	while [ "$(nmcli -t -f RUNNING general 2>/dev/null)" != running ] && [ $i -lt 30 ]; do
+		sleep 1; i=$((i + 1))
+	done
+	# The saved networks, and those to join automatically: one saved with
+	# autoconnect off (disabled=1 in wpa_supplicant.conf, as stock saves
+	# its networks until one is joined) waits to be joined on the screen
+	c=$(nmcli -t -f TYPE,AUTOCONNECT connection show 2>/dev/null)
+	n=$(printf '%s\n' "$c" | grep -c '^802-11-wireless:')
+	a=$(printf '%s\n' "$c" | grep -c '^802-11-wireless:yes$')
+	log "$n saved network(s), $a to join automatically"
+	if [ "$(nmcli radio wifi 2>/dev/null)" = disabled ]; then
+		log "radio off (switched off on the screen)"
+		return 0
+	fi
+	if [ "$a" = 0 ]; then
+		log "not waiting for a join: no network to join automatically (join one on the screen)"
+		return 0
+	fi
+	# Joined within a minute? Then the address (no network name).
+	i=0
+	while [ "$(nmcli -g GENERAL.STATE device show wlan0 2>/dev/null | cut -d' ' -f1)" != 100 ] && [ $i -lt 60 ]; do
+		[ "$(nmcli radio wifi 2>/dev/null)" = disabled ] && {
+			log "radio off (switched off on the screen)"
+			return 0
+		}
+		sleep 1; i=$((i + 1))
+	done
+	if [ $i -lt 60 ]; then
+		log "joined after ${i} s, $(nmcli -g IP4.ADDRESS device show wlan0 2>/dev/null | head -1)"
+		power_save
+	else
+		log "not joined after 60 s: $(nmcli -g GENERAL.STATE device show wlan0 2>/dev/null)"
+	fi
+}
+
+case "$1" in
+start)
+	[ -n "$AD5X_USB" ] && exit 0
+	[ "$(cat /run/ad5x-network/mode 2>/dev/null)" = nm ] || exit 0
+	(check) </dev/null >/dev/null 2>&1 &
+	;;
+stop)
+	;;
+esac
+exit 0

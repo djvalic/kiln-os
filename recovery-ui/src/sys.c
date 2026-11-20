@@ -4,6 +4,7 @@
 #endif
 #include "sys.h"
 #include "commands.h"
+#include "i18n.h"
 
 #include <arpa/inet.h>
 #include <dirent.h>
@@ -283,7 +284,7 @@ static int add_swu_dir(const char *dir, const char *where, file_ent *f, int n, i
 
 int sys_list_swu(file_ent *f, int max)
 {
-	int n = add_swu_dir(rui_get(PATH_UPDATE_DIR), "staged", f, 0, max);
+	int n = add_swu_dir(rui_get(PATH_UPDATE_DIR), tr(RS_SWU_STAGED), f, 0, max);
 	usb_vol v[8];
 	int nv = sys_usb_list(v, 8);
 	for (int i = 0; i < nv; i++) {

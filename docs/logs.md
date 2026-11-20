@@ -94,7 +94,10 @@ the plugins' root scripts' (`/data/ad5x/kiln-log/plugins-root.log`,
 `docs/plugin-root-hooks.md`) and `/data/ad5x/umask.log`. At each boot `S05ad5x-data` cuts each one to its
 last 64 KiB, starting at a whole line (`kiln_logs_trim` in
 `lib/logs.sh`). `wifi.log` (in `printer_data/logs`) keeps the current and
-the previous start (`wifi.log.1`).
+the previous start (`wifi.log.1`), and so does `network.log` (main OS: the
+network stack chosen at start, NetworkManager's connections, its safety
+net and the Wi-Fi networks written back to `wpa_supplicant.conf`;
+[network.md](network.md)).
 
 ## Sending a log for an issue
 

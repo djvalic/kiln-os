@@ -1,0 +1,401 @@
+From e267be11ce95b05d113f74684855ac5664d7dbeb Mon Sep 17 00:00:00 2001
+From: Hunter Laux <hunterlaux@gmail.com>
+Date: Wed, 18 Nov 2026 11:48:11 -0700
+Subject: [PATCH] ad5x: About shows the eMMC
+
+AD5X boards come with different eMMC parts (58A398, A31M8C, MMC8GB so
+far), and which one a printer has matters for support. Settings -> About
+now names it:
+
+  eMMC       A31M8C (maker 0xEC), PRV 0x30, 58.2 GiB
+
+The row comes from /sys/block/mmcblk0 (name, manfid, prv and size), so it
+works on every kernel. It is hidden when mmcblk0 is not an eMMC.
+
+Kiln builds only (HELIX_KILN_AD5X); elsewhere the row stays hidden.
+
+Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
+---
+ include/system/kiln_hardware.h    | 24 ++++++++++++
+ include/ui_settings_about.h       |  3 ++
+ src/system/kiln_hardware.cpp      | 55 ++++++++++++++++++++++++++++
+ src/ui/ui_settings_about.cpp      | 13 +++++++
+ tests/unit/test_kiln_hardware.cpp | 61 +++++++++++++++++++++++++++++++
+ translations/de.yml               |  1 +
+ translations/en.yml               |  1 +
+ translations/es.yml               |  1 +
+ translations/fr.yml               |  1 +
+ translations/it.yml               |  1 +
+ translations/ja.yml               |  1 +
+ translations/ko.yml               |  1 +
+ translations/pt.yml               |  1 +
+ translations/ru.yml               |  1 +
+ translations/tr.yml               |  1 +
+ translations/zh.yml               |  1 +
+ ui_xml/about_settings_overlay.xml |  5 +++
+ 17 files changed, 172 insertions(+)
+ create mode 100644 include/system/kiln_hardware.h
+ create mode 100644 src/system/kiln_hardware.cpp
+ create mode 100644 tests/unit/test_kiln_hardware.cpp
+
+diff --git a/include/system/kiln_hardware.h b/include/system/kiln_hardware.h
+new file mode 100644
+index 00000000..8f2a254b
+--- /dev/null
++++ b/include/system/kiln_hardware.h
+@@ -0,0 +1,24 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++#pragma once
++
++/**
++ * @file kiln_hardware.h
++ * @brief Kiln OS on the AD5X: which parts the printer has.
++ *
++ * AD5X boards differ in parts that matter for support, such as the eMMC
++ * (58A398, A31M8C, MMC8GB so far). The About panel shows it.
++ */
++
++#include <string>
++
++namespace helix::kiln_hardware {
++
++/**
++ * @brief The eMMC row: "A31M8C (maker 0xEC), PRV 0x30, 58.2 GiB".
++ *
++ * From /sys/block/mmcblk0; "" when there is no eMMC there. @p root is the
++ * test seam: the files are read below it.
++ */
++std::string emmc_summary(const std::string& root = "");
++
++} // namespace helix::kiln_hardware
+diff --git a/include/ui_settings_about.h b/include/ui_settings_about.h
+index 9643b107..82d47b1f 100644
+--- a/include/ui_settings_about.h
++++ b/include/ui_settings_about.h
+@@ -116,6 +116,8 @@ class AboutSettingsOverlay : public OverlayBase {
+     lv_subject_t log_dest_value_subject_{};
+     lv_subject_t host_arch_value_subject_{};
+     lv_subject_t about_copyright_subject_{};
++    lv_subject_t emmc_value_subject_{};
++    lv_subject_t has_emmc_subject_{};
+ 
+     // Static buffers for string subjects
+     char version_value_buf_[32];
+@@ -128,6 +130,7 @@ class AboutSettingsOverlay : public OverlayBase {
+     char log_dest_value_buf_[256];
+     char host_arch_value_buf_[64];
+     char about_copyright_buf_[48];
++    char emmc_value_buf_[96];
+ 
+     // Debounce tracker restart on inadvertent re-open
+     std::chrono::steady_clock::time_point last_deactivate_{};
+diff --git a/src/system/kiln_hardware.cpp b/src/system/kiln_hardware.cpp
+new file mode 100644
+index 00000000..fc69422e
+--- /dev/null
++++ b/src/system/kiln_hardware.cpp
+@@ -0,0 +1,55 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++#include "system/kiln_hardware.h"
++
++#include "text_io.h"
++
++#include <spdlog/fmt/fmt.h>
++
++namespace helix::kiln_hardware {
++
++namespace tio = helix::text_io;
++
++namespace {
++
++std::string read_trimmed(const std::string& path) {
++    auto body = tio::read_file(path, 4096);
++    if (!body) {
++        return {};
++    }
++    return std::string(tio::trim(*body));
++}
++
++} // namespace
++
++std::string emmc_summary(const std::string& root) {
++    const std::string block = root + "/sys/block/mmcblk0";
++    const std::string dev = block + "/device";
++    if (read_trimmed(dev + "/type") != "MMC") {
++        return {};
++    }
++    const std::string name = read_trimmed(dev + "/name");
++    if (name.empty()) {
++        return {};
++    }
++
++    std::string text = name;
++    // manfid reads "0x0000ec"
++    const std::string manfid = read_trimmed(dev + "/manfid");
++    if (manfid.size() > 2) {
++        if (auto id = tio::parse_int<unsigned>(manfid.substr(2), 16)) {
++            text += fmt::format(" (maker 0x{:02X})", *id);
++        }
++    }
++    const std::string prv = read_trimmed(dev + "/prv");
++    if (!prv.empty()) {
++        text += fmt::format(", PRV {}", prv);
++    }
++    // 512-byte sectors
++    if (auto sectors = tio::parse_int<unsigned long long>(read_trimmed(block + "/size"))) {
++        text += fmt::format(", {:.1f} GiB", static_cast<double>(*sectors) * 512.0 /
++                                                (1024.0 * 1024.0 * 1024.0));
++    }
++    return text;
++}
++
++} // namespace helix::kiln_hardware
+diff --git a/src/ui/ui_settings_about.cpp b/src/ui/ui_settings_about.cpp
+index 513dfd43..4d7d1861 100644
+--- a/src/ui/ui_settings_about.cpp
++++ b/src/ui/ui_settings_about.cpp
+@@ -37,6 +37,7 @@ inline constexpr int kContributorCount = sizeof(kContributors) / sizeof(kContrib
+ #include "lvgl/src/others/translation/lv_translation.h"
+ #include "replace_method_callback.h"
+ #include "system/diagnostics.h"
++#include "system/kiln_hardware.h"
+ #include "system/update_checker.h"
+ #include "theme_manager.h"
+ #include "ui/ui_widget_helpers.h"
+@@ -105,6 +106,18 @@ void AboutSettingsOverlay::init_subjects() {
+         }
+         UI_MANAGED_SUBJECT_STRING(host_arch_value_subject_, host_arch_value_buf_,
+                                   diag.identity.host_arch.c_str(), "host_arch_value", subjects_);
++
++        // Kiln OS on the AD5X: the eMMC (a part that differs between
++        // boards). The hardware doesn't change while running.
++#if defined(HELIX_KILN_AD5X)
++        const std::string emmc = helix::kiln_hardware::emmc_summary();
++#else
++        const std::string emmc;
++#endif
++        UI_MANAGED_SUBJECT_STRING(emmc_value_subject_, emmc_value_buf_, emmc.c_str(),
++                                  "about_emmc_value", subjects_);
++        UI_MANAGED_SUBJECT_INT(has_emmc_subject_, emmc.empty() ? 0 : 1, "about_has_emmc",
++                               subjects_);
+     });
+ }
+ 
+diff --git a/tests/unit/test_kiln_hardware.cpp b/tests/unit/test_kiln_hardware.cpp
+new file mode 100644
+index 00000000..2ca52436
+--- /dev/null
++++ b/tests/unit/test_kiln_hardware.cpp
+@@ -0,0 +1,61 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++/**
++ * Kiln OS: the About panel names the eMMC, from /sys/block/mmcblk0.
++ * Values below are printer 2's A31M8C.
++ */
++
++#include "system/kiln_hardware.h"
++
++#include <filesystem>
++#include <fstream>
++#include <string>
++
++#include "../catch_amalgamated.hpp"
++
++using namespace helix::kiln_hardware;
++namespace fs = std::filesystem;
++
++namespace {
++
++struct Root {
++    fs::path dir;
++    Root() {
++        dir = fs::temp_directory_path() /
++              ("kiln_hw_" + std::to_string(reinterpret_cast<std::uintptr_t>(this)));
++        fs::remove_all(dir);
++        fs::create_directories(dir);
++    }
++    ~Root() {
++        std::error_code ec;
++        fs::remove_all(dir, ec);
++    }
++    void put(const std::string& rel, const std::string& body) const {
++        const fs::path p = dir / rel;
++        fs::create_directories(p.parent_path());
++        std::ofstream(p, std::ios::binary) << body;
++    }
++    std::string str() const { return dir.string(); }
++};
++
++} // namespace
++
++TEST_CASE("Kiln hardware: the eMMC row", "[kiln][hardware]") {
++    Root r;
++    SECTION("no eMMC: no row") {
++        CHECK(emmc_summary(r.str()).empty());
++    }
++    SECTION("an SD card is not the eMMC") {
++        r.put("sys/block/mmcblk0/device/type", "SD\n");
++        r.put("sys/block/mmcblk0/device/name", "SD32G\n");
++        CHECK(emmc_summary(r.str()).empty());
++    }
++    SECTION("printer 2's A31M8C") {
++        r.put("sys/block/mmcblk0/device/type", "MMC\n");
++        r.put("sys/block/mmcblk0/device/name", "A31M8C\n");
++        r.put("sys/block/mmcblk0/device/manfid", "0x0000ec\n");
++        r.put("sys/block/mmcblk0/device/prv", "0x30\n");
++        r.put("sys/block/mmcblk0/size", "122142720\n");
++        CHECK(emmc_summary(r.str()) == "A31M8C (maker 0xEC), PRV 0x30, 58.2 GiB");
++    }
++}
+diff --git a/translations/de.yml b/translations/de.yml
+index da1d3525..2fe96c44 100644
+--- a/translations/de.yml
++++ b/translations/de.yml
+@@ -4908,6 +4908,7 @@ translations:
+   e.g. Jet Black: z.B. Tiefschwarz
+   e.g. NAME=my_var VALUE=123: z. B. NAME=my_var VALUE=123
+   e.g. Polymaker: z.B. Polymaker
++  eMMC: eMMC
+   eSpooler Mode: 'eSpooler-Modus'
+   eSpooler, clog detection, and sensor settings: 'eSpooler-, Verstopfungserkennungs- und Sensoreinstellungen'
+   elapsed: vergangen
+diff --git a/translations/en.yml b/translations/en.yml
+index 1f9ac5a0..c4a3274f 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -4802,6 +4802,7 @@ translations:
+   e.g. Jet Black: e.g. Jet Black
+   e.g. NAME=my_var VALUE=123: e.g. NAME=my_var VALUE=123
+   e.g. Polymaker: e.g. Polymaker
++  eMMC: eMMC
+   eSpooler Mode: eSpooler Mode
+   eSpooler, clog detection, and sensor settings: eSpooler, clog detection, and sensor settings
+   elapsed: elapsed
+diff --git a/translations/es.yml b/translations/es.yml
+index 68b8dcd9..771fd281 100644
+--- a/translations/es.yml
++++ b/translations/es.yml
+@@ -4899,6 +4899,7 @@ translations:
+   e.g. Jet Black: p. ej. Negro Azabache
+   e.g. NAME=my_var VALUE=123: p. ej. NAME=mi_var VALUE=123
+   e.g. Polymaker: p. ej. Polymaker
++  eMMC: eMMC
+   eSpooler Mode: 'Modo eSpooler'
+   eSpooler, clog detection, and sensor settings: 'Ajustes de eSpooler, detección de atascos y sensores'
+   elapsed: transcurrido
+diff --git a/translations/fr.yml b/translations/fr.yml
+index 1309f27d..7c6f1795 100644
+--- a/translations/fr.yml
++++ b/translations/fr.yml
+@@ -4934,6 +4934,7 @@ translations:
+   e.g. Jet Black: p. ex. Noir profond
+   e.g. NAME=my_var VALUE=123: ex. NAME=ma_var VALUE=123
+   e.g. Polymaker: p. ex. Polymaker
++  eMMC: eMMC
+   eSpooler Mode: 'Mode eSpooler'
+   eSpooler, clog detection, and sensor settings: 'Paramètres eSpooler, détection de bourrage et capteurs'
+   elapsed: écoulé
+diff --git a/translations/it.yml b/translations/it.yml
+index 4d0fe19a..74065455 100644
+--- a/translations/it.yml
++++ b/translations/it.yml
+@@ -4900,6 +4900,7 @@ translations:
+   e.g. Jet Black: es. Nero intenso
+   e.g. NAME=my_var VALUE=123: es. NAME=mia_var VALUE=123
+   e.g. Polymaker: es. Polymaker
++  eMMC: eMMC
+   eSpooler Mode: 'Modalità eSpooler'
+   eSpooler, clog detection, and sensor settings: 'Impostazioni eSpooler, rilevamento intasamenti e sensori'
+   elapsed: trascorso
+diff --git a/translations/ja.yml b/translations/ja.yml
+index f19444cd..b58e9a93 100644
+--- a/translations/ja.yml
++++ b/translations/ja.yml
+@@ -4645,6 +4645,7 @@ translations:
+   e.g. Jet Black: 例：ジェットブラック
+   e.g. NAME=my_var VALUE=123: '例: NAME=my_var VALUE=123'
+   e.g. Polymaker: 例：Polymaker
++  eMMC: eMMC
+   eSpooler Mode: 'eSpoolerモード'
+   eSpooler, clog detection, and sensor settings: 'eSpooler、詰まり検出、センサーの設定'
+   elapsed: 経過
+diff --git a/translations/ko.yml b/translations/ko.yml
+index 8620e5ae..8b89cc30 100644
+--- a/translations/ko.yml
++++ b/translations/ko.yml
+@@ -4486,6 +4486,7 @@ translations:
+   e.g. Jet Black: '예: Jet Black'
+   e.g. NAME=my_var VALUE=123: '예: NAME=my_var VALUE=123'
+   e.g. Polymaker: '예: Polymaker'
++  eMMC: eMMC
+   eSpooler Mode: eSpooler 모드
+   eSpooler, clog detection, and sensor settings: eSpooler, 막힘 감지 및 센서 설정
+   elapsed: 경과
+diff --git a/translations/pt.yml b/translations/pt.yml
+index 1784bd6f..ddb1344d 100644
+--- a/translations/pt.yml
++++ b/translations/pt.yml
+@@ -4903,6 +4903,7 @@ translations:
+   e.g. Jet Black: ex. Preto Fosco
+   e.g. NAME=my_var VALUE=123: ex. NAME=minha_var VALUE=123
+   e.g. Polymaker: ex. Polymaker
++  eMMC: eMMC
+   eSpooler Mode: 'Modo eSpooler'
+   eSpooler, clog detection, and sensor settings: 'Configurações de eSpooler, detecção de entupimento e sensores'
+   elapsed: decorrido
+diff --git a/translations/ru.yml b/translations/ru.yml
+index 400b17fd..0dd83607 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -4922,6 +4922,7 @@ translations:
+   e.g. Jet Black: напр. Чёрный
+   e.g. NAME=my_var VALUE=123: напр. NAME=my_var VALUE=123
+   e.g. Polymaker: напр. Polymaker
++  eMMC: eMMC
+   eSpooler Mode: 'Режим eSpooler'
+   eSpooler, clog detection, and sensor settings: 'Настройки eSpooler, обнаружения засора и датчиков'
+   elapsed: прошло
+diff --git a/translations/tr.yml b/translations/tr.yml
+index 9ce98226..bd4f37ef 100644
+--- a/translations/tr.yml
++++ b/translations/tr.yml
+@@ -4486,6 +4486,7 @@ translations:
+   e.g. Jet Black: örn. Jet Black
+   e.g. NAME=my_var VALUE=123: örn. NAME=my_var VALUE=123
+   e.g. Polymaker: örn. Polymaker
++  eMMC: eMMC
+   eSpooler Mode: eSpooler Modu
+   eSpooler, clog detection, and sensor settings: eSpooler, tıkanma algılama ve sensör ayarları
+   elapsed: geçen
+diff --git a/translations/zh.yml b/translations/zh.yml
+index 599e6007..2abdafec 100644
+--- a/translations/zh.yml
++++ b/translations/zh.yml
+@@ -4635,6 +4635,7 @@ translations:
+   e.g. Jet Black: 例如 炭黑
+   e.g. NAME=my_var VALUE=123: 例如 NAME=my_var VALUE=123
+   e.g. Polymaker: 例如 Polymaker
++  eMMC: eMMC
+   eSpooler Mode: 'eSpooler 模式'
+   eSpooler, clog detection, and sensor settings: 'eSpooler、堵塞检测与传感器设置'
+   elapsed: 已用时
+diff --git a/ui_xml/about_settings_overlay.xml b/ui_xml/about_settings_overlay.xml
+index 471d79c4..f13fb87a 100644
+--- a/ui_xml/about_settings_overlay.xml
++++ b/ui_xml/about_settings_overlay.xml
+@@ -69,6 +69,11 @@
+         <bind_flag_if_eq subject="settings_is_android" flag="hidden" ref_value="1"/>
+         <setting_info_row name="row_host_arch" label="Host" icon="sysinfo" bind_value="host_arch_value"/>
+       </lv_obj>
++      <!-- Kiln OS: the eMMC (hidden elsewhere) -->
++      <lv_obj name="container_emmc" width="100%" style_pad_all="0" scrollable="false">
++        <bind_flag_if_eq subject="about_has_emmc" flag="hidden" ref_value="0"/>
++        <setting_info_row name="row_emmc" label="eMMC" icon="sd" bind_value="about_emmc_value"/>
++      </lv_obj>
+       <!-- Install Root (hidden on Android — SDL-sandboxed paths are not user-meaningful) -->
+       <lv_obj name="container_install_root" width="100%" style_pad_all="0" scrollable="false">
+         <bind_flag_if_eq subject="settings_is_android" flag="hidden" ref_value="1"/>
+-- 
+2.43.0
+

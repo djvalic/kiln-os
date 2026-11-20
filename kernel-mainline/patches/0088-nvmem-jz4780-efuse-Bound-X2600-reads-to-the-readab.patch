@@ -1,0 +1,63 @@
+From 6db0a67923b90f15466d4e3f9641baea92b290e4 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 15:00:00 -0500
+Subject: [PATCH] nvmem: jz4780-efuse: Bound X2600 reads to the readable area
+
+The nvmem core bounds reads through sysfs to the device size, but not
+the offsets of cells from the device tree, nor reads through
+nvmem_device_read(). On the X2600 a read past the readable 120 bytes
+would reach the keys, and past word 0x3f FIELD_PREP() masks the word
+address, so a bad offset would silently wrap around to word 0. Refuse
+reads outside the readable area before touching the controller, so that
+the driver itself keeps the keys from being read.
+
+While here, say where the read timing comes from: the RD_ADJ and
+RD_STROBE split is the one of Ingenic's SPL (1 and 3 at 300 MHz), and
+its total of 34 cycles is what Ingenic's other X2600 code programs too.
+
+---
+ drivers/nvmem/jz4780-efuse.c | 17 +++++++++++++++--
+ 1 file changed, 15 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/nvmem/jz4780-efuse.c b/drivers/nvmem/jz4780-efuse.c
+index 34956f30d..81077c910 100644
+--- a/drivers/nvmem/jz4780-efuse.c
++++ b/drivers/nvmem/jz4780-efuse.c
+@@ -218,10 +218,19 @@ static int x2600_efuse_read(void *context, unsigned int offset,
+ 			    void *val, size_t bytes)
+ {
+ 	struct jz4780_efuse *efuse = context;
++	const unsigned int size = X2600_EFU_READABLE * sizeof(u32);
+ 	u32 data[X2600_EFU_WORDS];
+ 	__le32 buf[X2600_EFU_WORDS];
+ 	int ret, i;
+ 
++	/*
++	 * The nvmem core bounds sysfs reads to the device size, but not the
++	 * cells' offsets or nvmem_device_read(). Past the readable words are
++	 * the keys, and past word 0x3f the address field would wrap to word 0.
++	 */
++	if (offset >= size || bytes > size - offset)
++		return -EINVAL;
++
+ 	mutex_lock(&efuse->lock);
+ 
+ 	/*
+@@ -286,8 +295,12 @@ static int x2600_efuse_setup(struct jz4780_efuse *efuse,
+ 	 * In bus clock cycles:
+ 	 *   (rd_adj + 1) cycles > 4 ns, and
+ 	 *   (rd_adj + rd_strobe + 30) cycles > 100 ns.
+-	 * The period is rounded down to whole nanoseconds, as in Ingenic's
+-	 * code, which errs towards longer strobes: 34 cycles at 300 MHz.
++	 * The period is rounded down to whole nanoseconds, as Ingenic's
++	 * code does, which errs towards longer strobes. The split follows
++	 * Ingenic's SPL (spl_efuse.c, with the 4 ns bound): RD_ADJ 1 and
++	 * RD_STROBE 3 at 300 MHz. Its total of 34 cycles matches Ingenic's
++	 * 6.6 driver (0 and 4, from a 2 ns bound) and its U-Boot's SoC ID
++	 * check (check_socid.c, a fixed 4 and 0).
+ 	 * rd_strobe is signed; it is not made negative, which only makes
+ 	 * the strobe longer than it needs to be.
+ 	 */
+-- 
+2.43.0
+

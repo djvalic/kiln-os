@@ -33,8 +33,9 @@ For a printer that already runs the main OS from slot A, see
 > network if you don't use Ethernet).
 
 > **The two boards get new firmware.** At its first start Kiln OS writes
-> mainline Klipper firmware to the mainboard and the toolhead board (about a
-> minute; the screen says "Updating the boards"). If the screen then says
+> mainline Klipper firmware to the mainboard and the toolhead board (1 to 2
+> minutes; the screen says "Updating the boards", with the board being
+> written, its percentage, a bar and the elapsed time). If the screen then says
 > "Switch off and on", do that: the toolhead board takes new firmware only
 > right after power-on. Going back to stock puts Flashforge's board firmware
 > back by itself at stock's first start (switch off and on). Details:
@@ -63,7 +64,9 @@ For a printer that already runs the main OS from slot A, see
   in Settings > Connection > Network Settings), where the Wi-Fi switch
   also turns it off for good (it stays off after a restart, also without
   Ethernet, until you switch it back on there). Saved in `/data/ad5x/wpa_supplicant.conf`;
-  `/data/ad5x/wifi.disable` turns Wi-Fi off completely.
+  `/data/ad5x/wifi.disable` turns Wi-Fi off completely. The main OS runs
+  the network with NetworkManager, and goes back to the old way on its own
+  if NetworkManager brings up no network ([network.md](network.md)).
 
 ## Method 1: USB stick (recommended)
 
@@ -75,14 +78,30 @@ For a printer that already runs the main OS from slot A, see
    formats and fills a stick in one go; it asks you to type the device name.)
 2. Printer off, stick in, printer on.
 3. Stock starts, finds `flashforge_init.sh` and runs it before its own app.
-   The screen shows "Installing, step n of 6". It takes a few minutes (longer
-   with the eMMC copy). Don't switch the printer off.
-4. "Done, restarting": remove the USB stick, then wait. The printer restarts
-   by itself into the new system. The first start takes a few minutes more
-   (see "First start"). If nothing happens after 3 minutes, power-cycle the
-   printer. The switch is already made, so this is safe.
-5. Leave the stick in or take it out: Kiln OS never runs
+   The screen shows "Installing, step n of 6" with a ring turning around
+   the step number (a new picture about once a second, so you can see it
+   is working) and how long the step usually takes. It takes a few minutes;
+   step 2 takes up to 6 minutes when it also copies the eMMC to the stick.
+   Don't switch the printer off.
+4. **"Done, restarting"**: take out the USB stick. The printer restarts by
+   itself into Kiln OS. Stock's start-up ignores a normal restart while the
+   stick runs, so the installer forces one after a few seconds.
+5. If the printer is still on, about 20 s later the screen says **"Switch
+   off and on"**: take out the stick, then switch the printer off and on.
+   This is safe: Kiln OS is installed and the switch is made.
+6. Kiln OS starts. If stock ran from slot B, the recovery screen comes up
+   first and installs the main system: **"Installing Kiln OS"**, step n of
+   3, with a spinner and the elapsed time, and **"Don't switch the printer
+   off"**. It takes a few minutes and
+   restarts by itself. Then the main system starts; its first start takes a
+   few minutes more (see "First start").
+7. Leaving the stick in is harmless: Kiln OS never runs
    `flashforge_init.sh`. The log is `ad5x-install.log` on the stick.
+
+The install screens on the stick are in English only: stock's start-up
+hook has no language setting to go by. The recovery screen's Installing
+Kiln OS page follows the touch screen language (English and Russian so
+far).
 
 If the screen says **"Not installed"** or **"Installation failed"**, the
 printer waits with the message on screen. Remove the stick and power-cycle:
@@ -166,11 +185,24 @@ puts its recovery OS in slot A and the main OS in slot B.
      `/usr/data/ad5x/install/recovery.squashfs`;
    - recovery in A: the main OS update is left in `/usr/data/ad5x/update/`.
 6. **The boot flag** is pointed at the written slot, read back, and the
-   printer restarts (USB, or SSH with `--reboot`).
+   printer restarts (USB, or SSH with `--reboot`). First a normal `reboot`.
+   From the stick, stock's init doesn't act on it (the stick runs inside
+   stock's start-up scripts), so after 10 s the installer forces it:
+   `reboot -f` (the same as stock's own updater uses), then the kernel's
+   sysrq trigger if that returned. Over SSH the normal `reboot` works and
+   runs stock's own shutdown, so the installer waits a minute before it
+   forces anything (it doesn't cut that shutdown short). Each only after
+   `sync` and with the flag read back. If the printer is still on after
+   all of it (about 20 s from the stick, a minute and a bit over SSH), the
+   screen and the log say to switch it off and on.
 
 State: `/usr/data/ad5x/install/state` (`checked`, `backed-up`, `vendor`,
 `slot-written`, `staged`, `flag-set`, `done`; `returned` after Return to
-Flashforge firmware, which a new install accepts without `--retry`). Running the installer again
+Flashforge firmware). The main OS writes `done` when it has started
+completely (`S99ad5x-install-recovery`; with stock in slot A, after it has
+also written the recovery OS). A new install accepts `done` and `returned`
+without `--retry`; it refuses `flag-set` (see "If the new system doesn't
+start"). Running the installer again
 after a failure goes through the same steps; finished ones are checked and
 not repeated (a matching stock copy, slot or kernel is left as is).
 
@@ -187,7 +219,12 @@ not repeated (a matching stock copy, slot or kernel is left as is).
   `/data/ad5x/stock`.
 - **Recovery OS in slot A (stock was in B)**: recovery starts, finds the
   update in `/data/ad5x/update/`, installs it into slot B (checks, read-back),
-  points the flag at B and restarts into the main OS.
+  points the flag at B and restarts into the main OS. The recovery screen
+  shows this as "Installing Kiln OS": step 1 unpacks and checks the update,
+  step 2 writes it (with a percentage), step 3 restarts. **Don't switch the
+  printer off** while it says so: a power cut in step 2 leaves slot B half
+  written (the recovery OS then starts again and can install it again).
+  When the main OS has started completely, the install state becomes `done`.
 
 Either way the end state is the same: recovery in slot A, main OS in slot B,
 stock saved in `/data/ad5x/stock`, vendor files in `/data/ad5x/vendor`, both
@@ -343,17 +380,50 @@ that start; take the stick out afterwards.
   own first MiB from before Kiln's boot loader (saved as
   `/data/ad5x/stock/boot.img`), the page also offers **Also put back
   Flashforge's own boot loader**. You don't need it for stock to work.
+  If `/data/ad5x/stock` has no `boot.img`, the page also looks for one in
+  the usershare copy (`kiln-stock-backup`) and on a USB stick
+  (`kiln-stock-backup`).
+- If you keep Kiln's boot loader, `boot.img` is also copied to the usershare
+  partition (`kiln-stock-backup`). So the way back to Flashforge's own boot
+  loader stays even if the data partition is wiped later. If that copy
+  fails, the return still finishes (`boot.img` stays in
+  `/data/ad5x/stock`), and a later run of the return tries the copy again.
+- zMod leftovers: if the printer had zMod before, stock's own
+  `printer.cfg` (`/usr/data/config/printer.cfg`) may still have zMod's
+  `[include ./mod/...]` and `[include ./mod_data/...]` lines. Once zMod's
+  folder is gone, stock's Klipper stops at start with them (0 °C for nozzle
+  and bed, the IFS can't be used). The page lists such lines, and the
+  return turns them into comments (`#kiln-off ...`). Only lines whose file
+  is missing, or zMod's lines when zMod is gone, are changed. The old file
+  stays next to it as `printer.cfg.before-kiln-return`; your settings and
+  the `SAVE_CONFIG` block are kept as they are. Settings you kept in zMod's
+  `mod_data/user.cfg` no longer apply; copy what you need into
+  `printer.cfg`. If `printer.cfg` can't be changed, the return still
+  finishes and leaves the file as it was; the screen says "Flashforge's
+  printer.cfg couldn't be changed", and the log lists the lines. If stock's
+  Klipper then doesn't start, remove those `[include]` lines yourself (or
+  put a `#` in front of them).
 - Over SSH in the recovery OS the same tool is `ad5x-return-stock --check`
   and `ad5x-return-stock --yes` (`--status` shows how far it got; details
   in `docs/recovery-os.md`).
 
 ### Installing Kiln OS again
 
+Your Kiln settings on the data partition (`/data/ad5x`: tuning, Z
+offset, slot materials, plugins) are kept through the return and used
+again. Only Kiln's record of which IFS slot is in the toolhead is dropped
+(by the return, and again by the installer): stock has loaded and
+unloaded since, so Kiln starts knowing no slot and the setup wizard's
+Filament step finds it.
+
 The Kiln OS install stick works again as on any stock printer; no
-`ad5x-install-retry` file is needed after Return to Flashforge firmware.
-Printers that went back to stock some other way still need it: the
-installer refuses otherwise, because `/data/ad5x/install/state` remembers
-the earlier install.
+`ad5x-install-retry` file is needed after Return to Flashforge firmware,
+nor after any install that finished (state `done`: Kiln OS started
+completely). The installer refuses only when an earlier install switched
+to Kiln OS and Kiln OS never finished starting (state `flag-set`): then it
+needs `ad5x-install-retry`. A printer installed with an older release
+still has `flag-set`; its main OS changes it to `done` at its first start
+on a release with this check.
 
 ### Older releases
 
@@ -418,7 +488,14 @@ the first start.
 Not done yet:
 
 - The USB hook with our `flashforge_init.sh` on stock and on zMod, the screens
-  (`cmd_jpeg_display` while stock's logo is up), and the restart.
+  (`cmd_jpeg_display` while stock's logo is up). Done on stock on
+  2026-11-18: all six steps and the screens worked, but the plain `reboot`
+  never came (stock's init waits for its start scripts, which include the
+  stick). Not yet checked: the forced restart (`reboot -f`, then sysrq) and
+  the "Switch off and on" screen.
+- The recovery screen's Installing Kiln OS page during the first start
+  after the stick (stock in slot B), and the install state `done` after the
+  main OS's first complete start.
 - Any install on a printer that never had zMod (qemu only:
   `tools/test_install.sh`, part C).
 - A second mount of the running root (`mount -t squashfs -o ro /dev/mmcblk0p2`)

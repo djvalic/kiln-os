@@ -1,0 +1,1994 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 03:54:48 -0500
+Subject: [PATCH] ad5x: setup wizard filament step, live progress, Z offset
+ plan, prompts
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+What a fresh install showed: the Z offset step didn't say which slot,
+material or temperatures it would print with; a long step showed one
+static line and a thin bar; and after the Z offset nothing said to take
+the test print off the bed before the next step probed there.
+
+New step Filament (StepId::Ad5xFilament, Klipper's STEP=filament),
+between vibration compensation and IFS tuning. It lists the four IFS
+slots from printer.ad5x_setup.filament: a material dropdown for each
+slot with filament (Unknown, then the IFS's types from
+AmsBackendAd5xIfs::kStockWhitelist, plus the slot's own type when it is
+another one), "Empty" for the others; and "Filament in the toolhead":
+Auto (find it), Slot 1-4, None (empty), Use the filament in the toolhead
+as it is (keep, e.g. hand-fed). The dropdowns follow the live object
+until the user changes one. Start sends head (auto, 1-4, 0, keep) and
+material_<n> for each slot the user changed ("?" for Unknown). The
+toolhead choices are one table (head_choices()). A line under it says
+what the toolhead holds now (also "kept as it is" and "strand in the
+tube, slot unknown"); the IFS and Z offset pages show it too before
+Start. When printer.ifs.tube_blocked is set (or head_source is tube),
+the filament page warns: a strand is still in the tube, name the slot
+first. The step reads tube_blocked, find_result, head_found and colors
+of printer.ifs (queried with ad5x_setup, and taken from its updates).
+
+Every running AD5X step shows, besides the message and progress bar:
+the action key as a short phrase ("Probing the bed", "Loading slot 2",
+"Printing test patch 2"; an unknown key as it is), and once a second
+the nozzle and bed temperature with their targets and the time since
+step_started. When the printer clock is not set (1970 before NTP, or
+far from the screen's time), the screen counts from when it first saw
+the run.
+
+Z offset: from the start, the patch's plan from zoffset_plan ("Slot 2,
+PETG, 240/70 C"); with guess set it says PLA's temperatures are used and
+to Abort and set the material in the Filament step if that is wrong.
+
+Prompts: clear_bed while waiting shows "Remove the test print from the
+bed" with Done (accept) and hides the adjust buttons, the live view and
+Abort; after a failed or aborted Z offset a reminder to clear the bed
+with Done (accept clears it there too). head_unknown shows how to pull
+the filament out by hand before Retry. pick_slot (failed: Kiln can't
+tell the slot on this printer, or a strand sits in the tube) asks which
+slot's filament goes into the toolhead: a button per slot with filament
+(all four when none is known), "Slot 2 · PETG" with the spool's colour
+from printer.ifs.colors, and "I pulled it out by hand". A slot runs the
+filament step with head=<n>, "by hand" with head=0; from the IFS or Z
+offset card that filament run shows on the card, which then offers its
+own Start again. Retry before naming asks again. A prompt key the screen
+doesn't know shows the step's message with Done (accept) while waiting,
+Retry when failed.
+
+The G-code fallback sends string options unquoted (HEAD=auto).
+
+Tests: test_wizard_ad5x_setup.cpp (phrases, elapsed time and the clock
+guard, temperatures, the filament object, material choices, start
+options with keep, the plan, prompts with pick_slot, the pick buttons'
+labels, the printer.ifs fields, step order; the filament card loads
+from XML with its dropdowns, the clear_bed panel hides the adjust
+buttons and the pick_slot panel names each slot);
+test_wizard_step_logic counts the new step.
+---
+ include/ui_wizard_ad5x_setup.h        | 191 ++++++-
+ include/wizard_step.h                 |   3 +-
+ src/system/wizard_step.cpp            |   2 +
+ src/ui/ui_wizard_ad5x_setup.cpp       | 744 +++++++++++++++++++++++++-
+ tests/unit/test_wizard_ad5x_setup.cpp | 327 +++++++++++
+ tests/unit/test_wizard_step_logic.cpp |   5 +-
+ ui_xml/wizard_ad5x_filament.xml       |  16 +
+ ui_xml/wizard_ad5x_setup.xml          | 224 +++++++-
+ 8 files changed, 1476 insertions(+), 36 deletions(-)
+ create mode 100644 tests/unit/test_wizard_ad5x_setup.cpp
+ create mode 100644 ui_xml/wizard_ad5x_filament.xml
+
+diff --git a/include/ui_wizard_ad5x_setup.h b/include/ui_wizard_ad5x_setup.h
+index cfbfd94..97b6ba1 100644
+--- a/include/ui_wizard_ad5x_setup.h
++++ b/include/ui_wizard_ad5x_setup.h
+@@ -4,8 +4,8 @@
+ /**
+  * @file ui_wizard_ad5x_setup.h
+  * @brief AD5X steps of the setup wizard: time zone, nozzle size, then the
+- *        tuning steps (self-check, PID, bed mesh, vibration compensation, IFS
+- *        tuning, Z offset, save)
++ *        tuning steps (self-check, PID, bed mesh, vibration compensation,
++ *        filament, IFS tuning, Z offset, save)
+  *
+  * The time zone step is local to the screen (the Settings > Language & Time
+  * setting). The nozzle size step sets the `ad5x_nozzle` size Klipper runs with
+@@ -14,10 +14,14 @@
+  * drives the printer's setup steps (Klipper API `printer.ad5x_setup.control`,
+  * G-code `SETUP_WIZARD_STEP` as fallback) and shows
+  * the `ad5x_setup` Klipper status object (state, message, progress, results,
+- * self-check list, live z offset). The steps exist only for printers that have
++ * self-check list, live z offset). While a step runs the card also shows what
++ * it does now (`action`), the nozzle and bed temperatures and the time since
++ * it started; the filament step shows the IFS slots (`filament`), the Z offset
++ * step the slot and temperatures of its patch (`zoffset_plan`), and the card
++ * answers the step's `prompt` (clear_bed, head_unknown). The steps exist only for printers that have
+  * that object or carry the `ad5x` preset; every other printer skips them.
+  *
+- * All seven steps share one set of subjects (only one step is on screen at a
++ * All the tuning steps share one set of subjects (only one step is on screen at a
+  * time), owned by Ad5xSetupModel together with the status cache and the
+  * Moonraker subscription.
+  *
+@@ -38,6 +42,7 @@
+ #include "wizard_step.h"
+ 
+ #include <array>
++#include <cstdint>
+ #include <memory>
+ #include <optional>
+ #include <string>
+@@ -54,6 +59,121 @@ enum class View {
+     Failed = 4,      ///< Failed or aborted: message, Retry
+ };
+ 
++/// What the step asks of the user (`prompt`); drives ad5x_setup_prompt.
++enum class Prompt {
++    None = 0,
++    ClearBed = 1,         ///< Z offset saved, waiting: remove the test print, Done (accept)
++    HeadUnknown = 2,      ///< Failed: no slot cleared the toolhead sensor; pull it out by hand
++    ClearBedReminder = 3, ///< Z offset failed or aborted after a patch printed: clear the bed
++    OtherWaiting = 4,     ///< A prompt key the screen doesn't know, waiting: message, Done (accept)
++    OtherFailed = 5,      ///< A prompt key the screen doesn't know, failed: message, Retry
++    PickSlot = 6,         ///< Failed: the user names the slot in the toolhead (or pulled it out)
++};
++
++/// Whether @p prompt waits for the user's Done (accept) instead of the step's own controls.
++inline bool prompt_waits(Prompt prompt) {
++    return prompt == Prompt::ClearBed || prompt == Prompt::OtherWaiting;
++}
++
++/// The filament step's IFS slots.
++inline constexpr int kFilamentSlots = 4;
++
++/// `filament` of the status object.
++struct FilamentStatus {
++    bool known = false;                         ///< The object has `filament` (Kiln's IFS module)
++    std::array<bool, kFilamentSlots> present{}; ///< Filament at the IFS, per slot
++    std::array<std::string, kFilamentSlots> materials; ///< Type per slot, "" unknown
++    int head = 0;                                      ///< Slot in the toolhead, 0 none or unknown
++    std::string head_source;                           ///< loaded, user, found, unknown, empty
++    std::optional<bool> head_filament;                 ///< The toolhead sensor sees filament
++};
++
++/// The fields of `printer.ifs` the setup steps read.
++struct IfsFindStatus {
++    bool tube_blocked = false;  ///< A strand of an unknown slot sits in the tube
++    std::string find_result;    ///< found, pick, tube, none, error, "" none
++    int head_found = 0;         ///< The slot the last find found, 0 none
++    std::array<std::string, 4> colors; ///< "#RRGGBB" per slot, "" unknown
++};
++
++/// @p ifs (a `printer.ifs` status) as IfsFindStatus; missing fields stay default.
++IfsFindStatus parse_ifs_find(const json& ifs);
++
++
++/// Choices of the "Filament in the toolhead" dropdown. Their order and what
++/// each sends are in head_choices(); a new choice is one more row there.
++enum class HeadChoice { Auto, Slot1, Slot2, Slot3, Slot4, Empty, Keep };
++
++/// One row of the toolhead dropdown.
++struct HeadChoiceSpec {
++    HeadChoice choice;
++    const char* param; ///< `head` sent to the filament step
++    const char* label; ///< Untranslated label; "{}" is the slot number
++    int slot;          ///< For the label's "{}", else 0
++};
++
++/// The toolhead dropdown's rows, in order (the first is the default).
++const std::vector<HeadChoiceSpec>& head_choices();
++
++/// The toolhead dropdown's text, translated.
++std::string head_choice_options();
++
++/// @p status's `filament`, or known = false when it is missing or null.
++FilamentStatus parse_filament(const json& status);
++
++/// The material dropdown's values: "" (unknown) first, then the types the IFS
++/// knows (AmsBackendAd5xIfs::kStockWhitelist); @p current is added when it is
++/// another type, so a custom material set elsewhere stays selectable.
++std::vector<std::string> material_choices(const std::string& current);
++
++/// The dropdown text for material_choices(): "Unknown" for "", else the type.
++std::string material_options(const std::vector<std::string>& choices);
++
++/// Index of @p material (case-insensitive) in @p choices, 0 (unknown) if absent.
++uint32_t material_index(const std::vector<std::string>& choices, const std::string& material);
++
++/// The filament step's start options: `material_<n>` for each slot in
++/// @p materials that has a value ("" sent as "?", which clears it), and `head`
++/// from head_choices() (`auto`, `1`-`4`, `0`, `keep`).
++json filament_options(const std::array<std::optional<std::string>, kFilamentSlots>& materials,
++                      HeadChoice head);
++
++/// One line on the toolhead from the live `filament` ("Toolhead: slot 2, PETG").
++std::string head_text(const FilamentStatus& filament);
++
++/// The label of slot @p slot's button when the step asks which slot is in
++/// the toolhead: "Slot 2 · PETG", or "Slot 2" without a material.
++std::string pick_slot_label(int slot, const std::string& material);
++
++/// The slots to offer when the step asks which slot is in the toolhead: those
++/// with filament at the IFS, or all four when none is known to have filament.
++std::array<bool, kFilamentSlots> pick_slots(const FilamentStatus& filament);
++
++/// The running step's `action` (and `action_arg`) as a short translated phrase,
++/// "" for none; a key the screen doesn't know comes back as it is.
++std::string action_text(const std::string& action, int arg);
++
++/// "m:ss", or "h:mm:ss" from an hour.
++std::string elapsed_text(long seconds);
++
++/// Seconds the step has run. From @p step_started (the printer's clock) when
++/// it and @p now_unix look like a set clock and lie less than a day apart;
++/// otherwise (a printer clock still at 1970 before NTP, or a jump) the screen's
++/// own count, @p local_seconds since it first saw the step start.
++long elapsed_seconds(double step_started, double now_unix, long local_seconds);
++
++/// "Nozzle 180/240 °C · Bed 58/70 °C" from decidegrees; no "/target" when the
++/// target is 0.
++std::string temps_text(int nozzle_dc, int nozzle_target_dc, int bed_dc, int bed_target_dc);
++
++/// The Z offset patch's plan from `zoffset_plan`: "Slot 2, PETG, 240/70 °C",
++/// and when `guess` is true a second line saying PLA's temperatures are used.
++/// "" for null.
++std::string plan_text(const json& plan);
++
++/// The prompt step @p key's card answers, from the status object.
++Prompt prompt_for(const std::string& key, const json& status);
++
+ /// Static description of one tuning step.
+ struct StepSpec {
+     wizard::StepId id;
+@@ -114,14 +234,31 @@ class Ad5xSetupModel {
+     /// and move the nozzle there (TRASH_OFFSET ... MOVE=1).
+     void trash_move(double dx, double dy, bool reset);
+ 
++    /// The filament step's widgets (created by its card): the slot rows and
++    /// the toolhead dropdown, filled from `filament`.
++    void bind_filament_widgets(lv_obj_t* root);
++    /// The user changed a filament dropdown: keep the pick across status updates.
++    void filament_picked(lv_obj_t* dropdown);
++    /// The user named the slot in the toolhead (prompt pick_slot): the
++    /// filament step runs with head=@p slot (0: pulled out by hand). From
++    /// another step's card the filament step runs there, and the card
++    /// follows it until it ends.
++    void pick_slot(int slot);
++    /// The pick_slot panel's widgets (labels and colours of the slot buttons).
++    void bind_pick_widgets(lv_obj_t* root);
++
+     /// Start parameters the targeted session now starting adds, by step key:
+     /// {"pid": {"heaters": "extruder"}}. Read only while a targeted session
+     /// runs; an empty object clears them.
+     void set_session_params(json params);
+ 
+   private:
+-    void send(const std::string& action, double delta = 0.0);
+-    void send_gcode(const std::string& key, const std::string& action, double delta);
++    /// @p step_key overrides the card's step (a filament run from another
++    /// card); @p extra adds start options.
++    void send(const std::string& action, double delta = 0.0, const std::string& step_key = {},
++              const json* extra = nullptr);
++    void send_gcode(const std::string& key, const std::string& action, double delta,
++                    const json& options);
+     json step_options() const;
+     /// @p name of the session parameters for step @p key, or "" when the
+     /// session sets none (or no targeted session runs).
+@@ -131,6 +268,14 @@ class Ad5xSetupModel {
+     void refresh();
+     void update_footer(View view);
+     std::string results_text() const;
++    /// Action, temperatures and elapsed time of the running step (1 s timer).
++    void update_live(View view);
++    void fill_filament_widgets();
++    void fill_pick_widgets();
++    /// The step whose status the card follows: the card's own, or a filament
++    /// run started from it (pick_slot)
++    std::string followed_key() const;
++    json filament_step_options() const;
+ 
+     SubjectManager subjects_;
+     lv_subject_t view_{};
+@@ -143,7 +288,21 @@ class Ad5xSetupModel {
+     lv_subject_t is_trash_{};
+     lv_subject_t can_accept_{};
+     lv_subject_t estimate_avail_{};
++    lv_subject_t is_filament_{};
++    lv_subject_t prompt_{};
++    lv_subject_t prompt_wait_{};
++    lv_subject_t show_head_{};
++    std::array<lv_subject_t, kFilamentSlots> pick_offer_{};
++    lv_subject_t action_{};
++    lv_subject_t live_{};
++    lv_subject_t plan_{};
++    lv_subject_t head_{};
++    std::array<lv_subject_t, kFilamentSlots> slot_present_{};
+     bool estimate_once_ = false;
++    char action_buf_[128] = "";
++    char live_buf_[128] = "";
++    char plan_buf_[256] = "";
++    char head_buf_[160] = "";
+     char explanation_buf_[512] = "";
+     char message_buf_[256] = "";
+     char results_buf_[1536] = "";
+@@ -158,6 +317,26 @@ class Ad5xSetupModel {
+ 
+     bool klippy_ready_ = true;
+ 
++    // Elapsed time: the step run first seen (step + step_started) and when
++    std::string clock_run_;
++    uint32_t clock_seen_ms_ = 0;
++    ui::LvglTimerGuard live_timer_;
++
++    // Filament step widgets and the user's picks (kept across status updates)
++    std::array<ui::WidgetRef, kFilamentSlots> material_dropdowns_;
++    std::array<ui::WidgetRef, kFilamentSlots> slot_labels_;
++    ui::WidgetRef head_dropdown_;
++    std::array<ui::WidgetRef, kFilamentSlots> pick_buttons_;
++    std::array<ui::WidgetRef, kFilamentSlots> pick_swatches_;
++    json ifs_status_ = json::object();
++    /// "filament" while a slot named from another card's pick_slot runs
++    std::string aux_key_;
++    /// One start of the filament step with this head (a pick on its own card)
++    std::string head_override_;
++    std::array<std::vector<std::string>, kFilamentSlots> material_choices_;
++    std::array<bool, kFilamentSlots> material_picked_{};
++    bool head_picked_ = false;
++
+     SubscriptionGuard subscription_;
+     ObserverGuard klippy_observer_;
+     AsyncLifetimeGuard lifetime_;
+diff --git a/include/wizard_step.h b/include/wizard_step.h
+index a8da568..9155076 100644
+--- a/include/wizard_step.h
++++ b/include/wizard_step.h
+@@ -30,6 +30,7 @@ enum class StepId {
+     Ad5xPid,
+     Ad5xMesh,
+     Ad5xShaper,
++    Ad5xFilament,
+     Ad5xIfs,
+     Ad5xTrash,
+     Ad5xZoffset,
+@@ -41,7 +42,7 @@ enum class StepId {
+     Summary,
+     Telemetry,
+ };
+-inline constexpr int STEP_COUNT = 26;
++inline constexpr int STEP_COUNT = 27;
+ 
+ // Plain data needed to decide skips — no LVGL, constructible in tests.
+ struct StepContext {
+diff --git a/src/system/wizard_step.cpp b/src/system/wizard_step.cpp
+index 74b5d23..f2c632b 100644
+--- a/src/system/wizard_step.cpp
++++ b/src/system/wizard_step.cpp
+@@ -37,6 +37,8 @@ const char* to_string(StepId id) {
+         return "Ad5xMesh";
+     case StepId::Ad5xShaper:
+         return "Ad5xShaper";
++    case StepId::Ad5xFilament:
++        return "Ad5xFilament";
+     case StepId::Ad5xIfs:
+         return "Ad5xIfs";
+     case StepId::Ad5xTrash:
+diff --git a/src/ui/ui_wizard_ad5x_setup.cpp b/src/ui/ui_wizard_ad5x_setup.cpp
+index 8049f25..28be544 100644
+--- a/src/ui/ui_wizard_ad5x_setup.cpp
++++ b/src/ui/ui_wizard_ad5x_setup.cpp
+@@ -12,7 +12,9 @@
+ #include "ui_update_queue.h"
+ #include "ui_wizard.h"
+ 
++#include "ams_backend_ad5x_ifs.h"
+ #include "app_globals.h"
++#include "color_utils.h"
+ #include "config.h"
+ #include "display_settings_manager.h"
+ #include "helix_fs.h"
+@@ -30,8 +32,11 @@
+ #include <spdlog/spdlog.h>
+ 
+ #include <algorithm>
++#include <cctype>
++#include <cmath>
+ #include <cstdlib>
+ #include <cstring>
++#include <ctime>
+ 
+ // Wizard footer subjects (defined in ui_wizard.cpp)
+ extern lv_subject_t wizard_show_skip;
+@@ -71,6 +76,10 @@ const std::vector<StepSpec> k_specs = {
+      "Measures the frame's vibrations with the toolhead accelerometer and sets vibration "
+      "compensation. The printer is loud for a few minutes.",
+      false},
++    {StepId::Ad5xFilament, "filament", "wizard_ad5x_filament",
++     "Set the material in each slot with filament; the tests heat to it. Auto finds which slot "
++     "is in the toolhead and unloads it, or pick the slot yourself.",
++     false},
+     {StepId::Ad5xIfs, "ifs", "wizard_ad5x_ifs",
+      "Tunes filament swaps for every loaded IFS slot: the fastest reliable feed speed and the "
+      "load and unload distances. Load filament into the slots you use first.",
+@@ -111,7 +120,8 @@ struct ResultLabel {
+ constexpr ResultLabel k_result_labels[] = {
+     {"selfcheck", "Self-check"},      {"pid", "PID"},
+     {"mesh", "Bed mesh"},             {"shaper", "Vibration compensation"},
+-    {"ifs", "IFS tuning"},            {"trash", "Purge box"},
++    {"filament", "Filament"},         {"ifs", "IFS tuning"},
++    {"trash", "Purge box"},
+     {"zoffset", "Z offset"},          {"estimate", "Load cell estimate"},
+     {"soak", "Bed soak"},             {"finish", "Save"},
+ };
+@@ -147,6 +157,354 @@ void set_if_changed(lv_subject_t* subject, int value) {
+     }
+ }
+ 
++int int_field(const json& obj, const char* key, int fallback = 0) {
++    auto it = obj.find(key);
++    if (it == obj.end() || !it->is_number()) {
++        return fallback;
++    }
++    return static_cast<int>(it->get<double>());
++}
++
++std::string upper(std::string text) {
++    std::transform(text.begin(), text.end(), text.begin(),
++                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
++    return text;
++}
++
++/// Whole degrees from decidegrees, rounded.
++int whole_degrees(int decidegrees) {
++    return static_cast<int>(std::lround(decidegrees / 10.0));
++}
++
++/// Action keys and their phrases (English text is the translation key).
++struct ActionPhrase {
++    const char* key;
++    const char* text;      ///< Without action_arg
++    const char* with_arg;  ///< With action_arg > 0 ("{}" is the arg), or nullptr
++};
++constexpr ActionPhrase k_action_phrases[] = {
++    {"checking", "Checking the printer", nullptr},
++    {"fan_test", "Testing the fans", nullptr},
++    {"heater_test", "Testing the heaters", nullptr},
++    {"homing", "Homing", nullptr},
++    {"heating", "Heating", nullptr},
++    {"pid_nozzle", "Tuning the nozzle heater", nullptr},
++    {"pid_bed", "Tuning the bed heater", nullptr},
++    {"cleaning", "Cleaning the nozzle", nullptr},
++    {"probing", "Probing the bed", nullptr},
++    {"shaper_x", "Measuring vibrations on X", nullptr},
++    {"shaper_y", "Measuring vibrations on Y", nullptr},
++    {"setting_materials", "Setting the slot materials", nullptr},
++    {"finding_slot", "Finding the slot in the toolhead", nullptr},
++    {"tuning_ifs", "Tuning the IFS", nullptr},
++    {"moving", "Moving to the purge box", nullptr},
++    {"loading", "Loading filament", "Loading slot {}"},
++    {"unloading", "Unloading filament", "Unloading slot {}"},
++    {"cutting", "Cutting filament", nullptr},
++    {"estimating", "Estimating the Z offset", nullptr},
++    {"preparing", "Preparing the test print", nullptr},
++    {"purging", "Purging the nozzle", nullptr},
++    {"printing_patch", "Printing the test patch", "Printing test patch {}"},
++    {"waiting", "Waiting for you", nullptr},
++    {"saving", "Saving", nullptr},
++    {"cooling", "Letting the bed cool", nullptr},
++    {"soak", "Calibrating the bed soak", nullptr},
++};
++
++/// Printer clock values before this are an unset clock (1970 before NTP).
++constexpr double kClockSetAfter = 1.5e9; // 2017
++constexpr double kMaxStepSeconds = 24. * 3600.;
++
++} // namespace
++
++FilamentStatus parse_filament(const json& status) {
++    FilamentStatus out;
++    auto it = status.find("filament");
++    if (it == status.end() || !it->is_object()) {
++        return out;
++    }
++    const json& fil = *it;
++    out.known = true;
++    if (auto p = fil.find("present"); p != fil.end() && p->is_array()) {
++        for (const auto& slot : *p) {
++            if (slot.is_number_integer()) {
++                const int n = slot.get<int>();
++                if (n >= 1 && n <= kFilamentSlots) {
++                    out.present[n - 1] = true;
++                }
++            }
++        }
++    }
++    if (auto m = fil.find("materials"); m != fil.end() && m->is_object()) {
++        for (int n = 1; n <= kFilamentSlots; ++n) {
++            out.materials[n - 1] = str_field(*m, std::to_string(n).c_str());
++        }
++    }
++    out.head = std::clamp(int_field(fil, "head"), 0, kFilamentSlots);
++    out.head_source = str_field(fil, "head_source");
++    if (auto h = fil.find("head_filament"); h != fil.end() && h->is_boolean()) {
++        out.head_filament = h->get<bool>();
++    }
++    return out;
++}
++
++std::vector<std::string> material_choices(const std::string& current) {
++    std::vector<std::string> choices = {""};
++    for (const char* type : AmsBackendAd5xIfs::kStockWhitelist) {
++        choices.emplace_back(type);
++    }
++    const std::string cur = upper(current);
++    if (!cur.empty() && cur != "?" &&
++        std::find(choices.begin(), choices.end(), cur) == choices.end()) {
++        choices.push_back(cur);
++    }
++    return choices;
++}
++
++std::string material_options(const std::vector<std::string>& choices) {
++    std::string out;
++    for (const auto& c : choices) {
++        if (!out.empty()) {
++            out += '\n';
++        }
++        out += c.empty() ? std::string(lv_tr("Unknown")) : c;
++    }
++    return out;
++}
++
++uint32_t material_index(const std::vector<std::string>& choices, const std::string& material) {
++    const std::string want = upper(material);
++    for (size_t i = 0; i < choices.size(); ++i) {
++        if (choices[i] == want) {
++            return static_cast<uint32_t>(i);
++        }
++    }
++    return 0;
++}
++
++const std::vector<HeadChoiceSpec>& head_choices() {
++    static const std::vector<HeadChoiceSpec> choices = {
++        {HeadChoice::Auto, "auto", "Auto (find it)", 0},
++        {HeadChoice::Slot1, "1", "Slot {}", 1},
++        {HeadChoice::Slot2, "2", "Slot {}", 2},
++        {HeadChoice::Slot3, "3", "Slot {}", 3},
++        {HeadChoice::Slot4, "4", "Slot {}", 4},
++        {HeadChoice::Empty, "0", "None (empty)", 0},
++        {HeadChoice::Keep, "keep", "Use the filament in the toolhead as it is", 0},
++    };
++    return choices;
++}
++
++std::string head_choice_options() {
++    std::string out;
++    for (const auto& c : head_choices()) {
++        if (!out.empty()) {
++            out += '\n';
++        }
++        out += c.slot > 0 ? fmt::format(fmt::runtime(lv_tr(c.label)), c.slot)
++                          : std::string(lv_tr(c.label));
++    }
++    return out;
++}
++
++json filament_options(const std::array<std::optional<std::string>, kFilamentSlots>& materials,
++                      HeadChoice head) {
++    json options = json::object();
++    for (int n = 1; n <= kFilamentSlots; ++n) {
++        const auto& m = materials[n - 1];
++        if (m) {
++            options[fmt::format("material_{}", n)] = m->empty() ? std::string("?") : *m;
++        }
++    }
++    options["head"] = head_choices().front().param;
++    for (const auto& c : head_choices()) {
++        if (c.choice == head) {
++            options["head"] = c.param;
++        }
++    }
++    return options;
++}
++
++std::string head_text(const FilamentStatus& filament) {
++    if (!filament.known) {
++        return {};
++    }
++    if (filament.head_source == "tube") {
++        return lv_tr("Toolhead: strand in the tube, slot unknown");
++    }
++    if (filament.head_source == "kept") {
++        return lv_tr("Toolhead: filament kept as it is");
++    }
++    if (filament.head >= 1 && filament.head <= kFilamentSlots) {
++        const std::string& mat = filament.materials[filament.head - 1];
++        if (filament.head_source == "found") {
++            return fmt::format(fmt::runtime(lv_tr("Toolhead: slot {} was in it, now unloaded")),
++                               filament.head);
++        }
++        return mat.empty()
++                   ? fmt::format(fmt::runtime(lv_tr("Toolhead: slot {}")), filament.head)
++                   : fmt::format(fmt::runtime(lv_tr("Toolhead: slot {}, {}")), filament.head, mat);
++    }
++    if (filament.head_filament && *filament.head_filament) {
++        return lv_tr("Toolhead: filament from an unknown slot");
++    }
++    if (filament.head_filament && !*filament.head_filament) {
++        return lv_tr("Toolhead: empty");
++    }
++    return {};
++}
++
++std::string pick_slot_label(int slot, const std::string& material) {
++    return material.empty()
++               ? fmt::format(fmt::runtime(lv_tr("Slot {}")), slot)
++               : fmt::format(fmt::runtime(lv_tr("Slot {} \xC2\xB7 {}")), slot, upper(material));
++}
++
++std::array<bool, kFilamentSlots> pick_slots(const FilamentStatus& filament) {
++    const bool any = std::any_of(filament.present.begin(), filament.present.end(),
++                                 [](bool p) { return p; });
++    if (!any) {
++        std::array<bool, kFilamentSlots> all;
++        all.fill(true);
++        return all;
++    }
++    return filament.present;
++}
++
++IfsFindStatus parse_ifs_find(const json& ifs) {
++    IfsFindStatus out;
++    if (!ifs.is_object()) {
++        return out;
++    }
++    if (auto it = ifs.find("tube_blocked"); it != ifs.end() && it->is_boolean()) {
++        out.tube_blocked = it->get<bool>();
++    }
++    out.find_result = str_field(ifs, "find_result");
++    out.head_found = std::clamp(int_field(ifs, "head_found"), 0, kFilamentSlots);
++    if (auto it = ifs.find("colors"); it != ifs.end() && it->is_array()) {
++        for (size_t i = 0; i < it->size() && i < out.colors.size(); ++i) {
++            if ((*it)[i].is_string()) {
++                out.colors[i] = (*it)[i].get<std::string>();
++            }
++        }
++    }
++    return out;
++}
++
++std::string action_text(const std::string& action, int arg) {
++    if (action.empty()) {
++        return {};
++    }
++    for (const auto& phrase : k_action_phrases) {
++        if (action == phrase.key) {
++            if (arg > 0 && phrase.with_arg) {
++                return fmt::format(fmt::runtime(lv_tr(phrase.with_arg)), arg);
++            }
++            return lv_tr(phrase.text);
++        }
++    }
++    return action;
++}
++
++std::string elapsed_text(long seconds) {
++    seconds = std::max(0L, seconds);
++    if (seconds >= 3600) {
++        return fmt::format("{}:{:02}:{:02}", seconds / 3600, seconds / 60 % 60, seconds % 60);
++    }
++    return fmt::format("{}:{:02}", seconds / 60, seconds % 60);
++}
++
++long elapsed_seconds(double step_started, double now_unix, long local_seconds) {
++    if (step_started > kClockSetAfter && now_unix > kClockSetAfter) {
++        const double since = now_unix - step_started;
++        // A few seconds early is clock jitter; more, or a day, is a clock jump
++        if (since > -5. && since < kMaxStepSeconds) {
++            return std::max(0L, static_cast<long>(since));
++        }
++    }
++    return std::max(0L, local_seconds);
++}
++
++std::string temps_text(int nozzle_dc, int nozzle_target_dc, int bed_dc, int bed_target_dc) {
++    auto one = [](int now, int target) {
++        return target > 0 ? fmt::format("{}/{} \xC2\xB0"
++                                        "C",
++                                        whole_degrees(now), whole_degrees(target))
++                          : fmt::format("{} \xC2\xB0"
++                                        "C",
++                                        whole_degrees(now));
++    };
++    return fmt::format("{} {}  \xC2\xB7  {} {}", lv_tr("Nozzle"), one(nozzle_dc, nozzle_target_dc),
++                       lv_tr("Bed"), one(bed_dc, bed_target_dc));
++}
++
++std::string plan_text(const json& plan) {
++    if (!plan.is_object()) {
++        return {};
++    }
++    const int slot = int_field(plan, "slot");
++    const std::string material = upper(str_field(plan, "material"));
++    const int nozzle = int_field(plan, "nozzle");
++    const int bed = int_field(plan, "bed");
++    std::string out =
++        slot > 0 ? fmt::format(fmt::runtime(lv_tr("Slot {}, {}, {}/{} \xC2\xB0"
++                                                  "C")),
++                               slot, material.empty() ? std::string("?") : material, nozzle, bed)
++                 : fmt::format(fmt::runtime(lv_tr("{}, {}/{} \xC2\xB0"
++                                                  "C")),
++                               material.empty() ? std::string("?") : material, nozzle, bed);
++    auto g = plan.find("guess");
++    if (g != plan.end() && g->is_boolean() && g->get<bool>()) {
++        out += '\n';
++        const std::string source = str_field(plan, "source");
++        // A material the patch table doesn't have also falls back to PLA's
++        if (source == "guess" && !material.empty() && material != "PLA") {
++            out += fmt::format(fmt::runtime(lv_tr("No temperatures for {}: using PLA temperatures")),
++                               material);
++        } else {
++            out += lv_tr("Material unknown: using PLA temperatures");
++        }
++        out += ' ';
++        out += lv_tr("Abort and set it in the Filament step if this is wrong.");
++    }
++    return out;
++}
++
++Prompt prompt_for(const std::string& key, const json& status) {
++    if (str_field(status, "step") != key) {
++        return Prompt::None;
++    }
++    const std::string prompt = str_field(status, "prompt");
++    const std::string state = str_field(status, "state");
++    if (prompt == "clear_bed") {
++        if (state == "waiting_user") {
++            return Prompt::ClearBed;
++        }
++        if (state == "failed" || state == "aborted") {
++            return Prompt::ClearBedReminder;
++        }
++    }
++    if (prompt == "head_unknown" && state == "failed") {
++        return Prompt::HeadUnknown;
++    }
++    if (prompt == "pick_slot" && (state == "failed" || state == "aborted")) {
++        return Prompt::PickSlot;
++    }
++    // A prompt this screen doesn't know: the step's message, then Done or Retry
++    if (!prompt.empty() && prompt != "clear_bed" && prompt != "head_unknown" &&
++        prompt != "pick_slot") {
++        if (state == "waiting_user") {
++            return Prompt::OtherWaiting;
++        }
++        if (state == "failed" || state == "aborted") {
++            return Prompt::OtherFailed;
++        }
++    }
++    return Prompt::None;
++}
++
++namespace {
++
+ } // namespace
+ 
+ const std::vector<StepSpec>& step_specs() {
+@@ -228,6 +586,7 @@ View view_for(const std::string& key, const std::string& status_step,
+ 
+ Ad5xSetupModel::~Ad5xSetupModel() {
+     lifetime_.invalidate();
++    live_timer_.reset();
+     subscription_.reset();
+     klippy_observer_.reset();
+     subjects_.deinit_all();
+@@ -248,6 +607,22 @@ void Ad5xSetupModel::init_subjects() {
+     UI_MANAGED_SUBJECT_STRING(message_, message_buf_, "", "ad5x_setup_message", subjects_);
+     UI_MANAGED_SUBJECT_STRING(results_, results_buf_, "", "ad5x_setup_results", subjects_);
+     UI_MANAGED_SUBJECT_STRING(zoffset_, zoffset_buf_, "", "ad5x_setup_zoffset", subjects_);
++    UI_MANAGED_SUBJECT_INT(is_filament_, 0, "ad5x_setup_is_filament", subjects_);
++    UI_MANAGED_SUBJECT_INT(prompt_, 0, "ad5x_setup_prompt", subjects_);
++    UI_MANAGED_SUBJECT_INT(prompt_wait_, 0, "ad5x_setup_prompt_wait", subjects_);
++    UI_MANAGED_SUBJECT_INT(show_head_, 0, "ad5x_setup_show_head", subjects_);
++    UI_MANAGED_SUBJECT_INT(pick_offer_[0], 0, "ad5x_setup_pick1", subjects_);
++    UI_MANAGED_SUBJECT_INT(pick_offer_[1], 0, "ad5x_setup_pick2", subjects_);
++    UI_MANAGED_SUBJECT_INT(pick_offer_[2], 0, "ad5x_setup_pick3", subjects_);
++    UI_MANAGED_SUBJECT_INT(pick_offer_[3], 0, "ad5x_setup_pick4", subjects_);
++    UI_MANAGED_SUBJECT_STRING(action_, action_buf_, "", "ad5x_setup_action", subjects_);
++    UI_MANAGED_SUBJECT_STRING(live_, live_buf_, "", "ad5x_setup_live", subjects_);
++    UI_MANAGED_SUBJECT_STRING(plan_, plan_buf_, "", "ad5x_setup_plan", subjects_);
++    UI_MANAGED_SUBJECT_STRING(head_, head_buf_, "", "ad5x_setup_head", subjects_);
++    UI_MANAGED_SUBJECT_INT(slot_present_[0], 0, "ad5x_setup_slot1", subjects_);
++    UI_MANAGED_SUBJECT_INT(slot_present_[1], 0, "ad5x_setup_slot2", subjects_);
++    UI_MANAGED_SUBJECT_INT(slot_present_[2], 0, "ad5x_setup_slot3", subjects_);
++    UI_MANAGED_SUBJECT_INT(slot_present_[3], 0, "ad5x_setup_slot4", subjects_);
+     subjects_initialized_ = true;
+ }
+ 
+@@ -255,6 +630,19 @@ void Ad5xSetupModel::activate(const StepSpec* spec) {
+     active_ = spec;
+     start_in_flight_ = false;
+     local_error_.clear();
++    material_picked_ = {};
++    head_picked_ = false;
++    aux_key_.clear();
++    head_override_.clear();
++    // Live temperatures and the elapsed time, once a second while the card shows
++    live_timer_.reset(lv_timer_create(
++        [](lv_timer_t* t) {
++            auto* self = static_cast<Ad5xSetupModel*>(lv_timer_get_user_data(t));
++            if (self->subjects_initialized_ && self->active_) {
++                self->update_live(static_cast<View>(lv_subject_get_int(&self->view_)));
++            }
++        },
++        1000, this));
+ 
+     IMoonrakerAPI* api = get_moonraker_api();
+     if (api) {
+@@ -270,12 +658,30 @@ void Ad5xSetupModel::activate(const StepSpec* spec) {
+                 return;
+             }
+             auto obj = status.find("ad5x_setup");
+-            if (obj == status.end() || !obj->is_object()) {
++            auto ifs = status.find("ifs");
++            const bool has_setup = obj != status.end() && obj->is_object();
++            const bool has_ifs = ifs != status.end() && ifs->is_object();
++            if (!has_setup && !has_ifs) {
++                return;
++            }
++            json delta = has_setup ? *obj : json::object();
++            // printer.ifs: only the fields the steps read (find, tube, colours)
++            json ifs_delta = json::object();
++            if (has_ifs) {
++                for (const char* k : {"tube_blocked", "find_result", "head_found", "colors"}) {
++                    if (auto f = ifs->find(k); f != ifs->end()) {
++                        ifs_delta[k] = *f;
++                    }
++                }
++            }
++            if (!has_setup && ifs_delta.empty()) {
+                 return;
+             }
+-            json delta = *obj;
+-            token.defer("Ad5xSetupModel::status_update", [this, delta]() {
++            token.defer("Ad5xSetupModel::status_update", [this, delta, ifs_delta]() {
+                 merge_status(delta);
++                for (auto it = ifs_delta.begin(); it != ifs_delta.end(); ++it) {
++                    ifs_status_[it.key()] = it.value();
++                }
+                 refresh();
+             });
+         });
+@@ -303,6 +709,7 @@ void Ad5xSetupModel::activate(const StepSpec* spec) {
+                         lv_tr(hotend_only ? k_pid_hotend_explanation : spec->explanation));
+         set_if_changed(&is_zoffset_, std::strcmp(spec->key, "zoffset") == 0 ? 1 : 0);
+         set_if_changed(&is_trash_, std::strcmp(spec->key, "trash") == 0 ? 1 : 0);
++        set_if_changed(&is_filament_, std::strcmp(spec->key, "filament") == 0 ? 1 : 0);
+         set_if_changed(&can_accept_, (std::strcmp(spec->key, "zoffset") == 0 ||
+                                       std::strcmp(spec->key, "trash") == 0) ? 1 : 0);
+     }
+@@ -324,6 +731,22 @@ void Ad5xSetupModel::deactivate() {
+     start_in_flight_ = false;
+     local_error_.clear();
+     subscription_.reset();
++    live_timer_.reset();
++    for (auto& ref : material_dropdowns_) {
++        ref.reset();
++    }
++    for (auto& ref : slot_labels_) {
++        ref.reset();
++    }
++    head_dropdown_.reset();
++    for (auto& ref : pick_buttons_) {
++        ref.reset();
++    }
++    for (auto& ref : pick_swatches_) {
++        ref.reset();
++    }
++    aux_key_.clear();
++    head_override_.clear();
+     lv_subject_set_int(&wizard_show_skip, 0);
+     lv_subject_set_int(&connection_test_passed, 1);
+ }
+@@ -336,6 +759,10 @@ json Ad5xSetupModel::step_options() const {
+     if (estimate_once_ && std::strcmp(active_->key, "zoffset") == 0) {
+         options["estimate"] = 1;
+     }
++    // The filament step: the materials picked and the slot in the toolhead
++    if (std::strcmp(active_->key, "filament") == 0) {
++        options = filament_step_options();
++    }
+     // The mesh step keeps the bed hot when the Z offset test comes next.
+     if (std::strcmp(active_->key, "mesh") == 0) {
+         const auto& ids = ui_wizard_active_step_subset();
+@@ -374,11 +801,12 @@ std::string Ad5xSetupModel::session_param(const char* key, const char* name) con
+     return str_field(*it, name);
+ }
+ 
+-void Ad5xSetupModel::send(const std::string& action, double delta) {
++void Ad5xSetupModel::send(const std::string& action, double delta, const std::string& step_key,
++                          const json* extra) {
+     if (!active_) {
+         return;
+     }
+-    const std::string key = active_->key;
++    const std::string key = step_key.empty() ? std::string(active_->key) : step_key;
+     const bool is_start = action == "start";
+     IMoonrakerClient* client = get_moonraker_client();
+     if (!client || client->get_connection_state() != ConnectionState::CONNECTED) {
+@@ -394,8 +822,9 @@ void Ad5xSetupModel::send(const std::string& action, double delta) {
+     if (action == "adjust") {
+         params["delta"] = delta;
+     }
++    json options = json::object();
+     if (is_start) {
+-        const json options = step_options();
++        options = extra ? *extra : step_options();
+         for (auto it = options.begin(); it != options.end(); ++it) {
+             params[it.key()] = it.value();
+         }
+@@ -414,23 +843,23 @@ void Ad5xSetupModel::send(const std::string& action, double delta) {
+                 refresh();
+             });
+         },
+-        [this, token, key, action, delta, is_start](const MoonrakerError& err) {
++        [this, token, key, action, delta, is_start, options](const MoonrakerError& err) {
+             const int code = err.code;
+             // Kiln's endpoint puts the reason in front ("[printing] ..."),
+             // for programs; the screen shows the rest
+             const std::string message = MoonrakerError::strip_kiln_reason(err.message);
+             token.defer("Ad5xSetupModel::control_error", [this, key, action, delta, is_start,
+-                                                          code, message]() {
++                                                          code, message, options]() {
+                 // Moonraker without the endpoint: same action as G-code.
+                 if (code == -32601 || code == 404) {
+                     spdlog::warn("[AD5X setup] {} not available ({}), using G-code",
+                                  CONTROL_METHOD, message);
+-                    send_gcode(key, action, delta);
++                    send_gcode(key, action, delta, options);
+                     return;
+                 }
+                 if (is_start) {
+                     start_in_flight_ = false;
+-                    if (active_ && key == active_->key) {
++                    if (active_ && (key == active_->key || key == aux_key_)) {
+                         local_error_ = message.empty() ? std::string(lv_tr("Failed")) : message;
+                     }
+                 } else {
+@@ -445,7 +874,7 @@ void Ad5xSetupModel::send(const std::string& action, double delta) {
+ }
+ 
+ void Ad5xSetupModel::send_gcode(const std::string& key, const std::string& action,
+-                                double delta) {
++                                double delta, const json& options) {
+     IMoonrakerAPI* api = get_moonraker_api();
+     if (!api) {
+         return;
+@@ -455,11 +884,13 @@ void Ad5xSetupModel::send_gcode(const std::string& key, const std::string& actio
+         cmd += fmt::format(" DELTA={:.3f}", delta);
+     }
+     if (action == "start") {
+-        const json options = step_options();
+         for (auto it = options.begin(); it != options.end(); ++it) {
+             std::string name = it.key();
+             std::transform(name.begin(), name.end(), name.begin(), ::toupper);
+-            cmd += fmt::format(" {}={}", name, it.value().dump());
++            // A string goes as it is: HEAD=auto, not HEAD="auto"
++            cmd += fmt::format(" {}={}", name,
++                               it.value().is_string() ? it.value().get<std::string>()
++                                                      : it.value().dump());
+         }
+     }
+     spdlog::info("[AD5X setup] {}", cmd);
+@@ -481,7 +912,7 @@ void Ad5xSetupModel::send_gcode(const std::string& key, const std::string& actio
+             token.defer("Ad5xSetupModel::gcode_error", [this, is_start, key, message]() {
+                 if (is_start) {
+                     start_in_flight_ = false;
+-                    if (active_ && key == active_->key) {
++                    if (active_ && (key == active_->key || key == aux_key_)) {
+                         local_error_ = message;
+                     }
+                 }
+@@ -509,9 +940,11 @@ void Ad5xSetupModel::start() {
+     }
+     start_in_flight_ = true;
+     local_error_.clear();
++    aux_key_.clear();
+     refresh();
+     send("start");
+     estimate_once_ = false;
++    head_override_.clear();
+ }
+ 
+ void Ad5xSetupModel::start_estimate() {
+@@ -566,7 +999,9 @@ void Ad5xSetupModel::query_status() {
+         return;
+     }
+     const auto token = lifetime_.token();
+-    json params = {{"objects", {{"ad5x_setup", nullptr}}}};
++    json params = {{"objects",
++                    {{"ad5x_setup", nullptr},
++                     {"ifs", {"tube_blocked", "find_result", "head_found", "colors"}}}}};
+     client->send_jsonrpc(
+         "printer.objects.query", params,
+         [this, token](const json& response) {
+@@ -583,8 +1018,13 @@ void Ad5xSetupModel::query_status() {
+                 return;
+             }
+             json full = *obj;
+-            token.defer("Ad5xSetupModel::status_query", [this, full]() {
++            json ifs = json::object();
++            if (auto it = status->find("ifs"); it != status->end() && it->is_object()) {
++                ifs = *it;
++            }
++            token.defer("Ad5xSetupModel::status_query", [this, full, ifs]() {
+                 status_ = full;
++                ifs_status_ = ifs;
+                 refresh();
+             });
+         },
+@@ -675,13 +1115,26 @@ void Ad5xSetupModel::update_footer(View view) {
+                        (view == View::Running || view == View::WaitingUser) ? 0 : 1);
+ }
+ 
++std::string Ad5xSetupModel::followed_key() const {
++    if (!aux_key_.empty()) {
++        return aux_key_;
++    }
++    return active_ ? std::string(active_->key) : std::string();
++}
++
+ void Ad5xSetupModel::refresh() {
+     if (!subjects_initialized_ || !active_) {
+         return;
+     }
+-    const std::string key = active_->key;
++    const std::string card = active_->key;
+     const std::string st_step = str_field(status_, "step");
+     const std::string st_state = str_field(status_, "state");
++    // A slot named from this card ran the filament step: once it is done the
++    // card is its own again (Start runs this step with the slot known)
++    if (!aux_key_.empty() && !start_in_flight_ && st_step == aux_key_ && st_state == "done") {
++        aux_key_.clear();
++    }
++    const std::string key = followed_key();
+     const bool mine = st_step == key;
+ 
+     View view = view_for(key, st_step, st_state, start_in_flight_, !local_error_.empty());
+@@ -721,12 +1174,245 @@ void Ad5xSetupModel::refresh() {
+     }
+     set_if_changed(&estimate_avail_, estimate_avail);
+ 
++    // What the step asks of the user. A start in flight drops the old prompt.
++    Prompt prompt = start_in_flight_ ? Prompt::None : prompt_for(key, status_);
++    if (prompt_waits(prompt) && view != View::WaitingUser) {
++        prompt = Prompt::None;
++    }
++
++    // The Z offset patch's slot and temperatures, once the step has chosen them
++    std::string plan;
++    if (key == "zoffset" && mine && !start_in_flight_ &&
++        (view == View::Running || view == View::WaitingUser) && !prompt_waits(prompt)) {
++        if (auto it = status_.find("zoffset_plan"); it != status_.end()) {
++            plan = plan_text(*it);
++        }
++    }
++
++    // The IFS slots, live (also before the filament step runs)
++    const FilamentStatus filament = parse_filament(status_);
++    const IfsFindStatus ifs = parse_ifs_find(ifs_status_);
++    for (int n = 0; n < kFilamentSlots; ++n) {
++        set_if_changed(&slot_present_[n], filament.present[n] ? 1 : 0);
++    }
++    const auto offer = pick_slots(filament);
++    for (int n = 0; n < kFilamentSlots; ++n) {
++        set_if_changed(&pick_offer_[n], offer[n] ? 1 : 0);
++    }
++    std::string head;
++    if (card == "filament" || card == "zoffset" || card == "ifs") {
++        head = head_text(filament);
++        if (card == "filament" && !filament.known && view == View::Idle) {
++            head = lv_tr("The IFS slots aren't known yet.");
++        }
++        // A strand of an unknown slot in the tube: nothing loads until it is named
++        if (card == "filament" && prompt != Prompt::PickSlot &&
++            (ifs.tube_blocked || filament.head_source == "tube")) {
++            if (!head.empty()) {
++                head += '\n';
++            }
++            head += lv_tr("A strand is still in the tube: name the slot first");
++        }
++    }
++    const bool head_shown = !head.empty() && view != View::Running &&
++                            view != View::WaitingUser && prompt != Prompt::PickSlot;
++
+     copy_if_changed(&message_, message);
+     copy_if_changed(&results_, results_text());
+     copy_if_changed(&zoffset_, zoffset);
++    copy_if_changed(&plan_, plan);
++    copy_if_changed(&head_, head);
++    set_if_changed(&show_head_, head_shown ? 1 : 0);
++    set_if_changed(&prompt_, static_cast<int>(prompt));
++    set_if_changed(&prompt_wait_, prompt_waits(prompt) ? 1 : 0);
+     set_if_changed(&progress_, progress);
+     set_if_changed(&view_, static_cast<int>(view));
+     update_footer(view);
++    update_live(view);
++    if (card == "filament") {
++        fill_filament_widgets();
++    }
++    if (prompt == Prompt::PickSlot) {
++        fill_pick_widgets();
++    }
++}
++
++void Ad5xSetupModel::update_live(View view) {
++    const bool live = (view == View::Running || view == View::WaitingUser) &&
++                      lv_subject_get_int(&prompt_wait_) == 0;
++    if (!live || !active_) {
++        clock_run_.clear();
++        copy_if_changed(&action_, "");
++        copy_if_changed(&live_, "");
++        return;
++    }
++    const bool mine = str_field(status_, "step") == followed_key() && !start_in_flight_;
++    std::string action;
++    double started = 0.;
++    if (mine) {
++        int arg = 0;
++        if (auto it = status_.find("action_arg"); it != status_.end() && it->is_number()) {
++            arg = static_cast<int>(it->get<double>());
++        }
++        action = action_text(str_field(status_, "action"), arg);
++        if (auto it = status_.find("step_started"); it != status_.end() && it->is_number()) {
++            started = it->get<double>();
++        }
++    }
++    // The screen's own count starts when it first sees this run
++    const std::string run =
++        mine ? fmt::format("{}@{:.1f}", active_->key, started) : std::string("pending");
++    if (run != clock_run_) {
++        clock_run_ = run;
++        clock_seen_ms_ = lv_tick_get();
++    }
++    const long local = static_cast<long>(lv_tick_elaps(clock_seen_ms_) / 1000u);
++    const long seconds =
++        elapsed_seconds(started, static_cast<double>(std::time(nullptr)), local);
++
++    auto& temps = get_printer_state().temperature_state();
++    const std::string text = fmt::format(
++        "{}  \xC2\xB7  {}",
++        temps_text(lv_subject_get_int(temps.get_active_extruder_temp_subject()),
++                   lv_subject_get_int(temps.get_active_extruder_target_subject()),
++                   lv_subject_get_int(temps.get_bed_temp_subject()),
++                   lv_subject_get_int(temps.get_bed_target_subject())),
++        elapsed_text(seconds));
++    copy_if_changed(&action_, action);
++    copy_if_changed(&live_, text);
++}
++
++json Ad5xSetupModel::filament_step_options() const {
++    std::array<std::optional<std::string>, kFilamentSlots> materials;
++    const FilamentStatus filament = parse_filament(status_);
++    for (int n = 0; n < kFilamentSlots; ++n) {
++        lv_obj_t* dd = material_dropdowns_[n].get();
++        // Only what the user picked for a slot with filament; the rest stays
++        if (!dd || !material_picked_[n] || !filament.present[n]) {
++            continue;
++        }
++        const uint32_t i = lv_dropdown_get_selected(dd);
++        if (i < material_choices_[n].size()) {
++            materials[n] = material_choices_[n][i];
++        }
++    }
++    HeadChoice head = head_choices().front().choice;
++    if (lv_obj_t* dd = head_dropdown_.get()) {
++        const uint32_t i = lv_dropdown_get_selected(dd);
++        if (i < head_choices().size()) {
++            head = head_choices()[i].choice;
++        }
++    }
++    json options = filament_options(materials, head);
++    // The slot named on the pick_slot panel wins over the dropdown, once
++    if (!head_override_.empty()) {
++        options["head"] = head_override_;
++    }
++    return options;
++}
++
++void Ad5xSetupModel::bind_filament_widgets(lv_obj_t* root) {
++    for (int n = 0; n < kFilamentSlots; ++n) {
++        material_dropdowns_[n] = lv_obj_find_by_name(root, fmt::format("ad5x_fil_mat_{}", n + 1).c_str());
++        slot_labels_[n] = lv_obj_find_by_name(root, fmt::format("ad5x_fil_slot_{}", n + 1).c_str());
++        if (lv_obj_t* label = slot_labels_[n].get()) {
++            lv_label_set_text(label, fmt::format(fmt::runtime(lv_tr("Slot {}")), n + 1).c_str());
++        }
++        material_choices_[n].clear();
++    }
++    head_dropdown_ = lv_obj_find_by_name(root, "ad5x_fil_head");
++    if (lv_obj_t* dd = head_dropdown_.get()) {
++        lv_dropdown_set_options(dd, head_choice_options().c_str());
++        lv_dropdown_set_selected(dd, 0);
++    }
++    material_picked_ = {};
++    head_picked_ = false;
++    fill_filament_widgets();
++}
++
++void Ad5xSetupModel::fill_filament_widgets() {
++    const FilamentStatus filament = parse_filament(status_);
++    for (int n = 0; n < kFilamentSlots; ++n) {
++        lv_obj_t* dd = material_dropdowns_[n].get();
++        // A pick the user made stays until the card is built again
++        if (!dd || material_picked_[n]) {
++            continue;
++        }
++        auto choices = material_choices(filament.materials[n]);
++        if (choices != material_choices_[n]) {
++            material_choices_[n] = std::move(choices);
++            lv_dropdown_set_options(dd, material_options(material_choices_[n]).c_str());
++        }
++        const uint32_t index = material_index(material_choices_[n], filament.materials[n]);
++        if (lv_dropdown_get_selected(dd) != index) {
++            lv_dropdown_set_selected(dd, index);
++        }
++    }
++}
++
++void Ad5xSetupModel::filament_picked(lv_obj_t* dropdown) {
++    if (!dropdown) {
++        return;
++    }
++    if (dropdown == head_dropdown_.get()) {
++        head_picked_ = true;
++        return;
++    }
++    for (int n = 0; n < kFilamentSlots; ++n) {
++        if (dropdown == material_dropdowns_[n].get()) {
++            material_picked_[n] = true;
++        }
++    }
++}
++
++void Ad5xSetupModel::pick_slot(int slot) {
++    if (!active_ || slot < 0 || slot > kFilamentSlots) {
++        return;
++    }
++    const std::string head = std::to_string(slot);
++    spdlog::info("[AD5X setup] Slot in the toolhead named: {}", slot);
++    if (std::strcmp(active_->key, "filament") == 0) {
++        // The filament step itself: run it again with that slot
++        head_override_ = head;
++        start();
++        return;
++    }
++    // Another step's card (IFS, Z offset): the filament step runs from here
++    // with only the slot; the card follows it, then offers its own Start
++    const json options = {{"head", head}};
++    start_in_flight_ = true;
++    local_error_.clear();
++    aux_key_ = "filament";
++    refresh();
++    send("start", 0.0, aux_key_, &options);
++}
++
++void Ad5xSetupModel::bind_pick_widgets(lv_obj_t* root) {
++    for (int n = 0; n < kFilamentSlots; ++n) {
++        pick_buttons_[n] = lv_obj_find_by_name(root, fmt::format("btn_ad5x_pick_{}", n + 1).c_str());
++        pick_swatches_[n] = lv_obj_find_by_name(root, fmt::format("ad5x_pick_swatch_{}", n + 1).c_str());
++    }
++    fill_pick_widgets();
++}
++
++void Ad5xSetupModel::fill_pick_widgets() {
++    const FilamentStatus filament = parse_filament(status_);
++    const IfsFindStatus ifs = parse_ifs_find(ifs_status_);
++    for (int n = 0; n < kFilamentSlots; ++n) {
++        if (lv_obj_t* btn = pick_buttons_[n].get()) {
++            ui_button_set_text(btn, pick_slot_label(n + 1, filament.materials[n]).c_str());
++        }
++        if (lv_obj_t* sw = pick_swatches_[n].get()) {
++            // The spool's colour helps match the slot to the tube; none known: hidden
++            const auto rgb = helix::parse_hex_color(ifs.colors[n]);
++            if (rgb) {
++                lv_obj_set_style_bg_color(sw, lv_color_hex(*rgb), LV_PART_MAIN);
++                lv_obj_remove_flag(sw, LV_OBJ_FLAG_HIDDEN);
++            } else {
++                lv_obj_add_flag(sw, LV_OBJ_FLAG_HIDDEN);
++            }
++        }
++    }
+ }
+ 
+ // ============================================================================
+@@ -906,6 +1592,22 @@ static void on_ad5x_trash_move(lv_event_t* e) {
+     LVGL_SAFE_EVENT_CB_END();
+ }
+ 
++/// user_data: the slot "1"-"4", or "0" (pulled out by hand)
++static void on_ad5x_pick_slot(lv_event_t* e) {
++    LVGL_SAFE_EVENT_CB_BEGIN("[AD5X setup] on_pick_slot");
++    const char* slot = static_cast<const char*>(lv_event_get_user_data(e));
++    if (slot) {
++        model().pick_slot(std::atoi(slot));
++    }
++    LVGL_SAFE_EVENT_CB_END();
++}
++
++static void on_ad5x_filament_changed(lv_event_t* e) {
++    LVGL_SAFE_EVENT_CB_BEGIN("[AD5X setup] on_filament_changed");
++    model().filament_picked(static_cast<lv_obj_t*>(lv_event_get_current_target(e)));
++    LVGL_SAFE_EVENT_CB_END();
++}
++
+ void WizardAd5xSetupStep::register_callbacks() {
+     lv_xml_register_event_cb(nullptr, "on_ad5x_setup_start", on_ad5x_setup_start);
+     lv_xml_register_event_cb(nullptr, "on_ad5x_setup_abort", on_ad5x_setup_abort);
+@@ -913,6 +1615,8 @@ void WizardAd5xSetupStep::register_callbacks() {
+     lv_xml_register_event_cb(nullptr, "on_ad5x_setup_accept", on_ad5x_setup_accept);
+     lv_xml_register_event_cb(nullptr, "on_ad5x_setup_start_estimate", on_ad5x_setup_start_estimate);
+     lv_xml_register_event_cb(nullptr, "on_ad5x_trash_move", on_ad5x_trash_move);
++    lv_xml_register_event_cb(nullptr, "on_ad5x_filament_changed", on_ad5x_filament_changed);
++    lv_xml_register_event_cb(nullptr, "on_ad5x_pick_slot", on_ad5x_pick_slot);
+ }
+ 
+ lv_obj_t* WizardAd5xSetupStep::create(lv_obj_t* parent) {
+@@ -928,6 +1632,10 @@ lv_obj_t* WizardAd5xSetupStep::create(lv_obj_t* parent) {
+         }
+     }
+     model().activate(&spec_);
++    if (std::strcmp(spec_.key, "filament") == 0) {
++        model().bind_filament_widgets(root_);
++    }
++    model().bind_pick_widgets(root_);
+     return root_;
+ }
+ 
+diff --git a/tests/unit/test_wizard_ad5x_setup.cpp b/tests/unit/test_wizard_ad5x_setup.cpp
+new file mode 100644
+index 0000000..c8b3d0f
+--- /dev/null
++++ b/tests/unit/test_wizard_ad5x_setup.cpp
+@@ -0,0 +1,327 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++// The AD5X setup steps' card texts: the live view of a running step, the
++// filament step's slots and options, the Z offset plan and the prompts.
++
++#include "ui_wizard_ad5x_setup.h"
++
++#include "ui_button.h"
++#include "ui_wizard.h"
++
++#include "../lvgl_ui_test_fixture.h"
++#include "helix-xml/src/xml/lv_xml.h"
++
++#include <string>
++
++#include "../catch_amalgamated.hpp"
++#include "hv/json.hpp"
++
++using namespace helix::ad5x_setup;
++
++namespace {
++
++/// `ad5x_setup` as Klipper publishes it during a filament step.
++json sample_status() {
++    return json::parse(R"({
++        "step": "filament", "state": "running", "message": "Finding the slot",
++        "action": "finding_slot", "action_arg": 0, "step_started": 1795000000.0,
++        "prompt": null,
++        "filament": {"present": [1, 2, 4, 7, "x"],
++                     "materials": {"1": "PLA", "2": "petg", "3": null, "4": null},
++                     "head": 0, "head_source": "unknown", "head_filament": true},
++        "zoffset_plan": null
++    })");
++}
++
++} // namespace
++
++TEST_CASE("AD5X setup: action keys read as short phrases", "[ad5x_setup]") {
++    CHECK(action_text("", 0).empty());
++    CHECK(action_text("heating", 0) == "Heating");
++    CHECK(action_text("probing", 0) == "Probing the bed");
++    CHECK(action_text("finding_slot", 0) == "Finding the slot in the toolhead");
++    CHECK(action_text("loading", 2) == "Loading slot 2");
++    CHECK(action_text("loading", 0) == "Loading filament");
++    CHECK(action_text("printing_patch", 3) == "Printing test patch 3");
++    CHECK(action_text("pid_nozzle", 0) == "Tuning the nozzle heater");
++    // A key a newer Klipper adds shows as it is
++    CHECK(action_text("degassing", 0) == "degassing");
++}
++
++TEST_CASE("AD5X setup: elapsed time and the printer clock", "[ad5x_setup]") {
++    CHECK(elapsed_text(0) == "0:00");
++    CHECK(elapsed_text(65) == "1:05");
++    CHECK(elapsed_text(3725) == "1:02:05");
++    CHECK(elapsed_text(-4) == "0:00");
++
++    // A set clock: the printer's own start time
++    CHECK(elapsed_seconds(1795000000.0, 1795000090.4, 3) == 90);
++    // Not started (0), a clock still at 1970, or a jump: the screen's own count
++    CHECK(elapsed_seconds(0.0, 1795000090.0, 12) == 12);
++    CHECK(elapsed_seconds(42.0, 130.0, 7) == 7);
++    CHECK(elapsed_seconds(42.0, 1795000090.0, 7) == 7);
++    CHECK(elapsed_seconds(1795000000.0, 1795000000.0 + 3 * 24 * 3600, 9) == 9);
++    CHECK(elapsed_seconds(1795000100.0, 1795000000.0, 9) == 9);
++    // Jitter of a second or two is no reason to drop the printer's time
++    CHECK(elapsed_seconds(1795000001.0, 1795000000.0, 9) == 0);
++}
++
++TEST_CASE("AD5X setup: live temperatures", "[ad5x_setup]") {
++    CHECK(temps_text(1804, 2400, 583, 700) == "Nozzle 180/240 °C  ·  Bed 58/70 °C");
++    CHECK(temps_text(251, 0, 249, 0) == "Nozzle 25 °C  ·  Bed 25 °C");
++}
++
++TEST_CASE("AD5X setup: the IFS slots from the status object", "[ad5x_setup]") {
++    const FilamentStatus f = parse_filament(sample_status());
++    REQUIRE(f.known);
++    CHECK(f.present == std::array<bool, kFilamentSlots>{true, true, false, true});
++    CHECK(f.materials[0] == "PLA");
++    CHECK(f.materials[1] == "petg");
++    CHECK(f.materials[2].empty());
++    CHECK(f.head == 0);
++    CHECK(f.head_source == "unknown");
++    REQUIRE(f.head_filament.has_value());
++    CHECK(*f.head_filament);
++    CHECK(head_text(f) == "Toolhead: filament from an unknown slot");
++
++    json st = sample_status();
++    st["filament"]["head"] = 2;
++    st["filament"]["head_source"] = "loaded";
++    CHECK(head_text(parse_filament(st)) == "Toolhead: slot 2, petg");
++    st["filament"]["head_source"] = "found";
++    CHECK(head_text(parse_filament(st)) == "Toolhead: slot 2 was in it, now unloaded");
++    st["filament"]["head"] = 0;
++    st["filament"]["head_source"] = "empty";
++    st["filament"]["head_filament"] = false;
++    CHECK(head_text(parse_filament(st)) == "Toolhead: empty");
++
++    st["filament"]["head_source"] = "kept";
++    st["filament"]["head_filament"] = true;
++    CHECK(head_text(parse_filament(st)) == "Toolhead: filament kept as it is");
++    st["filament"]["head_source"] = "tube";
++    st["filament"]["head_filament"] = false;
++    CHECK(head_text(parse_filament(st)) == "Toolhead: strand in the tube, slot unknown");
++
++    // Without Kiln's IFS module the object has filament: null
++    st["filament"] = nullptr;
++    CHECK_FALSE(parse_filament(st).known);
++    CHECK(head_text(parse_filament(st)).empty());
++    CHECK_FALSE(parse_filament(json::object()).known);
++}
++
++TEST_CASE("AD5X setup: material choices", "[ad5x_setup]") {
++    const auto plain = material_choices("");
++    REQUIRE(plain.size() == 8);
++    CHECK(plain[0].empty());
++    CHECK(plain[1] == "PLA");
++    CHECK(plain.back() == "PETG-CF");
++    CHECK(material_options(plain).rfind("Unknown\nPLA\nPLA-CF\n", 0) == 0);
++    CHECK(material_index(plain, "petg") == 6);
++    CHECK(material_index(plain, "") == 0);
++    CHECK(material_index(plain, "NYLON") == 0);
++
++    // A custom type set elsewhere stays selectable, once
++    const auto custom = material_choices("asa");
++    REQUIRE(custom.size() == 9);
++    CHECK(custom.back() == "ASA");
++    CHECK(material_index(custom, "ASA") == 8);
++    CHECK(material_choices("PETG").size() == 8);
++    CHECK(material_choices("?").size() == 8);
++}
++
++TEST_CASE("AD5X setup: filament step options", "[ad5x_setup]") {
++    std::array<std::optional<std::string>, kFilamentSlots> mats;
++    json o = filament_options(mats, HeadChoice::Auto);
++    CHECK(o == json{{"head", "auto"}});
++
++    mats[1] = "PETG";
++    mats[3] = ""; // set to unknown: cleared
++    o = filament_options(mats, HeadChoice::Slot3);
++    CHECK(o == json{{"material_2", "PETG"}, {"material_4", "?"}, {"head", "3"}});
++    CHECK(filament_options({}, HeadChoice::Empty)["head"] == "0");
++
++    // The dropdown text follows the table, the first row is the default
++    REQUIRE(head_choices().front().choice == HeadChoice::Auto);
++    CHECK(head_choice_options() == "Auto (find it)\nSlot 1\nSlot 2\nSlot 3\nSlot 4\nNone (empty)\n"
++                                   "Use the filament in the toolhead as it is");
++    CHECK(filament_options({}, HeadChoice::Keep)["head"] == "keep");
++    for (const auto& c : head_choices()) {
++        CHECK(filament_options({}, c.choice)["head"] == c.param);
++    }
++}
++
++TEST_CASE("AD5X setup: the Z offset patch plan", "[ad5x_setup]") {
++    CHECK(plan_text(nullptr).empty());
++    CHECK(plan_text(json::parse(R"({"slot": 2, "material": "PETG", "nozzle": 240.0,
++                                    "bed": 70.0, "guess": false, "source": "slot"})")) ==
++          "Slot 2, PETG, 240/70 °C");
++
++    const std::string guess = plan_text(json::parse(
++        R"({"slot": 1, "material": "PLA", "nozzle": 220.0, "bed": 60.0,
++            "guess": true, "source": "guess"})"));
++    CHECK(guess.rfind("Slot 1, PLA, 220/60 °C\nMaterial unknown: using PLA temperatures", 0) == 0);
++
++    // A type the patch table doesn't have: named, PLA's temperatures
++    const std::string other = plan_text(json::parse(
++        R"({"slot": 3, "material": "PLA+", "nozzle": 220.0, "bed": 60.0,
++            "guess": true, "source": "guess"})"));
++    CHECK(other.find("No temperatures for PLA+: using PLA temperatures") != std::string::npos);
++
++    CHECK(plan_text(json::parse(R"({"slot": 0, "material": "ABS", "nozzle": 250,
++                                    "bed": 90, "guess": false, "source": "param"})")) ==
++          "ABS, 250/90 °C");
++}
++
++TEST_CASE("AD5X setup: prompts", "[ad5x_setup]") {
++    json st = {{"step", "zoffset"}, {"state", "waiting_user"}, {"prompt", "clear_bed"}};
++    CHECK(prompt_for("zoffset", st) == Prompt::ClearBed);
++    CHECK(prompt_waits(Prompt::ClearBed));
++    // Another step's prompt is not this card's
++    CHECK(prompt_for("soak", st) == Prompt::None);
++
++    st["state"] = "aborted";
++    CHECK(prompt_for("zoffset", st) == Prompt::ClearBedReminder);
++    CHECK_FALSE(prompt_waits(Prompt::ClearBedReminder));
++    st["state"] = "done";
++    CHECK(prompt_for("zoffset", st) == Prompt::None);
++
++    st = {{"step", "filament"}, {"state", "failed"}, {"prompt", "head_unknown"}};
++    CHECK(prompt_for("filament", st) == Prompt::HeadUnknown);
++    st["prompt"] = nullptr;
++    CHECK(prompt_for("filament", st) == Prompt::None);
++
++    st = {{"step", "zoffset"}, {"state", "failed"}, {"prompt", "pick_slot"}};
++    CHECK(prompt_for("zoffset", st) == Prompt::PickSlot);
++    CHECK_FALSE(prompt_waits(Prompt::PickSlot));
++    CHECK(prompt_for("filament", st) == Prompt::None);
++    st["state"] = "done";
++    CHECK(prompt_for("zoffset", st) == Prompt::None);
++
++    // A key the screen doesn't know yet: its message with Done or Retry
++    st = {{"step", "filament"}, {"state", "waiting_user"}, {"prompt", "strand_in_tube"}};
++    CHECK(prompt_for("filament", st) == Prompt::OtherWaiting);
++    CHECK(prompt_waits(Prompt::OtherWaiting));
++    st["state"] = "failed";
++    CHECK(prompt_for("filament", st) == Prompt::OtherFailed);
++}
++
++TEST_CASE("AD5X setup: naming the slot in the toolhead", "[ad5x_setup]") {
++    CHECK(pick_slot_label(2, "petg") == "Slot 2 · PETG");
++    CHECK(pick_slot_label(3, "") == "Slot 3");
++
++    FilamentStatus f;
++    f.present = {false, true, false, true};
++    CHECK(pick_slots(f) == std::array<bool, kFilamentSlots>{false, true, false, true});
++    // No slot known to have filament: all four are offered
++    CHECK(pick_slots(FilamentStatus{}) == std::array<bool, kFilamentSlots>{true, true, true, true});
++
++    const IfsFindStatus ifs = parse_ifs_find(json::parse(
++        R"({"tube_blocked": true, "find_result": "tube", "head_found": 0,
++            "colors": ["#FF0000", null, "#00FF00", "#0000FF"]})"));
++    CHECK(ifs.tube_blocked);
++    CHECK(ifs.find_result == "tube");
++    CHECK(ifs.head_found == 0);
++    CHECK(ifs.colors[0] == "#FF0000");
++    CHECK(ifs.colors[1].empty());
++    CHECK(parse_ifs_find(json::parse(R"({"find_result": "found", "head_found": 3})")).head_found ==
++          3);
++    CHECK_FALSE(parse_ifs_find(nullptr).tube_blocked);
++}
++
++TEST_CASE("AD5X setup: the filament step sits between vibration and IFS", "[ad5x_setup]") {
++    const auto& specs = step_specs();
++    auto at = [&](const char* key) {
++        for (size_t i = 0; i < specs.size(); ++i) {
++            if (std::string(specs[i].key) == key) {
++                return static_cast<int>(i);
++            }
++        }
++        return -1;
++    };
++    REQUIRE(at("filament") >= 0);
++    CHECK(at("filament") == at("shaper") + 1);
++    CHECK(at("ifs") == at("filament") + 1);
++    const StepSpec* spec = spec_for(helix::wizard::StepId::Ad5xFilament);
++    REQUIRE(spec != nullptr);
++    CHECK(std::string(spec->component) == "wizard_ad5x_filament");
++}
++
++TEST_CASE_METHOD(LVGLUITestFixture, "AD5X setup: the filament step's card loads from XML",
++                 "[ad5x_setup][ui]") {
++    ui_wizard_init_subjects();
++    ui_wizard_container_register_responsive_constants();
++    WizardAd5xSetupStep* step = get_wizard_ad5x_setup_step(helix::wizard::StepId::Ad5xFilament);
++    REQUIRE(step->id() == helix::wizard::StepId::Ad5xFilament);
++    step->init_subjects();
++    step->register_callbacks();
++    lv_obj_t* root = step->create(test_screen());
++    REQUIRE(root != nullptr);
++    lv_timer_handler();
++
++    // Not started, no status yet: the slot panel shows, the prompt panels don't
++    lv_obj_t* panel = lv_obj_find_by_name(root, "ad5x_filament_panel");
++    REQUIRE(panel != nullptr);
++    CHECK_FALSE(lv_obj_has_flag(panel, LV_OBJ_FLAG_HIDDEN));
++    lv_obj_t* clear_bed = lv_obj_find_by_name(root, "ad5x_clear_bed_panel");
++    REQUIRE(clear_bed != nullptr);
++    CHECK(lv_obj_has_flag(clear_bed, LV_OBJ_FLAG_HIDDEN));
++    lv_obj_t* zpanel = lv_obj_find_by_name(root, "ad5x_zoffset_panel");
++    REQUIRE(zpanel != nullptr);
++    CHECK(lv_obj_has_flag(zpanel, LV_OBJ_FLAG_HIDDEN));
++
++    lv_obj_t* head = lv_obj_find_by_name(root, "ad5x_fil_head");
++    REQUIRE(head != nullptr);
++    CHECK(std::string(lv_dropdown_get_options(head)) == head_choice_options());
++    CHECK(lv_dropdown_get_selected(head) == 0);
++    for (int n = 1; n <= kFilamentSlots; ++n) {
++        CAPTURE(n);
++        lv_obj_t* dd = lv_obj_find_by_name(root, ("ad5x_fil_mat_" + std::to_string(n)).c_str());
++        REQUIRE(dd != nullptr);
++        CHECK(std::string(lv_dropdown_get_options(dd)) == material_options(material_choices("")));
++        // No slot is known to have filament yet: the dropdown hides, "Empty" shows
++        CHECK(lv_obj_has_flag(dd, LV_OBJ_FLAG_HIDDEN));
++        lv_obj_t* label =
++            lv_obj_find_by_name(root, ("ad5x_fil_slot_" + std::to_string(n)).c_str());
++        REQUIRE(label != nullptr);
++        CHECK(std::string(lv_label_get_text(label)) == "Slot " + std::to_string(n));
++    }
++
++    // The Z offset adjust panel hides while a prompt waits
++    lv_subject_t* view = lv_xml_get_subject(nullptr, "ad5x_setup_view");
++    lv_subject_t* is_z = lv_xml_get_subject(nullptr, "ad5x_setup_is_zoffset");
++    lv_subject_t* wait = lv_xml_get_subject(nullptr, "ad5x_setup_prompt_wait");
++    lv_subject_t* prompt = lv_xml_get_subject(nullptr, "ad5x_setup_prompt");
++    REQUIRE(view != nullptr);
++    REQUIRE(is_z != nullptr);
++    REQUIRE(wait != nullptr);
++    REQUIRE(prompt != nullptr);
++    lv_subject_set_int(is_z, 1);
++    lv_subject_set_int(view, static_cast<int>(View::WaitingUser));
++    CHECK_FALSE(lv_obj_has_flag(zpanel, LV_OBJ_FLAG_HIDDEN));
++    lv_subject_set_int(prompt, static_cast<int>(Prompt::ClearBed));
++    lv_subject_set_int(wait, 1);
++    CHECK(lv_obj_has_flag(zpanel, LV_OBJ_FLAG_HIDDEN));
++    CHECK_FALSE(lv_obj_has_flag(clear_bed, LV_OBJ_FLAG_HIDDEN));
++
++    // pick_slot: the slot buttons, each named; "pulled it out by hand"
++    lv_obj_t* pick = lv_obj_find_by_name(root, "ad5x_pick_panel");
++    REQUIRE(pick != nullptr);
++    CHECK(lv_obj_has_flag(pick, LV_OBJ_FLAG_HIDDEN));
++    lv_subject_set_int(wait, 0);
++    lv_subject_set_int(view, static_cast<int>(View::Failed));
++    lv_subject_set_int(prompt, static_cast<int>(Prompt::PickSlot));
++    CHECK_FALSE(lv_obj_has_flag(pick, LV_OBJ_FLAG_HIDDEN));
++    CHECK(lv_obj_has_flag(clear_bed, LV_OBJ_FLAG_HIDDEN));
++    REQUIRE(lv_obj_find_by_name(root, "btn_ad5x_pick_none") != nullptr);
++    for (int n = 1; n <= kFilamentSlots; ++n) {
++        CAPTURE(n);
++        lv_obj_t* btn = lv_obj_find_by_name(root, ("btn_ad5x_pick_" + std::to_string(n)).c_str());
++        REQUIRE(btn != nullptr);
++        lv_obj_t* label = ui_button_get_label(btn);
++        REQUIRE(label != nullptr);
++        CHECK(std::string(lv_label_get_text(label)) == "Slot " + std::to_string(n));
++    }
++
++    step->cleanup();
++    lv_obj_delete(root);
++}
+diff --git a/tests/unit/test_wizard_step_logic.cpp b/tests/unit/test_wizard_step_logic.cpp
+index 08afacc..f52496e 100644
+--- a/tests/unit/test_wizard_step_logic.cpp
++++ b/tests/unit/test_wizard_step_logic.cpp
+@@ -34,7 +34,8 @@ static void skip_ad5x(std::vector<helix::StepSkip>& v) {
+     // The AD5X tuning steps are for the AD5X preset only
+     for (StepId s : {StepId::Ad5xTimezone, StepId::Ad5xNozzle, StepId::Ad5xSelfcheck,
+                      StepId::Ad5xPid, StepId::Ad5xMesh, StepId::Ad5xShaper,
+-                     StepId::Ad5xIfs, StepId::Ad5xTrash, StepId::Ad5xZoffset,
++                     StepId::Ad5xFilament, StepId::Ad5xIfs, StepId::Ad5xTrash,
++                     StepId::Ad5xZoffset,
+                      StepId::Ad5xSoak, StepId::Ad5xSummary, StepId::Ad5xFinish})
+         skip_step(v, s);
+ }
+@@ -277,7 +278,7 @@ TEST_CASE("id-nav: non-contiguous skips are honored", "[wizard][step_logic][idna
+     REQUIRE(helix::wizard_next(StepId::PrinterIdentify, v) == StepId::FanSelect);
+     REQUIRE(helix::wizard_next(StepId::FanSelect, v) == StepId::LedSelect);
+     REQUIRE(helix::wizard_next(StepId::FilamentSensor, v) == StepId::Preferences);
+-    REQUIRE(helix::wizard_visible_count(v) == helix::wizard::STEP_COUNT - 15); // 3 + 12 AD5X
++    REQUIRE(helix::wizard_visible_count(v) == helix::wizard::STEP_COUNT - 16); // 3 + 13 AD5X
+ }
+ 
+ TEST_CASE("id-nav: last visible step reports done", "[wizard][step_logic][idnav]") {
+diff --git a/ui_xml/wizard_ad5x_filament.xml b/ui_xml/wizard_ad5x_filament.xml
+new file mode 100644
+index 0000000..fc618ae
+--- /dev/null
++++ b/ui_xml/wizard_ad5x_filament.xml
+@@ -0,0 +1,16 @@
++<?xml version="1.0"?>
++<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
++<component>
++  <!-- First-Run Wizard: AD5X step "filament" (ad5x_setup step "filament"): the
++       material in each IFS slot and the slot in the toolhead.
++       Title here; body and behaviour in wizard_ad5x_setup.xml / ui_wizard_ad5x_setup.cpp. -->
++  <consts>
++    <str name="step_title" value="Printer Setup: Filament" value_tag="Printer Setup: Filament"/>
++    <str name="step_subtitle" value="The material in each slot and the slot in the toolhead" value_tag="The material in each slot and the slot in the toolhead"/>
++  </consts>
++  <view name="wizard_ad5x_filament_root"
++        extends="lv_obj" width="100%" height="content" style_bg_opa="0" style_border_width="0" style_pad_all="0"
++        scrollable="false">
++    <wizard_ad5x_setup/>
++  </view>
++</component>
+diff --git a/ui_xml/wizard_ad5x_setup.xml b/ui_xml/wizard_ad5x_setup.xml
+index 888bbfc..e25b80f 100644
+--- a/ui_xml/wizard_ad5x_setup.xml
++++ b/ui_xml/wizard_ad5x_setup.xml
+@@ -2,11 +2,16 @@
+ <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+ <component>
+   <!-- First-Run Wizard: body shared by the AD5X tuning steps (self-check, PID,
+-       bed mesh, vibration, IFS, Z offset, save). Each step's own component
++       bed mesh, vibration, filament, IFS, Z offset, save). Each step's own component
+        (wizard_ad5x_<step>.xml) carries its title and embeds this. All data comes
+        from the ad5x_setup_* subjects (ui_wizard_ad5x_setup.cpp), driven by the
+        printer's ad5x_setup status object.
+-       ad5x_setup_view: 0 idle, 1 running, 2 waiting for the user, 3 done, 4 failed -->
++       ad5x_setup_view: 0 idle, 1 running, 2 waiting for the user, 3 done, 4 failed
++       ad5x_setup_prompt: 0 none, 1 clear_bed (waiting: Done), 2 head_unknown (failed),
++       3 clear_bed after a failed or aborted Z offset (a reminder), 4 another prompt while
++       waiting (its message, Done), 5 another prompt after a failure (its message, Retry);
++       6 pick_slot (failed: name the slot in the toolhead);
++       ad5x_setup_prompt_wait: 1 for 1 and 4 (the step's own controls hide) -->
+   <view name="wizard_ad5x_setup_root"
+         extends="lv_obj" width="100%" height="content" style_bg_opa="0" style_border_width="0"
+         style_pad_all="0" flex_flow="column" style_flex_main_place="start" style_flex_cross_place="center"
+@@ -18,19 +23,220 @@
+ 
+       <text_body width="100%" bind_text="ad5x_setup_explanation" long_mode="wrap" style_text_align="center"/>
+ 
+-      <!-- Status line and progress -->
++      <!-- Filament: the IFS slots (material per slot with filament) and the slot in the
++           toolhead; the slot labels and dropdown options come from the code -->
++      <lv_obj name="ad5x_filament_panel"
++              width="100%" height="content" style_pad_all="0" style_pad_gap="#space_sm" style_bg_opa="0"
++              style_border_width="0" flex_flow="column" scrollable="false">
++        <bind_flag_if cond="ad5x_setup_is_filament eq 0 or ad5x_setup_view eq 1 or ad5x_setup_view eq 2" flag="hidden"/>
++        <lv_obj width="100%"
++                height="content" style_pad_all="0" style_pad_gap="#space_sm" style_bg_opa="0" style_border_width="0"
++                flex_flow="row_wrap" scrollable="false">
++          <lv_obj width="48%"
++                  height="content" style_pad_all="0" style_pad_gap="#space_sm" style_bg_opa="0" style_border_width="0"
++                  flex_flow="row" style_flex_cross_place="center" scrollable="false">
++            <text_body name="ad5x_fil_slot_1" width="content" translation_tag=""/>
++            <lv_dropdown name="ad5x_fil_mat_1" flex_grow="1" height="#button_height" options="" style_radius="#border_radius">
++              <bind_flag_if_eq subject="ad5x_setup_slot1" flag="hidden" ref_value="0"/>
++              <event_cb trigger="value_changed" callback="on_ad5x_filament_changed"/>
++            </lv_dropdown>
++            <text_body flex_grow="1" text="Empty" style_text_color="#text_muted">
++              <bind_flag_if_not_eq subject="ad5x_setup_slot1" flag="hidden" ref_value="0"/>
++            </text_body>
++          </lv_obj>
++          <lv_obj width="48%"
++                  height="content" style_pad_all="0" style_pad_gap="#space_sm" style_bg_opa="0" style_border_width="0"
++                  flex_flow="row" style_flex_cross_place="center" scrollable="false">
++            <text_body name="ad5x_fil_slot_2" width="content" translation_tag=""/>
++            <lv_dropdown name="ad5x_fil_mat_2" flex_grow="1" height="#button_height" options="" style_radius="#border_radius">
++              <bind_flag_if_eq subject="ad5x_setup_slot2" flag="hidden" ref_value="0"/>
++              <event_cb trigger="value_changed" callback="on_ad5x_filament_changed"/>
++            </lv_dropdown>
++            <text_body flex_grow="1" text="Empty" style_text_color="#text_muted">
++              <bind_flag_if_not_eq subject="ad5x_setup_slot2" flag="hidden" ref_value="0"/>
++            </text_body>
++          </lv_obj>
++          <lv_obj width="48%"
++                  height="content" style_pad_all="0" style_pad_gap="#space_sm" style_bg_opa="0" style_border_width="0"
++                  flex_flow="row" style_flex_cross_place="center" scrollable="false">
++            <text_body name="ad5x_fil_slot_3" width="content" translation_tag=""/>
++            <lv_dropdown name="ad5x_fil_mat_3" flex_grow="1" height="#button_height" options="" style_radius="#border_radius">
++              <bind_flag_if_eq subject="ad5x_setup_slot3" flag="hidden" ref_value="0"/>
++              <event_cb trigger="value_changed" callback="on_ad5x_filament_changed"/>
++            </lv_dropdown>
++            <text_body flex_grow="1" text="Empty" style_text_color="#text_muted">
++              <bind_flag_if_not_eq subject="ad5x_setup_slot3" flag="hidden" ref_value="0"/>
++            </text_body>
++          </lv_obj>
++          <lv_obj width="48%"
++                  height="content" style_pad_all="0" style_pad_gap="#space_sm" style_bg_opa="0" style_border_width="0"
++                  flex_flow="row" style_flex_cross_place="center" scrollable="false">
++            <text_body name="ad5x_fil_slot_4" width="content" translation_tag=""/>
++            <lv_dropdown name="ad5x_fil_mat_4" flex_grow="1" height="#button_height" options="" style_radius="#border_radius">
++              <bind_flag_if_eq subject="ad5x_setup_slot4" flag="hidden" ref_value="0"/>
++              <event_cb trigger="value_changed" callback="on_ad5x_filament_changed"/>
++            </lv_dropdown>
++            <text_body flex_grow="1" text="Empty" style_text_color="#text_muted">
++              <bind_flag_if_not_eq subject="ad5x_setup_slot4" flag="hidden" ref_value="0"/>
++            </text_body>
++          </lv_obj>
++        </lv_obj>
++        <lv_obj width="100%"
++                height="content" style_pad_all="0" style_pad_gap="#space_sm" style_bg_opa="0" style_border_width="0"
++                flex_flow="row" style_flex_cross_place="center" scrollable="false">
++          <text_body text="Filament in the toolhead"/>
++          <lv_dropdown name="ad5x_fil_head" flex_grow="1" height="#button_height" options="" style_radius="#border_radius">
++            <event_cb trigger="value_changed" callback="on_ad5x_filament_changed"/>
++          </lv_dropdown>
++        </lv_obj>
++      </lv_obj>
++
++      <!-- Filament, IFS and Z offset: the toolhead as the IFS module sees it now -->
++      <text_small width="100%" bind_text="ad5x_setup_head" long_mode="wrap" style_text_align="center"
++                  style_text_color="#text_muted">
++        <bind_flag_if_eq subject="ad5x_setup_show_head" flag="hidden" ref_value="0"/>
++      </text_small>
++
++      <!-- Live: what the step does now, the status line, progress, temperatures and time -->
++      <text_heading width="100%" bind_text="ad5x_setup_action" long_mode="wrap" style_text_align="center">
++        <bind_flag_if cond="(ad5x_setup_view ne 1 and ad5x_setup_view ne 2) or ad5x_setup_prompt_wait eq 1" flag="hidden"/>
++      </text_heading>
++      <!-- Z offset: the patch's slot, material and temperatures (and a guess said plainly) -->
++      <text_body width="100%" bind_text="ad5x_setup_plan" long_mode="wrap" style_text_align="center"
++                 style_text_color="#warning">
++        <bind_flag_if cond="ad5x_setup_is_zoffset eq 0 or (ad5x_setup_view ne 1 and ad5x_setup_view ne 2) or ad5x_setup_prompt_wait eq 1" flag="hidden"/>
++      </text_body>
+       <text_body width="100%" bind_text="ad5x_setup_message" long_mode="wrap" style_text_align="center">
+-        <bind_flag_if_eq subject="ad5x_setup_view" flag="hidden" ref_value="0"/>
++        <bind_flag_if cond="ad5x_setup_view eq 0 or ad5x_setup_prompt eq 1" flag="hidden"/>
+       </text_body>
+       <progress_bar name="ad5x_setup_progress_bar" width="80%" bind_value="ad5x_setup_progress">
+-        <bind_flag_if cond="ad5x_setup_view ne 1 and ad5x_setup_view ne 2" flag="hidden"/>
++        <bind_flag_if cond="(ad5x_setup_view ne 1 and ad5x_setup_view ne 2) or ad5x_setup_prompt_wait eq 1" flag="hidden"/>
+       </progress_bar>
++      <text_small width="100%" bind_text="ad5x_setup_live" long_mode="wrap" style_text_align="center"
++                  style_text_color="#text_muted">
++        <bind_flag_if cond="(ad5x_setup_view ne 1 and ad5x_setup_view ne 2) or ad5x_setup_prompt_wait eq 1" flag="hidden"/>
++      </text_small>
++
++      <!-- Z offset saved: the test print comes off the bed before the next step, Done goes on -->
++      <lv_obj name="ad5x_clear_bed_panel"
++              width="100%" height="content" style_pad_all="0" style_pad_gap="#space_sm" style_bg_opa="0"
++              style_border_width="0" flex_flow="column" style_flex_cross_place="center" scrollable="false">
++        <bind_flag_if_not_eq subject="ad5x_setup_prompt" flag="hidden" ref_value="1"/>
++        <lv_obj width="content"
++                height="content" style_pad_all="0" style_pad_gap="#space_sm" style_bg_opa="0" style_border_width="0"
++                flex_flow="row" style_flex_cross_place="center" scrollable="false">
++          <icon src="alert" size="sm" variant="warning"/>
++          <text_heading text="Remove the test print from the bed"/>
++        </lv_obj>
++        <text_body width="100%"
++                   text="The Z offset is saved. Take the test print off the bed so the next steps don't probe or print on it, then tap Done."
++                   long_mode="wrap" style_text_align="center"/>
++        <ui_button name="btn_ad5x_clear_bed_done" width="#wizard_button_width" height="#button_height" text="Done"
++                   variant="success">
++          <event_cb trigger="clicked" callback="on_ad5x_setup_accept"/>
++        </ui_button>
++      </lv_obj>
++
++      <!-- A prompt this screen doesn't know, waiting for the user: the message above, Done -->
++      <ui_button name="btn_ad5x_prompt_done" width="#wizard_button_width" height="#button_height" text="Done"
++                 variant="success">
++        <bind_flag_if_not_eq subject="ad5x_setup_prompt" flag="hidden" ref_value="4"/>
++        <event_cb trigger="clicked" callback="on_ad5x_setup_accept"/>
++      </ui_button>
++
++      <!-- pick_slot: Kiln can't tell which slot is in the toolhead (or a strand sits in the
++           tube): the user names it, or pulled it out by hand. The code sets the labels ("Slot {}"
++           is a placeholder, untagged, so each button has a label) and the colours -->
++      <lv_obj name="ad5x_pick_panel"
++              width="100%" height="content" style_pad_all="0" style_pad_gap="#space_sm" style_bg_opa="0"
++              style_border_width="0" flex_flow="column" style_flex_cross_place="center" scrollable="false">
++        <bind_flag_if_not_eq subject="ad5x_setup_prompt" flag="hidden" ref_value="6"/>
++        <text_heading text="Which slot is in the toolhead?"/>
++        <text_body width="100%"
++                   text="Kiln can't tell which slot's filament is in the toolhead. Look at the tubes: tap the slot whose filament goes into the toolhead. Nothing is fed until you choose."
++                   long_mode="wrap" style_text_align="center"/>
++        <lv_obj width="100%"
++                height="content" style_pad_all="0" style_pad_gap="#space_sm" style_bg_opa="0" style_border_width="0"
++                flex_flow="row_wrap" style_flex_main_place="center" scrollable="false">
++          <lv_obj width="48%"
++                  height="content" style_pad_all="0" style_pad_gap="#space_sm" style_bg_opa="0" style_border_width="0"
++                  flex_flow="row" style_flex_cross_place="center" scrollable="false">
++            <bind_flag_if_eq subject="ad5x_setup_pick1" flag="hidden" ref_value="0"/>
++            <lv_obj name="ad5x_pick_swatch_1" width="24" height="24" style_radius="12" style_border_width="1"
++                    style_border_color="#text_muted" style_bg_opa="100%" scrollable="false" clickable="false"/>
++            <ui_button name="btn_ad5x_pick_1" flex_grow="1" height="#button_height" text="Slot {}" translation_tag=""
++                       variant="secondary">
++              <event_cb trigger="clicked" callback="on_ad5x_pick_slot" user_data="1"/>
++            </ui_button>
++          </lv_obj>
++          <lv_obj width="48%"
++                  height="content" style_pad_all="0" style_pad_gap="#space_sm" style_bg_opa="0" style_border_width="0"
++                  flex_flow="row" style_flex_cross_place="center" scrollable="false">
++            <bind_flag_if_eq subject="ad5x_setup_pick2" flag="hidden" ref_value="0"/>
++            <lv_obj name="ad5x_pick_swatch_2" width="24" height="24" style_radius="12" style_border_width="1"
++                    style_border_color="#text_muted" style_bg_opa="100%" scrollable="false" clickable="false"/>
++            <ui_button name="btn_ad5x_pick_2" flex_grow="1" height="#button_height" text="Slot {}" translation_tag=""
++                       variant="secondary">
++              <event_cb trigger="clicked" callback="on_ad5x_pick_slot" user_data="2"/>
++            </ui_button>
++          </lv_obj>
++          <lv_obj width="48%"
++                  height="content" style_pad_all="0" style_pad_gap="#space_sm" style_bg_opa="0" style_border_width="0"
++                  flex_flow="row" style_flex_cross_place="center" scrollable="false">
++            <bind_flag_if_eq subject="ad5x_setup_pick3" flag="hidden" ref_value="0"/>
++            <lv_obj name="ad5x_pick_swatch_3" width="24" height="24" style_radius="12" style_border_width="1"
++                    style_border_color="#text_muted" style_bg_opa="100%" scrollable="false" clickable="false"/>
++            <ui_button name="btn_ad5x_pick_3" flex_grow="1" height="#button_height" text="Slot {}" translation_tag=""
++                       variant="secondary">
++              <event_cb trigger="clicked" callback="on_ad5x_pick_slot" user_data="3"/>
++            </ui_button>
++          </lv_obj>
++          <lv_obj width="48%"
++                  height="content" style_pad_all="0" style_pad_gap="#space_sm" style_bg_opa="0" style_border_width="0"
++                  flex_flow="row" style_flex_cross_place="center" scrollable="false">
++            <bind_flag_if_eq subject="ad5x_setup_pick4" flag="hidden" ref_value="0"/>
++            <lv_obj name="ad5x_pick_swatch_4" width="24" height="24" style_radius="12" style_border_width="1"
++                    style_border_color="#text_muted" style_bg_opa="100%" scrollable="false" clickable="false"/>
++            <ui_button name="btn_ad5x_pick_4" flex_grow="1" height="#button_height" text="Slot {}" translation_tag=""
++                       variant="secondary">
++              <event_cb trigger="clicked" callback="on_ad5x_pick_slot" user_data="4"/>
++            </ui_button>
++          </lv_obj>
++        </lv_obj>
++        <ui_button name="btn_ad5x_pick_none" height="#button_height" text="I pulled it out by hand"
++                   variant="ghost">
++          <event_cb trigger="clicked" callback="on_ad5x_pick_slot" user_data="0"/>
++        </ui_button>
++      </lv_obj>
++
++      <!-- After a failure: what to do by hand before Retry -->
++      <lv_obj width="100%"
++              height="content" style_pad_all="0" style_pad_gap="#space_sm" style_bg_opa="0" style_border_width="0"
++              flex_flow="row" style_flex_cross_place="center" scrollable="false">
++        <bind_flag_if_not_eq subject="ad5x_setup_prompt" flag="hidden" ref_value="2"/>
++        <icon src="alert" size="xs" variant="warning"/>
++        <text_body width="0" flex_grow="1"
++                   text="No slot cleared the toolhead. Cut the filament at the toolhead if it isn't cut, pull it out at the top by hand, then tap Retry."
++                   long_mode="wrap" style_text_color="#warning"/>
++      </lv_obj>
++      <lv_obj width="100%"
++              height="content" style_pad_all="0" style_pad_gap="#space_sm" style_bg_opa="0" style_border_width="0"
++              flex_flow="row" style_flex_cross_place="center" scrollable="false">
++        <bind_flag_if_not_eq subject="ad5x_setup_prompt" flag="hidden" ref_value="3"/>
++        <icon src="alert" size="xs" variant="warning"/>
++        <text_body width="0" flex_grow="1" text="Remove the test print from the bed before you retry."
++                   long_mode="wrap" style_text_color="#warning"/>
++        <ui_button name="btn_ad5x_clear_bed_reminder_done" height="#button_height" text="Done"
++                   variant="secondary">
++          <event_cb trigger="clicked" callback="on_ad5x_setup_accept"/>
++        </ui_button>
++      </lv_obj>
+ 
+       <!-- Z offset: live baby-stepping while the test patch prints -->
+       <lv_obj name="ad5x_zoffset_panel"
+               width="100%" height="content" style_pad_all="0" style_pad_gap="#space_sm" style_bg_opa="0"
+               style_border_width="0" flex_flow="column" style_flex_cross_place="center" scrollable="false">
+-        <bind_flag_if cond="ad5x_setup_is_zoffset eq 0 or ad5x_setup_view ne 2" flag="hidden"/>
++        <bind_flag_if cond="ad5x_setup_is_zoffset eq 0 or ad5x_setup_view ne 2 or ad5x_setup_prompt_wait eq 1" flag="hidden"/>
+         <text_heading width="100%" bind_text="ad5x_setup_zoffset" style_text_align="center"/>
+         <lv_obj width="100%"
+                 height="content" style_pad_all="0" style_pad_gap="#space_sm" style_bg_opa="0" style_border_width="0"
+@@ -106,17 +312,17 @@
+         <ui_button name="btn_ad5x_another" width="#wizard_button_width" height="#button_height"
+                    text="New Patch" variant="secondary">
+           <event_cb trigger="clicked" callback="on_ad5x_setup_start"/>
+-          <bind_flag_if cond="ad5x_setup_is_zoffset eq 0 or ad5x_setup_view ne 2" flag="hidden"/>
++          <bind_flag_if cond="ad5x_setup_is_zoffset eq 0 or ad5x_setup_view ne 2 or ad5x_setup_prompt_wait eq 1" flag="hidden"/>
+         </ui_button>
+         <ui_button name="btn_ad5x_accept" width="#wizard_button_width" height="#button_height" text="Accept"
+                    variant="success">
+           <event_cb trigger="clicked" callback="on_ad5x_setup_accept"/>
+-          <bind_flag_if cond="ad5x_setup_can_accept eq 0 or ad5x_setup_view ne 2" flag="hidden"/>
++          <bind_flag_if cond="ad5x_setup_can_accept eq 0 or ad5x_setup_view ne 2 or ad5x_setup_prompt_wait eq 1" flag="hidden"/>
+         </ui_button>
+         <ui_button name="btn_ad5x_abort" width="#wizard_button_width" height="#button_height" text="Abort"
+                    variant="danger">
+           <event_cb trigger="clicked" callback="on_ad5x_setup_abort"/>
+-          <bind_flag_if cond="ad5x_setup_view ne 1 and ad5x_setup_view ne 2" flag="hidden"/>
++          <bind_flag_if cond="(ad5x_setup_view ne 1 and ad5x_setup_view ne 2) or ad5x_setup_prompt eq 1" flag="hidden"/>
+         </ui_button>
+       </lv_obj>
+ 

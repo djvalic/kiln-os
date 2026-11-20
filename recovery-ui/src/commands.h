@@ -42,6 +42,7 @@ typedef enum {
 	PATH_TOUCH_NAME,	/* evdev device name of the touch screen */
 	PATH_FBDEV,		/* framebuffer */
 	PATH_SETTINGS,		/* main OS settings.json: its "language" key */
+	PATH_AUTO_INSTALL,	/* ad5x-recovery-auto's install state (key=value) */
 
 	RUI_N_ENTRIES
 } rui_entry;

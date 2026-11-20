@@ -26,24 +26,40 @@
 # ($AD5X_RUN/return-stock.open: request, usb or resume) and nothing else
 # runs (no update, no rescue). It never writes without a tap there.
 # On a failure the recovery OS stays up. Writes /run/ad5x/auto.done.
+# While it installs, the touch screen shows "Installing Kiln OS", step n of
+# 3, "Don't switch off" (rc_install_state in lib/recovery.sh:
+# $AD5X_RUN/auto-install; kept for a restart or a failure, else removed).
 . /usr/lib/ad5x-recovery/recovery.sh
 UPD=$AD5X_DATA/ad5x/update
 LOG=$UPD/last.log
 mkdir -p "$UPD" "$AD5X_RUN"
-rm -f "$AD5X_RUN/auto.done"
-trap 'date > "$AD5X_RUN/auto.done"' EXIT
+rm -f "$AD5X_RUN/auto.done" "$AD5X_RUN/auto-install"
+AD5X_AUTO_INSTALL=$AD5X_RUN/auto-install AD5X_AUTO_PID=$$
+export AD5X_AUTO_INSTALL AD5X_AUTO_PID
+trap 'date > "$AD5X_RUN/auto.done"
+	case "$(sed -n "s/^state=//p" "$AD5X_AUTO_INSTALL" 2>/dev/null)" in
+	check|write) rm -f "$AD5X_AUTO_INSTALL" ;; esac' EXIT
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" | tee -a "$LOG"; }
 
 apply() {	# FILE [USB-LOG]
 	log "applying $1"
 	ad5x-bootlog "auto: apply ${1##*/}"
+	rc_install_state check "${1##*/}"
 	out=$(ad5x-swu-apply "$1" 2>&1); rc=$?
 	echo "$out" | tail -n 30 >> "$LOG"
 	[ -n "$2" ] && { echo "$(date) ${1##*/}"; echo "$out" | tail -n 30; } >> "$2" 2>/dev/null
-	if [ $rc -eq 0 ]; then log "OK ${1##*/}: boot flag $(rc_read_flag)"; else log "FAILED ${1##*/}"; fi
+	if [ $rc -eq 0 ]; then
+		log "OK ${1##*/}: boot flag $(rc_read_flag)"
+		ad5x-bootlog "auto: OK ${1##*/}"
+	else
+		log "FAILED ${1##*/}"
+		ad5x-bootlog "auto: FAILED ${1##*/}"
+		rc_install_state failed
+	fi
 	return $rc
 }
 done_reboot() {
+	rc_install_state restart
 	log "rebooting into the main OS"
 	ad5x-usb umount >/dev/null 2>&1
 	sync; sleep 2; reboot

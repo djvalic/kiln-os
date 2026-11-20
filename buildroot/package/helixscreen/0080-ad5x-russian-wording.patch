@@ -1,0 +1,101 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 18:00:00 -0500
+Subject: [PATCH] ad5x: Russian wording on the touch screen
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Russian wording made consistent with the rest of Kiln OS:
+
+- Stock firmware is "стоковая прошивка" everywhere (as in 0077), so the
+  Return to Flashforge firmware row's description no longer says
+  "родная прошивка".
+- The Return to Flashforge firmware dialog names the recovery screen's
+  button as it is labelled: "Return to Flashforge" (ru "Вернуть
+  Flashforge"), not "Return to Flashforge firmware". The English text is
+  the key, so it changes in the source, en.yml and ru.yml. Only en and
+  ru had the old key (0072); other languages show English as before.
+- Extended memory (0074): a printer restart is "перезагрузка" as in
+  0071 and 0075 ("Перезагрузить сейчас?", "после перезагрузки"), and
+  the notice's Russian now says it is off by default, as the English
+  does.
+
+No test reads these strings.
+
+Upstream: not applicable (AD5X OS specific)
+---
+ src/ui/ui_settings_kiln_recovery.cpp |  3 +--
+ translations/en.yml                  |  2 +-
+ translations/ru.yml                  | 10 +++++-----
+ 3 files changed, 7 insertions(+), 8 deletions(-)
+
+diff --git a/src/ui/ui_settings_kiln_recovery.cpp b/src/ui/ui_settings_kiln_recovery.cpp
+index d893f002..43d52fe3 100644
+--- a/src/ui/ui_settings_kiln_recovery.cpp
++++ b/src/ui/ui_settings_kiln_recovery.cpp
+@@ -150,8 +150,7 @@ void confirm_and_request() {
+ void confirm_and_request_return_stock() {
+     confirm_then(lv_tr("Return to Flashforge firmware?"),
+                  lv_tr("The printer restarts into the recovery OS. There, check what it found and "
+-                       "tap Return to Flashforge firmware to start. Nothing is changed before "
+-                       "that tap."),
++                       "tap Return to Flashforge to start. Nothing is changed before that tap."),
+                  &request_return_stock, lv_tr("Can't return to Flashforge firmware: {}"));
+ }
+ 
+diff --git a/translations/en.yml b/translations/en.yml
+index f98776b3..8d6e64cd 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -5295,7 +5295,7 @@ translations:
+   'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.': 'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.'
+   'The nozzle size can''t change during a print': 'The nozzle size can''t change during a print'
+   'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.'
+-  'The printer restarts into the recovery OS. There, check what it found and tap Return to Flashforge firmware to start. Nothing is changed before that tap.': 'The printer restarts into the recovery OS. There, check what it found and tap Return to Flashforge firmware to start. Nothing is changed before that tap.'
++  'The printer restarts into the recovery OS. There, check what it found and tap Return to Flashforge to start. Nothing is changed before that tap.': 'The printer restarts into the recovery OS. There, check what it found and tap Return to Flashforge to start. Nothing is changed before that tap.'
+   'The results of the tuning so far. Check them, then Save.': 'The results of the tuning so far. Check them, then Save.'
+   'The results so far, before Save': 'The results so far, before Save'
+   'The temperature to measure, from a cold bed': 'The temperature to measure, from a cold bed'
+diff --git a/translations/ru.yml b/translations/ru.yml
+index e6c22df6..cadf8914 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -5179,13 +5179,13 @@ translations:
+   'Can''t shut down the printer: {}': 'Не удалось выключить принтер: {}'
+   # Extended memory on Settings > System and its bell notice (patch 0074)
+   'Extended memory': 'Расширенная память'
+-  'Use all 512 MiB. Not needed; off by default. Takes effect after a restart.': 'Использовать все 512 МБ. Не обязательно; по умолчанию выключено. Вступает в силу после перезапуска.'
++  'Use all 512 MiB. Not needed; off by default. Takes effect after a restart.': 'Использовать все 512 МБ. Не обязательно; по умолчанию выключено. Вступает в силу после перезагрузки.'
+   'Extended memory changes at the next start.': 'Изменение расширенной памяти вступит в силу при следующем запуске.'
+   'Extended memory was turned off: the printer didn''t finish starting with it.': 'Расширенная память выключена: с ней принтер не смог завершить запуск.'
+   'Needs a boot loader update to take effect.': 'Вступит в силу после обновления загрузчика.'
+   'Extended memory available': 'Доступна расширенная память'
+-  'This printer has 512 MiB of memory. Kiln OS uses 256 MiB by default, the same on every AD5X. You can switch Extended memory on in Settings > System. It isn''t needed; it is off by default.': 'В принтере 512 МБ, а Kiln OS на всех AD5X по умолчанию использует 256 МБ. Расширенную память можно включить в Настройки > Система. Это не обязательно.'
+-  'Restart now?': 'Перезапустить сейчас?'
++  'This printer has 512 MiB of memory. Kiln OS uses 256 MiB by default, the same on every AD5X. You can switch Extended memory on in Settings > System. It isn''t needed; it is off by default.': 'В принтере 512 МБ, а Kiln OS на всех AD5X по умолчанию использует 256 МБ. Расширенную память можно включить в Настройки > Система. Это не обязательно; по умолчанию она выключена.'
++  'Restart now?': 'Перезагрузить сейчас?'
+   'Cancel sent. The printer stops its start sequence at the next safe point.': 'Отмена отправлена. Принтер остановит стартовую последовательность в ближайшей безопасной точке.'
+   # Reboot or Shutdown asked one at a time on Kiln OS (patch 0075)
+   'Restart the printer?': 'Перезагрузить принтер?'
+@@ -5412,7 +5412,7 @@ translations:
+   'Purge box': 'Лоток для отходов'
+   'Remove {}?': 'Удалить {}?'
+   'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': 'Перезапуск в систему восстановления (установка обновления с USB-флешки или через веб-страницу на порту 8080)'
+-  'Restart into the recovery OS to put Flashforge''s own firmware back': 'Перезапуск в систему восстановления, чтобы вернуть родную прошивку Flashforge'
++  'Restart into the recovery OS to put Flashforge''s own firmware back': 'Перезапуск в систему восстановления, чтобы вернуть стоковую прошивку Flashforge'
+   'Restarting into the recovery OS...': 'Перезапуск в систему восстановления...'
+   'Retracting filament': 'Втягивание филамента'
+   'Retracting {}': 'Втягивание: {}'
+@@ -5461,7 +5461,7 @@ translations:
+   'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.': 'Сопло, установленное на принтере. От него зависят ширина линий, длина продувки и тест первого слоя. Изменить его можно позже в настройках.'
+   'The nozzle size can''t change during a print': 'Размер сопла нельзя изменить во время печати'
+   'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'Принтер перезапустится в систему восстановления, где печать недоступна. Чтобы вернуться, нажмите на её экране «Запустить ОС».'
+-  'The printer restarts into the recovery OS. There, check what it found and tap Return to Flashforge firmware to start. Nothing is changed before that tap.': 'Принтер перезапустится в систему восстановления. Там проверьте, что она нашла, и нажмите «Вернуть прошивку Flashforge», чтобы начать. До этого нажатия ничего не меняется.'
++  'The printer restarts into the recovery OS. There, check what it found and tap Return to Flashforge to start. Nothing is changed before that tap.': 'Принтер перезапустится в систему восстановления. Там проверьте, что она нашла, и нажмите «Вернуть Flashforge», чтобы начать. До этого нажатия ничего не меняется.'
+   'The results of the tuning so far. Check them, then Save.': 'Результаты настройки на данный момент. Проверьте их, затем сохраните.'
+   'The results so far, before Save': 'Результаты на данный момент, до сохранения'
+   'The temperature to measure, from a cold bed': 'Температура для измерения, начиная с холодного стола'
+-- 
+2.56.0
+

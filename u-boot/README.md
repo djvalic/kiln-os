@@ -39,7 +39,9 @@ rescue from a record in the first MiB's last sector, three tries at most
 keys are asked for from one address (0047-0048; below, "U-Boot
 proper"). 0049 sets the MSC pads to 1.8 V on every start, in the SPL and
 in U-Boot proper (jolting's finding in #68), and 0050, from jolting's PR
-#81, moves U-Boot proper's eMMC data by ADMA2 instead of PIO. A normal start from the eMMC does what it did before but for a
+#81, moves U-Boot proper's eMMC data by ADMA2 instead of PIO. 0051 takes out an eFuse read before the DDR setup that neither the
+stock SPL nor Ingenic's does. 0052 makes sure U-Boot never writes its state and records past their
+sector in `ota` (issue #83). A normal start from the eMMC does what it did before but for a
 few small reads (below, "What a normal start does more").
 
 ## Layout
@@ -85,6 +87,8 @@ few small reads (below, "What a normal start does more").
 | `patches/0048` | review of 0047: output only (keys from the network only with `/data/ad5x/netconsole-input` too, and only from the one unicast address on the file's first line); a prompt reached that way resets after 300 s idle (`BOOT_RETRY`, `RESET_TO_RETRY`); `bootcmd` never changed, the console devices serial and `ncip`/`bootretry` dropped at every start (`overwrite_console()`, `SYS_CONSOLE_ENV_OVERWRITE`): a `saveenv` keeps nothing of it; no `ad5x_nc` switch; the rescue's console output only; the switch decided in `bootlogic.c` (`ad5x_nc_decide`) |
 | `patches/0049` | the MSC pads (and GPIO port E) at 1.8 V on every start: EXCLK_DS.POC (CPM 0xE0, bit 31; `x2600_msc_pads_1v8()`, `mach/x2600.h`), set in the SPL at the top of `ad5x_emmc_init()` before the controller reset and in U-Boot proper in `board_early_init_r()` before the eMMC is probed; each logs `MSC pads at 3.3 V (EXCLK_DS 0x...): now 1.8 V` when it was clear (the boot ROM sets it only on an eMMC start; jolting found 3.3 V pads behind the USB-path read failures, #68). Was: set only in the SPL's USB branch (0034) |
 | `patches/0050` | jolting (PR #81): eMMC by ADMA2 in U-Boot proper (`MMC_SDHCI_ADMA`), as Ingenic's driver and Linux: PIO reads returned wrong words while the Ethernet DMA ran (netconsole on: 4 of 20 reads of p1 wrong on printer 2, 0 of 54 by ADMA); physical addresses in the descriptors, none across a 128 MiB boundary (one spare table entry for the split). Partly covered cache lines: 0040 (the PR's own 0040 not taken) |
+| `patches/0051` | SPL: no eFuse "TRIM1" read before the DDR setup (`x2600_efuse_trim1_overrides()` from 0010 removed): it put TRIM1's byte address 0x61 into EFUCTRL's word-address field (read CHIPKEY words 0x21-0x24, set reserved bit 27), and bits 8/9 of that word switched chip ODT (DDRC_CFG bit 2) and auto self-refresh off; neither the stock SPL nor Ingenic's SDK does it, and TRIM1 is Hamming-coded there. Tested boards read 0 (no `SPL: efuse:` line), so no change for them. The eFuse clock gate in `x2600_clk_init()` stays (0029's `x2600_socid()` reads after it) |
+| `patches/0052` | state and records (`ota` 0x90000, 0x90200) written a line at a time (`ad5x_sec_add`, `bootlogic.c`): a line goes in whole or not at all, only shorter than the parsers' 192 bytes, without a newline in it, and with room for the crc32 line and a NUL after it; one that doesn't fit is left out (the console says so), the crc32 line always written, so the sector always parses, only without that key (issue #83). Was: one `snprintf()` and the crc32 line at its returned length, unchecked. Same bytes as before for every record that fits |
 | `USB-BOOT.md` | starting the SPL from the boot ROM over J28 (phase 4): wiring, soft entry and K4, the cold-start test; the eMMC as a USB disk (`run-uboot`) |
 | `build.sh` | fetch v2026.10 (sha256-pinned), patch, build, check; `--container` for the laptop |
 | `Containerfile` | the builder's pinned Debian base + Debian's `gcc-mipsel-linux-gnu` |
@@ -164,6 +168,8 @@ Results 2026-11-15 (Debian gcc 14.2.0, laptop container, patches
 | with 0031-0032 (2026-11-17) | 0031 alone: SPL 13,864 bytes, BSS 988, 5,620 bytes free, worst-case stack 536 bytes, U-Boot proper 352,820 bytes. With 0032: SPL 14,200 bytes (0x80001800-0x80004F78; +336, `x2600_args_spl` and the memory words in `board_init_f`), 32 blocks with the header as before; BSS 1,024 bytes to 0x80005380 (`spl_args` +36); 5,248 bytes free in the window; worst-case stack 552 bytes of 2,048 (the same path, `board_init_f` 88); spl-usb.bin 16,384 bytes; chainload-test SPL 10,768 bytes; U-Boot proper 355,052 bytes, uImage 355,116 (sectors 82-775); first-MiB check and write plan pass for both dumps |
 | with 0030 reworked and 0033 (2026-11-17, #68) | SPL 15,576 bytes (0x80001800-0x800054D8; +1,376: the read steps and their log lines, the 400 kHz retry, `x2600_args_lpj`), 35 blocks with the header; BSS 1,036 bytes to 0x800058EC; 3,860 bytes free in the window; worst-case stack 584 bytes of 2,048 (the same path, `ad5x_emmc_read` 88); spl-usb.bin 17,920 bytes; chainload-test SPL 12,096 bytes; U-Boot proper 355,268 bytes, uImage 355,332 (sectors 82-776); first-MiB check (DDR tables by ID: `0x84 W634GU6QG-11`) and write plan pass for both dumps |
 | with 0034-0048, then 0049-0050 (2026-11-17, #68, PR #81) | 0034-0048: SPL 16,072 bytes (0x80001800-0x800056C8), 36 blocks with the header; BSS 1,040 bytes to 0x80005AE0; 3,360 bytes free in the window; worst-case stack 584 bytes of 2,048; U-Boot proper 461,444 bytes. With 0049-0050: SPL 16,184 bytes (0x80001800-0x80005738; +112, the pad check and its log line), still 36 blocks; BSS 1,040 bytes, 0x80005740-0x80005B50; 3,248 bytes free in the window; worst-case stack 584 bytes (the same path); spl-usb.bin and spl-usb2.bin 18,432 bytes; chainload-test SPL 12,480 bytes; U-Boot proper 462,948 bytes (+1,504: ADMA2 and `board_early_init_r`), uImage 463,012 (sectors 82-986); first-MiB check and write plan pass for both dumps, with U-Boot at 0xA400 too |
+| with 0051 (2026-11-18) | SPL 16,008 bytes (0x80001800-0x80005688; -176, the TRIM1 read and its two log lines), still 36 blocks; BSS 1,040 bytes, 0x80005690-0x80005AA0; 3,424 bytes free in the window; worst-case stack 584 bytes; spl-usb.bin and spl-usb2.bin 18,432 bytes; chainload-test SPL and U-Boot proper unchanged (byte for byte); first-MiB check passes for the bench dump with alexshev86's as the other |
+| with 0052 (2026-11-19, #83) | SPL, chainload-test SPL, spl-usb.bin and spl-usb2.bin unchanged (byte for byte; 16,008 bytes, 36 blocks: the formatters are only in U-Boot proper's image); U-Boot proper 463,612 bytes (+664), uImage 463,676 of 1,006,080 (sectors 82-987) |
 | first MiB | both stock dumps: candidate passes the check (only the SPL range and the length fields differ; the SPL is `spl-mmc.img`'s; DDR table and clocks as the unit's stock SPL); the write plan gives the same first MiB |
 
 jolting's SPL, for comparison: 22,400 bytes of code with BSS at
@@ -762,8 +768,12 @@ crc32 1a2b3c4d               reason own kernel 6.6.66-kiln did not finish starti
 `mem ext|std` and `failed-mem` (0032; `-` when none, at most 95 characters)
 are new: a sector from an older build reads as standard with no
 `failed-mem`, and an older build ignores both keys. With every field at its
-longest the records sector is at most 479 of 512 bytes (each line under
-the parsers' 192 bytes; `test_longest_records_fit_a_sector`).
+longest the records sector is at most 479 of 512 bytes, 486 with
+`fallbacks` at the largest unsigned int (each line under the parsers' 192
+bytes; `test_longest_records_fit_a_sector`, `RecordsGuard`). U-Boot never
+writes past the sector (0052): a line that wouldn't fit whole, with the
+crc32 line and a NUL after it, is left out, so the sector still parses for
+every reader (`lib/uboot.sh` too), only without that key.
 
 A sector that doesn't parse, has a bad CRC (an old `ota` backup restored)
 or is all zeros counts as empty: a fresh start, never a fallback.

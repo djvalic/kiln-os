@@ -32,9 +32,17 @@ define AD5X_SYSTEM_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/usr/bin/ad5x-flash-n32
 	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-mcu $(TARGET_DIR)/usr/bin/ad5x-mcu
 	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-fb-show $(TARGET_DIR)/usr/bin/ad5x-fb-show
+	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-fb-progress $(TARGET_DIR)/usr/bin/ad5x-fb-progress
 	$(AD5X_SYSTEM_INSTALL_MCU_FIRMWARE)
 	$(INSTALL) -D -m 0644 $(@D)/lib/network.sh \
 		$(TARGET_DIR)/usr/lib/ad5x/network.sh
+	# NetworkManager's connections from network.conf and
+	# wpa_supplicant.conf, and back (S40ad5x-network, docs/network.md);
+	# main image only, ad5x-recovery.mk doesn't install them
+	$(INSTALL) -D -m 0644 $(@D)/lib/ad5x_network.py \
+		$(TARGET_DIR)/usr/lib/ad5x/ad5x_network.py
+	$(INSTALL) -D -m 0755 $(@D)/lib/network-event \
+		$(TARGET_DIR)/usr/lib/ad5x/network-event
 	$(INSTALL) -D -m 0644 $(@D)/lib/slot.sh \
 		$(TARGET_DIR)/usr/lib/ad5x/slot.sh
 	$(INSTALL) -D -m 0644 $(@D)/lib/kernel.sh \
@@ -119,7 +127,8 @@ AD5X_SYSTEM_PKGDIR = $(BR2_EXTERNAL_AD5X_PATH)/package/ad5x-system
 
 # The boards' Klipper firmware this image is tested against
 # (klipper/mcu-dicts/FLASHED, built by tools/build_mcu.sh); ad5x-mcu flashes
-# it when a board runs anything else. Plus its screens. The IFS (filament
+# it when a board runs anything else. Plus its screens (and progress/, the
+# pieces ad5x-fb-progress draws over mcu-updating.jpg). The IFS (filament
 # unit) has its own version (klipper/mcu-dicts/FLASHED_IFS), so a new IFS
 # build does not reflash the mainboard or eboard.
 AD5X_SYSTEM_MCU_VERSION = $(strip $(shell cat $(BR2_EXTERNAL_AD5X_PATH)/../klipper/mcu-dicts/FLASHED))

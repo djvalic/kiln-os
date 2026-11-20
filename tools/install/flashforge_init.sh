@@ -9,9 +9,14 @@
 # the installer (ad5x-install/ad5x-install.sh --usb, the same one as the SSH
 # path) and shows its progress on the panel. Log: ad5x-install.log here.
 #
-# - Done: the installer reboots into Kiln OS. That system never runs
-#   this file (only stock's app_startup.sh does), so leaving the stick in is
-#   harmless.
+# - Done: the installer restarts the printer into Kiln OS. Stock's init
+#   ignores a normal reboot while this hook runs (it is part of stock's
+#   start-up), so the installer forces one (ad5x-install.sh, restart()).
+#   Kiln OS never runs this file (only stock's app_startup.sh does), so
+#   leaving the stick in is harmless.
+# - Done, but the printer is still running after all of that (about 20 s):
+#   the installer shows "Switch off and on" (screens/powercycle.jpg) and
+#   the printer waits here. A power cycle is safe then: the switch is made.
 # - Refused or failed: the message stays on the screen and the printer waits
 #   here (exit 0: stock's app_startup.sh then sleeps instead of starting the
 #   app). Remove the stick and power-cycle: the printer starts as before.
@@ -34,7 +39,42 @@ hold() {	# keep the message on the screen; stock then sleeps (exit 0)
 	echo "waiting: remove the stick and power-cycle the printer"
 	exit 0
 }
-screen() { [ -f "$B/screens/$1.jpg" ] && cmd_jpeg_display "$B/screens/$1.jpg" >/dev/null 2>&1; true; }
+# Step 1's frames (the ring turns) about once a second while the files on
+# the stick are checked, as ad5x-install.sh does for every step; stopped
+# (between two pictures) before anything else is shown and before the
+# installer takes over the screen; it also ends by itself when this script
+# is gone.
+ANIM=
+anim_stop() {
+	[ -n "$ANIM" ] || return 0
+	kill "$ANIM" 2>/dev/null
+	wait "$ANIM" 2>/dev/null
+	ANIM=
+}
+anim_loop() {	# OWNER NAME
+	trap 'kill $sp 2>/dev/null; exit 0' TERM
+	sp=
+	while :; do
+		for f in "$B/screens/$2.jpg" "$B/screens/$2"-[0-9]*.jpg; do
+			kill -0 "$1" 2>/dev/null || exit 0
+			[ -f "$f" ] && cmd_jpeg_display "$f" >/dev/null 2>&1
+			sleep 1 & sp=$!
+			wait $sp
+		done
+	done
+}
+screen() {
+	anim_stop
+	[ -f "$B/screens/$1.jpg" ] || return 0
+	if [ -f "$B/screens/$1-1.jpg" ]; then
+		anim_loop $$ "$1" >/dev/null 2>&1 &
+		ANIM=$!
+	else
+		cmd_jpeg_display "$B/screens/$1.jpg" >/dev/null 2>&1
+	fi
+	true
+}
+trap anim_stop EXIT
 
 # Our own system never runs this; if it somehow does, do nothing.
 if [ -f /etc/ad5x-release ]; then
@@ -56,8 +96,11 @@ retry=
 [ -f "$S/ad5x-install-retry" ] && { retry=--retry; rm -f "$S/ad5x-install-retry"; sync; }
 emmc="--emmc-backup $S"
 [ -f "$S/ad5x-no-emmc-backup" ] && emmc=
+anim_stop	# the installer shows its own screens from here
 MACHINE_ARG=$1 sh "$B/ad5x-install.sh" --usb --dir "$B" $retry $emmc
 rc=$?
 echo "installer exit $rc"
-[ $rc = 0 ] && { sleep 30; echo "no reboot?"; }
+# 0: installed, but the restart didn't happen (the installer forced it and
+# then put up the switch-off-and-on screen)
+[ $rc = 0 ] && echo "installed; the printer did not restart by itself"
 hold

@@ -1,5 +1,7 @@
 #!/bin/sh
-# Wi-Fi client on wlan0. wpa_supplicant always runs (unless Wi-Fi is off,
+# Wi-Fi client on wlan0, on the old network path: always in the recovery
+# OS, in the main OS when S40ad5x-network chose it (docs/network.md; else
+# NetworkManager runs Wi-Fi). wpa_supplicant always runs (unless Wi-Fi is off,
 # below) with /data/ad5x/wpa_supplicant.conf, so HelixScreen's Wi-Fi
 # screens (setup wizard, Settings > Network) can scan, join and save
 # networks there (update_config=1; updates never touch /data). The first
@@ -209,6 +211,10 @@ radio() {
 
 case "$1" in
 start)
+	# NetworkManager runs Wi-Fi at this start (the main OS's
+	# S40ad5x-network chose it, docs/network.md; S46ad5x-wifi-log writes
+	# wifi.log then). The recovery OS has no S40 and no such file.
+	[ "$(cat /run/ad5x-network/mode 2>/dev/null)" = nm ] && exit 0
 	if [ -f /var/run/wpa_supplicant.pid ] &&
 	   kill -0 "$(cat /var/run/wpa_supplicant.pid)" 2>/dev/null; then
 		echo "ad5x-wifi: already running"

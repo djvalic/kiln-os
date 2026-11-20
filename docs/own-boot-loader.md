@@ -81,6 +81,9 @@ X2600E boards with a table per chip (`X2600H-DDR3L`, `X2600E-DDR3`, ...),
 so there the `ddr:` line is the table for this chip and a `tables:` line
 lists them all. That build isn't on the list. On Kiln's boot loader already, put `D=/data/ad5x/stock/boot.img` on
 a line of its own first: it then reads the saved stock copy instead.
+`ad5x-bootloader-install --fingerprint` does that by itself, and after a
+wipe of `/data` it reads the copy in usershare's `kiln-stock-backup/` (or
+on a USB stick that is plugged in) instead.
 
 `spl` is the hash of the stock SPL (0x4400-0xA3FF) with 4 bytes at 0x4480
 read as zeros. Ingenic's USBCloner writes its DDR type (`84 00 84 00`)
@@ -176,7 +179,12 @@ that confirms U-Boot's starts and has a whole 6.6 kernel), in this order:
 0. If missing: this printer's stock first MiB saved as
    `/data/ad5x/stock/boot.img` (from the disk, while it still holds
    Flashforge's SPL), and its copy on the usershare partition
-   (`kiln-stock-backup`).
+   (`kiln-stock-backup`). If the data partition was wiped and the disk
+   holds Kiln's SPL, `boot.img` comes back from usershare's
+   `kiln-stock-backup` or a USB stick's `kiln-stock-backup`, after the same
+   checks as the saved one (it must match this disk). The check already
+   runs `ad5x-stock-copy`'s room test for that copy (`--space-check`), so
+   a usershare without room is refused before anything is written.
 1. Kiln's SPL: the SPL's first sector (its header, 0x4400) is zeroed
    first, then the rest of the SPL (0x4600-0xA3FF) and the boot ROM's
    length field at 0x4 are written, and the header sector last.
@@ -400,9 +408,10 @@ prints the board's fingerprint: please post it in issue #68 either way.
 
 The AD5X ships with two chips: X2600H (512 MiB DDR3L, the board Kiln's
 SPL was proven on) and X2600E (256 MiB DDR3). Kiln's SPL reads the chip
-type at power-on and sets up the memory for either, but it has not run
-from eMMC on an X2600E yet, and an SPL that sets the memory up wrong
-leaves the printer in USB mode. So an X2600E is treated like a board
+type at power-on and sets up the memory for either. From eMMC it has
+run on one X2600E so far (a tester's board, warm and cold start, issue
+#68), and an SPL that sets the memory up wrong leaves the printer in
+USB mode. So an X2600E is still treated like a board
 that isn't on the list: never offered on the touch screen, and installed
 only with `--unsupported-board`. A board where the installer can't tell
 the chip is refused, even with `--unsupported-board`. It tells them apart read-only, from `MemTotal` in

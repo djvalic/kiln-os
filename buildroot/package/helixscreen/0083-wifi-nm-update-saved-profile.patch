@@ -1,0 +1,651 @@
+From e3e7a9de587e46b102aa9f1f8f8518e5d821d9d9 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 03:02:43 -0500
+Subject: [PATCH] wifi: NM joins a saved network by updating its profile in
+ place
+
+Joining a network that already has a saved NetworkManager profile went
+through `nmcli device wifi connect <ssid> password <psk>`. nmcli reuses
+the saved profile for that, but before NetworkManager 1.56 its
+do_device_wifi_connect() (src/nmcli/devices.c) replaces the profile's
+whole 802-11-wireless-security setting with a new one that holds only
+the psk:
+
+    if (!s_wsec) {          /* s_wsec is always NULL here */
+        s_wsec = nm_setting_wireless_security_new();
+        nm_connection_add_setting(connection, s_wsec);
+    }
+
+The profile is then saved with Update2, which doesn't complete missing
+properties as AddAndActivate does, so NetworkManager refuses it:
+"802-11-wireless-security.key-mgmt: property is missing". That happens
+for every saved WPA profile, well-formed or not, so the self-heal took
+the delete-and-retry path on each such join: the good profile was
+deleted (its other settings, its UUID and so its DHCP lease with it) and
+a new one made, about 12 s later. NetworkManager 1.56 fixed nmcli
+(nm_connection_get_setting_wireless_security() first); 1.52 is in
+Buildroot 2026.02.
+
+A join now looks for a saved client profile with the same SSID first
+(`nmcli -t -f UUID,TYPE connection show`, then each Wi-Fi profile's SSID,
+mode, hidden, key-mgmt, psk and autoconnect; only nmcli's own UUIDs, hex
+and dashes, go into these command lines). A WPA/WPA3 personal profile
+with a password, or an open profile without one, is updated in place and
+activated, both by fork/exec:
+
+    nmcli connection modify uuid <U> connection.autoconnect yes
+        [802-11-wireless.hidden yes]
+        802-11-wireless-security.key-mgmt <its key-mgmt>
+        802-11-wireless-security.psk-flags 0
+        802-11-wireless-security.psk <psk>
+    nmcli connection up uuid <U> ifname <iface>
+
+so the whole security setting goes in, the psk is stored in the profile,
+and autoconnect is on: a network joined by hand is joined again at the
+next start (a profile saved with autoconnect off, as Kiln imports a
+network stock saved disabled, stayed off before). A failed join puts
+back the profile's autoconnect, hidden flag and stored psk, as nmcli
+leaves no profile behind for a new network that fails. Anything else (no
+profile, a profile without key-mgmt, WEP, enterprise, a modify that
+fails) takes `device wifi connect` and its stale-profile self-heal as
+before.
+
+Tests: the fake nmcli answers the profile lookups from files (not
+counted, so the existing connect cases are unchanged) and keeps every
+acting call's argv; new cases for the parsing (Wi-Fi profiles only, odd
+UUIDs dropped, terse escapes), which profiles are updated in place, the
+update/restore/up argv, a join of a profile saved with autoconnect off
+(modify then up, no connect or delete), a failed join (profile put
+back, AUTH_FAILED), a profile without key-mgmt (connect, delete, retry)
+and no profile (connect as before).
+---
+ include/wifi_backend_networkmanager.h         |  50 ++++
+ src/api/wifi_backend_networkmanager.cpp       | 189 +++++++++++++-
+ .../unit/test_wifi_backend_networkmanager.cpp | 239 +++++++++++++++++-
+ 3 files changed, 472 insertions(+), 6 deletions(-)
+
+diff --git a/include/wifi_backend_networkmanager.h b/include/wifi_backend_networkmanager.h
+index c310057..b94d862 100644
+--- a/include/wifi_backend_networkmanager.h
++++ b/include/wifi_backend_networkmanager.h
+@@ -250,6 +250,56 @@ class WifiBackendNetworkManager : public WifiBackend {
+     ConnectAttempt try_nmcli_connect(const std::string& ssid, const std::string& password,
+                                      bool is_hidden);
+ 
++    // Single fork/exec of `nmcli <args>` (no shell), stderr captured, 30 s limit.
++    // Honours connect_active_ for cancellation.
++    ConnectAttempt run_nmcli(const std::vector<std::string>& args);
++
++    /// A saved NetworkManager Wi-Fi profile, as found by find_saved_profile().
++    struct SavedProfile {
++        std::string uuid;
++        std::string ssid;
++        std::string mode;        ///< 802-11-wireless.mode ("" or "infrastructure" for a client)
++        std::string key_mgmt;    ///< 802-11-wireless-security.key-mgmt ("" = open)
++        std::string psk;         ///< Stored psk (empty when not stored in the profile)
++        std::string autoconnect; ///< connection.autoconnect as nmcli prints it ("yes"/"no")
++        std::string hidden;      ///< 802-11-wireless.hidden as nmcli prints it ("yes"/"no")
++    };
++
++    /// UUIDs of the 802-11-wireless profiles in `nmcli -t -f UUID,TYPE connection show`
++    /// output, in nmcli's order. A UUID that is not 36 hex digits and dashes is
++    /// dropped: it goes into a popen() command line.
++    std::vector<std::string> parse_wifi_profile_uuids(const std::string& output);
++
++    /// The fields of one profile from `nmcli -s -t -f <fields> connection show uuid <U>`
++    /// ("setting.property:value" lines, terse escapes undone). uuid is left empty.
++    SavedProfile parse_profile_fields(const std::string& output);
++
++    /// The saved client profile whose SSID is `ssid`, if there is one.
++    std::optional<SavedProfile> find_saved_profile(const std::string& ssid);
++
++    /// Whether a join with `password` can update `profile` in place: a WPA/WPA3
++    /// personal profile when a password is given, an open profile when none is.
++    /// Anything else (no key-mgmt, WEP, enterprise) takes `device wifi connect`
++    /// and its stale-profile self-heal.
++    static bool can_update_in_place(const SavedProfile& profile, const std::string& password);
++
++    /// `nmcli connection modify` argv that updates a saved profile in place for a
++    /// join: autoconnect on, and with a password the full security settings
++    /// (key-mgmt kept, psk stored in the profile). Program name excluded.
++    static std::vector<std::string> update_profile_argv(const SavedProfile& profile,
++                                                        const std::string& password,
++                                                        bool is_hidden);
++
++    /// `nmcli connection modify` argv that puts back what update_profile_argv()
++    /// changed, after a join that failed. Program name excluded.
++    static std::vector<std::string> restore_profile_argv(const SavedProfile& profile,
++                                                         const std::string& password,
++                                                         bool is_hidden);
++
++    /// `nmcli connection up uuid <uuid> ifname <iface>` argv, program name excluded.
++    static std::vector<std::string> activate_profile_argv(const std::string& uuid,
++                                                          const std::string& iface);
++
+     // Delete a saved connection profile by id. Best-effort, fork/exec to avoid
+     // shell injection with caller-supplied SSIDs. Returns true if nmcli exited 0.
+     bool delete_connection_profile(const std::string& profile_id);
+diff --git a/src/api/wifi_backend_networkmanager.cpp b/src/api/wifi_backend_networkmanager.cpp
+index dd894b9..4ee7e61 100644
+--- a/src/api/wifi_backend_networkmanager.cpp
++++ b/src/api/wifi_backend_networkmanager.cpp
+@@ -22,6 +22,7 @@
+ 
+ #include <algorithm>
+ #include <array>
++#include <cctype>
+ #include <cerrno>
+ #include <chrono>
+ #include <cstdio>
+@@ -693,6 +694,135 @@ std::vector<std::string> WifiBackendNetworkManager::connect_argv(const std::stri
+ WifiBackendNetworkManager::ConnectAttempt
+ WifiBackendNetworkManager::try_nmcli_connect(const std::string& ssid, const std::string& password,
+                                              bool is_hidden) {
++    return run_nmcli(connect_argv(ssid, password, is_hidden, wifi_interface_));
++}
++
++std::vector<std::string>
++WifiBackendNetworkManager::parse_wifi_profile_uuids(const std::string& output) {
++    std::vector<std::string> uuids;
++    std::istringstream stream(output);
++    std::string line;
++    while (std::getline(stream, line)) {
++        auto fields = split_nmcli_fields(line);
++        if (fields.size() != 2 || fields[1] != "802-11-wireless") {
++            continue;
++        }
++        const std::string& uuid = fields[0];
++        bool plain = uuid.size() == 36;
++        for (char c : uuid) {
++            plain = plain && (std::isxdigit(static_cast<unsigned char>(c)) || c == '-');
++        }
++        if (plain) {
++            uuids.push_back(uuid);
++        }
++    }
++    return uuids;
++}
++
++WifiBackendNetworkManager::SavedProfile
++WifiBackendNetworkManager::parse_profile_fields(const std::string& output) {
++    SavedProfile profile;
++    std::istringstream stream(output);
++    std::string line;
++    while (std::getline(stream, line)) {
++        // "setting.property:value": property names hold no colon, the value's
++        // own colons and backslashes are escaped in terse mode
++        auto colon = line.find(':');
++        if (colon == std::string::npos) {
++            continue;
++        }
++        const std::string name = line.substr(0, colon);
++        auto parts = split_nmcli_fields(line.substr(colon + 1));
++        std::string value;
++        for (size_t i = 0; i < parts.size(); ++i) {
++            value += (i ? ":" : "") + parts[i];
++        }
++        if (name == "802-11-wireless.ssid") {
++            profile.ssid = value;
++        } else if (name == "802-11-wireless.mode") {
++            profile.mode = value;
++        } else if (name == "802-11-wireless.hidden") {
++            profile.hidden = value;
++        } else if (name == "802-11-wireless-security.key-mgmt") {
++            profile.key_mgmt = value;
++        } else if (name == "802-11-wireless-security.psk") {
++            profile.psk = value;
++        } else if (name == "connection.autoconnect") {
++            profile.autoconnect = value;
++        }
++    }
++    return profile;
++}
++
++std::optional<WifiBackendNetworkManager::SavedProfile>
++WifiBackendNetworkManager::find_saved_profile(const std::string& ssid) {
++    // Only nmcli's own output (UUIDs checked to be hex and dashes) goes into
++    // these command lines, never the SSID.
++    for (const std::string& uuid :
++         parse_wifi_profile_uuids(exec_nmcli("-t -f UUID,TYPE connection show"))) {
++        SavedProfile profile = parse_profile_fields(
++            exec_nmcli("-s -t -f 802-11-wireless.ssid,802-11-wireless.mode,"
++                       "802-11-wireless.hidden,802-11-wireless-security.key-mgmt,"
++                       "802-11-wireless-security.psk,connection.autoconnect "
++                       "connection show uuid " +
++                       uuid));
++        if (profile.ssid != ssid ||
++            (!profile.mode.empty() && profile.mode != "infrastructure")) {
++            continue;
++        }
++        profile.uuid = uuid;
++        return profile;
++    }
++    return std::nullopt;
++}
++
++bool WifiBackendNetworkManager::can_update_in_place(const SavedProfile& profile,
++                                                    const std::string& password) {
++    if (password.empty()) {
++        return profile.key_mgmt.empty();
++    }
++    return profile.key_mgmt == "wpa-psk" || profile.key_mgmt == "sae";
++}
++
++std::vector<std::string> WifiBackendNetworkManager::update_profile_argv(
++    const SavedProfile& profile, const std::string& password, bool is_hidden) {
++    std::vector<std::string> argv = {"connection", "modify",      "uuid",
++                                     profile.uuid, "connection.autoconnect", "yes"};
++    if (is_hidden) {
++        argv.insert(argv.end(), {"802-11-wireless.hidden", "yes"});
++    }
++    if (!password.empty()) {
++        // The whole security setting, not just the psk: key-mgmt is what an
++        // update without it is refused for.
++        argv.insert(argv.end(), {"802-11-wireless-security.key-mgmt", profile.key_mgmt,
++                                 "802-11-wireless-security.psk-flags", "0",
++                                 "802-11-wireless-security.psk", password});
++    }
++    return argv;
++}
++
++std::vector<std::string> WifiBackendNetworkManager::restore_profile_argv(
++    const SavedProfile& profile, const std::string& password, bool is_hidden) {
++    std::vector<std::string> argv = {"connection", "modify", "uuid", profile.uuid,
++                                     "connection.autoconnect",
++                                     profile.autoconnect == "no" ? "no" : "yes"};
++    if (is_hidden) {
++        argv.insert(argv.end(),
++                    {"802-11-wireless.hidden", profile.hidden == "yes" ? "yes" : "no"});
++    }
++    if (!password.empty() && !profile.psk.empty()) {
++        argv.insert(argv.end(), {"802-11-wireless-security.psk", profile.psk});
++    }
++    return argv;
++}
++
++std::vector<std::string> WifiBackendNetworkManager::activate_profile_argv(const std::string& uuid,
++                                                                          const std::string& iface) {
++    return {"connection", "up", "uuid", uuid, "ifname", iface};
++}
++
++WifiBackendNetworkManager::ConnectAttempt
++WifiBackendNetworkManager::run_nmcli(const std::vector<std::string>& args) {
+     ConnectAttempt result;
+ 
+     // SECURITY: fork/exec (no shell) so SSID/password can't be interpreted by sh.
+@@ -701,7 +831,6 @@ WifiBackendNetworkManager::try_nmcli_connect(const std::string& ssid, const std:
+ 
+     // Built before fork(): the child of a multithreaded process must not
+     // allocate between fork and exec, so it inherits ready-to-use pointers.
+-    std::vector<std::string> args = connect_argv(ssid, password, is_hidden, wifi_interface_);
+     std::vector<char*> exec_args;
+     exec_args.reserve(args.size() + 2);
+     exec_args.push_back(const_cast<char*>("nmcli"));
+@@ -803,7 +932,58 @@ void WifiBackendNetworkManager::connect_thread_func(std::string ssid, std::strin
+                                                     bool is_hidden) {
+     spdlog::debug("[WifiBackend] NM: Connect thread started for '{}'", helix::redact::ssid(ssid));
+ 
+-    ConnectAttempt attempt = try_nmcli_connect(ssid, password, is_hidden);
++    ConnectAttempt attempt;
++    bool joined_in_place = false;
++
++    // A network that already has a saved profile is joined by updating that
++    // profile in place and activating it. `device wifi connect <ssid> password
++    // <psk>` reuses the saved profile too, but nmcli before 1.56 replaces its
++    // whole 802-11-wireless-security setting with a new one holding only the
++    // psk (do_device_wifi_connect, src/nmcli/devices.c), so NetworkManager
++    // refuses the update ("key-mgmt: property is missing") for every saved
++    // WPA profile, and the self-heal below deleted a good profile to make a new
++    // one. In place, the profile keeps its UUID (and so its DHCP lease), its
++    // other settings and its file, and autoconnect is turned on: a network
++    // joined by hand is joined again at the next start.
++    std::optional<SavedProfile> profile = find_saved_profile(ssid);
++    if (profile && can_update_in_place(*profile, password)) {
++        ConnectAttempt update = run_nmcli(update_profile_argv(*profile, password, is_hidden));
++        if (!connect_active_) {
++            return;
++        }
++        if (update.exit_code == 0) {
++            spdlog::info("[WifiBackend] NM: Updated the saved profile for '{}' in place",
++                         helix::redact::ssid(ssid));
++            attempt = run_nmcli(activate_profile_argv(profile->uuid, wifi_interface_));
++            if (!connect_active_) {
++                return;
++            }
++            joined_in_place = true;
++            if (attempt.exit_code != 0) {
++                // A failed join leaves the saved profile as it was, as nmcli
++                // leaves none behind for a new network that fails
++                ConnectAttempt restore =
++                    run_nmcli(restore_profile_argv(*profile, password, is_hidden));
++                if (restore.exit_code != 0) {
++                    spdlog::warn("[WifiBackend] NM: Could not restore the saved profile for "
++                                 "'{}' after the failed join (exit code {})",
++                                 helix::redact::ssid(ssid), restore.exit_code);
++                }
++            }
++        } else {
++            spdlog::warn("[WifiBackend] NM: Could not update the saved profile for '{}' "
++                         "(exit code {}); trying device wifi connect",
++                         helix::redact::ssid(ssid), update.exit_code);
++        }
++    } else if (profile) {
++        spdlog::debug("[WifiBackend] NM: Saved profile for '{}' (key-mgmt '{}') not updated "
++                      "in place; trying device wifi connect",
++                      helix::redact::ssid(ssid), profile->key_mgmt);
++    }
++
++    if (!joined_in_place) {
++        attempt = try_nmcli_connect(ssid, password, is_hidden);
++    }
+ 
+     if (!connect_active_) {
+         return;
+@@ -814,13 +994,14 @@ void WifiBackendNetworkManager::connect_thread_func(std::string ssid, std::strin
+     // (e.g. created earlier without security), the password write lands but
+     // key-mgmt stays empty and NM refuses with:
+     //   Error: 802-11-wireless-security.key-mgmt: property is missing.
+-    // Self-heal once: delete the stale profile and retry.
++    // Self-heal once: delete the stale profile and retry. (A saved WPA profile
++    // was updated in place above; this is left for a really broken one.)
+     auto looks_like_stale_profile = [](const std::string& err) {
+         return err.find("key-mgmt") != std::string::npos &&
+                err.find("property is missing") != std::string::npos;
+     };
+ 
+-    if (attempt.exit_code != 0 && !attempt.timed_out &&
++    if (!joined_in_place && attempt.exit_code != 0 && !attempt.timed_out &&
+         looks_like_stale_profile(attempt.stderr_out)) {
+         spdlog::warn("[WifiBackend] NM: '{}' has a stale/malformed saved profile "
+                      "(key-mgmt missing); deleting and retrying",
+diff --git a/tests/unit/test_wifi_backend_networkmanager.cpp b/tests/unit/test_wifi_backend_networkmanager.cpp
+index 2381672..d7a5f54 100644
+--- a/tests/unit/test_wifi_backend_networkmanager.cpp
++++ b/tests/unit/test_wifi_backend_networkmanager.cpp
+@@ -44,7 +44,14 @@
+ class TestableNMBackend : public WifiBackendNetworkManager {
+   public:
+     // Expose private methods for unit testing via public wrappers
++    using WifiBackendNetworkManager::activate_profile_argv;
++    using WifiBackendNetworkManager::can_update_in_place;
+     using WifiBackendNetworkManager::connect_argv;
++    using WifiBackendNetworkManager::parse_profile_fields;
++    using WifiBackendNetworkManager::parse_wifi_profile_uuids;
++    using WifiBackendNetworkManager::restore_profile_argv;
++    using WifiBackendNetworkManager::SavedProfile;
++    using WifiBackendNetworkManager::update_profile_argv;
+     using WifiBackendNetworkManager::is_polkit_permission_error;
+     using WifiBackendNetworkManager::parse_scan_output;
+     using WifiBackendNetworkManager::split_nmcli_fields;
+@@ -165,16 +172,33 @@ struct FakeNmcliDir {
+     std::string dir;
+     std::string argv_file;
+     std::string count_file;
++    std::string history_file;
+ 
+     FakeNmcliDir() {
+         char tmpl[] = "/tmp/helix-fake-nmcli-XXXXXX";
+         dir = ::mkdtemp(tmpl);
+         argv_file = dir + "/argv.txt";
+         count_file = dir + "/count";
++        history_file = dir + "/history.txt";
+ 
++        // The saved-profile lookups (popen, read-only) answer from files and
++        // are not counted: call_count() and argv_lines() see only the
++        // commands that act (connect, modify, up, delete).
+         std::string script = R"SH(#!/bin/sh
++case "$*" in
++"-t -f UUID,TYPE connection show")
++  cat "$NMCLI_DIR/conns" 2>/dev/null; exit 0 ;;
++"-s -t -f "*" connection show uuid "*)
++  for a; do u=$a; done
++  cat "$NMCLI_DIR/show-$u" 2>/dev/null; exit 0 ;;
++esac
+ n=$(($(cat "$NMCLI_COUNT" 2>/dev/null || echo 0) + 1))
+ echo "$n" > "$NMCLI_COUNT"
++{ printf '%s\n' "$@"; echo "---"; } >> "$NMCLI_DIR/history.txt"
++if [ -n "$NMCLI_FAIL_UP" ] && [ "$1 $2" = "connection up" ]; then
++  echo "$NMCLI_FAIL_UP" >&2
++  exit 4
++fi
+ if [ -n "$NMCLI_FAIL_ALL" ]; then
+   echo "$NMCLI_FAIL_ALL" >&2
+   exit 1
+@@ -191,10 +215,11 @@ exit 0
+ 
+         ::setenv("NMCLI_ARGV", argv_file.c_str(), 1);
+         ::setenv("NMCLI_COUNT", count_file.c_str(), 1);
++        ::setenv("NMCLI_DIR", dir.c_str(), 1);
+     }
+     ~FakeNmcliDir() {
+-        for (const char* var :
+-             {"NMCLI_ARGV", "NMCLI_COUNT", "NMCLI_FAIL_FIRST", "NMCLI_FAIL_ALL"}) {
++        for (const char* var : {"NMCLI_ARGV", "NMCLI_COUNT", "NMCLI_FAIL_FIRST", "NMCLI_FAIL_ALL",
++                                "NMCLI_DIR", "NMCLI_FAIL_UP"}) {
+             ::unsetenv(var);
+         }
+         std::error_code ec;
+@@ -212,6 +237,34 @@ exit 0
+         ::setenv("NMCLI_FAIL_ALL", stderr_line, 1);
+     }
+ 
++    /// A saved profile NetworkManager lists: `show` is what
++    /// `nmcli -s -t -f ... connection show uuid <uuid>` prints for it.
++    void add_profile(const std::string& uuid, const std::string& type, const std::string& show) {
++        std::ofstream(dir + "/conns", std::ios::app) << uuid << ":" << type << "\n";
++        std::ofstream(dir + "/show-" + uuid) << show;
++    }
++
++    /// `nmcli connection up` fails with `stderr_line` (exit 4).
++    void fail_up(const char* stderr_line) {
++        ::setenv("NMCLI_FAIL_UP", stderr_line, 1);
++    }
++
++    /// Every acting invocation's argv, in order.
++    std::vector<std::vector<std::string>> history() {
++        std::ifstream f(history_file);
++        std::vector<std::vector<std::string>> calls(1);
++        std::string line;
++        while (std::getline(f, line)) {
++            if (line == "---") {
++                calls.emplace_back();
++            } else {
++                calls.back().push_back(line);
++            }
++        }
++        calls.pop_back();
++        return calls;
++    }
++
+     /// How many times the fake nmcli was exec'd.
+     int call_count() {
+         std::ifstream f(count_file);
+@@ -335,6 +388,188 @@ TEST_CASE("NM backend: hidden connect execs nmcli with 'hidden yes'",
+     }
+ }
+ 
++// ============================================================================
++// Saved Profile: update in place
++// ============================================================================
++//
++// nmcli before 1.56 replaces a reused profile's whole 802-11-wireless-security
++// setting with one holding only the psk, so `device wifi connect <ssid>
++// password <psk>` on a saved WPA profile is refused ("key-mgmt: property is
++// missing"). A saved profile is updated in place (full security settings,
++// autoconnect on) and activated instead.
++
++namespace {
++const char* kSavedUuid = "3d1d6b0e-5c1a-3f7e-9b2a-0c4d5e6f7a8b";
++
++std::string profile_show(const std::string& ssid, const std::string& key_mgmt,
++                         const std::string& psk, const std::string& autoconnect) {
++    std::string out = "802-11-wireless.ssid:" + ssid +
++                      "\n802-11-wireless.mode:infrastructure\n802-11-wireless.hidden:yes\n";
++    if (!key_mgmt.empty()) {
++        out += "802-11-wireless-security.key-mgmt:" + key_mgmt +
++               "\n802-11-wireless-security.psk:" + psk + "\n";
++    }
++    return out + "connection.autoconnect:" + autoconnect + "\n";
++}
++} // namespace
++
++TEST_CASE("NM backend: saved profile parsing", "[network][nm][saved_profile]") {
++    TestableNMBackend backend;
++
++    SECTION("only Wi-Fi profiles with plain UUIDs") {
++        auto uuids = backend.parse_wifi_profile_uuids(
++            "11111111-2222-3333-4444-555555555555:802-3-ethernet\n"
++            "3d1d6b0e-5c1a-3f7e-9b2a-0c4d5e6f7a8b:802-11-wireless\n"
++            "$(reboot)-2222-3333-4444-5555555555:802-11-wireless\n"
++            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee:802-11-wireless\n");
++        CHECK(uuids == std::vector<std::string>{"3d1d6b0e-5c1a-3f7e-9b2a-0c4d5e6f7a8b",
++                                                "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"});
++    }
++
++    SECTION("fields, terse escapes undone") {
++        auto p = backend.parse_profile_fields(
++            "802-11-wireless.ssid:Cafe\\:Bar\n802-11-wireless.mode:infrastructure\n"
++            "802-11-wireless.hidden:yes\n802-11-wireless-security.key-mgmt:wpa-psk\n"
++            "802-11-wireless-security.psk:a\\:b\\\\c\nconnection.autoconnect:no\n");
++        CHECK(p.ssid == "Cafe:Bar");
++        CHECK(p.mode == "infrastructure");
++        CHECK(p.hidden == "yes");
++        CHECK(p.key_mgmt == "wpa-psk");
++        CHECK(p.psk == "a:b\\c");
++        CHECK(p.autoconnect == "no");
++        CHECK(p.uuid.empty());
++    }
++
++    SECTION("which profiles are updated in place") {
++        TestableNMBackend::SavedProfile p;
++        p.key_mgmt = "wpa-psk";
++        CHECK(TestableNMBackend::can_update_in_place(p, "secret12"));
++        CHECK_FALSE(TestableNMBackend::can_update_in_place(p, ""));
++        p.key_mgmt = "sae";
++        CHECK(TestableNMBackend::can_update_in_place(p, "secret12"));
++        p.key_mgmt = "";
++        CHECK_FALSE(TestableNMBackend::can_update_in_place(p, "secret12"));
++        CHECK(TestableNMBackend::can_update_in_place(p, ""));
++        p.key_mgmt = "wpa-eap";
++        CHECK_FALSE(TestableNMBackend::can_update_in_place(p, "secret12"));
++        p.key_mgmt = "none"; // WEP
++        CHECK_FALSE(TestableNMBackend::can_update_in_place(p, "secret12"));
++    }
++
++    SECTION("update and restore argv") {
++        TestableNMBackend::SavedProfile p;
++        p.uuid = kSavedUuid;
++        p.key_mgmt = "wpa-psk";
++        p.psk = "oldpass1";
++        p.autoconnect = "no";
++        p.hidden = "no";
++        CHECK(TestableNMBackend::update_profile_argv(p, "newpass2", false) ==
++              std::vector<std::string>{"connection", "modify", "uuid", kSavedUuid,
++                                       "connection.autoconnect", "yes",
++                                       "802-11-wireless-security.key-mgmt", "wpa-psk",
++                                       "802-11-wireless-security.psk-flags", "0",
++                                       "802-11-wireless-security.psk", "newpass2"});
++        CHECK(TestableNMBackend::update_profile_argv(p, "", true) ==
++              std::vector<std::string>{"connection", "modify", "uuid", kSavedUuid,
++                                       "connection.autoconnect", "yes",
++                                       "802-11-wireless.hidden", "yes"});
++        CHECK(TestableNMBackend::restore_profile_argv(p, "newpass2", true) ==
++              std::vector<std::string>{"connection", "modify", "uuid", kSavedUuid,
++                                       "connection.autoconnect", "no", "802-11-wireless.hidden",
++                                       "no", "802-11-wireless-security.psk", "oldpass1"});
++        CHECK(TestableNMBackend::activate_profile_argv(kSavedUuid, "wlan0") ==
++              std::vector<std::string>{"connection", "up", "uuid", kSavedUuid, "ifname", "wlan0"});
++    }
++}
++
++TEST_CASE("NM backend: joining a saved network updates its profile in place",
++          "[network][nm][saved_profile][slow]") {
++    FakeNmcliDir fake;
++    ScopedPathPrepend path_prepend(fake.dir);
++
++    // Declared before the backend so they outlive the connect thread's
++    // callbacks (see the hidden connect test).
++    std::atomic<bool> connected{false};
++    std::atomic<bool> auth_failed{false};
++    TestableNMBackend backend;
++    backend.force_running("wlan0");
++    backend.register_event_callback("CONNECTED", [&](const std::string&) { connected = true; });
++    backend.register_event_callback("AUTH_FAILED",
++                                    [&](const std::string&) { auth_failed = true; });
++
++    const std::vector<std::string> modify{"connection",
++                                          "modify",
++                                          "uuid",
++                                          kSavedUuid,
++                                          "connection.autoconnect",
++                                          "yes",
++                                          "802-11-wireless-security.key-mgmt",
++                                          "wpa-psk",
++                                          "802-11-wireless-security.psk-flags",
++                                          "0",
++                                          "802-11-wireless-security.psk",
++                                          "newpass2"};
++    const std::vector<std::string> up{"connection", "up", "uuid", kSavedUuid, "ifname", "wlan0"};
++
++    // Another network's profile first: only the SSID's own is touched
++    fake.add_profile("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "802-11-wireless",
++                     profile_show("Neighbour", "wpa-psk", "theirs12", "yes"));
++
++    SECTION("a profile saved with autoconnect off (stock's network, as Kiln imports it)") {
++        fake.add_profile(kSavedUuid, "802-11-wireless",
++                         profile_show("HomeNet", "wpa-psk", "oldpass1", "no"));
++
++        REQUIRE(backend.connect_network("HomeNet", "newpass2", false).success());
++        REQUIRE(helix_test::wait_until([&connected] { return connected.load(); }, 8000));
++
++        // modify, then up: no device wifi connect, no delete-and-retry
++        CHECK(fake.history() == std::vector<std::vector<std::string>>{modify, up});
++    }
++
++    SECTION("a failed join puts the profile back") {
++        fake.add_profile(kSavedUuid, "802-11-wireless",
++                         profile_show("HomeNet", "wpa-psk", "oldpass1", "no"));
++        fake.fail_up("Error: Connection activation failed: Secrets were required, but not "
++                     "provided.");
++
++        REQUIRE(backend.connect_network("HomeNet", "newpass2", false).success());
++        REQUIRE(helix_test::wait_until([&auth_failed] { return auth_failed.load(); }, 8000));
++
++        auto calls = fake.history();
++        REQUIRE(calls.size() == 3);
++        CHECK(calls[0] == modify);
++        CHECK(calls[1] == up);
++        CHECK(calls[2] == std::vector<std::string>{"connection", "modify", "uuid", kSavedUuid,
++                                                   "connection.autoconnect", "no",
++                                                   "802-11-wireless-security.psk", "oldpass1"});
++        CHECK_FALSE(connected.load());
++    }
++
++    SECTION("a profile without key-mgmt takes device wifi connect and its self-heal") {
++        fake.add_profile(kSavedUuid, "802-11-wireless", profile_show("HomeNet", "", "", "yes"));
++        fake.fail_first();
++
++        REQUIRE(backend.connect_network("HomeNet", "newpass2", false).success());
++        REQUIRE(helix_test::wait_until([&connected] { return connected.load(); }, 8000));
++
++        auto calls = fake.history();
++        REQUIRE(calls.size() == 3);
++        CHECK(calls[0] == std::vector<std::string>{"device", "wifi", "connect", "HomeNet",
++                                                   "password", "newpass2", "ifname", "wlan0"});
++        CHECK(calls[1] == std::vector<std::string>{"connection", "delete", "id", "HomeNet"});
++        CHECK(calls[2] == calls[0]);
++    }
++
++    SECTION("no saved profile: device wifi connect as before") {
++        REQUIRE(backend.connect_network("HomeNet", "newpass2", false).success());
++        REQUIRE(helix_test::wait_until([&connected] { return connected.load(); }, 8000));
++
++        CHECK(fake.history() ==
++              std::vector<std::vector<std::string>>{{"device", "wifi", "connect", "HomeNet",
++                                                     "password", "newpass2", "ifname", "wlan0"}});
++    }
++}
++
+ // ============================================================================
+ // Scan Output Parsing Tests
+ // ============================================================================

@@ -41,13 +41,16 @@
 #      /usr/data/ad5x/install (the main OS writes it into slot A once it has
 #      started completely, S99ad5x-install-recovery), or the main .zip in
 #      /usr/data/ad5x/update (the recovery OS installs it at its first start)
-#   6. the boot flag is set to the written slot (last), then reboot.
+#   6. the boot flag is set to the written slot (last), then reboot (a
+#      forced one when the normal one doesn't come: at once from the stick,
+#      after a minute over SSH; restart() below).
 # State in /usr/data/ad5x/install/state; a second run is safe (finished steps
 # are checked, not repeated blindly). Exit status: 0 done (or check OK),
 # 1 failed, 2 usage, 3 refused (not an AD5X, not stock, already installed).
 #
 # Test overrides: AD5X_SYS AD5X_DEV AD5X_CMDLINE AD5X_MOUNTS AD5X_DT
-# AD5X_USERDATA AD5X_ROOT AD5X_APP_STARTUP AD5X_TMP AD5X_MEMINFO.
+# AD5X_USERDATA AD5X_ROOT AD5X_APP_STARTUP AD5X_TMP AD5X_MEMINFO AD5X_SYSRQ
+# AD5X_REBOOT_WAIT.
 : "${AD5X_SYS:=/sys}" "${AD5X_DEV:=/dev}" "${AD5X_CMDLINE:=/proc/cmdline}"
 : "${AD5X_MOUNTS:=/proc/mounts}" "${AD5X_DT:=/proc/device-tree}"
 : "${AD5X_USERDATA:=/usr/data}" "${AD5X_ROOT:=}" "${AD5X_TMP:=/tmp/ad5x-install}"
@@ -68,8 +71,8 @@ while [ $# -gt 0 ]; do
 	--sums) SUMS=$2; shift ;;
 	--emmc-backup) EMMC=$2; shift ;;
 	--log) XLOG=$2; shift ;;
-	-h|--help) sed -n '2,49p' "$0"; exit 0 ;;
-	*) sed -n '2,49p' "$0" >&2; exit 2 ;;
+	-h|--help) sed -n '2,52p' "$0"; exit 0 ;;
+	*) sed -n '2,52p' "$0" >&2; exit 2 ;;
 	esac
 	shift
 done
@@ -86,11 +89,48 @@ LOG=$T/install.log
 
 log() { echo "$*"; echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; [ -n "$XLOG" ] && echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$XLOG"; true; }
 SCREENS=$DIR/screens
+# A screen with frames (stepN.jpg, stepN-1.jpg .. stepN-7.jpg: the ring
+# around the badge turns) is shown frame after frame, about once a second,
+# by a loop in the background until the next show(), so a long step never
+# looks stuck. show() stops the loop first and waits for it (it ends only
+# between two pictures), so the new screen always comes last; so does the
+# exit trap. Signals are left as they were (a killed installer dies at
+# once): the loop sees that its installer is gone and ends by itself
+# within about a second.
+# Screens without frames (done, powercycle, failed, refused, installed)
+# stay as they are.
+ANIM=
+anim_stop() {
+	[ -n "$ANIM" ] || return 0
+	kill "$ANIM" 2>/dev/null
+	wait "$ANIM" 2>/dev/null
+	ANIM=
+}
+anim_loop() {	# OWNER NAME: NAME.jpg, NAME-1.jpg .. in turn while OWNER runs
+	trap 'kill $sp 2>/dev/null; exit 0' TERM
+	sp=
+	while :; do
+		for f in "$SCREENS/$2.jpg" "$SCREENS/$2"-[0-9]*.jpg; do
+			kill -0 "$1" 2>/dev/null || exit 0
+			[ -f "$f" ] && cmd_jpeg_display "$f" >/dev/null 2>&1
+			sleep 1 & sp=$!
+			wait $sp
+		done
+	done
+}
 show() {	# screen name (screens/NAME.jpg), only with --usb
-	[ -n "$usb" ] && [ -f "$SCREENS/$1.jpg" ] && [ -e "$AD5X_DEV/fb0" ] || return 0
-	cmd_jpeg_display "$SCREENS/$1.jpg" >/dev/null 2>&1
+	[ -n "$usb" ] && [ -e "$AD5X_DEV/fb0" ] || return 0
+	anim_stop
+	[ -f "$SCREENS/$1.jpg" ] || return 0
+	if [ -f "$SCREENS/$1-1.jpg" ]; then
+		anim_loop $$ "$1" >/dev/null 2>&1 &
+		ANIM=$!
+	else
+		cmd_jpeg_display "$SCREENS/$1.jpg" >/dev/null 2>&1
+	fi
 	true
 }
+trap anim_stop EXIT
 fail() { log "FAILED: $*"; show failed; exit 1; }
 refuse() { log "NOT INSTALLED: $*"; show "${REFUSE_SCREEN:-refused}"; exit 3; }
 step() { STEP=$1; log "== step $1/6: $2"; show "step$1"; }
@@ -150,6 +190,57 @@ fetch() {	# FILE|URL -> local path
 
 log "=== Kiln OS installer $(cat "$DIR/VERSION" 2>/dev/null) ${check:+(check only)}${usb:+ (USB)}"
 log "bundle: $DIR"
+
+# Restart into the new system, only once the boot flag is written and read
+# back (the caller has checked it; checked again here) and after sync.
+# 1. A plain reboot asks init. Stock's init (BusyBox 1.31 linuxrc) acts
+#    on that only after its start scripts have finished, and the install
+#    stick runs inside them (rcS, S99factory_test_shell, app_startup.sh,
+#    flashforge_init.sh): from the stick the request just waits (the
+#    printer stayed on the done screen). Over SSH, on a stock system that
+#    has finished starting, it works as usual: init runs stock's own
+#    shutdown (its programs stopped, data synced), which isn't cut short.
+# 2. "reboot -f": BusyBox syncs and makes the reboot system call itself,
+#    without init. Stock's own app_startup.sh does the same after a
+#    Flashforge update. From the stick (--usb) after a short wait (7 s:
+#    init won't act there); over SSH only when the printer is still up
+#    a minute after the plain reboot.
+# 3. If that returned: the kernel's sysrq trigger (emergency sync,
+#    read-only remount, reset), when the kernel has one.
+# Returns 0 when the printer is still running after all of them, 1 (and
+# tries nothing) when the flag doesn't read back.
+# Tests: AD5X_SYSRQ (default /proc/sysrq-trigger); AD5X_REBOOT_WAIT=0
+# skips the waits.
+SYSRQ=${AD5X_SYSRQ:-/proc/sysrq-trigger}
+nap() { [ "${AD5X_REBOOT_WAIT:-}" = 0 ] || sleep "$1"; }
+restart() {
+	if [ -z "$FLAG" ] || [ "$(read_flag)" != "$FLAG" ]; then
+		log "not restarting: the boot flag reads '$(read_flag)', not '$FLAG'"
+		return 1
+	fi
+	log "rebooting"
+	sync; nap 3
+	reboot
+	if [ -n "$usb" ]; then
+		nap 7
+		log "no restart yet (stock's start-up still running): forcing it (reboot -f)"
+	else
+		nap 60
+		log "no restart a minute after the reboot: forcing it (reboot -f)"
+	fi
+	sync
+	reboot -f
+	nap 3
+	if [ -e "$SYSRQ" ]; then
+		log "still running: restarting through $SYSRQ"
+		sync
+		echo s > "$SYSRQ"; nap 1
+		echo u > "$SYSRQ"; nap 1
+		echo b > "$SYSRQ"
+		nap 3
+	fi
+	return 0
+}
 
 # ---------------------------------------------------------------- 1. checks
 step 1 "checking the printer and the files"
@@ -217,8 +308,15 @@ fi
 # earlier attempts
 st=$(sed -n 's/^state=//p' "$I/state" 2>/dev/null)
 case "$st" in
-flag-set|done)
+flag-set)
+	# Switched, but Kiln OS never reported a finished start (the main OS
+	# writes "done" then: S99ad5x-install-recovery). Stock again means the
+	# new system didn't come up and the printer fell back: no install loop
 	[ -n "$retry" ] || refuse "an earlier install already switched to Kiln OS (state '$st', $I/install.log), and the printer is running stock again: the new system didn't finish starting, or stock was put back. To install again anyway: --retry (USB: put a file ad5x-install-retry on the stick)" ;;
+done)
+	# Kiln OS was installed and started completely; nothing of it falls
+	# back to stock by itself, so stock was put back on purpose
+	log "Kiln OS was installed and started earlier (state 'done'), and the printer runs stock again: installing again" ;;
 returned)
 	# Return to Flashforge firmware (the recovery OS's ad5x-return-stock)
 	# removed Kiln OS on purpose: a new install needs no --retry
@@ -454,6 +552,58 @@ else
 	[ "$(sha "$z")" = "$(sha "$MAIN")" ] || fail "update copy reads back wrong"
 	log "main OS update left in $U/ad5x/update: the recovery OS installs it into slot B at its first start"
 fi
+
+# Kiln's data from an earlier install (/usr/data/ad5x kept through Return
+# to Flashforge firmware): its variables.cfg names the IFS slot Kiln last
+# loaded into the nozzle, but stock has run since (it runs now) and loads
+# and unloads with its own record. The slot record is dropped (ifs_loaded,
+# ifs_channel, ifs_loaded_source, and the notes of an unfinished slot
+# search ifs_find_open, ifs_tube_blocked), so Kiln OS starts knowing no
+# slot and finds the one in the toolhead. Every other line stays byte for
+# byte. ifs_forget is the same code as in the recovery OS's
+# ad5x-return-stock, which drops it at the return already.
+IFS_FORGET="ifs_loaded ifs_channel ifs_loaded_source ifs_find_open ifs_tube_blocked"
+ifs_forget() {	# FILE [check]: prints the names dropped; 1: FILE left as it was
+	local f nf t n n0 n1 n2
+	f=$1 nf=$1.kiln-new t=$T/ifs-forget
+	[ -f "$f" ] && [ ! -L "$f" ] || return 0
+	awk -v names="$IFS_FORGET" -v gone="$t" '
+	BEGIN { n = split(names, a, " "); for (i = 1; i <= n; i++) del[a[i]] = 1; printf "" > gone }
+	{
+		l = $0; sub(/\r$/, "", l); d = 0
+		if (l ~ /^\[/) {
+			s = l; sub(/^\[[ \t]*/, "", s); sub(/[ \t]*\].*$/, "", s); sec = tolower(s); c = 0
+		} else if (c && l ~ /^[ \t]/ && l ~ /[^ \t]/) {
+			d = 1
+		} else {
+			c = 0
+			if (sec == "variables" && l ~ /^[^ \t]/) {
+				k = l; sub(/[ \t]*[=:].*$/, "", k); k = tolower(k)
+				if (k in del) { d = 1; c = 1; print "@" k > gone }
+			}
+		}
+		if (d) print "-" > gone
+		else print $0
+	}' "$f" > "$t.keep" || { rm -f "$t" "$t.keep"; return 1; }
+	n=$(sed -n 's/^@//p' "$t" | tr '\n' ' ' | sed 's/ $//')
+	if [ -z "$n" ]; then rm -f "$t" "$t.keep"; return 0; fi
+	if [ "${2:-}" = check ]; then echo "$n"; rm -f "$t" "$t.keep"; return 0; fi
+	n0=$(awk 'END { print NR }' "$f") n1=$(awk 'END { print NR }' "$t.keep") n2=$(grep -c '^-' "$t")
+	if [ -e "$nf" ] && [ ! -f "$nf" ]; then rm -f "$t" "$t.keep"; return 1; fi
+	rm -f "$nf" 2>/dev/null
+	if [ "$n0" = $((n1 + n2)) ] && cp -p "$f" "$nf" && cat "$t.keep" > "$nf" && sync &&
+	   cmp -s "$t.keep" "$nf" && mv -f "$nf" "$f" && sync; then
+		rm -f "$t" "$t.keep"; echo "$n"; return 0
+	fi
+	rm -f "$t" "$t.keep" "$nf" 2>/dev/null
+	return 1
+}
+KVARS=$U/ad5x/printer_data/config/variables.cfg
+if kv=$(ifs_forget "$KVARS"); then
+	[ -n "$kv" ] && log "Kiln's variables.cfg from before: the IFS slot record dropped ($kv; stock has run since)"
+else
+	log "WARNING: Kiln's variables.cfg from before couldn't be changed: Kiln OS may take a wrong IFS slot as loaded (the setup wizard's Filament step with the toolhead's slot named fixes it)"
+fi
 echo "state=staged" > "$I/state"
 
 # ---------------------------------------------------------------- 6. boot flag
@@ -466,9 +616,10 @@ log "boot flag '$FLAG': the next start runs slot $IDLE"
 log "DONE. Going back to stock later: ad5x-restore-stock (over SSH; it boots the recovery OS), see docs/install.md"
 show done
 if [ -n "$reboot_after" ]; then
-	log "rebooting"
-	sync; sleep 3
-	reboot
+	restart || fail "the boot flag doesn't read back as '$FLAG' before the restart"
+	# still here: none of the ways restarted the printer
+	log "the printer did not restart by itself: switch it off and on. That is safe now: Kiln OS is installed and the boot flag is set"
+	show powercycle
 else
 	log "reboot to start Kiln OS"
 fi

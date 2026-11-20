@@ -215,7 +215,24 @@ every try, the phases and reasons), `tools/test_kiln_os.py` (the
 endpoint). Not yet tested on a printer.
 
 Screens while it works: "Updating the boards", "Switch off and on", "Board
-update failed". `ad5x-mcu status` shows both versions and the IFS's
+update failed". "Updating the boards" never stands still: on Kiln's kernels
+`ad5x-fb-progress` (started by `ad5x-mcu` when the first board is about to
+be written, stopped before the next screen) turns a ring around the badge,
+says what is happening ("Checking the boards", "Writing the mainboard",
+"Writing the toolhead board", "Writing the filament unit (IFS)", "Starting
+the toolhead board") with the flasher's own percentage (the last `NN%` in
+`nations.log`, `iap.log` or `ifs.log`), fills a bar with it (a moving
+segment while there is none yet) and counts the elapsed time ("2:14"); the
+footer says it usually takes 1 to 2 minutes, once. It redraws only those
+parts, five times a second, niced, from pieces made at build time
+(`tools/make_install_screens.py --boards`, `/usr/share/ad5x/screens/progress/`;
+the image's Pillow has no FreeType); about 0.5 % of one laptop core
+(`tools/test_progress.sh`). On the stock kernel `ad5x-mcu` shows
+`mcu-updating.jpg` and seven frames of the turning ring with
+`cmd_jpeg_display`, one a second. Either is best effort: a missing or
+failing helper changes nothing in the flashing. Killed, `ad5x-mcu` leaves
+nothing drawing: the helper ends when its parent is gone, the loop within
+about a second. `ad5x-mcu status` shows both versions and the IFS's
 (`ifs=`): its Klipper version, or `flashforge 3.0.7` for Flashforge's
 firmware (from its `F19` answer), empty when nothing answers. While Klipper
 runs it holds the ports, also the IFS's with Flashforge's firmware

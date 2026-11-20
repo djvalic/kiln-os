@@ -1,0 +1,347 @@
+#!/bin/sh
+# Which network stack runs this start, and NetworkManager's setup when it
+# is NetworkManager (docs/network.md). Main OS only: the recovery OS has
+# no NetworkManager and runs S41ad5x-eth and S42ad5x-wifi as always.
+#
+# NetworkManager (S45NetworkManager) by default. The old path,
+# wpa_supplicant and udhcpc (S41ad5x-eth, S42ad5x-wifi, HelixScreen's
+# wpa_supplicant backend), when:
+#   /data/ad5x/network-legacy       is there (yours: always the old path)
+#   /data/ad5x/network-legacy.auto  is there (this script's: NetworkManager
+#                                   had no network at an earlier start
+#                                   and the old path had one; delete it
+#                                   to try NetworkManager again)
+#   NetworkManager or its setup is missing or fails
+# The choice is in /run/ad5x-network/mode (nm or legacy): S41, S42,
+# S45NetworkManager (/etc/default/NetworkManager) and S46ad5x-wifi-log
+# follow it.
+#
+# Setup, at every start: NetworkManager's connections are made new in
+# /run/ad5x-network/connections from /data/ad5x/network.conf (read the
+# same way lib/network.sh reads it) and /data/ad5x/wpa_supplicant.conf
+# (made from stock's networks if it isn't there, as S42 does), by
+# /usr/lib/ad5x/ad5x_network.py. Those files stay the saved setup: a
+# network the screen joins, changes or forgets is written back to
+# wpa_supplicant.conf as soon as NetworkManager saves it (inotifyd on the
+# connections, "sync"), and once more at "stop", so the old path, an
+# older release and the recovery OS have it too. /data/ad5x/wifi.disable:
+# no Wi-Fi at all (wlan0 left to no one, issue #44).
+#
+# Safety net ("check", in the background): NetworkManager must be running
+# within 30 s and some interface must have an IPv4 address within 120 s
+# of this start. If not, and a network was to be expected (an Ethernet
+# cable in, or a saved Wi-Fi network to join automatically, not
+# disabled=1, with Wi-Fi on), this start switches
+# to the old path ("revert": NetworkManager stopped, S41 and S42 started,
+# HelixScreen restarted so it takes the wpa_supplicant backend). If the
+# old path then has an address within 60 s, network-legacy.auto keeps it
+# at the next starts; if not, it wasn't NetworkManager, and the next start
+# tries NetworkManager again.
+#
+# printer_data/logs/network.log (Fluidd shows it): the choice, the setup,
+# the check and every write-back; the previous start's is network.log.1.
+
+# Files this creates are readable by klipper and www-data, whoever started
+# it (a root SSH session may run with umask 077; issue #31). The keyfiles
+# and wpa_supplicant.conf are 0600 (ad5x_network.py).
+umask 022
+
+NET=/run/ad5x-network
+CONN=$NET/connections
+DATA=/data/ad5x
+LEGACY=$DATA/network-legacy
+AUTO=$DATA/network-legacy.auto
+CONF=$DATA/wpa_supplicant.conf
+# NetworkManager's state (leases, its secret key): /var/lib/NetworkManager
+# links here (board/ad5x/post-build.sh)
+STATE=$DATA/NetworkManager
+HELIX=$DATA/helixscreen/config/settings.json
+LOG=$DATA/printer_data/logs/network.log
+NM_PID=/var/run/NetworkManager.pid
+NM_CONFD=/run/NetworkManager/conf.d
+# Test overrides (tools/test_network_nm.sh): AD5X_LIB (/usr/lib/ad5x),
+# AD5X_NET_NM (the NetworkManager binary), AD5X_NET_INIT (/etc/init.d),
+# AD5X_NET_*_WAIT (the waits below, in seconds)
+LIB=${AD5X_LIB:-/usr/lib/ad5x}
+PY=$LIB/ad5x_network.py
+NM_BIN=${AD5X_NET_NM:-/usr/sbin/NetworkManager}
+INIT=${AD5X_NET_INIT:-/etc/init.d}
+# NetworkManager running, an IPv4 address, the old path's address
+NM_WAIT=${AD5X_NET_NM_WAIT:-30}
+NET_WAIT=${AD5X_NET_WAIT:-120}
+OLD_WAIT=${AD5X_NET_OLD_WAIT:-60}
+
+log() {
+	echo "ad5x-network: $*"
+	echo "$(date '+%F %T') $*" >> $LOG 2>/dev/null
+}
+
+# py ARGS: ad5x_network.py, its "ad5x-network:" lines into the log
+py() {
+	out=$(python3 -I $PY "$@" 2>&1)
+	rc=$?
+	[ -n "$out" ] && printf '%s\n' "$out" | while IFS= read -r l; do
+		log "${l#ad5x-network: }"
+	done
+	return $rc
+}
+
+mode() { cat $NET/mode 2>/dev/null; }
+
+# The reason for the old path at this start, if there is one
+legacy_reason() {
+	if [ -f $LEGACY ]; then
+		echo "$LEGACY is there"
+	elif [ -f $AUTO ]; then
+		echo "$AUTO is there ($(head -1 $AUTO 2>/dev/null)); delete it to try NetworkManager again"
+	elif [ ! -x $NM_BIN ] || [ ! -f $PY ]; then
+		echo "no NetworkManager in this image"
+	fi
+}
+
+# What stock left on usershare (read-only): its MAC, its saved networks
+usershare() {
+	rm -rf $NET/usershare
+	mkdir -p $NET/usershare/mnt
+	for u in /sys/class/block/*/uevent; do
+		grep -qx "PARTNAME=usershare" "$u" 2>/dev/null || continue
+		dev=/dev/$(sed -n 's/^DEVNAME=//p' "$u")
+		if mount -t ext4 -o ro "$dev" $NET/usershare/mnt 2>/dev/null; then
+			cp $NET/usershare/mnt/MAC $NET/usershare/MAC 2>/dev/null
+			(umask 077; cp $NET/usershare/mnt/wifi/wpa_supplicant.conf \
+				$NET/usershare/wpa_supplicant.conf 2>/dev/null)
+			umount $NET/usershare/mnt
+		fi
+	done
+	rmdir $NET/usershare/mnt 2>/dev/null
+}
+
+# The connections, from network.conf (sourced in a subshell, with
+# network.sh's defaults) and wpa_supplicant.conf
+generate() {
+	rm -rf $CONN
+	mkdir -p $CONN && chmod 700 $CONN
+	nowifi=
+	[ -f $DATA/wifi.disable ] && nowifi=--no-wifi
+	# shellcheck disable=SC1090
+	(
+		MODE=dhcp ADDRESS= GATEWAY= DNS= IFACE=
+		[ -f $DATA/network.conf ] && . $DATA/network.conf
+		export AD5X_NET_MODE="$MODE" AD5X_NET_ADDRESS="$ADDRESS" \
+			AD5X_NET_GATEWAY="$GATEWAY" AD5X_NET_DNS="$DNS" AD5X_NET_IFACE="$IFACE"
+		py generate --out $CONN --manifest $NET/manifest --conf $CONF \
+			--stock $NET/usershare/wpa_supplicant.conf --mac $NET/usershare/MAC $nowifi
+	) || return 1
+	[ -s $CONN/kiln-ethernet.nmconnection ]
+}
+
+# DHCP leases of connections that are gone: NetworkManager names a lease
+# file by its connection's UUID. A connection made here gets its fixed
+# UUID again at every start; one the screen made gets a new UUID, and after
+# a restart it is made here from wpa_supplicant.conf, so its old lease file
+# would stay for good.
+old_leases() {
+	n=0
+	for f in $STATE/*.lease; do
+		[ -f "$f" ] || continue
+		u=$(echo "${f##*/}" | sed -n 's/^[a-z0-9]*-\([0-9a-f]\{8\}-[0-9a-f]\{4\}-[0-9a-f]\{4\}-[0-9a-f]\{4\}-[0-9a-f]\{12\}\)-.*\.lease$/\1/p')
+		[ -n "$u" ] || continue
+		grep -qx "uuid=$u" $CONN/*.nmconnection 2>/dev/null && continue
+		rm -f "$f" && n=$((n + 1))
+	done
+	[ $n -gt 0 ] && log "$n DHCP lease file(s) of connections no longer saved removed"
+	return 0
+}
+
+prepare() {
+	usershare
+	# The saved passwords stay private, as S42 keeps them (issue #31)
+	for f in $CONF $CONF.bad-*; do
+		[ -f "$f" ] && chmod 600 "$f"
+	done
+	generate || { rm -rf $NET/usershare; return 1; }
+	rm -rf $NET/usershare
+	# NetworkManager's state: switches set with nmcli (radio, networking)
+	# don't outlive a start, HelixScreen sets its own Wi-Fi switch again
+	mkdir -p $STATE && chmod 700 $STATE
+	rm -f $STATE/NetworkManager.state $STATE/NetworkManager-intern.conf
+	old_leases
+	# /etc/resolv.conf links to /run/resolv.conf (rc-manager=file)
+	[ -e /run/resolv.conf ] || : > /run/resolv.conf
+	mkdir -p $NM_CONFD
+	if [ -n "$nowifi" ]; then
+		printf '[keyfile]\nunmanaged-devices=interface-name:wlan0\n' \
+			> $NM_CONFD/50-ad5x-wifi-disable.conf
+		ip link set wlan0 down 2>/dev/null
+	fi
+	return 0
+}
+
+watch_start() {
+	inotifyd $LIB/network-event $CONN:wymd </dev/null >/dev/null 2>&1 &
+	echo $! > $NET/watch.pid
+}
+
+watch_stop() {
+	[ -f $NET/watch.pid ] && kill "$(cat $NET/watch.pid)" 2>/dev/null
+	rm -f $NET/watch.pid
+}
+
+# sync: NetworkManager's Wi-Fi networks into wpa_supplicant.conf, one at a
+# time (inotifyd's events, stop, revert)
+sync_conf() {
+	[ -d $CONN ] || return 0
+	(
+		flock 9
+		py writeback --dir $CONN --manifest $NET/manifest --conf $CONF ||
+			log "writing the Wi-Fi networks back failed: $CONF unchanged"
+	) 9> $NET/sync.lock
+}
+
+nm_running() {
+	[ -f $NM_PID ] && kill -0 "$(cat $NM_PID)" 2>/dev/null
+}
+
+have_ipv4() {
+	ip -4 addr show scope global 2>/dev/null | grep -q 'inet '
+}
+
+addresses() {
+	ip -4 -o addr show scope global 2>/dev/null |
+		awk '{ printf "%s%s %s", s, $2, $4; s = ", " }'
+}
+
+# wifi_nets: "SAVED AUTO", the network blocks in wpa_supplicant.conf and
+# those of them to join automatically (not disabled=1: stock saves its
+# networks that way until one is joined, and neither NetworkManager nor
+# the old path joins one by itself)
+wifi_nets() {
+	awk '/^[[:space:]]*network[[:space:]]*=/ { b = 1; d = 0; next }
+		b && /^[[:space:]]*disabled[[:space:]]*=[[:space:]]*[1-9]/ { d = 1 }
+		b && /^[[:space:]]*}/ { n++; if (!d) a++; b = 0 }
+		END { print n + 0, a + 0 }' $CONF 2>/dev/null || echo 0 0
+}
+
+# Was a network to be expected? An Ethernet cable in, or a saved Wi-Fi
+# network to join automatically with Wi-Fi on (not wifi.disable, not
+# switched off on the screen). Says why not in $why_not.
+expect_network() {
+	[ "$(cat /sys/class/net/eth0/carrier 2>/dev/null)" = 1 ] && return 0
+	why_not="no Ethernet cable"
+	if [ -f $DATA/wifi.disable ]; then
+		why_not="$why_not, Wi-Fi off ($DATA/wifi.disable)"
+		return 1
+	fi
+	if grep -Eq '"wifi_enabled"[[:space:]]*:[[:space:]]*(false|0)' $HELIX 2>/dev/null; then
+		why_not="$why_not, Wi-Fi switched off on the screen"
+		return 1
+	fi
+	set -- $(wifi_nets)
+	[ "${2:-0}" -gt 0 ] && return 0
+	why_not="$why_not, $1 saved Wi-Fi network(s), 0 to join automatically"
+	return 1
+}
+
+# revert REASON: the old path, now
+revert() {
+	log "switching to the old network path (wpa_supplicant, udhcpc): $1"
+	sync_conf
+	watch_stop
+	# NetworkManager stopped here, not by S45NetworkManager (whose stop
+	# waits for the pid file without a limit): TERM, 10 s, then KILL
+	if nm_running; then
+		kill "$(cat $NM_PID)" 2>/dev/null
+		i=0
+		while nm_running && [ $i -lt 10 ]; do sleep 1; i=$((i + 1)); done
+		nm_running && kill -9 "$(cat $NM_PID)" 2>/dev/null
+	fi
+	rm -f $NM_PID
+	# NetworkManager's wpa_supplicant (started over D-Bus) and addresses
+	killall wpa_supplicant 2>/dev/null
+	for i in eth0 wlan0; do ip addr flush dev $i 2>/dev/null; done
+	echo legacy > $NET/mode
+	# HelixScreen takes NetworkManager's backend while this is there
+	rm -rf /run/NetworkManager
+	$INIT/S41ad5x-eth start
+	$INIT/S42ad5x-wifi start
+	if [ -f /var/run/helixscreen.pid ] &&
+	   kill -0 "$(cat /var/run/helixscreen.pid)" 2>/dev/null; then
+		log "HelixScreen restarted (wpa_supplicant backend)"
+		$INIT/S70helixscreen restart >/dev/null 2>&1
+	fi
+	i=0
+	while ! have_ipv4 && [ $i -lt $OLD_WAIT ]; do
+		sleep 2; i=$((i + 2))
+	done
+	if have_ipv4; then
+		echo "$(date '+%F %T'): $1; the old path had a network ($(addresses))" > $AUTO
+		log "the old path has a network ($(addresses)): it stays, $AUTO made (delete it to try NetworkManager again)"
+	else
+		log "no network on the old path either: not NetworkManager's fault, the next start tries it again"
+	fi
+}
+
+check() {
+	i=0
+	while ! nm_running; do
+		if [ $i -ge $NM_WAIT ]; then
+			revert "NetworkManager not running after $NM_WAIT s"
+			return
+		fi
+		sleep 1; i=$((i + 1))
+	done
+	while ! have_ipv4; do
+		if [ $i -ge $NET_WAIT ]; then
+			if expect_network; then
+				revert "no IPv4 address after $NET_WAIT s"
+			else
+				log "no network after $NET_WAIT s, and none to expect ($why_not): NetworkManager stays"
+			fi
+			return
+		fi
+		sleep 2; i=$((i + 2))
+	done
+	log "network up after ${i} s: $(addresses)"
+}
+
+case "$1" in
+start)
+	[ -n "$AD5X_USB" ] && exit 0
+	watch_stop
+	mkdir -p $NET ${LOG%/*}
+	[ -s $LOG ] && mv -f $LOG $LOG.1 2>/dev/null
+	: > $LOG 2>/dev/null
+	# A route through a port whose cable is out is ignored (issue #8; S41
+	# sets it on the old path)
+	echo 1 2>/dev/null > /proc/sys/net/ipv4/conf/default/ignore_routes_with_linkdown
+	echo 1 2>/dev/null > /proc/sys/net/ipv4/conf/all/ignore_routes_with_linkdown
+	why=$(legacy_reason)
+	if [ -z "$why" ] && ! prepare; then
+		why="NetworkManager's setup failed"
+		rm -rf /run/NetworkManager $CONN
+	fi
+	if [ -n "$why" ]; then
+		echo legacy > $NET/mode
+		log "old network path (wpa_supplicant, udhcpc): $why"
+		exit 0
+	fi
+	echo nm > $NET/mode
+	log "NetworkManager: $(ls $CONN | grep -c '\.nmconnection$') connection(s) made"
+	watch_start
+	(check) </dev/null >/dev/null 2>&1 &
+	;;
+stop)
+	[ "$(mode)" = nm ] || exit 0
+	watch_stop
+	sync_conf
+	;;
+sync)
+	[ "$(mode)" = nm ] && sync_conf
+	;;
+status)
+	echo "mode: $(mode)"
+	why=$(legacy_reason)
+	[ -n "$why" ] && echo "next start: old path ($why)" || echo "next start: NetworkManager"
+	;;
+esac
+exit 0
