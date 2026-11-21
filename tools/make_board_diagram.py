@@ -222,7 +222,7 @@ n32_loads = [
     (650, "TMC2209 Y", "EN PA2, DIR PA7, STEP PC4, UART PB0", False),
     (710, "TMC2209 Z", "EN PB14, DIR PC8, STEP PC7, UART PB15", False),
     (770, "Bed", "heater PB9; thermistor PA0 on J35", False),
-    (830, "Probe input", "PB3 on J23 (RES); weighing board trigger?", False),
+    (830, "Probe input", "PB3 on J23 (RES): weighing board trigger", False),
     (890, "Endstops", "Y PC12 on J12; Z PD2 on J14", False),
     (950, "PCB fan / chamber light", "PA5 on J20; PA11 on J21", False),
     (1015, "Fan/servo headers, off in stock", "J16 PB7 fitted; J17 PC15, J18 PA4, J26 PC11 not", True),
@@ -242,7 +242,7 @@ uart_items = [
      "UART4 PB24/PB25 (ttyS4)", False),
     (870, "Toolhead board (eboard)", ["extruder, heater, fans,", "LIS2DW, X endstop"],
      "UART5 PB26/PB27 (ttyS5)", False),
-    (980, "Weighing board", ["strain gauges; tared over ttyS7", "trigger to N32 PB3? (unproven)"],
+    (980, "Weighing board", ["strain gauges; tared over ttyS7", "trigger to N32 PB3 (confirmed)"],
      "UART7 PC4/PC5 (ttyS7)", False),
     (1080, "J24 TVOC", ["not fitted; opened by nothing"],
      "UART3 PB22/PB23 (ttyS3)", True),
@@ -258,11 +258,12 @@ for y, t, sub, soc_text, dsh in uart_items:
     wire([(XX1, y), (PX0, y)], kind, dashed=dsh)
     d.text((s(XX1 - 10), s(y)), soc_text, font=F_TEXT, fill=C[kind], anchor="rm")
 # Weighing board trigger -> N32 PB3: likely, not proven.
-# Weighing board trigger -> probe input (N32 PB3): likely, not proven.
+# Weighing board trigger -> probe input (N32 PB3). Confirmed by a press
+# test: PB3 trips when the board's reading rises (about 200-900 g here).
 # Runs below the N32 box to reach the probe input on the right.
 wire([(PX1, 995), (1730, 995), (1730, 1190), (2160, 1190), (2160, 845), (2200, 845)],
-     "unk", dashed=True)
-label(1945, 1190, "weighing board trigger? (unproven)", C["unk"], anchor="mm")
+     "gpio")
+label(1945, 1190, "weighing board trigger (confirmed by press test)", C["gpio"], anchor="mm")
 # PC3 driver enable
 d.text((s(XX1 - 10), s(785)), "PC3: RS-485 driver enable", font=F_SMALL, fill=C["gpio"], anchor="rm")
 
