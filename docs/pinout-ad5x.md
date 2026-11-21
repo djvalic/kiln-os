@@ -3,11 +3,14 @@
 All measurements were taken on the **FFP0303_Main_Board_V3.0.1** main board,
 dated 2025-05-16. Other board revisions may differ.
 
-> **Warning:** the board mixes two logic levels. Ports **B**, **C** and **D** of
-> the X2600 run at **3.3 V**. The **E port** sits in the 1.8 V bank (VDDIO18),
-> and its `AUX` pins are 1.8 V ADC inputs; the **A port** is also 1.8 V on this
-> board. Before connecting an expansion board, make sure its signal lines match
-> the level of the pin. Ignoring this can destroy the printer.
+> **Warning:** the board mixes two logic levels. Ports **B** and **C** of the
+> X2600 run at **3.3 V**. Port **D** is 3.3 V except PD0–PD5, which are on
+> VDDIO_SD and are **1.8 V** on this board — the eMMC runs HS200, 8-bit, at a
+> 1.80 V signal voltage. None of PD0–PD5 reach a connector or a test point. The
+> **E port** sits in the 1.8 V bank (VDDIO18), and its `AUX` pins are 1.8 V ADC
+> inputs; the **A port** is also 1.8 V on this board. Before connecting an
+> expansion board, make sure its signal lines match the level of the pin.
+> Ignoring this can destroy the printer.
 
 Two different chips are involved, and both use `PA`/`PB`/`PC` style port names.
 Each section below says which chip its pin names belong to:
@@ -20,9 +23,13 @@ the main core's JTAG pins (TDO, TDI, TCK, TMS).
 
 ## 1. J28 USB
 
-Not fitted at the factory. Wired to the **X2600** as USB0, with OTG support.
-Used to recover the boot loader or the eMMC with Ingenic's USBCloner. It can
-also be used to attach expansion boards.
+Wired to the **X2600** as USB0, with OTG support. Used to recover the boot
+loader or the eMMC with Ingenic's USBCloner. It can also be used to attach
+expansion boards.
+
+The two main board generations differ here: J28 is **fitted** on
+first-generation boards and **not fitted** on second-generation ones. On the
+FFP0303_Main_Board_V3.0.1 used for these measurements it is not fitted.
 
 Example: connecting a BTT EBB42:
 
@@ -38,15 +45,19 @@ boards.
 
 ## 3. USB hub (GL852G)
 
-The **X2600** has one USB host port. A **GL852G** hub on the main board fans it
-out to four ports:
+The **X2600** has two USB 2.0 ports. USB0 (OTG) goes to J28; USB1 feeds the
+**GL852G** hub on the main board, which fans it out to four ports:
 
-| Port | Where it goes                        |
-|-----:|--------------------------------------|
-| 1    | USB socket on the display board      |
+| Port | Where it goes                          |
+|-----:|----------------------------------------|
+| 1    | USB socket on the display board        |
 | 2    | USB camera socket on the display board |
-| 3    | J6 on the main board                 |
-| 4    | Wi-Fi module                         |
+| 3    | J6 on the main board                   |
+| 4    | Wi-Fi module                           |
+
+USB1 has no OTG. The datasheet says it can act as a device, but on this board
+it is wired straight to the hub, so in practice it is host only. USB0 works as
+a host too, as the EBB42 example above shows.
 
 ## 4. J8 Debug
 
@@ -129,8 +140,15 @@ out. Using it requires soldering the additional support components.
 
 ## 11. J16 PLA fan
 
-Not fitted at the factory. Wired to the **N32G455** (N32G455 port names), pin
-PB7. In the stock `printer.base.cfg` the `chamber_fan` on PB7 is commented out.
+Fitted at the factory. Wired to the **N32G455** (N32G455 port names), pin PB7.
+In the stock `printer.base.cfg` the `chamber_fan` on PB7 is commented out.
+
+| Pin | Signal |
+|----:|--------|
+| +   | +24 V  |
+| PWM | PB7    |
+| FG  | +3.3 V |
+| −   | GND    |
 
 ## 12. J5 LCD
 
@@ -178,8 +196,9 @@ Other X2600 pins on J5:
 
 * PC14 (pin 12, ball T13) — backlight on/off, also PWM15. Pulled down at reset,
   so the backlight stays off until Linux drives it.
-* PC10 (pin 13, ball T11) — PWM11 / TCU5_IN1 / CAN1_RX. Kiln does not use it;
-  what the stock firmware does with it is unknown.
+* PC10 (pin 13, ball T11) — PWM11 / TCU5_IN1 / CAN1_RX. Neither Kiln nor the
+  stock firmware uses it: it is not in `firmwareExe`, the module scripts or the
+  start-up scripts. Its purpose is unknown.
 * PC0/PC1 (pins 15/16, balls B4/C5) — touch I2C0 clock/data, TSC2007 at 0x48,
   400 kHz. At reset these are the main core's JTAG TDO/TDI.
 * PC7 (pin 18, ball T10) — touch interrupt, low while the panel is touched.
@@ -244,7 +263,7 @@ Notes:
 
 ## 14. X2600 pins Kiln uses
 
-Following the stock device tree (`ad5x.dts`).
+As in Kiln's device tree (`ad5x.dts`), which follows stock.
 
 | Pin         | Use                                              |
 |-------------|--------------------------------------------------|
@@ -294,22 +313,23 @@ The rest are wired straight on the board and go to no connector at all:
 | PB14/PC8/PC7  | Z enable/dir/step  |
 | PB15          | Z TMC2209 UART     |
 
-Four more are fitted but disabled in the stock config:
+These are wired to a connector, but their function is disabled in the stock
+config:
 
-| Pin | Use                          | Connector |
-|-----|------------------------------|-----------|
-| PA4 | external fan (commented out) | J18       |
-| PB7 | chamber fan (commented out)  | J16       |
-| PC11| not in any config            | J26       |
-| PC15| internal fan (commented out) | J17       |
+| Pin | Use                          | Connector       |
+|-----|------------------------------|-----------------|
+| PA4 | external fan (commented out) | J18, not fitted |
+| PB7 | chamber_fan (commented out)  | J16, fitted     |
+| PC11| not in any config            | J26, not fitted |
+| PC15| internal fan (commented out) | J17, not fitted |
 
 ## 16. Power path: K1 and PB12
 
 Both belong to the AD5M Pro, and neither is used on the AD5X.
 
-* **K1**  is the power button of the AD5M Pro. The same button is
-  also on the LCD board. On the AD5X it has no direct connection to the X2600
-  or the N32G455.
+* **K1** is the power button of the AD5M Pro. The same button is also on the
+  LCD board. On the AD5X it has no direct connection to the X2600 or the
+  N32G455.
 * **PB12 (GPIO 44)** works in the power circuit on the AD5M Pro, the same way
   as K1. There it goes to **U20**, presumably a small microcontroller such as
   the STC15W201 or an equivalent. **That part is not fitted on the AD5X**, so
@@ -319,4 +339,5 @@ Both belong to the AD5M Pro, and neither is used on the AD5X.
 ## 17. Still open
 
 * J5 pin 19 — unknown.
-* J5 pin 13 (PC10) — what the stock firmware does with it.
+* J5 pin 13 (PC10) — not used by Kiln or the stock firmware; its purpose is
+  unknown.
