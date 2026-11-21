@@ -258,9 +258,11 @@ for y, t, sub, soc_text, dsh in uart_items:
     wire([(XX1, y), (PX0, y)], kind, dashed=dsh)
     d.text((s(XX1 - 10), s(y)), soc_text, font=F_TEXT, fill=C[kind], anchor="rm")
 # Weighing board trigger -> N32 PB3: likely, not proven.
-wire([(PX1, 995), (1725, 995), (1725, 830), (NX0, 830)], "unk", dashed=True)
-label(1725, 900, "trigger?", C["unk"], anchor="mm")
-d.text((s(NX0 + 10), s(830)), "PB3 probe in", font=F_SMALL, fill=MUTED, anchor="lm")
+# Weighing board trigger -> probe input (N32 PB3): likely, not proven.
+# Runs below the N32 box to reach the probe input on the right.
+wire([(PX1, 995), (1730, 995), (1730, 1190), (2160, 1190), (2160, 845), (2200, 845)],
+     "unk", dashed=True)
+label(1945, 1190, "weighing board trigger? (unproven)", C["unk"], anchor="mm")
 # PC3 driver enable
 d.text((s(XX1 - 10), s(785)), "PC3: RS-485 driver enable", font=F_SMALL, fill=C["gpio"], anchor="rm")
 
