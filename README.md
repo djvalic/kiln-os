@@ -6,6 +6,8 @@
 
 [![Sponsor](https://img.shields.io/badge/Sponsor-djvalic-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/djvalic) (optional, a thank-you: [what sponsoring means](docs/sponsoring.md))
 
+[![Discord](https://img.shields.io/badge/Discord-Kiln%20OS-5865F2?logo=discord&logoColor=white)](https://discord.gg/nyAj7VY9Eh)
+
 An open operating system for the **Flashforge Adventurer 5X (AD5X)**. It
 replaces the stock firmware with a Buildroot Linux system running mainline
 Klipper on the host and on both printer boards, Moonraker, Fluidd, the
@@ -199,6 +201,16 @@ come back in line, see [docs/ifs-troubleshooting.md](docs/ifs-troubleshooting.md
   stock system and reboots into the recovery OS, whose "Restore stock" puts
   it back into its slot ([docs/install.md](docs/install.md), "Going back to
   stock").
+
+## Getting help
+
+- **Bugs and feature requests:** please open an
+  [issue here on GitHub](https://github.com/djvalic/kiln-os/issues), with
+  the Kiln OS version (`cat /etc/ad5x-release`) and the logs if you have
+  them. Issues are where fixes are tracked.
+- **Questions, prints and mods:** the
+  [Kiln OS Discord](https://discord.gg/nyAj7VY9Eh) has #help, #showcase
+  and #releases. A bug found there still gets a GitHub issue.
 
 ## Building
 

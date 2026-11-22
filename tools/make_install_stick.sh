@@ -109,6 +109,12 @@ Kiln OS $VERSION, install stick. See docs/install.md.
    The first start of Kiln OS can show "Installing Kiln OS" for a few
    minutes: don't switch the printer off then.
 3. Log: ad5x-install.log on the stick.
+"Not installed", "An earlier install didn't finish starting": to try again,
+put an empty file named ad5x-install-retry next to flashforge_init.sh and
+switch the printer off and on with the stick in.
+Nothing happens (stock starts as usual, no ad5x-install.log)? The stick must
+be FAT32 (not exFAT or NTFS), these files in its top folder (not in a
+subfolder), no other USB drive plugged in, no AD5X-*.tgz on the stick.
 Works on the stock firmware, with or without zMod. Never put an AD5X-*.tgz on
 this stick. Back to stock later: ad5x-restore-stock over SSH (docs/install.md).
 TXT

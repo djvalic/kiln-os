@@ -13,7 +13,7 @@ the recovery screen's [en.txt](../../recovery-ui/i18n/en.txt) and [ru.txt](../..
 - 365 keys belong to Kiln OS's own screens. I wrote their Russian myself, so they need a native speaker's check most (section 5). 14 of them are new since the last list: Boot into recovery, Log detail, the two Auto-Refill rows of the IFS settings, and SELECTOR and HUB on the IFS drawing. 5 more are new since then: the IFS messages that said AMS in English (section 5); their Russian is the one the AMS messages already had. 54 more are new with patches 0071 to 0077 (section 5): Reboot and Shutdown asking one action at a time, Return to Flashforge firmware, Extended memory, and the IFS firmware switch. 3 more are new with patches 0078 and 0079: the eMMC row of Settings > About, and 7 with patches 0081 and 0082: the Processor row next to it (section 5). 52 more are new with patches 0084 and 0085: the setup wizard's Filament step, what a running step is doing (action, temperatures, time), the Z offset test's slot and temperatures, "Remove the test print from the bed", and naming the slot in the toolhead when Kiln can't tell it (section 5), and one more step name for the logs, `Ad5xFilament`. Patch 0080 changed some Russian wording (section 2).
 - 41 keys are new in HelixScreen v1.1.0-rc.1, and the 41 that came with v1.1.0-beta.18 are still unchecked. HelixScreen ships Russian for all of them, so nothing shows in English, but nobody here has checked that Russian yet (section 7). rc.1 also removed 9 older keys whose texts it rewrote (the HelixPrint plugin reasons and the tour).
 - A few open questions and texts that are still English on the screen (section 1).
-- Recovery screen: all 155 lines of `ru.txt` have a first Russian version that needs checking (section 6).
+- Recovery screen: all 155 lines of `ru.txt` have a first Russian version that needs checking (section 6), and 11 more for removing Kiln OS's settings and files at Return to Flashforge firmware (section 6, last group).
 
 ## 1. Open items
 
@@ -934,7 +934,7 @@ each line is the id, one TAB, then the text. The rules are at the top of `en.txt
 - keep file paths and command names (`/data/ad5x/...`, `ad5x-update`, `SWUpdate`) as they are
 - leave out the icons and "Kiln OS": the screen adds them (`recovery_title` is shown after "Kiln OS")
 - the screen is small: keep a text about as long as the English, buttons especially
-- the recovery font only holds the characters the texts use; if you add a new one, that's fine, I regenerate the font
+- the recovery font holds the whole Russian alphabet and the other characters the texts use; if you add a new sign, that's fine, I regenerate the font
 
 The lines I am least sure of:
 
@@ -1298,6 +1298,99 @@ The lines I am least sure of:
   = `Ошибка обновления (см. журнал)`
 - `job_failed`: `%s: failed (exit %d)`
   = `%s: ошибка (код %d)`
+
+### Sizes and the tools' progress lines (new, unchecked)
+
+Sizes on the update, USB and restore pages now use these units (the number keeps its dot, as on the touch screen's
+About page). The `pg_` lines are what Return to Flashforge firmware and the boot loader install show under the
+progress bar while they run; the log below the bar stays English. `p1`/`p3`/`p4`, `kernel`, `kernel2`, `rootfs2`, `ota`,
+`SPL` and `U-Boot` are partition and program names and stay as they are.
+
+- `size_gb`: `%.1f GB`
+  = `%.1f ГБ`
+- `size_mb`: `%.0f MB`
+  = `%.0f МБ`
+- `size_kb`: `%.0f KB`
+  = `%.0f КБ`
+- `size_b`: `%llu B`
+  = `%llu Б`
+- `pg_checking`: `Checking`
+  = `Проверка`
+- `pg_done`: `Done`
+  = `Готово`
+- `pg_bl_spl`: `Writing Kiln's SPL`
+  = `Запись SPL Kiln`
+- `pg_bl_kernel2`: `Writing Kiln's 6.6 into kernel2`
+  = `Запись ядра Kiln 6.6 в kernel2`
+- `pg_bl_kernel`: `Writing Kiln's 6.6 into kernel`
+  = `Запись ядра Kiln 6.6 в kernel`
+- `pg_bl_uboot`: `Writing Kiln's U-Boot`
+  = `Запись U-Boot Kiln`
+- `pg_bl_step0`: `Step 0: the stock first MiB saved (/data, usershare)`
+  = `Шаг 0: сохранение первого МБ eMMC со стоковым загрузчиком (/data, usershare)`
+- `pg_bl_step1`: `Step 1: Kiln's SPL (0x4600-0xA3FF, the length at 0x4, the header sector last)`
+  = `Шаг 1: запись SPL Kiln (0x4600-0xA3FF, длина по адресу 0x4, сектор заголовка последним)`
+- `pg_bl_step1_up`: `Step 1: this build's SPL (0x4600-0xA3FF, the length at 0x4, the header sector last)`
+  = `Шаг 1: запись SPL этой сборки (0x4600-0xA3FF, длина по адресу 0x4, сектор заголовка последним)`
+- `pg_bl_step2`: `Step 2: kernel2 (p3) <- Kiln's 6.6`
+  = `Шаг 2: запись ядра Kiln 6.6 в kernel2 (p3)`
+- `pg_bl_step3`: `Step 3: kernel (p1) <- Kiln's 6.6`
+  = `Шаг 3: запись ядра Kiln 6.6 в kernel (p1)`
+- `pg_bl_step4`: `Step 4: U-Boot's settings, state and records in ota cleared`
+  = `Шаг 4: очистка настроек, состояния и записей U-Boot в ota`
+- `pg_bl_step4_up`: `Step 4: U-Boot's settings, state and records in ota: kept (an upgrade)`
+  = `Шаг 4: настройки, состояние и записи U-Boot в ota сохраняются (обновление)`
+- `pg_bl_step5`: `Step 5: Kiln's U-Boot at 0xA400 (body, then header)`
+  = `Шаг 5: запись U-Boot Kiln по адресу 0xA400 (сначала тело, затем заголовок)`
+- `pg_bl_step5_up`: `Step 5: this build's U-Boot at 0xA400 (the old header zeroed, the body, then the header)`
+  = `Шаг 5: запись U-Boot этой сборки по адресу 0xA400 (обнуление старого заголовка, тело, затем заголовок)`
+- `pg_rs_unpack`: `Unpacking %s`
+  = `Распаковка %s`
+- `pg_rs_root`: `Writing Flashforge's root (slot B)`
+  = `Запись корневой системы Flashforge (слот B)`
+- `pg_rs_step1`: `Step 1: Kiln's U-Boot out of 0xA400`
+  = `Шаг 1: удаление U-Boot Kiln с адреса 0xA400`
+- `pg_rs_step2`: `Step 2: U-Boot's settings in ota cleared`
+  = `Шаг 2: очистка настроек U-Boot в ota`
+- `pg_rs_step3`: `Step 3: rootfs2 (p4) <- stock root`
+  = `Шаг 3: запись корневой системы стоковой прошивки в rootfs2 (p4)`
+- `pg_rs_step4`: `Step 4: kernel2 (p3) <- stock kernel`
+  = `Шаг 4: запись ядра стоковой прошивки в kernel2 (p3)`
+- `pg_rs_step5`: `Step 5: kernel (p1) <- stock kernel`
+  = `Шаг 5: запись ядра стоковой прошивки в kernel (p1)`
+- `pg_rs_step6`: `Step 6: Flashforge's boot loader (SPL)`
+  = `Шаг 6: запись загрузчика Flashforge (SPL)`
+- `pg_rs_step7`: `Step 7: stock's board update armed, install state set`
+  = `Шаг 7: подготовка обновления плат стоковой прошивкой, запись состояния установки`
+- `pg_rs_step8`: `Step 8: boot flag -> slot B`
+  = `Шаг 8: установка флага загрузки на слот B`
+
+### Return to Flashforge firmware: removing Kiln OS's settings and files (new 2026-11-20, unchecked)
+
+The two boxes on the Return to Flashforge page, the confirmation and the result. "Print files" is `файлы для печати` here (HelixScreen's section is `Файлы Gcode`).
+
+- `rs_wipe_box`: `Also remove Kiln OS's settings and files (%s)`
+  = `Также удалить настройки и файлы Kiln OS (%s)`
+- `rs_prints_box`: `…and the uploaded print files too (%d files, %s)`
+  = `…и загруженные файлы для печати (файлов: %d, %s)`
+- `rs_wipe_note`: `Deleted for good once Flashforge's firmware is back: printer settings (Z offset, mesh), network, plugins, SSH keys, logs. Kept: Flashforge's files, the return's log and, unless ticked, the print files. Kiln OS installed later starts fresh, with its setup wizard.`
+  = `Удаляются навсегда, когда прошивка Flashforge уже возвращена: настройки принтера (смещение по Z, сетка стола), сеть, плагины, ключи SSH, журналы. Остаются: файлы Flashforge, журнал возврата и, если не отмечено, файлы для печати. Kiln OS, установленная позже, начнёт заново, с мастером настройки.`
+- `rs_q_wipe`: `Then Kiln OS's settings and files are deleted (%s): printer settings, network, plugins, SSH keys, logs. The print files and Flashforge's files stay.`
+  = `Затем удаляются настройки и файлы Kiln OS (%s): настройки принтера, сеть, плагины, ключи SSH, журналы. Файлы для печати и файлы Flashforge остаются.`
+- `rs_q_wipe_prints`: `Then Kiln OS's settings and files are deleted (%s), and the uploaded print files too (%d files, %s). Flashforge's files stay.`
+  = `Затем удаляются настройки и файлы Kiln OS (%s), а также загруженные файлы для печати (файлов: %d, %s). Файлы Flashforge остаются.`
+- `rs_q2_wipe`: `Kiln OS in the main slot will be gone, and its settings and files (%s) deleted for good: this can't be undone. Don't switch the printer off until the screen says it is done.`
+  = `Kiln OS в основном слоте будет удалена, а её настройки и файлы (%s) будут удалены навсегда: это нельзя отменить. Не выключайте принтер, пока на экране не появится сообщение о завершении.`
+- `rs_q2_wipe_prints`: `Kiln OS in the main slot will be gone, and its settings and files and the print files (%s in all) deleted for good: this can't be undone. Don't switch the printer off until the screen says it is done.`
+  = `Kiln OS в основном слоте будет удалена, а её настройки, файлы и файлы для печати (всего %s) будут удалены навсегда: это нельзя отменить. Не выключайте принтер, пока на экране не появится сообщение о завершении.`
+- `rs_wiped`: `Kiln OS's settings and files were removed (%s). The print files were kept.`
+  = `Настройки и файлы Kiln OS удалены (%s). Файлы для печати сохранены.`
+- `rs_wiped_prints`: `Kiln OS's settings and files and the print files were removed (%s).`
+  = `Настройки и файлы Kiln OS, а также файлы для печати удалены (%s).`
+- `rs_wipe_failed`: `Some of Kiln OS's files couldn't be removed; Flashforge's firmware is back all the same. The log /data/ad5x/return-stock/log lists them.`
+  = `Часть файлов Kiln OS удалить не удалось; прошивка Flashforge всё равно возвращена. Они перечислены в журнале /data/ad5x/return-stock/log.`
+- `pg_rs_step9`: `Step 9: Kiln OS's settings and files removed`
+  = `Шаг 9: удаление настроек и файлов Kiln OS`
 
 ## 7. New in HelixScreen v1.1.0-rc.1 and beta.18
 

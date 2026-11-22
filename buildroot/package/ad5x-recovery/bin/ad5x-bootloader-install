@@ -3,12 +3,13 @@
 # into this printer's first MiB, from the recovery OS (slot A). Opt-in and
 # experimental, at the user's own risk: docs/own-boot-loader.md. The
 # recovery screen's "Install Kiln's boot loader (experimental)" runs it,
-# offered only on a board on the allowlist (lib/bootloader.sh); over SSH it
-# runs on its own. Without it the printer keeps starting as it does
+# offered only on a board on the allowlist (lib/bootloader.sh), and its
+# "Update Kiln's boot loader" (--upgrade) when the printer has Kiln's boot
+# loader of another build; over SSH it runs on its own. Without it the printer keeps starting as it does
 # (Flashforge's SPL and U-Boot, its 5.10 chainloading Kiln's 6.6).
 #
-# usage: ad5x-bootloader-install [--check] [--unsupported-board]
-#        ad5x-bootloader-install --yes [--unsupported-board]
+# usage: ad5x-bootloader-install [--check] [--upgrade] [--unsupported-board]
+#        ad5x-bootloader-install --yes [--upgrade] [--unsupported-board]
 #        ad5x-bootloader-install --fingerprint | --status | --offer
 #        ad5x-bootloader-install --verify-start
 #   --check        (the default) every check, this board's fingerprint, what
@@ -17,6 +18,12 @@
 #                  goes on from what the eMMC already holds). On a disk
 #                  with Kiln's boot loader of another build: upgrade it to
 #                  this one (see "Upgrade" below)
+#   --upgrade      only an upgrade (the recovery screen's "Update Kiln's
+#                  boot loader"): with --check or --yes, refused (exit 1,
+#                  nothing written) unless the disk holds Kiln's boot loader
+#                  of another build to upgrade, or an upgrade that stopped
+#                  (the record's kind=upgrade); this build's already (nothing
+#                  to do) is fine. Never an install over Flashforge's SPL
 #   --unsupported-board  expert override, SSH only: go on although this
 #                  board's fingerprint is not on the allowlist (asks for a
 #                  typed confirmation on a terminal; never from the touch
@@ -138,12 +145,19 @@
 # 5.10 or Kiln's 6.6; Kiln's boot loader of another build at 0x4400 or
 # 0xA400 only whole, as an upgrade takes it (or an upgrade's own
 # write cut short, by the record).
-# Progress lines "@progress N text" for the touch screen; log in
+# Progress lines "@progress N [code] text" for the touch screen (the code
+# is the screen's translation: recovery-ui/src/progress.c); log in
 # /data/ad5x/bootloader/log; the install record in /data/ad5x/bootloader/state.
-# Exit: 0 done (or nothing to do), 1 refused (nothing written), 2 checks
-# passed (no --yes), 3 a write failed but every system still starts (run it
-# again), 4 the boot loader area is not as before (don't switch off; run it
-# again now), 9 stopped by --stop-after.
+# Exit: 0 done, or nothing to do ("result: already installed (this
+# build)": the disk holds this build's first MiB byte for byte and no run
+# is unfinished; that result even when other checks fail, another job or
+# the start-up actions running, as nothing would be written), 1 refused
+# (nothing written), 2 checks passed (no --yes; "result: ready to install"
+# for a fresh install, "ready to go on" only for a run that stopped: the
+# record says started, or Kiln's SPL or part of its U-Boot is on the disk),
+# 3 a write failed but every system still starts (run it again), 4 the boot
+# loader area is not as before (don't switch off; run it again now), 9
+# stopped by --stop-after.
 # AD5X_RECOVERY_LIB, AD5X_LIB, AD5X_BOOTLOADER_FILES, AD5X_ROOT, AD5X_MEMINFO (tests).
 . ${AD5X_RECOVERY_LIB:-/usr/lib/ad5x-recovery}/recovery.sh
 LIB=${AD5X_LIB:-/usr/lib/ad5x}
@@ -158,7 +172,7 @@ MARK=kiln-stock-backup
 PHRASE="I accept the risk of an unsupported board"
 ISSUE="https://github.com/djvalic/kiln-os/issues/68"
 
-mode=check override= stop_after= dry=
+mode=check override= stop_after= dry= only_upgrade=
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--check) mode=check ;;
@@ -168,6 +182,7 @@ while [ $# -gt 0 ]; do
 	--offer) mode=offer ;;
 	--verify-start) mode=verify ;;
 	--unsupported-board) override=1 ;;
+	--upgrade) only_upgrade=1 ;;
 	--dry-run) dry=1 ;;
 	--stop-after) stop_after=$2; shift ;;
 	-h|--help) sed -n '2,/^# AD5X_RECOVERY_LIB/p' "$0"; exit 0 ;;
@@ -204,7 +219,8 @@ nfail=0
 ok() { say "  ok    $*"; }
 bad() { say "  FAIL  $*"; nfail=$((nfail + 1)); }
 note() { say "  note  $*"; }
-prog() { echo "@progress $*"; }
+# prog N CODE TEXT: the screen's progress line, not in the log
+prog() { echo "@progress $1 [$2] $3"; }
 loud() {
 	say "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
 	for l in "$@"; do say "!! $l"; done
@@ -501,9 +517,9 @@ fi
 
 # ------------------------------------------------------------- checks
 mkdir -p "$BL_DATA" 2>/dev/null && : >> "$LOG" 2>/dev/null && logging=1
-say "== $ME $(date '+%Y-%m-%d %H:%M:%S') ($mode${override:+, --unsupported-board})"
+say "== $ME $(date '+%Y-%m-%d %H:%M:%S') ($mode${only_upgrade:+, --upgrade}${override:+, --unsupported-board})"
 say "checks:"
-prog 2 "Checking"
+prog 2 checking "Checking"
 if [ "$(id -u)" = 0 ]; then ok "root"; else bad "not root"; fi
 if [ -f "${AD5X_ROOT:-}/etc/ad5x-recovery" ] && [ "$(rc_slot)" = A ]; then
 	ok "the recovery OS, slot A ($(rc_root)): no print can run"
@@ -825,6 +841,11 @@ if [ -n "$FINAL" ]; then
 	other*) bad "the disk differs from the saved stock first MiB outside Kiln's ranges (offset $(printf '0x%x' "${SPLC#other }")): refused" ;;
 	*) bad "0x4400-0xA3FF and 0xA400 hold neither the stock bytes nor this build's ($SPLC, $UBC): refused" ;;
 	esac
+	# --upgrade (the screen's Update): an upgrade or nothing to do, never
+	# an install
+	if [ -n "$only_upgrade" ] && [ -z "$UPG" ] && [ -z "$SAME" ]; then
+		bad "--upgrade: no Kiln boot loader of another build here to update (installing Kiln's boot loader is a step of its own): refused"
+	fi
 fi
 
 # ------------------------------------------------------------- the steps
@@ -843,13 +864,15 @@ clear_rescue() {
 NAME_0="the stock first MiB saved (/data, usershare)" NAME_1="Kiln's SPL (0x4600-0xA3FF, the length at 0x4, the header sector last)"
 NAME_2="kernel2 (p3) <- Kiln's 6.6" NAME_3="kernel (p1) <- Kiln's 6.6"
 NAME_4="U-Boot's settings, state and records in ota cleared" NAME_5="Kiln's U-Boot at 0xA400 (body, then header)"
+STEP_UP=	# steps whose name (and screen code, bl_stepN_up) an upgrade changes
 if [ -n "$UPG" ]; then
+	STEP_UP=" 1 4 5 "
 	NAME_1="this build's SPL (0x4600-0xA3FF, the length at 0x4, the header sector last)"
 	NAME_4="U-Boot's settings, state and records in ota: kept (an upgrade)"
 	NAME_5="this build's U-Boot at 0xA400 (the old header zeroed, the body, then the header)"
 fi
 
-ndone=0 todo=
+todo=
 if [ "$nfail" = 0 ]; then
 	say "plan (in this order; the boot flag stays on slot A, this recovery OS):"
 	[ -n "$RESCUE" ] && say "  first: LBA $BL_RESCUE_LBA (a network rescue record) <- the saved stock first MiB's sector"
@@ -860,12 +883,26 @@ if [ "$nfail" = 0 ]; then
 	else
 		for n in 0 1 2 3 4 5; do
 			eval "nm=\$NAME_$n"
-			if done_$n; then say "  $n. $nm: done"; ndone=$((ndone + 1))
+			if done_$n; then say "  $n. $nm: done"
 			else say "  $n. $nm"; todo="$todo $n"; fi
 		done
 	fi
 fi
 say ""
+# Kiln's boot loader of this build there already, byte for byte, and no
+# run of it unfinished (the record not "started"), no rescue record to
+# clear: there is nothing to write, so the result is that, whatever else
+# failed above (another job, start-up actions still running: those matter
+# only to a write). Exit 0, as the screen's Check reads it. The record is
+# left as it is (verified, unverified: the first start after the install)
+already() {
+	say "result: already installed (this build): Kiln's SPL and U-Boot are installed ($(bl_stval state)), the ones this recovery OS carries ($NEWV) byte for byte: nothing to do"
+	exit 0
+}
+if [ "$nfail" != 0 ] && [ -n "$SAME" ] && [ -z "$RESCUE" ] && [ "$REC" != started ]; then
+	say "plan: nothing: the first MiB is the one this build leads to, byte for byte (the failed check(s) above matter only to a write)"
+	already
+fi
 if [ "$nfail" != 0 ]; then
 	say "result: refused ($nfail check(s) failed), nothing written"
 	exit 1
@@ -883,7 +920,7 @@ fi
 if [ -z "$todo" ]; then
 	case "$REC" in started|'') bl_stset state installed; bl_stset date "$(date '+%Y-%m-%d %H:%M:%S')" ;; esac
 	if [ "$REC" != started ] && [ -n "$SAME" ]; then
-		say "result: done: Kiln's SPL and U-Boot are installed ($(bl_stval state)), the ones this recovery OS carries ($NEWV) byte for byte: nothing to do"
+		already
 	else
 		say "result: done: Kiln's SPL and U-Boot are installed ($(bl_stval state)). Restart to start through them"
 	fi
@@ -894,10 +931,15 @@ if [ "$mode" != yes ]; then
 		say "result: ready to go on: an earlier $([ -n "$UPG" ] && echo upgrade || echo install) stopped after part of the work (--yes finishes it)"
 	elif [ -n "$UPG" ]; then
 		say "result: ready: an upgrade of Kiln's boot loader ($OLDV -> $NEWV), nothing written yet (--yes starts it)"
-	elif [ "$ndone" -gt 1 ]; then
+	elif [ "$SPLC" != stock ] || [ "$UBC" != stock ]; then
+		# no record (a wiped /data), but Kiln's SPL or part of Kiln's
+		# U-Boot on the disk: an install stopped part-way. Steps 0 and 4
+		# done alone are no such sign: boot.img saved earlier (by the
+		# main OS or a check) and an ota area blank (Flashforge's factory
+		# reset blanks it) are a fresh install's start
 		say "result: ready to go on: an earlier install stopped after part of the work (--yes finishes it)"
 	else
-		say "result: ready: nothing written yet (--yes starts it)"
+		say "result: ready to install: nothing written yet (--yes starts it)"
 	fi
 	exit 2
 fi
@@ -980,7 +1022,7 @@ say "writing (don't switch the printer off):"
 
 fail3() {	# WHAT: a write failed, every system still starts
 	loud "$1" "The boot flag is still on slot A: this recovery OS starts again." \
-		"Run it again to finish (Install Kiln's boot loader)."
+		"Run it again to finish ($([ -n "$UPG" ] && echo Update || echo Install) Kiln's boot loader)."
 	ad5x-bootlog "bootloader: failed: $1" 2>/dev/null
 	say "result: failed: $1; run it again"
 	exit 3
@@ -1021,7 +1063,7 @@ step_0() {
 	US_OK=1
 }
 step_1() {
-	prog 20 "Writing Kiln's SPL"
+	prog 20 bl_spl "Writing Kiln's SPL"
 	bl_put_spl "$FINAL" "$DISK" && return 0
 	if [ -n "$UPG" ]; then
 		# never Flashforge's SPL here: it would start the Kiln U-Boot at
@@ -1053,15 +1095,15 @@ step_1() {
 	done
 	fail4 "writing Kiln's SPL failed and Flashforge's doesn't read back either"
 }
-step_2() { prog 40 "Writing Kiln's 6.6 into kernel2"; bl_put_kernel "$K66" "$P3" && kiln_kernel "$P3"; }
-step_3() { prog 60 "Writing Kiln's 6.6 into kernel"; bl_put_kernel "$K66" "$P1" && kiln_kernel "$P1"; }
+step_2() { prog 40 bl_kernel2 "Writing Kiln's 6.6 into kernel2"; bl_put_kernel "$K66" "$P3" && kiln_kernel "$P3"; }
+step_3() { prog 60 bl_kernel "Writing Kiln's 6.6 into kernel"; bl_put_kernel "$K66" "$P1" && kiln_kernel "$P1"; }
 step_4() {
 	say "  ota: sectors $BL_OTA_LBA-$((BL_OTA_LBA + BL_OTA_N - 1)) (U-Boot's settings, state, records) zeroed"
 	dd if=/dev/zero of="$P5" bs=512 seek=$BL_OTA_LBA count=$BL_OTA_N conv=notrunc,fsync 2>/dev/null &&
 		bl_read "$P5" $BL_OTA_LBA $BL_OTA_N "$T/o4" && is_zero "$T/o4"
 }
 step_5() {
-	prog 80 "Writing Kiln's U-Boot"
+	prog 80 bl_uboot "Writing Kiln's U-Boot"
 	# a U-Boot header there (an upgrade's old U-Boot): its sector zeroed
 	# first, so no header stands in front of a body being changed; from
 	# then on Kiln's SPL finds no U-Boot and starts the flagged slot itself
@@ -1083,7 +1125,9 @@ step_5() {
 si=0 total=$(echo $todo | wc -w)
 for sn in $todo; do
 	eval "nm=\$NAME_$sn"
-	prog $((10 + si * 85 / total)) "Step $sn: $nm"
+	pc=bl_step$sn
+	case "$STEP_UP" in *" $sn "*) pc=${pc}_up ;; esac
+	prog $((10 + si * 85 / total)) $pc "Step $sn: $nm"
 	if [ "$sn" = 5 ]; then
 		# every step before it, checked once more on the disk
 		for sm in 0 1 2 3 4; do done_$sm || fail3 "step $sm isn't done on the disk before U-Boot"; done
@@ -1096,7 +1140,7 @@ done
 cur_mib "$T/rb.img" && cmp -s "$T/rb.img" "$FINAL" || fail3 "the first MiB doesn't read back as expected at the end"
 bl_stset state installed
 bl_stset date "$(date '+%Y-%m-%d %H:%M:%S')"
-prog 100 "Done"
+prog 100 done "Done"
 if [ -n "$UPG" ]; then
 	ad5x-bootlog "bootloader: upgraded (${OLDV:-?} -> $NEWV)" 2>/dev/null
 	say "result: done: Kiln's boot loader upgraded (${OLDV:-?} -> $NEWV). Restart: it starts this recovery OS, and the screen shows the result"

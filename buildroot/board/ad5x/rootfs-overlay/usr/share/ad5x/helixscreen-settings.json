@@ -39,7 +39,7 @@
       "e": 1.0,
       "f": -1.6879432201385498,
       "rotation": 0,
-      "valid": true
+      "valid": false
     },
     "long_press_time": 500,
     "scroll_limit": 10,

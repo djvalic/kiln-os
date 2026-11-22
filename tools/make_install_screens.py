@@ -4,7 +4,7 @@
 usage: make_install_screens.py OUTDIR
        make_install_screens.py --boards OUTDIR
 Writes step1.jpg .. step6.jpg, done.jpg, powercycle.jpg, failed.jpg,
-refused.jpg and installed.jpg in the brand's look (tools/make_logo.py: the mark, the Nord
+refused.jpg, retry.jpg, restart.jpg and installed.jpg in the brand's look (tools/make_logo.py: the mark, the Nord
 colours, Noto Sans; no Fira, so the builder can make them).
 tools/install/ad5x-install.sh shows them with the stock system's own
 cmd_jpeg_display while it runs from the install stick: done.jpg when the
@@ -377,6 +377,18 @@ def main():
            "This printer can't be installed this way.",
            "See ad5x-install.log on the stick. Remove the stick, power-cycle.",
            foot="")
+    # The two refusals the user can clear without help: an earlier install
+    # that switched to Kiln OS but never finished starting (state
+    # flag-set), and a boot flag that waits for a restart
+    screen(os.path.join(out, "retry.jpg"), "warn", "Not installed",
+           "An earlier install didn't finish starting.",
+           "To try again, put an empty file named ad5x-install-retry",
+           line3="next to flashforge_init.sh on the stick, then switch off and on.",
+           foot="Details: ad5x-install.log on the stick.")
+    screen(os.path.join(out, "restart.jpg"), "warn", "Not installed",
+           "The printer has to restart once first.",
+           "Remove the stick and switch the printer off and on.",
+           line3="When it has started, try again with the stick.", foot="")
     screen(os.path.join(out, "installed.jpg"), "info", "Already installed",
            "This printer already runs Kiln OS.",
            "Use an update instead. Remove the stick, power-cycle.",

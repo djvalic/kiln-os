@@ -284,6 +284,8 @@ it is the X2600's OTG controller (`13500000`). Next to it is an empty USB-C
 footprint labelled `USB2`, with test pads `B5`, `RX`, `TX`, `B8` below it;
 what that one connects to isn't known.
 
+The connector pinout of the FFP0303 board is in [pinout-ad5x.md](pinout-ad5x.md).
+
 J28 serves two purposes:
 
 - **Recovery:** the boot ROM's USB boot mode is on this controller. With

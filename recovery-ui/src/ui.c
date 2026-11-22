@@ -9,6 +9,7 @@
 #include "sys.h"
 #include "i18n.h"
 #include "lang.h"
+#include "progress.h"
 #include <stdarg.h>
 
 #include <errno.h>
@@ -232,6 +233,7 @@ static void page_backup(void);
 static void page_restore(void);
 static void page_return(void);
 static void page_bootloader(void);
+static void page_bootloader_upgrade(void);
 static void page_network(void);
 static void page_logs(void);
 static void page_power(void);
@@ -314,7 +316,7 @@ static lv_obj_t *page_frame(const char *title, bool back)
 typedef void (*action_fn)(void);
 
 static struct {
-	char title[96], text[512], text2[512], ok[96];
+	char title[96], text[1024], text2[1024], ok[96];
 	bool danger, twice;
 	action_fn fn;
 	lv_obj_t *ok_btn;
@@ -587,6 +589,33 @@ static bool kv(const char *key, char *out, size_t cap)
 	return kv_in(stc.text, key, out, cap) || kv_in(stc.slots, key, out, cap);
 }
 
+/* Kiln's boot loader: the install record is an upgrade's (ad5x-status
+ * bootloader_kind=upgrade) and still current (started, or installed and
+ * its first start recorded or not), not one left from before a Return to
+ * Flashforge firmware */
+static bool bl_record_upgrade(void)
+{
+	char k[16], st[24];
+	if (!kv("bootloader_kind", k, sizeof(k)) || strcmp(k, "upgrade") ||
+	    !kv("bootloader_install", st, sizeof(st)))
+		return false;
+	return !strcmp(st, "started") || !strcmp(st, "installed") ||
+	       !strcmp(st, "verified") || !strcmp(st, "unverified");
+}
+
+/* Kiln's boot loader's page opened by itself this start (home_refresh) */
+static bool bl_shown;
+
+/* The start-up actions (ad5x-recovery-auto) still running: ad5x-status
+ * auto=running (done, or off with /data/ad5x/recovery/noauto: not
+ * waited for). Jobs that check for them (ad5x-bootloader-install's "no
+ * other job") wait instead of running into "busy: start-up-actions" */
+static bool auto_running(void)
+{
+	char v[16];
+	return kv("auto", v, sizeof(v)) && !strcmp(v, "running");
+}
+
 /* The printer's IPv4 (no /prefix) and interface */
 static bool cur_ip(char *ip, size_t cap, char *ifc, size_t icap)
 {
@@ -681,13 +710,14 @@ static void home_refresh(void)
 	}
 	/* Once per start: the first start after Kiln's boot loader was
 	 * installed (its result) or an unfinished install opens its page
-	 * (ad5x-bootloader-install --verify-start) */
-	static bool bl_shown;
+	 * (ad5x-bootloader-install --verify-start). It opens at once, while
+	 * the start-up actions may still run: the page shows the result and
+	 * waits for them before its check (bl_start_check) */
 	char bo[16];
 	if (!bl_shown && stc.seq > 0 && !job_running() && kv("bootloader_open", bo, sizeof(bo))) {
 		bl_shown = true;
-		slog("opening Kiln's boot loader (%s)", bo);
-		go(page_bootloader);
+		slog("opening Kiln's boot loader (%s%s)", bo, bl_record_upgrade() ? ", an update" : "");
+		go(bl_record_upgrade() ? page_bootloader_upgrade : page_bootloader);
 		return;
 	}
 	char ip[64], ifc[16], mode[16], ssh[16], buf[300], flag[32], slotb[96], v[64];
@@ -1418,11 +1448,15 @@ static void page_restore(void)
  * the eMMC ("don't switch off"); after it, Shut down. */
 static struct {
 	lv_obj_t *status, *files, *after, *cfg, *spl, *go, *check, *save;
+	lv_obj_t *wipe, *prints, *wipe_note;	/* Kiln's data: the two boxes */
 	capture *cap;
 	char source[200], target[240], config[240], why[240];
 	char source_kind[16], source_file[200], target_kind[24], config_kind[16];
-	int config_lines;
+	int config_lines, prints_files;
+	unsigned long long kiln_kb, prints_kb;
 	bool spl_offer, ready, resume, done_already, checked, cfg_failed;
+	bool wipe_offer, wipe_ticked_once;
+	char wipe_asked[16];	/* "kiln" or "prints": an unfinished return asked it */
 } rt;
 
 static void rt_free(lv_event_t *e)
@@ -1437,11 +1471,30 @@ static bool rt_spl(void)
 	return rt.spl && rt.spl_offer && lv_obj_has_state(rt.spl, LV_STATE_CHECKED);
 }
 
+/* "Also remove Kiln OS's settings and files" and, only with it, "...and the
+ * uploaded print files too" (ad5x-return-stock --remove-kiln-data,
+ * --remove-prints: step 9, after the return) */
+static bool rt_wipe(void)
+{
+	return rt.wipe && rt.wipe_offer && lv_obj_has_state(rt.wipe, LV_STATE_CHECKED);
+}
+
+static bool rt_prints(void)
+{
+	return rt_wipe() && rt.prints && lv_obj_has_state(rt.prints, LV_STATE_CHECKED);
+}
+
+static const char *rt_wipe_flags(void)
+{
+	return rt_prints() ? "--remove-kiln-data --remove-prints"
+	       : rt_wipe() ? "--remove-kiln-data" : "";
+}
+
 static void rt_start_check(void)
 {
 	if (rt.cap || job_running())
 		return;
-	const char *v[] = { "SPL", rt_spl() ? "--flashforge-spl" : "", NULL };
+	const char *v[] = { "SPL", rt_spl() ? "--flashforge-spl" : "", "WIPE", rt_wipe_flags(), NULL };
 	char *c = cmd_expand(CMD_RETURN_CHECK, v);
 	slog("return to Flashforge: %s", c);
 	rt.cap = capture_start(c, 16384);
@@ -1484,6 +1537,12 @@ static void rt_parse(const char *t)
 	/* an earlier run couldn't change stock's printer.cfg (it went on) */
 	rt.cfg_failed = text_has_line(t, "config_failed: yes");
 	rt.spl_offer = rt_line(t, "spl_option", v, sizeof(v)) && !strcmp(v, "yes");
+	rt.wipe_offer = rt_line(t, "wipe_option", v, sizeof(v)) && !strcmp(v, "yes");
+	rt.kiln_kb = rt_line(t, "kiln_data_kb", v, sizeof(v)) ? strtoull(v, NULL, 10) : 0;
+	rt.prints_kb = rt_line(t, "prints_kb", v, sizeof(v)) ? strtoull(v, NULL, 10) : 0;
+	rt.prints_files = rt_line(t, "prints_files", v, sizeof(v)) ? atoi(v) : 0;
+	if (!rt_line(t, "wipe_asked", rt.wipe_asked, sizeof(rt.wipe_asked)))
+		rt.wipe_asked[0] = 0;
 	rt_line(t, "result", res, sizeof(res));
 	rt.ready = !strncmp(res, "ready", 5);
 	rt.resume = !strncmp(res, "ready to go on", 14);
@@ -1517,6 +1576,26 @@ static const char *rt_source_text(char *buf, size_t cap)
 	else
 		snprintf(buf, cap, "%s", rt.source);
 	return buf;
+}
+
+/* The two boxes: shown while the return is still to do and there is Kiln
+ * data to remove; the print files box (indented) only with print files,
+ * and usable only with the first ticked */
+static void rt_show_wipe(void)
+{
+	char t[480], a[32], b[32];
+	bool on = rt.wipe_offer && !rt.done_already;
+	human_size(rt.kiln_kb << 10, a, sizeof(a));
+	lv_checkbox_set_text(rt.wipe, (snprintf(t, sizeof(t), tr(RS_RS_WIPE_BOX), a), t));
+	human_size(rt.prints_kb << 10, b, sizeof(b));
+	lv_checkbox_set_text(rt.prints,
+			     (snprintf(t, sizeof(t), tr(RS_RS_PRINTS_BOX), rt.prints_files, b), t));
+	show(rt.wipe, on);
+	show(rt.prints, on && (rt.prints_files > 0 || rt.prints_kb > 0));
+	if (!rt_wipe())
+		lv_obj_remove_state(rt.prints, LV_STATE_CHECKED);
+	enable(rt.prints, rt_wipe());
+	show(rt.wipe_note, on && rt_wipe());
 }
 
 static void rt_show(void)
@@ -1553,6 +1632,7 @@ static void rt_show(void)
 	lv_obj_set_style_text_color(rt.cfg, rt.cfg_failed ? C_WARN : C_MUTED, 0);
 	show(rt.cfg, rt.cfg_failed || rt.config[0] != 0);
 	show(rt.spl, rt.spl_offer && !rt.done_already);
+	rt_show_wipe();
 	if (!rt.checked)
 		return;
 	lv_color_t c = C_OK;
@@ -1580,13 +1660,24 @@ static void rt_refresh(void)
 		rt_parse(t ? t : "");
 		capture_free(rt.cap);
 		rt.cap = NULL;
+		/* an unfinished return was asked to remove Kiln's data: the
+		 * boxes ticked again as then, and checked with them */
+		if (rt.wipe_asked[0] && rt.wipe_offer && !rt.wipe_ticked_once) {
+			rt.wipe_ticked_once = true;
+			lv_obj_add_state(rt.wipe, LV_STATE_CHECKED);
+			if (!strcmp(rt.wipe_asked, "prints"))
+				lv_obj_add_state(rt.prints, LV_STATE_CHECKED);
+			rt_show();
+			rt_start_check();
+			return;
+		}
 		rt_show();
 	}
 }
 
 static void return_now(void)
 {
-	const char *v[] = { "SPL", rt_spl() ? "--flashforge-spl" : "", NULL };
+	const char *v[] = { "SPL", rt_spl() ? "--flashforge-spl" : "", "WIPE", rt_wipe_flags(), NULL };
 	char *c = cmd_expand(CMD_RETURN_STOCK, v), src[240];
 	start_job_x(JK_CMD, tr(RS_RS_RUNNING), rt_source_text(src, sizeof(src)), c, false, false,
 		    true, AFTER_POWEROFF);
@@ -1599,18 +1690,36 @@ static void on_rt_go(lv_event_t *e)
 	(void)e;
 	if (!rt.ready)
 		return;
-	if (rt.resume) {	/* asked before; finish it */
+	if (rt.resume && !rt_wipe()) {	/* asked before; finish it */
 		return_now();
 		return;
 	}
-	confirm(tr(RS_RS_Q), tr(RS_RS_Q_TEXT), tr_sym(LV_SYMBOL_WARNING, RS_RS_GO), true,
-		tr(RS_RS_Q_TEXT2), return_now);
+	/* deleting Kiln's data is said on both steps, with the sizes, and
+	 * that it can't be undone */
+	char t1[1024], t2[1024], k[32], p[32], all[32], w[600];
+	if (!rt_wipe()) {
+		confirm(tr(RS_RS_Q), tr(RS_RS_Q_TEXT), tr_sym(LV_SYMBOL_WARNING, RS_RS_GO), true,
+			tr(RS_RS_Q_TEXT2), return_now);
+		return;
+	}
+	human_size(rt.kiln_kb << 10, k, sizeof(k));
+	human_size(rt.prints_kb << 10, p, sizeof(p));
+	human_size((rt.kiln_kb + rt.prints_kb) << 10, all, sizeof(all));
+	if (rt_prints()) {
+		snprintf(w, sizeof(w), tr(RS_RS_Q_WIPE_PRINTS), k, rt.prints_files, p);
+		snprintf(t2, sizeof(t2), tr(RS_RS_Q2_WIPE_PRINTS), all);
+	} else {
+		snprintf(w, sizeof(w), tr(RS_RS_Q_WIPE), k);
+		snprintf(t2, sizeof(t2), tr(RS_RS_Q2_WIPE), k);
+	}
+	snprintf(t1, sizeof(t1), "%s\n\n%s", tr(RS_RS_Q_TEXT), w);
+	confirm(tr(RS_RS_Q), t1, tr_sym(LV_SYMBOL_WARNING, RS_RS_GO), true, t2, return_now);
 }
 
 static void on_rt_check(lv_event_t *e)
 {
 	(void)e;
-	const char *v[] = { "SPL", rt_spl() ? "--flashforge-spl" : "", NULL };
+	const char *v[] = { "SPL", rt_spl() ? "--flashforge-spl" : "", "WIPE", rt_wipe_flags(), NULL };
 	char *c = cmd_expand(CMD_RETURN_CHECK, v);
 	start_job(JK_CMD, tr(RS_RS_CHECKING_TITLE), "", c, true, false);
 	free(c);
@@ -1628,6 +1737,35 @@ static void on_rt_spl(lv_event_t *e)
 {
 	(void)e;
 	rt_start_check();
+}
+
+static void on_rt_wipe(lv_event_t *e)
+{
+	(void)e;
+	rt_show_wipe();		/* the print files box follows the first */
+	if (rt_wipe()) {	/* the second box and the note into view */
+		lv_obj_update_layout(lv_obj_get_parent(rt.wipe));
+		lv_obj_scroll_to_view(rt.wipe_note, LV_ANIM_OFF);
+	}
+	rt_start_check();
+}
+
+/* A box of the page as the boot loader box, INDENT px in (the print files
+ * box under Kiln's data box), its text wrapping */
+static lv_obj_t *rt_box(lv_obj_t *parent, int indent)
+{
+	lv_obj_t *b = lv_checkbox_create(parent);
+	lv_checkbox_set_text(b, "");
+	lv_obj_set_width(b, lv_pct(100));
+	lv_obj_set_style_text_font(b, F20, 0);
+	lv_obj_set_style_pad_column(b, 12, 0);
+	lv_obj_set_style_pad_left(b, indent, 0);
+	lv_obj_set_style_width(b, 30, LV_PART_INDICATOR);
+	lv_obj_set_style_height(b, 30, LV_PART_INDICATOR);
+	lv_obj_set_ext_click_area(b, 8);
+	lv_obj_add_event_cb(b, on_rt_wipe, LV_EVENT_VALUE_CHANGED, NULL);
+	show(b, false);
+	return b;
 }
 
 static void page_return(void)
@@ -1661,6 +1799,11 @@ static void page_return(void)
 	lv_obj_set_ext_click_area(rt.spl, 8);
 	lv_obj_add_event_cb(rt.spl, on_rt_spl, LV_EVENT_VALUE_CHANGED, NULL);
 	show(rt.spl, false);
+	rt.wipe = rt_box(c, 0);
+	rt.prints = rt_box(c, 42);
+	rt.wipe_note = wrap_label(c, tr(RS_RS_WIPE_NOTE), F16, C_WARN);
+	lv_obj_set_style_pad_left(rt.wipe_note, 42, 0);
+	show(rt.wipe_note, false);
 	lv_obj_t *row = box(body, LV_FLEX_FLOW_ROW);
 	lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
 	lv_obj_set_style_pad_column(row, 12, 0);
@@ -1688,34 +1831,103 @@ static void page_return(void)
  * this page with the result. Offered (Reboot / power) only when
  * ad5x-status --slots says bootloader_offer=yes (the board on the
  * allowlist, no Kiln U-Boot there yet) or an install is unfinished. The
- * expert override (--unsupported-board, SSH only) is never run from here. */
+ * expert override (--unsupported-board, SSH only) is never run from here.
+ * "Update Kiln's boot loader" (bl.up, page_bootloader_upgrade) is the same
+ * page with its own words, offered when ad5x-status --slots says
+ * bootloader_upgrade=yes (Kiln's boot loader of another build there) or an
+ * update is unfinished: it runs the tool with --upgrade (refused unless
+ * it is an upgrade, so never an install), and its "upgrade:" line shows
+ * the build on the printer and the one this release carries.
+ * The result page (bl.result: ad5x-status bootloader_open=result, or the
+ * record verified or unverified after an install or update) leads with
+ * the outcome from the record, before and whatever the check says; the
+ * check's own line goes under it (bl.note): "installed and up to date"
+ * ("result: already installed (this build)", Install hidden), or, should
+ * something have changed, ready or why not. The check waits for the
+ * start-up actions (ad5x-status auto=running, polled) on every page: run
+ * meanwhile, it would only say "busy: start-up-actions". */
 static struct {
-	lv_obj_t *status, *board, *go, *check;
+	lv_obj_t *card, *status, *note, *board, *builds, *go, *check;
 	capture *cap;
-	char why[240];
-	bool known, ready, resume, done_already, checked;
+	char why[240], from[96], to[96];
+	bool up, known, ready, resume, done_already, already, checked, result, waiting;
 } bl;
+
+/* The install's string, or the update's (bl.up) */
+#define BL_S(install, update) (bl.up ? (update) : (install))
 
 static void bl_free(lv_event_t *e)
 {
-	(void)e;
+	/* the page opened again over itself: the old card goes after the new
+	 * one's check started, and must not take it along */
+	if (lv_event_get_target(e) != bl.card)
+		return;
 	capture_free(bl.cap);
 	bl.cap = NULL;
+}
+
+/* The page opens with the result of an install or update: ad5x-status
+ * bootloader_open=result (--verify-start, the first start after it), or
+ * the record says verified or unverified and no update is offered (with
+ * bootloader_upgrade=yes another build is there now: that record's
+ * result is an old one, and the page is the update's) */
+static bool bl_result_page(void)
+{
+	char st[24], bo[16], up[8];
+	if (kv("bootloader_open", bo, sizeof(bo)) && !strcmp(bo, "result"))
+		return true;
+	if (kv("bootloader_upgrade", up, sizeof(up)) && !strcmp(up, "yes"))
+		return false;
+	kv("bootloader_install", st, sizeof(st));
+	return !strcmp(st, "verified") || !strcmp(st, "unverified");
+}
+
+/* The result page's headline: the outcome, from the record */
+static void bl_outcome(void)
+{
+	char st[24];
+	kv("bootloader_install", st, sizeof(st));
+	if (!strcmp(st, "unverified")) {
+		lv_label_set_text(bl.status, tr_sym(LV_SYMBOL_WARNING, BL_S(RS_BL_UNVERIFIED, RS_BL_UP_UNVERIFIED)));
+		lv_obj_set_style_text_color(bl.status, C_WARN, 0);
+	} else {
+		lv_label_set_text(bl.status, tr_sym(LV_SYMBOL_OK, !strcmp(st, "verified")
+						    ? BL_S(RS_BL_VERIFIED, RS_BL_UP_VERIFIED)
+						    : BL_S(RS_BL_INSTALLED, RS_BL_UP_DONE)));
+		lv_obj_set_style_text_color(bl.status, C_OK, 0);
+	}
+}
+
+/* The check's line: the headline, or under the result page's outcome */
+static void bl_line(const char *text, lv_color_t c)
+{
+	lv_obj_t *l = bl.result ? bl.note : bl.status;
+	lv_label_set_text(l, text);
+	lv_obj_set_style_text_color(l, c, 0);
+	show(l, true);
 }
 
 static void bl_start_check(void)
 {
 	if (bl.cap || job_running())
 		return;
-	char *c = cmd_expand(CMD_BOOTLOADER_CHECK, NULL);
+	enable(bl.go, false);
+	enable(bl.check, false);
+	if (auto_running()) {
+		/* bl_refresh starts it once they are done */
+		if (!bl.waiting)
+			slog("Kiln's boot loader: the check waits for the start-up actions");
+		bl.waiting = true;
+		bl_line(tr_sym(LV_SYMBOL_REFRESH, RS_BL_WAIT_AUTO), C_MUTED);
+		return;
+	}
+	bl.waiting = false;
+	char *c = cmd_expand(BL_S(CMD_BOOTLOADER_CHECK, CMD_BOOTLOADER_UPGRADE_CHECK), NULL);
 	slog("Kiln's boot loader: %s", c);
 	bl.cap = capture_start(c, 16384);
 	free(c);
 	bl.checked = false;
-	lv_label_set_text(bl.status, tr_sym(LV_SYMBOL_REFRESH, RS_BL_CHECKING));
-	lv_obj_set_style_text_color(bl.status, C_MUTED, 0);
-	enable(bl.go, false);
-	enable(bl.check, false);
+	bl_line(tr_sym(LV_SYMBOL_REFRESH, RS_BL_CHECKING), C_MUTED);
 }
 
 static void bl_parse(const char *t)
@@ -1726,7 +1938,26 @@ static void bl_parse(const char *t)
 	bl.known = rt_line(t, "board", b, sizeof(b)) && !strcmp(b, "known");
 	bl.ready = !strncmp(res, "ready", 5);
 	bl.resume = !strncmp(res, "ready to go on", 14);
-	bl.done_already = !strncmp(res, "done", 4);
+	/* "already installed (this build)": nothing to do, Install hidden */
+	bl.already = !strncmp(res, "already installed", 17);
+	bl.done_already = bl.already || !strncmp(res, "done", 4);
+	/* "upgrade: Kiln boot loader <on the disk> -> <this build>" */
+	char up[240] = "";
+	bl.from[0] = bl.to[0] = 0;
+	if (rt_line(t, "upgrade", up, sizeof(up))) {
+		const char *u = up, *arrow = strstr(up, " -> ");
+		if (!strncmp(u, "Kiln boot loader ", 17))
+			u += 17;
+		if (arrow && arrow > u) {
+			const char *to = arrow + 4;
+			if (!strncmp(u, "built ", 6) && !strchr(u + 6, ','))
+				u += 6;
+			if (!strncmp(to, "built ", 6) && !strchr(to + 6, ','))
+				to += 6;
+			snprintf(bl.from, sizeof(bl.from), "%.*s", (int)(arrow - u), u);
+			snprintf(bl.to, sizeof(bl.to), "%s", to);
+		}
+	}
 	for (const char *l = t; l && *l; l = strchr(l, '\n') ? strchr(l, '\n') + 1 : NULL)
 		if (!strncmp(l, "  FAIL  ", 8)) {
 			snprintf(bl.why, sizeof(bl.why), "%.*s", (int)strcspn(l + 8, "\n"), l + 8);
@@ -1741,35 +1972,58 @@ static void bl_show(void)
 {
 	if (!bl.checked)
 		return;
-	char t[480], st[24];
+	char t[1024], st[24];
 	lv_label_set_text(bl.board, tr(bl.known ? RS_BL_BOARD_KNOWN : RS_BL_BOARD_UNKNOWN));
+	if (bl.up && bl.from[0] && bl.to[0] && !bl.done_already) {
+		snprintf(t, sizeof(t), tr(RS_BL_UP_BUILDS), bl.from, bl.to);
+		lv_label_set_text(bl.builds, t);
+		show(bl.builds, true);
+	} else {
+		show(bl.builds, false);
+	}
 	lv_color_t c = C_OK;
-	if (bl.done_already) {
+	if (bl.already) {
+		snprintf(t, sizeof(t), "%s", tr_sym(LV_SYMBOL_OK, RS_BL_UP_TO_DATE));
+	} else if (bl.done_already) {
 		kv("bootloader_install", st, sizeof(st));
 		if (!strcmp(st, "verified"))
-			snprintf(t, sizeof(t), "%s", tr_sym(LV_SYMBOL_OK, RS_BL_VERIFIED));
+			snprintf(t, sizeof(t), "%s", tr_sym(LV_SYMBOL_OK, BL_S(RS_BL_VERIFIED, RS_BL_UP_VERIFIED)));
 		else if (!strcmp(st, "unverified"))
-			snprintf(t, sizeof(t), "%s", tr_sym(LV_SYMBOL_WARNING, RS_BL_UNVERIFIED)), c = C_WARN;
+			snprintf(t, sizeof(t), "%s", tr_sym(LV_SYMBOL_WARNING, BL_S(RS_BL_UNVERIFIED, RS_BL_UP_UNVERIFIED))), c = C_WARN;
 		else
-			snprintf(t, sizeof(t), "%s", tr_sym(LV_SYMBOL_OK, RS_BL_INSTALLED));
+			snprintf(t, sizeof(t), "%s", tr_sym(LV_SYMBOL_OK, BL_S(RS_BL_INSTALLED, RS_BL_UP_DONE)));
 	} else if (bl.resume) {
-		snprintf(t, sizeof(t), "%s", tr_sym(LV_SYMBOL_WARNING, RS_BL_RESUME)), c = C_WARN;
+		snprintf(t, sizeof(t), "%s", tr_sym(LV_SYMBOL_WARNING, BL_S(RS_BL_RESUME, RS_BL_UP_RESUME))), c = C_WARN;
 	} else if (bl.ready) {
-		snprintf(t, sizeof(t), "%s", tr_sym(LV_SYMBOL_OK, RS_BL_READY));
+		snprintf(t, sizeof(t), "%s", tr_sym(LV_SYMBOL_OK, BL_S(RS_BL_READY, RS_BL_UP_READY)));
 	} else {
 		iconed(t, sizeof(t), LV_SYMBOL_CLOSE, "  ", tr(RS_RS_REFUSED), bl.why), c = C_WARN;
 	}
-	lv_label_set_text(bl.status, t);
-	lv_obj_set_style_text_color(bl.status, c, 0);
+	if (bl.result) {
+		/* the outcome stays the headline; the check's line goes under
+		 * it, the record's outcome in the headline already */
+		bl_outcome();
+		if (bl.done_already && !bl.already)
+			show(bl.note, false);
+		else
+			bl_line(t, bl.already ? C_MUTED : c);
+	} else {
+		bl_line(t, c);
+	}
 	lv_label_set_text(lv_obj_get_child(bl.go, 0),
 			  tr_sym(bl.resume ? LV_SYMBOL_PLAY : LV_SYMBOL_WARNING,
-				 bl.resume ? RS_RS_CONTINUE : RS_BL_GO));
+				 bl.resume ? RS_RS_CONTINUE : BL_S(RS_BL_GO, RS_BL_UP_GO)));
+	/* nothing to install: no Install; on the result page only once the
+	 * check says there is something to do */
+	show(bl.go, !bl.already && (!bl.result || bl.ready));
 	enable(bl.go, bl.ready);
 	enable(bl.check, true);
 }
 
 static void bl_refresh(void)
 {
+	if (bl.waiting && !auto_running())
+		bl_start_check();
 	if (bl.cap && capture_done(bl.cap)) {
 		const char *t = capture_text(bl.cap);
 		bl_parse(t ? t : "");
@@ -1781,9 +2035,10 @@ static void bl_refresh(void)
 
 static void bl_install_now(void)
 {
-	char *c = cmd_expand(CMD_BOOTLOADER_INSTALL, NULL);
-	start_job_x(JK_CMD, tr(RS_BL_RUNNING), "", c, false, false, true, AFTER_REBOOT);
-	jb.done_text = tr(RS_BL_INSTALLED);
+	char *c = cmd_expand(BL_S(CMD_BOOTLOADER_INSTALL, CMD_BOOTLOADER_UPGRADE), NULL);
+	start_job_x(JK_CMD, tr(BL_S(RS_BL_RUNNING, RS_BL_UP_RUNNING)), "", c, false, false, true,
+		    AFTER_REBOOT);
+	jb.done_text = tr(BL_S(RS_BL_INSTALLED, RS_BL_UP_DONE));
 	free(c);
 }
 
@@ -1796,43 +2051,80 @@ static void on_bl_go(lv_event_t *e)
 		bl_install_now();
 		return;
 	}
-	confirm(tr(RS_BL_Q), tr(RS_BL_Q_TEXT), tr_sym(LV_SYMBOL_WARNING, RS_BL_GO), true,
+	confirm(tr(BL_S(RS_BL_Q, RS_BL_UP_Q)), tr(BL_S(RS_BL_Q_TEXT, RS_BL_UP_Q_TEXT)),
+		tr_sym(LV_SYMBOL_WARNING, BL_S(RS_BL_GO, RS_BL_UP_GO)), true,
 		tr(RS_BL_Q_TEXT2), bl_install_now);
 }
 
 static void on_bl_check(lv_event_t *e)
 {
 	(void)e;
-	char *c = cmd_expand(CMD_BOOTLOADER_CHECK, NULL);
+	char *c = cmd_expand(BL_S(CMD_BOOTLOADER_CHECK, CMD_BOOTLOADER_UPGRADE_CHECK), NULL);
 	start_job(JK_CMD, tr(RS_BL_CHECKING_TITLE), "", c, true, false);
 	free(c);
 }
 
-static void page_bootloader(void)
+static void bl_page(bool up)
 {
 	capture_free(bl.cap);
 	memset(&bl, 0, sizeof(bl));
-	lv_obj_t *body = page_frame(tr(RS_BL_TITLE), true);
+	bl.up = up;
+	bl.result = bl_result_page();
+	lv_obj_t *body = page_frame(tr(BL_S(RS_BL_TITLE, RS_BL_UP_TITLE)), true);
 	lv_obj_t *c = card(body);
 	lv_obj_set_width(c, lv_pct(100));
 	lv_obj_set_flex_grow(c, 1);
 	lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
 	lv_obj_set_style_pad_all(c, 16, 0);
 	lv_obj_set_style_pad_row(c, 8, 0);
+	bl.card = c;
 	lv_obj_add_event_cb(c, bl_free, LV_EVENT_DELETE, NULL);
-	wrap_label(c, tr(RS_BL_TEXT), F20, C_TEXT);
-	bl.board = wrap_label(c, "", F16, C_MUTED);
-	bl.status = wrap_label(c, "", F20B, C_MUTED);
+	if (bl.result) {
+		/* the result first: the outcome and the check's line, then what
+		 * the boot loader is, smaller */
+		bl.status = wrap_label(c, "", F20B, C_MUTED);
+		bl.note = wrap_label(c, "", F16, C_MUTED);
+		show(bl.note, false);
+		wrap_label(c, tr(BL_S(RS_BL_TEXT, RS_BL_UP_TEXT)), F16, C_MUTED);
+		bl.board = wrap_label(c, "", F16, C_MUTED);
+		bl.builds = wrap_label(c, "", F16, C_MUTED);
+		show(bl.builds, false);
+	} else {
+		wrap_label(c, tr(BL_S(RS_BL_TEXT, RS_BL_UP_TEXT)), F20, C_TEXT);
+		bl.board = wrap_label(c, "", F16, C_MUTED);
+		bl.builds = wrap_label(c, "", F16, C_MUTED);
+		show(bl.builds, false);
+		bl.status = wrap_label(c, "", F20B, C_MUTED);
+		bl.note = wrap_label(c, "", F16, C_MUTED);
+		show(bl.note, false);
+	}
 	lv_obj_t *row = box(body, LV_FLEX_FLOW_ROW);
 	lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
 	lv_obj_set_style_pad_column(row, 12, 0);
 	bl.check = button(row, LV_SYMBOL_EYE_OPEN, tr(RS_CHECK), 0, on_bl_check, NULL);
 	lv_obj_set_width(bl.check, 170);
-	bl.go = button(row, LV_SYMBOL_WARNING, tr(RS_BL_GO), 2, on_bl_go, NULL);
+	bl.go = button(row, LV_SYMBOL_WARNING, tr(BL_S(RS_BL_GO, RS_BL_UP_GO)), 2, on_bl_go, NULL);
 	lv_obj_set_flex_grow(bl.go, 1);
 	enable(bl.go, false);
+	if (bl.result) {
+		slog("Kiln's boot loader: the result page (record %s)",
+		     kv("bootloader_install", bl.why, sizeof(bl.why)) ? bl.why : "none");
+		bl.why[0] = 0;
+		bl_outcome();
+		show(bl.go, false);
+	}
 	bl_start_check();
 	cur_refresh = bl_refresh;
+}
+
+static void page_bootloader(void)
+{
+	bl_page(false);
+}
+
+static void page_bootloader_upgrade(void)
+{
+	bl_page(true);
 }
 
 /* ---------------------------------------------------------- network page */
@@ -2152,12 +2444,19 @@ static void page_power(void)
 	wrap_label(c, tr(RS_POWER_TEXT), F20, C_TEXT);
 	wrap_label(c, tr(RS_POWER_TEXT2), F20, C_MUTED);
 	/* Kiln's own boot loader: offered on a board on the allowlist without
-	 * it while slot B holds Kiln OS, or to finish an install that stopped
+	 * it while slot B holds Kiln OS, or to finish an install that stopped;
+	 * its update when the printer has Kiln's boot loader of another build
+	 * (bootloader_upgrade=yes), or to finish an update that stopped
 	 * (ad5x-status --slots) */
 	char v[16], sb[96];
-	if ((kv("bootloader_offer", v, sizeof(v)) && !strcmp(v, "yes") &&
-	     kv("slot_b", sb, sizeof(sb)) && !strncmp(sb, "ad5x ", 5)) ||
-	    (kv("bootloader_install", v, sizeof(v)) && !strcmp(v, "started"))) {
+	bool kiln_b = kv("slot_b", sb, sizeof(sb)) && !strncmp(sb, "ad5x ", 5);
+	bool started = kv("bootloader_install", v, sizeof(v)) && !strcmp(v, "started");
+	if ((kv("bootloader_upgrade", v, sizeof(v)) && !strcmp(v, "yes") && kiln_b) ||
+	    (started && bl_record_upgrade())) {
+		lv_obj_t *b = button(c, LV_SYMBOL_DRIVE, tr(RS_BL_UP_ENTRY), 0, on_go,
+				     page_bootloader_upgrade);
+		lv_obj_set_width(b, lv_pct(100));
+	} else if ((kv("bootloader_offer", v, sizeof(v)) && !strcmp(v, "yes") && kiln_b) || started) {
 		lv_obj_t *b = button(c, LV_SYMBOL_DRIVE, tr(RS_BL_ENTRY), 0, on_go, page_bootloader);
 		lv_obj_set_width(b, lv_pct(100));
 	}
@@ -2280,7 +2579,7 @@ static void job_refresh(void)
 		else
 			snprintf(step, sizeof(step), tr(RS_SWU_STATUS), swu_status_tr(ss.status));
 	} else if (js.step[0]) {
-		snprintf(step, sizeof(step), "%s", js.step);
+		pg_text(js.code, js.arg, js.step, step, sizeof(step));	/* screen's language */
 	} else if (jb.what[0]) {
 		snprintf(step, sizeof(step), "%s", jb.what);
 	}
@@ -2363,6 +2662,22 @@ static void job_refresh(void)
 		 * edit (ad5x-return-stock's "config_failed: yes"): said here */
 		if (text_has_line(t, "config_failed: yes")) {
 			set_iconed(jp.step, LV_SYMBOL_WARNING, "  ", "%s", tr(RS_RS_CFG_FAILED));
+			lv_obj_set_style_text_color(jp.step, C_WARN, 0);
+		}
+		/* step 9, Kiln's data: what went ("wipe_removed_kb:" with
+		 * "wipe_prints:"), or that not all of it could go */
+		char wk[32], wp[16], sz[32], wt[600], was[1200];
+		if (ok && rt_line(t, "wipe_removed_kb", wk, sizeof(wk))) {
+			human_size(strtoull(wk, NULL, 10) << 10, sz, sizeof(sz));
+			bool pr = rt_line(t, "wipe_prints", wp, sizeof(wp)) && !strcmp(wp, "removed");
+			snprintf(wt, sizeof(wt), tr(pr ? RS_RS_WIPED_PRINTS : RS_RS_WIPED), sz);
+			snprintf(was, sizeof(was), "%s", lv_label_get_text(jp.step));
+			lv_label_set_text_fmt(jp.step, "%s\n%s", was, wt);
+		}
+		if (text_has_line(t, "wipe_failed: yes")) {
+			snprintf(was, sizeof(was), "%s", lv_label_get_text(jp.step));
+			lv_label_set_text_fmt(jp.step, "%s\n%s  %s", was, LV_SYMBOL_WARNING,
+					      tr(RS_RS_WIPE_FAILED));
 			lv_obj_set_style_text_color(jp.step, C_WARN, 0);
 		}
 	}
@@ -2733,6 +3048,10 @@ void ui_init(lv_display_t *disp)
 	fonts_init();
 	lv_theme_t *th = lv_theme_default_init(disp, C_ACCENT_FILL, C_DANGER_FILL, true, F20);
 	lv_display_set_theme(disp, th);
+	/* The first status run is a whole one (--slots): the power page's boot
+	 * loader entry and what slot B holds come from it, and without it they
+	 * stayed unknown until a job had run */
+	status_kick(true);
 	go(page_home);
 	lv_timer_create(tick, 250, NULL);
 	slog("ad5x-recovery-ui started");
@@ -2774,6 +3093,238 @@ static void auto_put(const char *state, unsigned step, long pid)
 		state, step, pid);
 	fclose(f);
 	rename(tmp, p);
+}
+
+/* A file next to PATH_AUTO_INSTALL ($S/run/ad5x in the simulation), for
+ * its stand-ins; NULL text removes it */
+static void sim_file(const char *name, const char *text)
+{
+	char f[600];
+	snprintf(f, sizeof(f), "%s", rui_get(PATH_AUTO_INSTALL));
+	char *sl = strrchr(f, '/');
+	if (!sl)
+		return;
+	*sl = 0;
+	mkdir(f, 0755);
+	snprintf(sl, sizeof(f) - (size_t)(sl - f), "/%s", name);
+	if (!text) {
+		unlink(f);
+		return;
+	}
+	FILE *o = fopen(f, "w");
+	if (o) {
+		fputs(text, o);
+		fclose(o);
+	}
+}
+
+/* One whole ad5x-status run from now on (--slots with slots) */
+static void status_wait(bool slots)
+{
+	for (int i = 0; i < 300 && stc.cap; i++)
+		settle(20);
+	unsigned s0 = stc.seq;
+	status_kick(slots);
+	for (int i = 0; i < 300 && (stc.seq == s0 || stc.cap); i++)
+		settle(20);
+}
+
+/* The entry's text on the power page ("" when there is none) */
+static const char *power_bl_entry(void)
+{
+	lv_obj_t *body = lv_obj_get_child(scr, -1);
+	lv_obj_t *c = body ? lv_obj_get_child(body, 0) : NULL;
+	for (uint32_t i = 0; c && i < lv_obj_get_child_count(c); i++) {
+		lv_obj_t *b = lv_obj_get_child(c, (int32_t)i);
+		if (lv_obj_check_type(b, &lv_button_class) && lv_obj_get_child_count(b))
+			return lv_label_get_text(lv_obj_get_child(b, 0));
+	}
+	return "";
+}
+
+/* The boot loader page shows a refusal ("Not possible now: ...", or the
+ * busy start-up actions) in its headline or under it */
+static bool bl_refused_shown(void)
+{
+	char pre[96];
+	snprintf(pre, sizeof(pre), "%s", tr(RS_RS_REFUSED));
+	pre[strcspn(pre, "%")] = 0;
+	const char *h = lv_label_get_text(bl.status), *n = lv_label_get_text(bl.note);
+	bool note = !lv_obj_has_flag(bl.note, LV_OBJ_FLAG_HIDDEN);
+	return strstr(h, pre) || strstr(h, "start-up-actions") ||
+	       (note && (strstr(n, pre) || strstr(n, "start-up-actions")));
+}
+
+/* sim-bl-calls (the simulated ad5x-bootloader-install's runs): how many,
+ * and how many while the start-up actions ran */
+static void bl_sim_calls(int *all, int *during_auto)
+{
+	char f[600];
+	snprintf(f, sizeof(f), "%s", rui_get(PATH_AUTO_INSTALL));
+	char *sl = strrchr(f, '/');
+	*all = *during_auto = 0;
+	if (!sl)
+		return;
+	snprintf(sl, sizeof(f) - (size_t)(sl - f), "/sim-bl-calls");
+	FILE *i = fopen(f, "r");
+	char l[256];
+	while (i && fgets(l, sizeof(l), i)) {
+		(*all)++;
+		if (!strncmp(l, "auto=running", 12))
+			(*during_auto)++;
+	}
+	if (i)
+		fclose(i);
+}
+
+/* The first start after an install (the owner's printer, rc6): Kiln's
+ * U-Boot started this recovery, --verify-start recorded it (verified) and
+ * asked for the page (bootloader_open=result), and the start-up actions
+ * are still running (no auto.done). The page opens by itself with the
+ * result, runs no check meanwhile (it would say "busy: start-up-actions"),
+ * then once they are done says it is up to date, Install hidden; never a
+ * refusal. Then the same with unverified (the start not through Kiln's
+ * U-Boot): the outcome with what to do */
+static int bl_result_shots(void (*shot)(const char *name))
+{
+	int fails = 0, n, na;
+#define BL_CHECK(cond, what) do { \
+		if (cond) { slog("shots: ok   %s", what); } \
+		else { slog("shots: FAIL %s", what); fails++; } } while (0)
+	sim_file("sim-bl-slots", "bootloader=kiln\nbootloader_upgrade=no\nbootloader_offer=no\n");
+	sim_file("sim-bl-state", "verified");
+	sim_file("sim-bl-kind", "install");
+	sim_file("sim-bl-open", "result");
+	sim_file("sim-auto", "running");
+	sim_file("sim-bl-calls", NULL);
+	go(page_home);
+	bl_shown = false;
+	status_wait(true);
+	for (int i = 0; i < 200 && cur_page != page_bootloader; i++)
+		settle(20);
+	settle(1500);
+	bl_sim_calls(&n, &na);
+	BL_CHECK(cur_page == page_bootloader && bl.result && !bl.up,
+		 "result at start, start-up actions running: the boot loader page opens by itself");
+	BL_CHECK(strstr(lv_label_get_text(bl.status), tr(RS_BL_VERIFIED)) != NULL,
+		 "result at start: the headline is the outcome (installed, this start through it)");
+	BL_CHECK(!bl_refused_shown(), "result at start, start-up actions running: no refusal, no busy line");
+	BL_CHECK(bl.waiting && !bl.cap && n == 0 &&
+		 strstr(lv_label_get_text(bl.note), tr(RS_BL_WAIT_AUTO)) != NULL,
+		 "result at start, start-up actions running: no check run, the page waits for them");
+	BL_CHECK(lv_obj_has_flag(bl.go, LV_OBJ_FLAG_HIDDEN), "result at start: no Install button");
+	shot("21l-bl-result-waiting");
+	/* auto.done: the check runs (polled), and finds this build there */
+	sim_file("sim-auto", NULL);
+	status_wait(false);
+	for (int i = 0; i < 200 && (bl.waiting || bl.cap || !bl.checked); i++)
+		settle(20);
+	settle(300);
+	bl_sim_calls(&n, &na);
+	BL_CHECK(n == 1 && na == 0 && bl.checked && !bl.waiting,
+		 "after auto.done: the check runs once, never while the start-up actions ran");
+	BL_CHECK(bl.already && strstr(lv_label_get_text(bl.status), tr(RS_BL_VERIFIED)) &&
+		 strstr(lv_label_get_text(bl.note), tr(RS_BL_UP_TO_DATE)),
+		 "after auto.done: still the outcome first, then installed and up to date");
+	BL_CHECK(!bl_refused_shown() && lv_obj_has_flag(bl.go, LV_OBJ_FLAG_HIDDEN),
+		 "after auto.done: no refusal, Install hidden");
+	shot("21m-bl-result-up-to-date");
+	/* unverified: installed, this start not through Kiln's U-Boot */
+	sim_file("sim-bl-state", "unverified");
+	status_wait(false);
+	go(page_bootloader);
+	for (int i = 0; i < 200 && (bl.cap || !bl.checked); i++)
+		settle(20);
+	settle(300);
+	BL_CHECK(bl.result && strstr(lv_label_get_text(bl.status), tr(RS_BL_UNVERIFIED)) &&
+		 strstr(lv_label_get_text(bl.note), tr(RS_BL_UP_TO_DATE)) &&
+		 lv_obj_has_flag(bl.go, LV_OBJ_FLAG_HIDDEN) && !bl_refused_shown(),
+		 "unverified: the outcome with what to do, up to date, no refusal, no Install");
+	shot("21n-bl-result-unverified");
+	sim_file("sim-bl-slots", NULL);
+	sim_file("sim-bl-state", NULL);
+	sim_file("sim-bl-kind", NULL);
+	sim_file("sim-bl-open", NULL);
+	sim_file("sim-bl-calls", NULL);
+	status_wait(true);
+#undef BL_CHECK
+	return fails;
+}
+
+/* "Update Kiln's boot loader": Kiln's boot loader of an older build on
+ * the printer (bootloader_upgrade=yes): the entry, the page with both
+ * builds, the two confirmations, the job, and the page at the first start
+ * after it (the record's kind=upgrade, verified) */
+static int bl_update_shots(void (*shot)(const char *name))
+{
+	int fails = 0;
+#define BL_CHECK(cond, what) do { \
+		if (cond) { slog("shots: ok   %s", what); } \
+		else { slog("shots: FAIL %s", what); fails++; } } while (0)
+	/* an earlier install's record, verified: not the page's result now */
+	sim_file("sim-bl-slots", "bootloader=kiln\nbootloader_upgrade=yes\nbootloader_offer=no\n");
+	sim_file("sim-bl-state", "verified");
+	sim_file("sim-bl-kind", "install");
+	status_wait(true);
+	go(page_power);
+	settle(200);
+	BL_CHECK(strstr(power_bl_entry(), tr(RS_BL_UP_ENTRY)) != NULL,
+		 "bootloader_upgrade=yes: Update Kiln's boot loader on the power page");
+	shot("21f-power-bl-update");
+	go(page_bootloader_upgrade);
+	for (int i = 0; i < 100 && bl.cap; i++)
+		settle(20);
+	settle(200);
+	BL_CHECK(bl.up && !bl.result && strstr(lv_label_get_text(bl.status), tr(RS_BL_UP_READY)) &&
+		 !lv_obj_has_flag(bl.go, LV_OBJ_FLAG_HIDDEN),
+		 "an update offered over an earlier install's verified record: the update's page, not that result");
+	BL_CHECK(bl.up && bl.ready && !bl.resume && !strcmp(bl.from, "Nov 15 2026 - 19:48:50 +0000") &&
+		 !strcmp(bl.to, "Nov 19 2026 - 10:02:11 +0000") &&
+		 !lv_obj_has_flag(bl.builds, LV_OBJ_FLAG_HIDDEN),
+		 "the update page: ready, both builds shown");
+	shot("21g-bl-update");
+	on_bl_go(NULL);
+	settle(100);
+	shot("21h-bl-update-confirm1");
+	click(dlg.ok_btn);
+	settle(2400);
+	shot("21i-bl-update-confirm2");
+	dlg_close();
+	{
+		char *c = cmd_expand(BL_S(CMD_BOOTLOADER_INSTALL, CMD_BOOTLOADER_UPGRADE), NULL);
+		BL_CHECK(!strcmp(c, "ad5x-bootloader-install --yes --upgrade"),
+			 "the update runs ad5x-bootloader-install --yes --upgrade");
+		free(c);
+	}
+	bl_install_now();
+	wait_job();
+	shot("21j-bl-update-done");
+	/* the first start after it: --verify-start recorded it */
+	sim_file("sim-bl-slots", "bootloader=kiln\nbootloader_upgrade=no\nbootloader_offer=no\n");
+	sim_file("sim-bl-state", "verified");
+	sim_file("sim-bl-kind", "upgrade");
+	status_wait(true);
+	BL_CHECK(bl_record_upgrade(), "the record: an update, verified");
+	go(page_power);
+	settle(200);
+	BL_CHECK(!power_bl_entry()[0], "after the update: no boot loader entry on the power page");
+	go(bl_record_upgrade() ? page_bootloader_upgrade : page_bootloader);
+	for (int i = 0; i < 100 && bl.cap; i++)
+		settle(20);
+	settle(200);
+	BL_CHECK(bl.up && bl.done_already && lv_obj_has_flag(bl.builds, LV_OBJ_FLAG_HIDDEN),
+		 "the update page after the restart: done, verified");
+	BL_CHECK(bl.result && bl.already && strstr(lv_label_get_text(bl.status), tr(RS_BL_UP_VERIFIED)) &&
+		 strstr(lv_label_get_text(bl.note), tr(RS_BL_UP_TO_DATE)) &&
+		 lv_obj_has_flag(bl.go, LV_OBJ_FLAG_HIDDEN) && !bl_refused_shown(),
+		 "the update page after the restart: updated and verified first, up to date, no Update");
+	shot("21k-bl-update-verified");
+	sim_file("sim-bl-slots", NULL);
+	sim_file("sim-bl-state", NULL);
+	sim_file("sim-bl-kind", NULL);
+	status_wait(true);
+#undef BL_CHECK
+	return fails;
 }
 
 static int auto_shots(void (*shot)(const char *name))
@@ -2871,6 +3422,22 @@ int ui_run_shots(void (*shot)(const char *name))
 	int fails = 0;
 	settle(300);
 	shot("01-home");
+
+	/* Before any job: the start's own status run read the slots, so the
+	 * power page offers Kiln's boot loader (the simulation's default:
+	 * bootloader_offer=yes, Kiln OS in slot B) */
+	for (int i = 0; i < 300 && !strstr(stc.slots, "bootloader_offer="); i++)
+		settle(20);
+	go(page_power);
+	settle(200);
+	if (strstr(power_bl_entry(), tr(RS_BL_ENTRY))) {
+		slog("shots: ok   at start, before any job: Install Kiln's boot loader on the power page");
+	} else {
+		slog("shots: FAIL at start, before any job: Install Kiln's boot loader on the power page");
+		fails++;
+	}
+	go(page_home);
+	settle(200);
 
 	go(page_update);
 	settle(200);
@@ -2998,6 +3565,74 @@ int ui_run_shots(void (*shot)(const char *name))
 		unlink(cf);
 	}
 
+	/* Kiln's data: the two boxes (the print files box usable only with
+	 * the first), the confirmation with the sizes on both steps, and what
+	 * went on the result */
+	go(page_return);
+	for (int i = 0; i < 100 && rt.cap; i++)
+		settle(20);
+	settle(200);
+	if (!lv_obj_has_flag(rt.wipe, LV_OBJ_FLAG_HIDDEN) && !lv_obj_has_flag(rt.prints, LV_OBJ_FLAG_HIDDEN) &&
+	    lv_obj_has_state(rt.prints, LV_STATE_DISABLED) && !rt_wipe()) {
+		slog("shots: ok   Kiln's data: both boxes shown, off, the print files box disabled");
+	} else {
+		slog("shots: FAIL Kiln's data: the boxes are not as they should be at the start");
+		fails++;
+	}
+	lv_obj_add_state(rt.wipe, LV_STATE_CHECKED);
+	lv_obj_send_event(rt.wipe, LV_EVENT_VALUE_CHANGED, NULL);
+	for (int i = 0; i < 100 && rt.cap; i++)
+		settle(20);
+	settle(200);
+	if (!lv_obj_has_state(rt.prints, LV_STATE_DISABLED) && rt.ready &&
+	    !lv_obj_has_flag(rt.wipe_note, LV_OBJ_FLAG_HIDDEN)) {
+		slog("shots: ok   Kiln's data ticked: the print files box usable, the note shown");
+	} else {
+		slog("shots: FAIL Kiln's data ticked: the print files box or the note");
+		fails++;
+	}
+	shot("16g-return-wipe");
+	on_rt_go(NULL);
+	settle(100);
+	shot("16h-return-wipe-confirm1");
+	click(dlg.ok_btn);
+	settle(2400);
+	shot("16i-return-wipe-confirm2");
+	dlg_close();
+	/* the print files box goes off with the first, and back on by hand */
+	lv_obj_add_state(rt.prints, LV_STATE_CHECKED);
+	lv_obj_remove_state(rt.wipe, LV_STATE_CHECKED);
+	lv_obj_send_event(rt.wipe, LV_EVENT_VALUE_CHANGED, NULL);
+	if (!lv_obj_has_state(rt.prints, LV_STATE_CHECKED) && !rt_prints() &&
+	    lv_obj_has_state(rt.prints, LV_STATE_DISABLED)) {
+		slog("shots: ok   Kiln's data unticked: the print files box goes off with it");
+	} else {
+		slog("shots: FAIL Kiln's data unticked: the print files box stayed on");
+		fails++;
+	}
+	for (int i = 0; i < 100 && rt.cap; i++)
+		settle(20);
+	lv_obj_add_state(rt.wipe, LV_STATE_CHECKED);
+	lv_obj_send_event(rt.wipe, LV_EVENT_VALUE_CHANGED, NULL);
+	for (int i = 0; i < 100 && rt.cap; i++)
+		settle(20);
+	lv_obj_add_state(rt.prints, LV_STATE_CHECKED);
+	lv_obj_send_event(rt.prints, LV_EVENT_VALUE_CHANGED, NULL);
+	for (int i = 0; i < 100 && rt.cap; i++)
+		settle(20);
+	settle(200);
+	shot("16j-return-wipe-prints");
+	on_rt_go(NULL);
+	settle(100);
+	shot("16k-return-wipe-prints-confirm1");
+	click(dlg.ok_btn);
+	settle(2400);
+	shot("16l-return-wipe-prints-confirm2");
+	dlg_close();
+	return_now();
+	wait_job();
+	shot("16m-return-wipe-done");
+
 	go(page_network);
 	settle(600);
 	shot("17-network");
@@ -3031,8 +3666,12 @@ int ui_run_shots(void (*shot)(const char *name))
 	shot("21d-bootloader-confirm2");
 	dlg_close();
 	bl_install_now();
+	settle(1500);
+	shot("21dd-bootloader-running");
 	wait_job();
 	shot("21e-bootloader-done");
+	fails += bl_update_shots(shot);
+	fails += bl_result_shots(shot);
 
 	/* A browser upload arriving while on the home screen, with a dialog
 	 * open (its second stage, arm timer running): the job page replaces

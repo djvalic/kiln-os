@@ -22,9 +22,15 @@ const char *tr(enum rui_str id)
 	return s && *s ? s : rui_i18n_text[LANG_EN][id];
 }
 
+bool tr_has(enum rui_str id)
+{
+	const char *s = rui_i18n_text[cur][id];
+	return cur != LANG_EN && s && *s;
+}
+
 const char *tr_sym(const char *sym, enum rui_str id)
 {
-	static char ring[8][256];
+	static char ring[8][1024];	/* the longest Russian strings are over 500 bytes */
 	static unsigned next;
 	char *out = ring[next++ % 8];
 	snprintf(out, sizeof(ring[0]), "%s  %s", sym ? sym : "", tr(id));

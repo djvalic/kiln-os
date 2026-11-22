@@ -147,9 +147,16 @@ the file hides the button again. The SSH commands below work either way.
 4. Tap **Install** and confirm twice. Wait until the screen says it is
    done.
 5. Tap **Reboot**. The printer starts this recovery screen again, now
-   through Kiln's boot loader, and the page shows the result: "Done: Kiln's
-   boot loader is installed and started this recovery." Then **Boot main
-   OS**.
+   through Kiln's boot loader, and the page opens by itself with the
+   result on top: "Done: Kiln's boot loader is installed and started this
+   recovery." Under it: "Kiln's boot loader is installed and up to date",
+   and no Install button. The page waits for the recovery OS's start-up
+   actions to finish before it checks (a few seconds). If the start didn't
+   come through Kiln's U-Boot (Kiln's SPL started the system itself), the
+   page says so: the printer works and **Boot main OS** starts Kiln OS;
+   please post it, with what **Check** shows, in
+   [issue #68](https://github.com/djvalic/kiln-os/issues/68). Then **Boot
+   main OS**.
 
 If the power goes off during the install, the recovery screen comes back
 (the boot flag stays on the recovery OS all through the install), the page
@@ -168,6 +175,18 @@ reboot
 
 The log is `/data/ad5x/bootloader/log`, the install record
 `/data/ad5x/bootloader/state`.
+
+The check's last line says where things stand: `result: ready to install`
+(nothing written yet; a stock first MiB saved earlier and a blank U-Boot
+area in `ota`, as Flashforge's factory reset leaves it, are still a fresh
+install), `result: ready to go on` (an install that stopped part-way: its
+record says `started`, or Kiln's SPL or part of Kiln's U-Boot is on the
+disk; `--yes` finishes it), `result: already installed (this build)`
+(nothing to do, exit 0; also while another job or the start-up actions
+run, since nothing would be written) or `result: refused` with the
+failed checks. Exit codes: 0 done or nothing to do, 1 refused, 2 checked,
+3 a write failed but every system still starts, 4 the boot loader area is
+not as before (run it again at once).
 
 ## What the installer writes
 
@@ -220,8 +239,34 @@ with every update, and updates never touch the boot loader.
 
 The recovery OS carries the boot loader of its own release. When the
 printer has Kiln's boot loader of another build (an earlier install, or
-the bench tools), the same command upgrades it, over SSH in the recovery
-OS (the recovery screen has no button for it yet):
+the bench tools), it can be upgraded to the one this release carries.
+
+### On the recovery screen
+
+1. Boot into recovery (touch screen: Settings > System > Boot into
+   recovery).
+2. Tap **Reboot / Power**. When the printer has Kiln's boot loader of
+   another build (on a known board), there is a button **Update Kiln's
+   boot loader**. No opt-in file is needed: you installed Kiln's boot
+   loader already. The button isn't there when the boot loader is already
+   this release's.
+3. The page checks everything first and shows the build on the printer
+   and the one after the update. Nothing is written yet.
+4. Tap **Update** and confirm twice (the same risk note as the install).
+   Wait until the screen says it is done.
+5. Tap **Reboot**. The printer starts this recovery screen again through
+   the new boot loader, and the page shows the result. Then **Boot main
+   OS**.
+
+If the power goes off during the update, the recovery screen comes back,
+the page opens by itself and **Continue** finishes it. The screen runs
+`ad5x-bootloader-install --yes --upgrade`: `--upgrade` refuses anything
+that isn't an upgrade, so this button never installs Kiln's boot loader
+over Flashforge's, and it never uses `--unsupported-board`.
+
+### Over SSH
+
+The same command upgrades it, over SSH in the recovery OS:
 
 ```
 ad5x-bootloader-install --status   # the build on the disk and the one carried

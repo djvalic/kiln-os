@@ -3,13 +3,14 @@
 How the stock AD5X tares its bed strain gauges and sets Z before a print,
 recorded by running the stock app (`firmwareExe` 3.1.0) in the sandbox
 (`tools/qemu/run_firmwareexe.sh -L -X ttyS7`). Behaviour and values only.
-Not yet seen on hardware.
+The reply format, the tare and the probe trigger have since been checked
+on hardware (see "To confirm on hardware"); the rest is from the sandbox.
 
 ## The board
 
 - Own host UART: **`/dev/ttyS7`, 9600 baud**, 8N1. Not a Klipper MCU and
-  not in the stock Klipper config. Its trigger output is presumably the
-  probe pin (`[probe] pin: !PB3` on the mainboard).
+  not in the stock Klipper config. Its trigger output is the probe pin
+  (`[probe] pin: !PB3` on the mainboard), confirmed by a press test.
 - The app sends a command followed by `\n`. A reply counts once it is
   **longer than 12 bytes and contains `ok`**; the app waits up to 1 s for
   more bytes and sends the command up to 5 times.
@@ -80,6 +81,15 @@ effect on the print; `_CHECK_Z_APPLY` does the same unless
   bed centre and saves it (`ad5x_center_z`). `_CHECK_Z` does steps 2 to 5.
   Differences are in `docs/deviations-from-stock.md`.
 
+## Idea: Z offset from the force reading
+
+PB3 is only a yes/no at the board's trip point, and the Z offset is then
+corrected with a fixed `z_offset` and the per-unit `zProbeOffset`. The
+board also reports force in grams over ttyS7, so Kiln could find first
+contact itself: step Z down slowly and take the point where the reading
+starts to rise above its tared noise. That would probably give a more
+repeatable Z offset than the trip point plus fixed offsets. Untried.
+
 ## To confirm on hardware
 
 - ~~The board's real reply text~~: read on the developer's printer (USB test
@@ -88,7 +98,15 @@ effect on the print; `_CHECK_Z_APPLY` does the same unless
   of each other. Fields: raw ADC count, then grams; the fifth field (what
   stock and `ad5x_weight` read) is the grams. 60 g untared, nothing on the
   bed. Nothing was sent to the board unasked: no reply before `H7`.
-- That `H1` really tares and the probe pin triggers on contact after it.
+- ~~That `H1` really tares and the probe pin triggers on contact after
+  it~~: checked on an X2600E printer (2026-11-21, nothing heated or moved).
+  After `WEIGHT_TARE`, `H7` reads about 0 g (raw about 8709000, moving
+  by about 100 counts). Pressing the bed by hand gave 660-1800 g and
+  `QUERY_PROBE` reported TRIGGERED; released, it read open and about
+  0 g again. 34 of 105 samples were triggered, all during presses. The
+  trip point is somewhere around 200-900 g (the probe and the weight are
+  read a moment apart). Scale: about 56 raw counts per gram. Not yet
+  checked with the nozzle touching the bed.
 - What `H2 S500`, `H3 S100` and `H3 S200` calibrate (likely a known
   weight in grams); don't send them until known.
 - Whether Y-3 is on the bed's edge or past it (where the scrub happens).

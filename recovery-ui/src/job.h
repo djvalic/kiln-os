@@ -13,7 +13,9 @@ typedef struct {
 	bool finished;		/* ran and ended (stays set until next start) */
 	int exit_code;		/* valid when finished; -1 = killed/failed */
 	int progress;		/* 0..100, or -1 = unknown */
-	char step[160];		/* last "@step"/"@progress" text */
+	char step[160];		/* last "@step"/"@progress" text (English) */
+	char code[32];		/* its "[code]" or "[code:arg]", empty if none */
+	char arg[128];		/* (progress.h: pg_text gives the shown text) */
 } job_state;
 
 /* Start cmd (a /bin/sh -c string). False if a job is already running. */

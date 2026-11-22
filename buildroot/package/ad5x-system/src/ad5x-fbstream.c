@@ -325,8 +325,12 @@ static void load_calibration(void)
 		ok = 1;
 		for (i = 0; i < 6; i++)
 			ok &= json_num(js, "calibration", ck[i], &v[i]) == 0;
+		// "valid": true inside the calibration object only: an invalid
+		// affine (the seed since issue #90) is followed by touch_range's
 		const char *cp = strstr(js, "\"calibration\"");
-		cal_valid = ok && cp && strstr(cp, "\"valid\": true");
+		const char *ce = cp ? strchr(cp, '}') : NULL;
+		const char *cv = cp ? strstr(cp, "\"valid\": true") : NULL;
+		cal_valid = ok && cv && (!ce || cv < ce);
 		if (cal_valid)
 			memcpy(cal, v, sizeof(v));
 		ok = 1;

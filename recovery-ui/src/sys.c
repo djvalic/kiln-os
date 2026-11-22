@@ -393,12 +393,13 @@ int sys_list_backups(backup_set *b, int max)
 
 void human_size(unsigned long long bytes, char *buf, size_t cap)
 {
+	/* the unit in the screen's language ("1.2 ГБ") */
 	if (bytes >= 1ULL << 30)
-		snprintf(buf, cap, "%.1f GB", bytes / 1073741824.0);
+		snprintf(buf, cap, tr(RS_SIZE_GB), bytes / 1073741824.0);
 	else if (bytes >= 1ULL << 20)
-		snprintf(buf, cap, "%.0f MB", bytes / 1048576.0);
+		snprintf(buf, cap, tr(RS_SIZE_MB), bytes / 1048576.0);
 	else if (bytes >= 1024)
-		snprintf(buf, cap, "%.0f KB", bytes / 1024.0);
+		snprintf(buf, cap, tr(RS_SIZE_KB), bytes / 1024.0);
 	else
-		snprintf(buf, cap, "%llu B", bytes);
+		snprintf(buf, cap, tr(RS_SIZE_B), bytes);
 }

@@ -55,8 +55,10 @@ CHANNEL_ACTIVITY = {7: "clamped", 10: "loading", 11: "loading",
 # "refill".
 OPERATIONS = ("load", "unload", "swap", "eject", "prefeed", "refill", "tune",
               "select", "feed", "retract")
+# homing: the IFS selector; homing_printer: G28 before a toolhead
+# operation started with HOME=1 (_require_homed)
 PHASES = ("heating", "cutting", "unloading", "homing", "selecting", "feeding",
-          "purging", "priming")
+          "purging", "priming", "homing_printer")
 
 # Nozzle temperature to move each material at (handling, not printing),
 # as FX's ifs_materials.py uses. Override or add with temp_<type> in [ifs].
@@ -1879,7 +1881,8 @@ class IFS:
         target= (its slot) are printer.ifs operation/target_channel while it
         runs; without op it is no operation (a query, a raw command).
         keep_stop=True: a stop already requested counts (the second _run
-        of one command: a stop during its first one ends it too)."""
+        of one command: a stop during its first one ends it too).
+        home=True: G28 first, inside the operation (_require_homed)."""
         # A stop pressed while the queued moves of an earlier command run
         # counts for this one: the flag is cleared before the wait, not after
         if not kw.get('keep_stop'):
@@ -1895,6 +1898,8 @@ class IFS:
             self._end_operation()
             self.operation, self.target_channel = op, kw.get('target', 0)
         try:
+            if kw.get('home'):
+                self._home_printer()
             with self.mutex:
                 try:
                     result = func(*args)
@@ -1949,11 +1954,38 @@ class IFS:
         except (IfsError, self.gcode.error) as e:
             logging.info("ifs: reset after an error failed: %s", e)
             return str(e)
-    def _require_homed(self):
+    def _homed(self):
         toolhead = self.printer.lookup_object('toolhead')
         status = toolhead.get_status(self.reactor.monotonic())
-        if not all(a in status.get('homed_axes', '') for a in "xyz"):
-            raise self.gcode.error("IFS: home the printer first (G28)")
+        return all(a in status.get('homed_axes', '') for a in "xyz")
+    def _print_holds_printer(self):
+        ps = self.printer.lookup_object('print_stats', None)
+        return ps is not None and ps.get_status(
+            self.reactor.monotonic()).get('state') in ("printing", "paused")
+    def _require_homed(self, gcmd):
+        """Before an operation that cuts or moves the extruder: whether it
+        homes first (pass it to _run as home=). Homed: no. Not homed:
+        HOME=1 (the touch screen, UNLOAD_FILAMENT) on an idle printer: yes,
+        G28 at the start of the operation (_home_printer). Without HOME=1
+        (a command typed in the console: no motion it didn't ask for), and
+        always during a print or a pause: the error, nothing moves."""
+        if self._homed():
+            return False
+        if not gcmd.get_int('HOME', 0, minval=0, maxval=1):
+            raise gcmd.error("IFS: home the printer first (G28)")
+        if self._print_holds_printer():
+            raise gcmd.error("IFS: home the printer first (G28); it is not "
+                             "homed by itself during a print or a pause")
+        return True
+    def _home_printer(self):
+        """G28 at the start of an operation (home=True): printer.ifs phase
+        homing_printer while it runs, so the screen can say so."""
+        self.gcode.respond_info("IFS: homing first (G28)")
+        self._track("homing_printer")
+        self.gcode.run_script_from_command("G28")
+        self._track("")
+        if not self._homed():
+            raise self.gcode.error("IFS: homing did not home x, y and z")
     def _heat(self, gcmd, chans, fallback=None):
         """Make the nozzle hot enough to move filament. With TEMP= heat to
         that; otherwise only when the target is below min_extrude_temp
@@ -2859,22 +2891,23 @@ class IFS:
         purge = self._swap_purges(gcmd)
         # Read here, before anything moves: the position is the print's
         at_print = not purge and self._at_print_ok()
-        self._require_homed()
+        home = self._require_homed(gcmd)
         # "swap" takes a slot out of the nozzle first, "load" fills it
         self._with_heat(gcmd, (old, new), self._swap, old, new, flush, rounds,
                         purge, at_print, op="swap" if old else "load",
-                        target=new)
+                        target=new, home=home)
     cmd_IFS_SWAP_help = ("Change to another IFS channel (cut, unload, load, "
                          "purge): CHANNEL= [TEMP=] [FLUSH=mm] [ROUNDS=] "
-                         "[PURGE=0|1]")
+                         "[PURGE=0|1] [HOME=1]")
     def cmd_IFS_SWAP(self, gcmd):
         self._tool_change(gcmd, self._get_channel(gcmd))
     cmd_IFS_LOAD_help = ("Load a slot into the nozzle, unloading the current "
-                         "one first: SLOT= [TEMP=]")
+                         "one first: SLOT= [TEMP=] [HOME=1]")
     def cmd_IFS_LOAD(self, gcmd):
         self._tool_change(gcmd, self._get_channel(gcmd, 'SLOT'))
     cmd_IFS_UNLOAD_help = ("Take the filament out of the nozzle (cut, unload); "
-                           "the lane stays threaded: [SLOT=] [TEMP=]")
+                           "the lane stays threaded: [SLOT=] [TEMP=] "
+                           "[HOME=1]")
     def cmd_IFS_UNLOAD(self, gcmd):
         # A strand in the tube: the toolhead sensor reads empty, so the
         # unload would only record "nothing loaded" and lift the block. The
@@ -2888,20 +2921,21 @@ class IFS:
         if self.channel and slot != self.channel:
             raise gcmd.error("IFS_UNLOAD: slot %d is not loaded (slot %d is)"
                              % (slot, self.channel))
-        self._require_homed()
+        home = self._require_homed(gcmd)
         self._with_heat(gcmd, (slot,), self._unload_toolhead, slot,
-                        op="unload", target=slot)
+                        op="unload", target=slot, home=home)
     cmd_IFS_EJECT_help = ("Pull a slot's filament out of the IFS (unloads "
-                          "the nozzle first if it is the loaded one): SLOT=")
+                          "the nozzle first if it is the loaded one): SLOT= "
+                          "[HOME=1]")
     def cmd_IFS_EJECT(self, gcmd):
         slot = self._get_channel(gcmd, 'SLOT')
         if slot == self.channel:
-            self._require_homed()
+            home = self._require_homed(gcmd)
             def unload_and_eject():
                 self._unload_toolhead(slot)
                 self._eject(slot)
             self._with_heat(gcmd, (slot,), unload_and_eject, op="eject",
-                            target=slot)
+                            target=slot, home=home)
             return
         if not self.channel and self._head_has_filament():
             raise gcmd.error("IFS_EJECT: the toolhead holds filament from an "
@@ -3129,8 +3163,8 @@ class IFS:
         self.find_result = "found"
     cmd_IFS_FIND_HEAD_SLOT_help = (
         "Filament in the toolhead from a slot Kiln doesn't know: find the "
-        "slot and unload it: [TEMP=]; SLOT=n names it instead (a strand "
-        "left in the tube is pulled back)")
+        "slot and unload it: [TEMP=] [HOME=1]; SLOT=n names it instead (a "
+        "strand left in the tube is pulled back)")
     def cmd_IFS_FIND_HEAD_SLOT(self, gcmd):
         # Nothing of an earlier find is read as this one's result
         self.head_found = 0
@@ -3193,7 +3227,7 @@ class IFS:
             gcmd.respond_info("IFS: slot %d is in the toolhead (known)"
                               % (self.channel,))
             return
-        self._require_homed()
+        home = self._require_homed(gcmd)
         chans = self._find_candidates()
         if guess in chans:
             chans = [guess] + [c for c in chans if c != guess]
@@ -3214,7 +3248,7 @@ class IFS:
         try:
             # keep_stop: an abort during the slot query above counts
             found = self._run(self._find_head_slot, chans, op="unload",
-                              target=0, keep_stop=True)
+                              target=0, keep_stop=True, home=home)
         except self.gcode.error as e:
             if not self.find_result:
                 self.find_result = "error"
@@ -3505,11 +3539,11 @@ class IFS:
                 # A real unload: cut and extruder move, so homed and hot.
                 # Only for that part: feeding to the head sensor needs no
                 # heat.
-                self._require_homed()
+                home = self._require_homed(gcmd)
                 self.tune_unloaded = self.channel
                 self._with_heat(gcmd, (self.channel,), self._tune_all, chans,
                                 False, False, True, False, op="tune",
-                                target=self.channel)
+                                target=self.channel, home=home)
             self._run(self._tune_all, chans, do_speed, do_load, False, do_tube,
                       op="tune", target=chans[0])
         finally:
@@ -3519,7 +3553,7 @@ class IFS:
     cmd_IFS_TUNE_help = ("Tune swaps (QuickSwap-like): unload length, feed "
                          "speed, each slot's load distance; saved in "
                          "variables.cfg. [CHANNEL=] [SPEED=1] [LOAD=1] "
-                         "[UNLOAD=1] [TUBE=0] [TEMP=]")
+                         "[UNLOAD=1] [TUBE=0] [TEMP=] [HOME=1]")
     def cmd_IFS_TUNE(self, gcmd):
         self._tune_cmd(gcmd, gcmd.get_int('SPEED', 1), gcmd.get_int('LOAD', 1),
                        gcmd.get_int('UNLOAD', 1), gcmd.get_int('TUBE', 0))

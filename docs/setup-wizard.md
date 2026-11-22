@@ -17,7 +17,7 @@ install). Our AD5X steps are added by a HelixScreen patch:
 
 | # | Step | Source |
 |---|------|--------|
-| 1 | Touch calibration (skipped if already valid) | HelixScreen |
+| 1 | Touch calibration (on a fresh install always: the seed has no valid calibration; skipped once one is saved) | HelixScreen |
 | 2 | Language | HelixScreen |
 | 3 | Wi-Fi (optional) | HelixScreen |
 | 4 | Connection (auto, local Moonraker) | HelixScreen |
@@ -36,6 +36,25 @@ install). Our AD5X steps are added by a HelixScreen patch:
 
 Every AD5X step has Start, Skip and (while running) Abort. A failed step
 shows the message and offers Retry / Skip.
+
+**Taps land in the wrong place?** Hold a finger still anywhere on the
+screen for 10 seconds. The touch calibration opens (the same as Settings >
+Touch & Input > Touch Calibration); lift your finger and tap the targets.
+In the setup wizard it goes back to the wizard's own touch calibration
+step (step 1); a step that was running stops, as when you leave it. In
+Settings > Printer > Run Setup Wizard, which has no touch step, it ends
+that run (as Back on its first step) and then opens the calibration. An
+open dialog or the first-run tour is closed first; the tour is offered
+again later. It does nothing on the lock screen (no way past a PIN) or
+while a "please wait" or abort screen is up. The finger may lift for a
+moment (up to 0.2 s, three times) or slip a little during the hold, but
+tapping is not a hold. Short taps, long presses, scrolling and
+sliders work as before, but holding the jog pad or a slider still for
+10 seconds opens the calibration too. Nothing happens on the calibration
+screen itself, so it doesn't get in the way of step 1. Once it has opened,
+take your finger off the screen for 3 seconds before it can open again.
+(HelixScreen patches 0089, from PR #91 by jolting, 0090 and 0091; issue
+#90.)
 
 ## Klipper contract (`klipper/setup.cfg` + `klipper/extras/ad5x_setup.py`)
 
@@ -492,6 +511,11 @@ Klipper starts.
 - numpy for the vibration step: add `python-numpy` to the image, or skip
   the step.
 - IFS tuning: see below.
+- After a reinstall over stock (Return to Flashforge firmware, then the
+  install stick): "Run the setup wizard?" over the home screen at the first
+  start (in the screen's language only); Run opens the Settings
+  session, Skip stays home; no question at the next restart; a Fluidd
+  update asks nothing.
 
 ## IFS tuning (QuickSwap-like)
 
@@ -730,7 +754,7 @@ an update.
 
 ## HelixScreen side (`buildroot/package/helixscreen/000*.patch`)
 
-Patches on HelixScreen v1.1.0-rc.1 (63 files, `0001` to `0071`; the missing
+Patches on HelixScreen v1.1.0-rc.1 (85 files, `0001` to `0093`; the missing
 numbers were dropped because upstream has them), applied by Buildroot after
 extract (after the `GIT_INIT` hook has committed the pristine tree, so
 upstream's own submodule patching is unaffected; they touch `src/`,
@@ -759,7 +783,7 @@ from a clean clone of the build dir's `import` commit with `git format-patch`.
 | `0015-ad5x-wizard-one-page-steps` | The Z offset step's buttons read Closer / Away (no hint line); the purge box is one row of arrows (Left, Right, Front, Back, Factory), so Accept and Abort fit on the page; shorter step text |
 | ~~`0016-ad5x-network-menu-fixes`~~ | Dropped with beta.18: upstream reads the kernel's IP and leaves out hidden SSIDs itself |
 | `0018-ad5x-preset-no-aux-fan` | The AD5X preset has no aux fan (`chamber_fan` is not on the printer): an empty `fans/aux` is no longer filled from the preset at every boot, which made the fan step come back each start |
-| `0019-ad5x-buttons-no-drag-scroll` | Plain buttons do not pass a drag to the panel behind them (LVGL scroll chain off); list rows (`*_row`) keep drag-scroll. Set in `create_xml_hidden`, the home page walk and the home tile resize |
+| `0019-ad5x-buttons-no-drag-scroll` | Buttons do not pass a drag to the page behind them (LVGL scroll chain off), so a press on one does not start a scroll. Set in `create_xml_hidden` only (the home page walk and the home tile resize went with the beta.18 rebase), so it covers overlays and Settings sub-pages, not the main panels. Patch 0092 narrows it to buttons (`lv_button` and `ui_button`): list rows (`row`, `row_*`, `*_row*`) and everything in them, `setting_group` cards, containers and overlay roots keep drag-scroll |
 
 ### Steps
 
@@ -767,7 +791,7 @@ One data-driven step class (`src/ui/ui_wizard_ad5x_setup.cpp`,
 `WizardAd5xSetupStep`), one instance per row of a table (`StepId`, step
 name, XML component, explanation). New `StepId`s `Ad5xSelfcheck` ...
 `Ad5xFinish` sit between `FilamentSensor` and `InputShaper`, so the order
-is: touch calibration (skipped when the seed's calibration is valid),
+is: touch calibration (skipped once a valid one is saved; the seed has none),
 language, Wi-Fi, connection (auto, local Moonraker), [hardware pickers,
 collapsed by the preset], **self-check, PID, bed mesh, vibration, filament,
 IFS, purge box, Z offset, bed soak, summary, save** (`Ad5xFilament`, patch
@@ -913,13 +937,67 @@ changes it later (confirm: Klipper restarts).
 
 The template `helixscreen-settings.json` has `wizard_completed: false`
 at the root and under `printers.default`; everything else (preset `ad5x`,
-`preset_provisional: false`, touch calibration, fans, sensor, host,
+`preset_provisional: false`, fans, sensor, host,
 `telemetry_enabled: false`) is unchanged. `S70helixscreen` copies it only
 when `/data/ad5x/helixscreen/config/settings.json` does not exist, so:
 
 - fresh install: wizard once, preset authoritative (pickers collapsed),
-  touch calibration skipped;
-- existing install / update: the old settings.json stays, no wizard.
+  starting with HelixScreen's touch calibration (issue #90): the seed has
+  the stock touch range (`touch_range` X 60..723, Y 72..404, valid) but
+  `input.calibration.valid: false`, so the step runs, and until it is done
+  taps map by the range alone, as on the recovery screen. On our 6.6
+  kernel `ad5x-touch-units` puts the Y flip into that range edge for edge
+  (Y 3482..649, X 307..3702), so taps aren't upside down before the
+  calibration. Before issue #90 the seed's affine was valid and the step
+  was skipped, which left screens that read differently from the default
+  without working touch;
+- existing install / update: the old settings.json stays, no wizard;
+- reinstall over stock with the old settings kept: the question below.
+
+### After a reinstall (patch 0088)
+
+Return to Flashforge firmware keeps `/data/ad5x`, so a later reinstall from
+the install stick (or over SSH) finds the old `settings.json` with the
+wizard marked done. Owner decision (2026-11-20): keep the settings, but
+offer the wizard.
+
+- **Detection**: the installer (`tools/install/ad5x-install.sh`, step 5,
+  next to the IFS slot record's `ifs_forget`) writes
+  `/data/ad5x/helixscreen/offer-setup-wizard` (one line: when, and by whom)
+  when `/data/ad5x/helixscreen/config/settings.json` exists. The installer
+  only runs on stock, so that file means Kiln OS ran here before and stock
+  ran since, however the printer got back to stock. Without the settings
+  file nothing is written: the screen starts fresh and the wizard runs as a
+  first run. Fluidd, `.swu` and recovery updates never run the installer
+  and never write it.
+- **The question**: S70 sets `HELIX_WIZARD_OFFER_FILE` to that path. At the
+  screen's start, when the file exists and no wizard runs, it asks:
+
+  | | English | Russian |
+  |---|---|---|
+  | Title | Run the setup wizard? | Запустить мастер настройки? |
+  | Text | Kiln OS is installed again and kept your settings. Flashforge's firmware ran in between and may have changed the filament, the Z offset or the boards. The setup wizard checks and tunes the printer again; every step can be skipped. | Kiln OS установлена снова, ваши настройки сохранены. До этого работала прошивка Flashforge: она могла изменить филамент, смещение по Z или платы. Мастер настройки снова проверит и настроит принтер, любой шаг можно пропустить. |
+  | Buttons | Run, Skip | Запуск, Пропустить |
+
+  The screen shows the question in its selected language only (en.yml,
+  ru.yml; other languages show the English text, as for every Kiln key).
+
+- **Run** deletes the file and starts the same session as Settings >
+  Printer > Run Setup Wizard (time zone, nozzle size, the AD5X steps).
+  While a print may move the printer it is refused ("Cannot calibrate while
+  printing") and the file stays. **Skip** deletes the file; the home screen
+  stays and nothing is asked again. Closing the dialog another way
+  (backdrop tap) answers nothing: asked again at the next start.
+- **Answered without a question**: when a wizard runs at that start anyway
+  (a fresh settings file, the `run-setup-wizard` flag) the file is deleted;
+  so it is when `SETUP_WIZARD` opens the steps while the question is up
+  (the question closes).
+- The user's results (`wizard_completed`, Z offset, tuning, the welcome
+  tour's `tour/completed`) are never cleared; the tour can be replayed from
+  Help & About.
+- Tests: `tests/unit/test_kiln_wizard_offer.cpp` (HelixScreen),
+  `tools/test_install.sh` part B (the file written after Return to
+  Flashforge firmware with the settings kept, none on a fresh install).
 
 ### Not verified
 

@@ -1,0 +1,1661 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 14:30:00 -0500
+Subject: [PATCH] touch: calibration works when the stored touch range is
+ damaged
+
+The stored touch range (settings.json /input/touch_range) is programmed
+into lv_evdev at start, and a calibration capture only turned the affine
+off: the stored range stayed live, and lv_evdev scales and clamps every
+reading through it. With a damaged range (issue #90: X 707..19420,
+Y -947..-26692 on a 0..4095 device) every tap clamped to Y=0, the panel
+rejected the three points as degenerate before the fit from the raw
+readings was reached, and no recalibration could ever finish, the hold
+to recalibrate (0089-0091) included.
+
+- The capture runs under the device's declared ABS range in place of a
+  stored one (TouchCalibrationSession::begin_capture, through the new
+  ICalibrationSink::declared_touch_range), laid out as the stored range
+  and the affine stored with it run together (range_layout_with_affine,
+  orient_declared_like): the stored swap, and each axis reversed when
+  the range reverses it XOR the affine's term for it (a, e) is
+  negative; an affine whose off-diagonal terms dominate swaps the axes
+  once more, with the signs of b and d. Calibrations made on Kiln's
+  kernels keep the Y flip in the range, ones converted from stock units
+  in the affine (e < 0). Either way the screen stays the right way up
+  during the capture and the overlay's Cancel and the wizard's Skip are
+  where they are drawn. Without a stored range (none, or one refused below) the
+  declared range is taken the way the device runs uncalibrated
+  (uncalibrated_declared_orientation): Y reversed on Kiln builds on
+  Kiln's own kernels (kiln_raw_y_runs_up: the TSC2007's raw readings,
+  where Flashforge's 5.10 driver flips Y), as the seed's range does;
+  elsewhere as declared, and then nothing is replaced. An environment
+  override and a display-size range stay.
+- The snapshot keeps the range live at the start: cancel puts it back
+  (restore), a retry or fast-revert runs under the capture range again
+  (revert_for_retry), and an accepted calibration saves its fitted range
+  as before. An affine-only result is saved with the range it was
+  captured under (commit_calibration_result's new capture_range), so the
+  next start runs the range its affine was solved over.
+- Every successful commit clears /input/force_calibration, so a forced
+  calibration taken in the wizard's touch step is not forced again by
+  the overlay at the next start.
+- The Settings overlay's "no usable new calibration" path puts the whole
+  pre-session mapping back through the session (show_pre_session), so
+  the stored range comes back with its affine.
+- Capture markers map the digitizer reading through the pre-session
+  range (evdev_point_from_raw), so they still land where the touch went
+  under the old calibration.
+- load_touch_range() refuses a stored range through which the device's
+  declared range reaches under 1/8 of a screen axis
+  (stored_touch_range_fits_declared, kStoredTouchRangeMinReach): that
+  axis is in effect clamped to one edge. Either direction is fine (min >
+  max inverts an axis); the swap is taken into account. It logs a
+  warning and the kernel's range applies; load_touch_calibration() drops
+  the affine stored with such a range, and the refusal sets
+  /input/force_calibration (saved), so the calibration opens at this
+  start, through the capture above, as when ad5x-touch-units sets the
+  flag. Both backends set the declared range first
+  (set_declared_touch_range, trusted_declared_touch_range: not when the
+  query failed, an axis has no span, or the range is the display
+  transposed). With no declared range known nothing is judged, as
+  upstream.
+
+Why a reach and not a margin around the declared range: a panel that
+emits past its declared range saves a wider range with its own
+calibration, and a margin refused that at the next start, every start.
+Its readings reach 1/k of the axis at k times the declared span, so only
+k over 8 is refused, while the damaged record's Y reaches none of it.
+
+Tests in test_kiln_touch_cal_range.cpp: the reported range clamps every
+tap to Y=0 and the panel never reaches VERIFY; under the session the
+capture runs under the kernel range the stored one's way up, the fit
+finds the panel's edges and the commit saves them; with a good, Y-up
+stored range, and with the owner's state from before issue #90 (X
+307..3702, Y 649..3482, e = -1), the bottom-left and bottom-right
+buttons map to the bottom during the capture; a flip in the range and
+one in the affine cancel out; the layout of a range and an affine,
+off-diagonal included; and the stored range comes back on cancel, after a
+retry and with the pre-session mapping shown; the swap and directions
+carried over; nothing is replaced under an environment or display-size
+range, with no declared range, or where the declared range is live the
+same way up; a forced calibration with no stored range runs Y-up on
+Kiln's kernels, finishes, saves the fitted range and clears the flag; an
+affine-only result saves the capture range; every successful commit
+clears the flag; load_touch_range refuses the reported range and sets
+the flag, and accepts normal and inverted ones (Y 3608..591, X
+4000..90) and the wide range a panel emitting past its range saves; the
+affine stored with a refused range is not loaded; the helpers.
+
+Upstream: not applicable (Kiln OS specific)
+---
+ include/display_manager.h                |   2 +
+ include/touch_calibration.h              |  61 ++
+ include/touch_calibration_controller.h   |   4 +
+ include/touch_calibration_session.h      |  47 +-
+ include/touch_calibration_wrapper.h      |  19 +
+ src/api/display_backend_drm.cpp          |   8 +
+ src/api/display_backend_fbdev.cpp        |   5 +
+ src/api/touch_calibration_wrapper.cpp    |  92 ++-
+ src/application/display_manager.cpp      |  11 +
+ src/ui/touch_calibration.cpp             | 133 ++++
+ src/ui/touch_calibration_controller.cpp  |  25 +-
+ src/ui/touch_calibration_session.cpp     |  74 ++-
+ src/ui/ui_touch_calibration_overlay.cpp  |   5 +-
+ tests/unit/test_kiln_touch_cal_range.cpp | 769 +++++++++++++++++++++++
+ 14 files changed, 1240 insertions(+), 15 deletions(-)
+ create mode 100644 tests/unit/test_kiln_touch_cal_range.cpp
+
+diff --git a/include/display_manager.h b/include/display_manager.h
+index f2794c2..5c9326f 100644
+--- a/include/display_manager.h
++++ b/include/display_manager.h
+@@ -489,6 +489,8 @@ class DisplayManager : public helix::ICalibrationSink {
+                m_backend->apply_touch_range(swap_axes, min_x, min_y, max_x, max_y, source);
+     }
+     helix::LiveTouchRange current_touch_range() const override;
++    /// Kiln OS: the backend's trusted declared range (helix::get_declared_touch_range)
++    helix::LiveTouchRange declared_touch_range() const override;
+ 
+     /**
+      * @brief Mark whether a touch-calibration UI (overlay or wizard) is on screen
+diff --git a/include/touch_calibration.h b/include/touch_calibration.h
+index 31b94f0..9cd099e 100644
+--- a/include/touch_calibration.h
++++ b/include/touch_calibration.h
+@@ -462,6 +462,67 @@ struct TouchRangeSettings {
+     int capture_rotation = -1;
+ };
+ 
++/// Kiln OS: the least share of a screen axis the device's declared range must
++/// reach through a stored range. lv_evdev scales the stored range onto the axis
++/// and clamps, so readings within the declared range land on the part of the
++/// axis the two ranges share. Under 1/8 (60 px of the AD5X's 480) the axis is
++/// in effect clamped to one edge: the damaged record of issue #90 (Y
++/// -947..-26692 on a 0..4095 device) reaches none of it. A panel that emits
++/// past its declared range (#1714) saves a wider range and still reaches
++/// 1/k of the axis at k times the span, so only a k over 8 is refused, and a
++/// range a calibration saved on such a panel is not refused at the next start.
++constexpr double kStoredTouchRangeMinReach = 0.125;
++
++/// Kiln OS: whether a stored range belongs to a device declaring @p declared
++/// (EVIOCGABS: min/max per axis, valid=false when unknown): per axis, the
++/// declared range reaches at least kStoredTouchRangeMinReach of the stored
++/// span. The stored range is post-swap, so with swap_axes its X is the
++/// device's Y. Either direction is fine: min > max inverts an axis. An unknown
++/// or degenerate declared range is not judged (true). Pure.
++bool stored_touch_range_fits_declared(const TouchRangeSettings& stored,
++                                      const TouchRangeSettings& declared);
++
++/// Kiln OS: @p declared laid out the way @p like runs, for a capture under the
++/// declared range in place of @p like: like's swap (post-swap X is then the
++/// device's Y range), and each axis reversed (min > max) where like's is.
++/// capture_rotation 0: the result is native digitizer space. Pure.
++TouchRangeSettings orient_declared_like(const TouchRangeSettings& declared,
++                                        const TouchRangeSettings& like);
++
++/// Kiln OS: the swap and axis directions of the whole mapping @p range and
++/// then @p affine make (range alone when the affine is not valid): an axis is
++/// reversed when the range reverses it XOR the affine's term for it is
++/// negative (a for X, e for Y). An affine whose off-diagonal terms dominate
++/// (|b| + |d| > |a| + |e|, as detect_axis_transposition judges) swaps the axes
++/// once more, with b's sign for the new X and d's for the new Y. The numbers
++/// are @p range's, rearranged; only the layout means anything. A calibration
++/// converted from stock units keeps min < max and the Y flip in the affine
++/// (e < 0); one made on Kiln's kernel keeps it in the range. Pure.
++TouchRangeSettings range_layout_with_affine(const TouchRangeSettings& range,
++                                            const TouchCalibration& affine);
++
++/// Kiln OS: @p declared the way the device runs uncalibrated: with
++/// @p raw_y_runs_up (the AD5X's TSC2007 on Kiln's own kernels reports Y from
++/// the screen's bottom up; Flashforge's 5.10 driver flips it) the device's Y
++/// axis reversed. Pure.
++TouchRangeSettings uncalibrated_declared_orientation(const TouchRangeSettings& declared,
++                                                     bool raw_y_runs_up);
++
++/// Kiln OS: the declared ABS range a stored range can be judged against and a
++/// calibration capture can run under: valid only when the query succeeded, both
++/// axes have a span, and the range is not the display transposed (that
++/// declaration lies, and the backends scale by the display size instead).
++/// @p env_swap: the swap the environment holds (HELIX_TOUCH_SWAP_AXES), kept
++/// in swap_axes. Pure.
++TouchRangeSettings trusted_declared_touch_range(bool got_range, int min_x, int max_x, int min_y,
++                                                int max_y, bool env_swap, int display_width,
++                                                int display_height);
++
++/// Kiln OS: what lv_evdev makes of the digitizer reading @p raw under @p range
++/// (lv_evdev.c _evdev_process_pointer: swap, scale onto 0..width-1 and
++/// 0..height-1 in integer steps, clamp). Native, pre-rotation space. Pure.
++Point evdev_point_from_raw(Point raw, const TouchRangeSettings& range, int width, int height);
++
+ /**
+  * @brief Which stage supplied the ABS range lv_evdev is actually scaling against
+  *
+diff --git a/include/touch_calibration_controller.h b/include/touch_calibration_controller.h
+index 3b3254f..de291e8 100644
+--- a/include/touch_calibration_controller.h
++++ b/include/touch_calibration_controller.h
+@@ -97,6 +97,10 @@ class TouchCalibrationController {
+     /// restarting the point sequence itself.
+     void revert_candidate();
+ 
++    /// Kiln OS: the whole pre-session mapping live again, affine on, snapshot
++    /// kept (TouchCalibrationSession::show_pre_session).
++    void show_pre_session();
++
+     /// Throw the candidate away and start the point sequence again.
+     void retry();
+ 
+diff --git a/include/touch_calibration_session.h b/include/touch_calibration_session.h
+index 3a0a655..c46955f 100644
+--- a/include/touch_calibration_session.h
++++ b/include/touch_calibration_session.h
+@@ -62,6 +62,15 @@ struct ICalibrationSink {
+         return {};
+     }
+ 
++    /// Kiln OS: the ABS range the kernel declares for the touch device, with the
++    /// swap that runs without a stored range (source Declared), each axis in
++    /// the direction the device runs uncalibrated (uncalibrated_declared_orientation). A capture
++    /// runs under it in place of a stored range, which may be damaged (issue #90). Invalid (the
++    /// default): unknown or untrusted, and the capture keeps the live range.
++    virtual LiveTouchRange declared_touch_range() const {
++        return {};
++    }
++
+     /// Mark that a calibration capture is on screen.
+     ///
+     /// The global debug-touch ripple is suppressed while this is true: the
+@@ -131,8 +140,14 @@ bool apply_calibration_result(ICalibrationSink* sink, const TouchCalibration& ca
+ /// @param cal The affine over the CURRENT evdev range (TouchCalibrationPanel::get_calibration)
+ /// @param fit The range decomposition of that same mapping (TouchCalibrationPanel::get_range_fit)
+ /// @return true if the live device accepted the new mapping
++///
++/// Kiln OS: @p capture_range, the range a session captured under in place of
++/// the live one (TouchCalibrationSession::capture_range), is what an affine-only
++/// result was solved over, so it is the range saved with it. Every successful
++/// commit also clears /input/force_calibration.
+ bool commit_calibration_result(ICalibrationSink* sink, const TouchCalibration& cal,
+-                               const TouchRangeFit& fit);
++                               const TouchRangeFit& fit,
++                               const TouchRangeSettings* capture_range = nullptr);
+ 
+ /// Shared backup/disable/restore bookkeeping for an interactive touch
+ /// calibration session, used by both the first-run wizard
+@@ -151,13 +166,40 @@ class TouchCalibrationSession {
+     /// Snapshot the calibration and evdev range active now and disable the affine transform so
+     /// the session can capture raw (pre-affine) coordinates. Re-snapshots on
+     /// every call: a session always begins from a clean baseline.
++    ///
++    /// Kiln OS: a stored range live now is replaced for the capture by the
++    /// sink's declared_touch_range(), laid out as the stored one runs together
++    /// with the snapshotted affine (range_layout_with_affine, orient_declared_like). The stored one
++    /// may be damaged, and lv_evdev clamps through it: with every tap on one edge the three points
++    /// are degenerate and no recalibration can ever finish (issue #90). Without a stored range, the
++    /// declared range as the sink orients it (the device's uncalibrated direction) replaces the
++    /// live one where they differ. The snapshot keeps the live one for restore().
+     void begin_capture(ICalibrationSink& sink);
+ 
+     /// Revert to the snapshot (if a valid one is held) and disable the affine
+     /// transform again, ready for another capture attempt (retry / timeout /
+-    /// fast-revert).
++    /// fast-revert). Kiln OS: under the range the capture began with
++    /// (capture_range()), the declared one when begin_capture() replaced it.
+     void revert_for_retry(ICalibrationSink& sink);
+ 
++    /// Kiln OS: put the whole pre-session mapping back, the snapshotted range
++    /// and calibration, with the affine enabled, keeping the snapshot armed (a
++    /// VERIFY without a usable new calibration). A later revert_for_retry()
++    /// goes back to the capture range.
++    void show_pre_session(ICalibrationSink& sink);
++
++    /// Kiln OS: the range begin_capture() put in place of the live stored one,
++    /// or null when the capture runs under the range live at the start.
++    const TouchRangeSettings* capture_range() const {
++        return capture_range_.range.valid ? &capture_range_.range : nullptr;
++    }
++
++    /// Kiln OS: the evdev range live when the session began (valid=false when
++    /// unknown).
++    const TouchRangeSettings& range_backup() const {
++        return range_backup_.range;
++    }
++
+     /// The user accepted/persisted a new calibration: drop the snapshot so a
+     /// later restore() will not revert their new calibration.
+     void commit();
+@@ -185,6 +227,7 @@ class TouchCalibrationSession {
+   private:
+     TouchCalibration backup_{};
+     LiveTouchRange range_backup_{};
++    LiveTouchRange capture_range_{}; ///< Kiln OS: see capture_range()
+     bool has_backup_ = false;
+ };
+ 
+diff --git a/include/touch_calibration_wrapper.h b/include/touch_calibration_wrapper.h
+index e2d9305..c988f71 100644
+--- a/include/touch_calibration_wrapper.h
++++ b/include/touch_calibration_wrapper.h
+@@ -153,8 +153,21 @@ bool get_touch_range_diagnostics(TouchRangeDiagnostics& out);
+ 
+ /// Load the stored evdev ABS range from Config.
+ /// Returns valid=false when nothing is stored, which means "keep the kernel range".
++/// Kiln OS: also valid=false, with a warning, for a stored range that does not
++/// fit the declared range set by set_declared_touch_range()
++/// (stored_touch_range_fits_declared, issue #90); load_touch_calibration() then
++/// drops the affine stored with it as well, and /input/force_calibration is set
++/// (and saved), so the calibration opens at this start.
+ TouchRangeSettings load_touch_range();
+ 
++/// Kiln OS: the touch device's declared ABS range, from
++/// trusted_declared_touch_range(). The display backend sets it before it loads
++/// the stored range; load_touch_range() judges the stored range against it, and
++/// a calibration capture runs under it (DisplayManager::declared_touch_range).
++/// valid=false (the default): unknown, nothing judged. LVGL thread.
++void set_declared_touch_range(const TouchRangeSettings& declared);
++TouchRangeSettings get_declared_touch_range();
++
+ /// Persist an evdev ABS range solved by calibration (does not call Config::save()).
+ /// Writing an invalid range clears the stored one, so a later calibration that
+ /// could not solve the range never leaves a stale one behind to double up with a
+@@ -174,6 +187,12 @@ const char* kiln_touch_units(const std::string& kernel_release);
+ bool kiln_touch_units_tagged();
+ void set_kiln_touch_units_tagged_for_test(std::optional<bool> on);
+ 
++/// Kiln OS: the touch device reports Y from the screen's bottom up when not
++/// calibrated: Kiln builds (kiln_touch_units_tagged()) on Kiln's own kernels
++/// ("own": the TSC2007's raw readings; Flashforge's 5.10 driver flips Y). A
++/// calibration capture without a stored range runs that way up.
++bool kiln_raw_y_runs_up();
++
+ /// Install the calibration read callback wrapper on an input device.
+ /// Sets up ctx with the calibration data, chains to the existing read callback,
+ /// and records ctx as the process-wide active calibration context (see the .cpp
+diff --git a/src/api/display_backend_drm.cpp b/src/api/display_backend_drm.cpp
+index e66160d..94cf9c3 100644
+--- a/src/api/display_backend_drm.cpp
++++ b/src/api/display_backend_drm.cpp
+@@ -922,6 +922,14 @@ bool DisplayBackendDRM::open_touch_device(bool reopening) {
+             // been calibrated takes exactly the path it always did.
+             const bool env_range_override = env_min_x && env_max_x && env_min_y && env_max_y;
+             const bool env_swap_override = swap_axes != nullptr;
++            // Kiln OS: the stored range is judged against the declared one, and a
++            // calibration capture runs under it (issue #90)
++            helix::set_declared_touch_range(
++                pointer_is_evdev_
++                    ? helix::trusted_declared_touch_range(
++                          got_range, abs_x.minimum, abs_x.maximum, abs_y.minimum, abs_y.maximum,
++                          helix::env_truthy(swap_axes), screen_width_, screen_height_)
++                    : helix::TouchRangeSettings{});
+             const helix::TouchRangeSettings stored_range =
+                 pointer_is_evdev_ ? helix::load_touch_range() : helix::TouchRangeSettings{};
+             // Asked of the display, not of `/display/rotate`, and via the same
+diff --git a/src/api/display_backend_fbdev.cpp b/src/api/display_backend_fbdev.cpp
+index 9991949..4b014bf 100644
+--- a/src/api/display_backend_fbdev.cpp
++++ b/src/api/display_backend_fbdev.cpp
+@@ -437,6 +437,11 @@ lv_indev_t* DisplayBackendFbdev::create_input_pointer() {
+     // path it always did.
+     const bool env_range_override = env_min_x && env_max_x && env_min_y && env_max_y;
+     const bool env_swap_override = swap_axes != nullptr;
++    // Kiln OS: the stored range is judged against the declared one, and a
++    // calibration capture runs under it (issue #90)
++    helix::set_declared_touch_range(helix::trusted_declared_touch_range(
++        got_range, abs_x.minimum, abs_x.maximum, abs_y.minimum, abs_y.maximum,
++        helix::env_truthy(swap_axes), screen_width_, screen_height_));
+     const helix::TouchRangeSettings stored_range = helix::load_touch_range();
+     // Asked of the display, not of `/display/rotate`, and via the same helper the
+     // calibration solver gates on - the key is only the request, and it differs
+diff --git a/src/api/touch_calibration_wrapper.cpp b/src/api/touch_calibration_wrapper.cpp
+index 2126b7a..b686796 100644
+--- a/src/api/touch_calibration_wrapper.cpp
++++ b/src/api/touch_calibration_wrapper.cpp
+@@ -367,12 +367,26 @@ bool get_last_raw_touch(Point& out) {
+     return true;
+ }
+ 
+-TouchRangeSettings load_touch_range() {
+-    TouchRangeSettings range;
++namespace {
++
++// Kiln OS: the touch device's declared ABS range (set_declared_touch_range).
++// Written by the display backend and read on the LVGL thread only.
++TouchRangeSettings s_declared_range;
++
++enum class StoredRangeState {
++    None,     ///< no stored range, or a degenerate one (upstream: ignored)
++    Usable,   ///< programmed
++    OffDevice ///< Kiln OS: mostly outside the device's declared range (issue #90)
++};
++
++/// @p report: the backend's load (load_touch_range): log what is refused, and
++/// for a range off the device ask for a calibration at this start
++StoredRangeState read_stored_touch_range(TouchRangeSettings& range, bool report) {
++    range = TouchRangeSettings{};
+     helix::Config* cfg = helix::Config::get_instance();
+ 
+     if (!cfg->get<bool>("/input/touch_range/valid", false)) {
+-        return range;
++        return StoredRangeState::None;
+     }
+ 
+     range.swap_axes = cfg->get<bool>("/input/touch_range/swap_axes", false);
+@@ -389,12 +403,58 @@ TouchRangeSettings load_touch_range() {
+     // min == max is not a passthrough in lv_evdev: the scale is skipped but the
+     // clamp is not, so every coordinate would collapse onto one pixel. Refuse it.
+     if (range.min_x == range.max_x || range.min_y == range.max_y) {
+-        spdlog::warn("[TouchCal] Stored touch range is degenerate X({}..{}) Y({}..{}) - ignoring",
+-                     range.min_x, range.max_x, range.min_y, range.max_y);
+-        return TouchRangeSettings{};
++        if (report) {
++            spdlog::warn(
++                "[TouchCal] Stored touch range is degenerate X({}..{}) Y({}..{}) - ignoring",
++                range.min_x, range.max_x, range.min_y, range.max_y);
++        }
++        range = TouchRangeSettings{};
++        return StoredRangeState::None;
+     }
+ 
+     range.valid = true;
++
++    // Kiln OS: a range the device cannot produce scales and clamps every
++    // reading to an edge: a dead screen, and a recalibration that never gets
++    // three usable taps (issue #90). Fall back to the kernel's range.
++    if (!stored_touch_range_fits_declared(range, s_declared_range)) {
++        if (report) {
++            spdlog::warn("[TouchCal] Stored touch range X({}..{}) Y({}..{}) swap={} lies outside "
++                         "the device's range X({}..{}) Y({}..{}) - ignoring it, the kernel's "
++                         "range applies; touch calibration opens at this start",
++                         range.min_x, range.max_x, range.min_y, range.max_y, range.swap_axes,
++                         s_declared_range.min_x, s_declared_range.max_x, s_declared_range.min_y,
++                         s_declared_range.max_y);
++            // The uncalibrated path is the board's default affine over the
++            // kernel's range, which may not fit this kernel's units (upside
++            // down on the AD5X's own kernels). /input/force_calibration opens
++            // the calibration after the display is up (Application's
++            // run_wizard / apply_startup_cli_actions), and its success clears
++            // the flag; ad5x-touch-units sets the same flag.
++            if (!cfg->get<bool>("/input/force_calibration", false)) {
++                cfg->set<bool>("/input/force_calibration", true);
++                cfg->save();
++            }
++        }
++        range = TouchRangeSettings{};
++        return StoredRangeState::OffDevice;
++    }
++    return StoredRangeState::Usable;
++}
++
++} // namespace
++
++void set_declared_touch_range(const TouchRangeSettings& declared) {
++    s_declared_range = declared;
++}
++
++TouchRangeSettings get_declared_touch_range() {
++    return s_declared_range;
++}
++
++TouchRangeSettings load_touch_range() {
++    TouchRangeSettings range;
++    read_stored_touch_range(range, true);
+     return range;
+ }
+ 
+@@ -419,6 +479,14 @@ void set_kiln_touch_units_tagged_for_test(std::optional<bool> on) {
+     s_kiln_touch_units_override = on;
+ }
+ 
++bool kiln_raw_y_runs_up() {
++    if (!kiln_touch_units_tagged()) {
++        return false;
++    }
++    struct utsname u{};
++    return uname(&u) == 0 && std::string(kiln_touch_units(u.release)) == "own";
++}
++
+ void save_touch_range(const TouchRangeSettings& range) {
+     helix::Config* cfg = helix::Config::get_instance();
+ 
+@@ -459,6 +527,15 @@ TouchCalibration load_touch_calibration() {
+     TouchCalibration cal;
+ 
+     cal.valid = cfg->get<bool>("/input/calibration/valid", false);
++    // Kiln OS: next to a stored range the affine is that range's residual, and
++    // over the kernel's range it means nothing. With the range refused as off
++    // the device, take the uncalibrated path (issue #90).
++    TouchRangeSettings stored_range;
++    if (cal.valid && read_stored_touch_range(stored_range, false) == StoredRangeState::OffDevice) {
++        spdlog::warn("[TouchCal] Stored calibration belongs to a touch range outside the "
++                     "device's - ignoring it, recalibration required");
++        cal.valid = false;
++    }
+     // Every save writes the rotation key (touch_calibration_session.cpp#write_affine),
+     // so a record without one states no basis. Zero reproduces what such a record did
+     // when it was written - the matrix was handed panel-space points directly - and it
+@@ -474,7 +551,7 @@ TouchCalibration load_touch_calibration() {
+         // the range carries the whole mapping and the residual is an identity. The
+         // platform default is a whole second mapping; composing it on top of a range
+         // the user just measured would undo the calibration they ran (#1259, #1276).
+-        if (load_touch_range().valid) {
++        if (read_stored_touch_range(stored_range, false) == StoredRangeState::Usable) {
+             spdlog::info("[TouchCal] Stored touch range in effect with no residual affine - "
+                          "platform default not applied");
+             return cal;
+@@ -561,6 +638,7 @@ void uninstall_calibration_wrapper(lv_indev_t* indev, CalibrationContext& ctx) {
+     std::lock_guard<std::mutex> lock(s_diag_mutex);
+     if (s_active_ctx == &ctx) {
+         s_active_ctx = nullptr;
++        s_declared_range = TouchRangeSettings{}; // Kiln OS: that device's
+     }
+ }
+ 
+diff --git a/src/application/display_manager.cpp b/src/application/display_manager.cpp
+index 9d61180..461a386 100644
+--- a/src/application/display_manager.cpp
++++ b/src/application/display_manager.cpp
+@@ -934,6 +934,17 @@ helix::LiveTouchRange DisplayManager::current_touch_range() const {
+     return live;
+ }
+ 
++helix::LiveTouchRange DisplayManager::declared_touch_range() const {
++    helix::LiveTouchRange declared;
++    if (m_backend) {
++        declared.range = helix::uncalibrated_declared_orientation(helix::get_declared_touch_range(),
++                                                                  helix::kiln_raw_y_runs_up());
++        declared.source = declared.range.valid ? helix::TouchRangeSource::Declared
++                                               : helix::TouchRangeSource::None;
++    }
++    return declared;
++}
++
+ helix::TouchCalibration DisplayManager::get_current_calibration() const {
+     if (!m_backend) {
+         return {};
+diff --git a/src/ui/touch_calibration.cpp b/src/ui/touch_calibration.cpp
+index 64ae654..f71751a 100644
+--- a/src/ui/touch_calibration.cpp
++++ b/src/ui/touch_calibration.cpp
+@@ -12,6 +12,7 @@
+ #include <initializer_list>
+ #include <mutex>
+ #include <optional>
++#include <utility>
+ 
+ namespace helix {
+ 
+@@ -624,6 +625,138 @@ TouchRangeSource resolve_touch_range_source(bool env_range_override,
+     return TouchRangeSource::Declared;
+ }
+ 
++namespace {
++
++/// One axis of stored_touch_range_fits_declared(): the stored ends (either
++/// order) against the declared ones.
++bool stored_axis_fits_declared(int stored_a, int stored_b, int declared_a, int declared_b) {
++    const long lo = std::min(declared_a, declared_b);
++    const long hi = std::max(declared_a, declared_b);
++    const long s_lo = std::min(stored_a, stored_b);
++    const long s_hi = std::max(stored_a, stored_b);
++    if (hi <= lo || s_hi <= s_lo) {
++        return true; // nothing to judge against (a degenerate stored one is refused before)
++    }
++    // The share of the screen axis that readings within the declared range reach
++    const long shared = std::min(s_hi, hi) - std::max(s_lo, lo);
++    return static_cast<double>(shared) >=
++           kStoredTouchRangeMinReach * static_cast<double>(s_hi - s_lo);
++}
++
++int evdev_scale_axis(int v, int in_min, int in_max, int out_max) {
++    // lv_evdev's _evdev_calibrate with out_min 0, in its integer order
++    if (in_min != in_max) {
++        v = (v - in_min) * out_max / (in_max - in_min);
++    }
++    return std::clamp(v, 0, out_max);
++}
++
++} // namespace
++
++bool stored_touch_range_fits_declared(const TouchRangeSettings& stored,
++                                      const TouchRangeSettings& declared) {
++    if (!stored.valid || !declared.valid) {
++        return true;
++    }
++    // The stored range is what lv_evdev scales AFTER its swap
++    const int dev_min_x = stored.swap_axes ? declared.min_y : declared.min_x;
++    const int dev_max_x = stored.swap_axes ? declared.max_y : declared.max_x;
++    const int dev_min_y = stored.swap_axes ? declared.min_x : declared.min_y;
++    const int dev_max_y = stored.swap_axes ? declared.max_x : declared.max_y;
++    return stored_axis_fits_declared(stored.min_x, stored.max_x, dev_min_x, dev_max_x) &&
++           stored_axis_fits_declared(stored.min_y, stored.max_y, dev_min_y, dev_max_y);
++}
++
++TouchRangeSettings orient_declared_like(const TouchRangeSettings& declared,
++                                        const TouchRangeSettings& like) {
++    TouchRangeSettings out;
++    if (!declared.valid) {
++        return out;
++    }
++    out.valid = true;
++    out.swap_axes = like.swap_axes;
++    out.capture_rotation = 0;
++    const int x_lo = like.swap_axes ? std::min(declared.min_y, declared.max_y)
++                                    : std::min(declared.min_x, declared.max_x);
++    const int x_hi = like.swap_axes ? std::max(declared.min_y, declared.max_y)
++                                    : std::max(declared.min_x, declared.max_x);
++    const int y_lo = like.swap_axes ? std::min(declared.min_x, declared.max_x)
++                                    : std::min(declared.min_y, declared.max_y);
++    const int y_hi = like.swap_axes ? std::max(declared.min_x, declared.max_x)
++                                    : std::max(declared.min_y, declared.max_y);
++    const bool x_down = like.min_x > like.max_x;
++    const bool y_down = like.min_y > like.max_y;
++    out.min_x = x_down ? x_hi : x_lo;
++    out.max_x = x_down ? x_lo : x_hi;
++    out.min_y = y_down ? y_hi : y_lo;
++    out.max_y = y_down ? y_lo : y_hi;
++    return out;
++}
++
++TouchRangeSettings range_layout_with_affine(const TouchRangeSettings& range,
++                                            const TouchCalibration& affine) {
++    TouchRangeSettings out = range;
++    if (!range.valid || !affine.valid) {
++        return out;
++    }
++    const bool cross =
++        std::abs(affine.b) + std::abs(affine.d) > std::abs(affine.a) + std::abs(affine.e);
++    if (!cross) {
++        if (affine.a < 0.0f) {
++            std::swap(out.min_x, out.max_x);
++        }
++        if (affine.e < 0.0f) {
++            std::swap(out.min_y, out.max_y);
++        }
++        return out;
++    }
++    // Screen X comes from the range's Y stage and screen Y from its X stage
++    out.swap_axes = !range.swap_axes;
++    out.min_x = affine.b < 0.0f ? range.max_y : range.min_y;
++    out.max_x = affine.b < 0.0f ? range.min_y : range.max_y;
++    out.min_y = affine.d < 0.0f ? range.max_x : range.min_x;
++    out.max_y = affine.d < 0.0f ? range.min_x : range.max_x;
++    return out;
++}
++
++TouchRangeSettings uncalibrated_declared_orientation(const TouchRangeSettings& declared,
++                                                     bool raw_y_runs_up) {
++    TouchRangeSettings out = declared;
++    if (out.valid && raw_y_runs_up) {
++        // The device's Y is the post-swap X under a swap
++        if (out.swap_axes) {
++            std::swap(out.min_x, out.max_x);
++        } else {
++            std::swap(out.min_y, out.max_y);
++        }
++    }
++    return out;
++}
++
++TouchRangeSettings trusted_declared_touch_range(bool got_range, int min_x, int max_x, int min_y,
++                                                int max_y, bool env_swap, int display_width,
++                                                int display_height) {
++    TouchRangeSettings out;
++    if (!got_range || min_x >= max_x || min_y >= max_y ||
++        has_transposed_abs_range(max_x, max_y, display_width, display_height)) {
++        return out;
++    }
++    out.valid = true;
++    out.swap_axes = env_swap;
++    out.min_x = min_x;
++    out.max_x = max_x;
++    out.min_y = min_y;
++    out.max_y = max_y;
++    return out;
++}
++
++Point evdev_point_from_raw(Point raw, const TouchRangeSettings& range, int width, int height) {
++    const int x = range.swap_axes ? raw.y : raw.x;
++    const int y = range.swap_axes ? raw.x : raw.y;
++    return Point{evdev_scale_axis(x, range.min_x, range.max_x, std::max(width - 1, 0)),
++                 evdev_scale_axis(y, range.min_y, range.max_y, std::max(height - 1, 0))};
++}
++
+ void TouchObservedExtremes::observe(int x, int y) {
+     if (distinct_samples == 0) {
+         min_x = max_x = x;
+diff --git a/src/ui/touch_calibration_controller.cpp b/src/ui/touch_calibration_controller.cpp
+index 25c436b..e426ce2 100644
+--- a/src/ui/touch_calibration_controller.cpp
++++ b/src/ui/touch_calibration_controller.cpp
+@@ -109,6 +109,23 @@ void TouchCalibrationController::on_press() {
+         // opened. A first-ever calibration has no backup, and the pre-calibration
+         // state really is that far off, so it shows at the raw point.
+         Point landed{point.x, point.y};
++        // Kiln OS: a capture under the declared range in place of the stored
++        // one (issue #90) is not the pre-session evdev space either. Take the
++        // digitizer reading through the stored range as lv_evdev did, then to
++        // the screen as the read path does (frame hook, rotation; the affine is
++        // off during capture), before the pre-session affine below.
++        lv_indev_t* indev = lv_indev_active();
++        lv_display_t* indev_disp = indev ? lv_indev_get_display(indev) : nullptr;
++        if (session_.capture_range() && session_.range_backup().valid && has_device_raw &&
++            indev_disp) {
++            const Point native =
++                evdev_point_from_raw(device_raw, session_.range_backup(),
++                                     lv_display_get_original_horizontal_resolution(indev_disp),
++                                     lv_display_get_original_vertical_resolution(indev_disp));
++            const lv_point_t on_screen =
++                map_touch_point_to_screen(indev, lv_point_t{native.x, native.y});
++            landed = Point{static_cast<int>(on_screen.x), static_cast<int>(on_screen.y)};
++        }
+         const TouchCalibration& pre_session = session_.backup();
+         if (pre_session.valid) {
+             lv_display_t* disp = lv_display_get_default();
+@@ -148,6 +165,12 @@ void TouchCalibrationController::revert_candidate() {
+     }
+ }
+ 
++void TouchCalibrationController::show_pre_session() {
++    if (ICalibrationSink* s = sink()) {
++        session_.show_pre_session(*s);
++    }
++}
++
+ void TouchCalibrationController::retry() {
+     if (!panel_) {
+         return;
+@@ -190,7 +213,7 @@ CommitOutcome TouchCalibrationController::commit() {
+         return CommitOutcome::NoCalibration;
+     }
+ 
+-    const bool applied = commit_calibration_result(sink(), *cal, fit);
++    const bool applied = commit_calibration_result(sink(), *cal, fit, session_.capture_range());
+ 
+     Config::get_instance()->save();
+ 
+diff --git a/src/ui/touch_calibration_session.cpp b/src/ui/touch_calibration_session.cpp
+index eda729e..8e6cbdc 100644
+--- a/src/ui/touch_calibration_session.cpp
++++ b/src/ui/touch_calibration_session.cpp
+@@ -83,7 +83,7 @@ bool apply_calibration_result(ICalibrationSink* sink, const TouchCalibration& ca
+ }
+ 
+ bool commit_calibration_result(ICalibrationSink* sink, const TouchCalibration& cal,
+-                               const TouchRangeFit& fit) {
++                               const TouchRangeFit& fit, const TouchRangeSettings* capture_range) {
+     const InstalledCalibration installed = install_calibration_result(sink, cal, fit);
+ 
+     TouchRangeSettings range;
+@@ -95,6 +95,13 @@ bool commit_calibration_result(ICalibrationSink* sink, const TouchCalibration& c
+         range.min_y = fit.min_y;
+         range.max_y = fit.max_y;
+         range.capture_rotation = cal.capture_rotation;
++    } else if (capture_range != nullptr && capture_range->valid) {
++        // Kiln OS: the affine was solved over the range the session captured
++        // under (the declared one, laid out as the device runs), so the next
++        // start has to run that one too
++        range = *capture_range;
++        range.valid = true;
++        range.capture_rotation = 0;
+     } else if (sink != nullptr) {
+         // The affine was solved over whatever range is live. A stored one stays
+         // with it, keeping its own capture rotation; anything else is the
+@@ -105,7 +112,15 @@ bool commit_calibration_result(ICalibrationSink* sink, const TouchCalibration& c
+         }
+     }
+     save_touch_range(range);
+-    write_affine(*Config::get_instance(), installed.affine);
++    Config* cfg = Config::get_instance();
++    write_affine(*cfg, installed.affine);
++    // Kiln OS: a forced calibration (--calibrate-touch's config form, set by
++    // ad5x-touch-units or a refused stored range) is done, whichever screen
++    // took it: the Settings overlay, the hold, or the wizard's touch step
++    if (cfg->get<bool>("/input/force_calibration", false)) {
++        cfg->set<bool>("/input/force_calibration", false);
++        spdlog::info("[TouchCalSession] Forced touch calibration done: flag cleared");
++    }
+ 
+     const char* affine_kind =
+         !installed.affine.valid ? "none" : (installed.range_installed ? "residual" : "full");
+@@ -118,7 +133,44 @@ bool commit_calibration_result(ICalibrationSink* sink, const TouchCalibration& c
+ void TouchCalibrationSession::begin_capture(ICalibrationSink& sink) {
+     backup_ = sink.current_calibration();
+     range_backup_ = sink.current_touch_range();
++    capture_range_ = {};
+     has_backup_ = true;
++    // Kiln OS: capture under the kernel's range, not a stored one (issue #90),
++    // laid out as the stored one runs (its swap, each axis in its direction),
++    // so the screen's buttons are where they are drawn during the capture.
++    // Without a stored range, under the declared range as the device runs
++    // uncalibrated (the sink's declared_touch_range: on the AD5X's own kernels
++    // Y reversed). Not over an environment override (the user's own) or a
++    // display-size range (stands in for a declaration that lies), and not over
++    // a range that cannot be read back, as it could not be put back.
++    const LiveTouchRange declared = sink.declared_touch_range();
++    TouchRangeSettings want;
++    if (declared.range.valid && range_backup_.range.valid) {
++        if (range_backup_.source == TouchRangeSource::Stored) {
++            // The direction from the range and the affine together: a
++            // calibration converted from stock units has its Y flip in the
++            // affine (e < 0), not in the range
++            want = orient_declared_like(declared.range,
++                                        range_layout_with_affine(range_backup_.range, backup_));
++        } else if (range_backup_.source == TouchRangeSource::Declared) {
++            want = declared.range;
++            want.capture_rotation = 0;
++        }
++    }
++    const TouchRangeSettings& live = range_backup_.range;
++    const bool differs = want.valid && (want.swap_axes != live.swap_axes ||
++                                        want.min_x != live.min_x || want.max_x != live.max_x ||
++                                        want.min_y != live.min_y || want.max_y != live.max_y);
++    if (differs && sink.apply_touch_range(want.swap_axes, want.min_x, want.min_y, want.max_x,
++                                          want.max_y, TouchRangeSource::Declared)) {
++        capture_range_.range = want;
++        capture_range_.source = TouchRangeSource::Declared;
++        spdlog::info("[TouchCalSession] Capture runs under the device's range X({}..{}) "
++                     "Y({}..{}) swap={}, not the {} X({}..{}) Y({}..{})",
++                     want.min_x, want.max_x, want.min_y, want.max_y, want.swap_axes,
++                     touch_range_source_name(range_backup_.source), live.min_x, live.max_x,
++                     live.min_y, live.max_y);
++    }
+     sink.disable_affine();
+     spdlog::debug("[TouchCalSession] begin_capture: backup snapshotted (valid={}), affine disabled",
+                   backup_.valid);
+@@ -128,7 +180,8 @@ void TouchCalibrationSession::revert_for_retry(ICalibrationSink& sink) {
+     // The candidate may have re-programmed the evdev range, and the next capture
+     // has to run under the range the session began with: the full affine
+     // compute_range_fit() pairs with the raw points is solved against it.
+-    restore_range(sink, range_backup_);
++    // Kiln OS: the capture range, when begin_capture() replaced the stored one.
++    restore_range(sink, capture_range_.range.valid ? capture_range_ : range_backup_);
+     bool reverted = has_backup_ && backup_.valid;
+     if (reverted) {
+         sink.apply_calibration(backup_);
+@@ -145,10 +198,24 @@ void TouchCalibrationSession::revert_for_retry(ICalibrationSink& sink) {
+                   reverted);
+ }
+ 
++void TouchCalibrationSession::show_pre_session(ICalibrationSink& sink) {
++    restore_range(sink, range_backup_);
++    if (has_backup_ && backup_.valid) {
++        sink.apply_calibration(backup_);
++    } else if (has_backup_) {
++        // As in restore(): no prior calibration, so none is shown
++        sink.clear_calibration();
++    }
++    sink.enable_affine();
++    spdlog::debug("[TouchCalSession] show_pre_session: pre-session range and calibration live, "
++                  "backup kept");
++}
++
+ void TouchCalibrationSession::commit() {
+     has_backup_ = false;
+     backup_ = {};
+     range_backup_ = {};
++    capture_range_ = {};
+     spdlog::debug("[TouchCalSession] commit: backup dropped (new calibration kept)");
+ }
+ 
+@@ -175,6 +242,7 @@ void TouchCalibrationSession::restore(ICalibrationSink& sink) {
+     has_backup_ = false;
+     backup_ = {};
+     range_backup_ = {};
++    capture_range_ = {};
+     spdlog::debug("[TouchCalSession] restore: restored backup={}, affine re-enabled", reverted);
+ }
+ 
+diff --git a/src/ui/ui_touch_calibration_overlay.cpp b/src/ui/ui_touch_calibration_overlay.cpp
+index bf7164b..8e75649 100644
+--- a/src/ui/ui_touch_calibration_overlay.cpp
++++ b/src/ui/ui_touch_calibration_overlay.cpp
+@@ -133,8 +133,9 @@ TouchCalibrationOverlay::TouchCalibrationOverlay() {
+             // range before its affine was refused, so put the whole pre-session
+             // mapping back (range and matrix, backup kept armed) and re-enable it,
+             // leaving the screen at least as usable as it was on entry.
+-            controller_.revert_candidate();
+-            sink->enable_affine();
++            // Kiln OS: through the session, which also puts the stored range
++            // back (the capture ran under the declared one, issue #90)
++            controller_.show_pre_session();
+             spdlog::warn("[{}] Entered VERIFY without a usable new calibration; "
+                          "kept the pre-session one",
+                          get_name());
+diff --git a/tests/unit/test_kiln_touch_cal_range.cpp b/tests/unit/test_kiln_touch_cal_range.cpp
+new file mode 100644
+index 0000000..5da5ac7
+--- /dev/null
++++ b/tests/unit/test_kiln_touch_cal_range.cpp
+@@ -0,0 +1,769 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//
++// Kiln OS: touch calibration works when the stored touch range is damaged
++// (issue #90).
++//
++// lv_evdev scales and clamps every reading through the stored range. A damaged
++// one (the report: X 707..19420, Y -947..-26692 on a 0..4095 device) put every
++// tap at Y=0, the panel rejected the three points as degenerate before the fit
++// from the raw readings was reached, and no recalibration (the hold to
++// recalibrate included) could finish. Now:
++// - a capture runs under the device's declared range in place of a stored one,
++//   and cancel and retry put things back as they were
++// - load_touch_range() refuses a stored range that lies outside the device's
++//   range, and the screen falls back to the kernel's range
++//
++// Run with: ./build/bin/helix-tests "[kiln][touch-cal-range]"
++
++#include "config.h"
++#include "lvgl_test_fixture.h"
++#include "touch_calibration.h"
++#include "touch_calibration_panel.h"
++#include "touch_calibration_session.h"
++#include "touch_calibration_wrapper.h"
++
++#include <cstdlib>
++#include <string>
++#include <vector>
++
++#include "../catch_amalgamated.hpp"
++
++using Catch::Approx;
++using namespace helix;
++
++namespace {
++
++constexpr int kW = 800;
++constexpr int kH = 480;
++
++TouchRangeSettings range_of(int min_x, int max_x, int min_y, int max_y, bool swap = false) {
++    TouchRangeSettings r;
++    r.valid = true;
++    r.swap_axes = swap;
++    r.min_x = min_x;
++    r.max_x = max_x;
++    r.min_y = min_y;
++    r.max_y = max_y;
++    r.capture_rotation = 0;
++    return r;
++}
++
++/// The device: 0..4095 on both axes (TSC2007 on Kiln's kernel)
++TouchRangeSettings declared_4095() {
++    return range_of(0, 4095, 0, 4095);
++}
++
++/// The declared range laid out as the AD5X's stored ranges run: Y from the
++/// bottom up (min_y > max_y)
++TouchRangeSettings declared_y_up() {
++    return range_of(0, 4095, 4095, 0);
++}
++
++/// The report's settings.json (issue #90)
++TouchRangeSettings reported_damaged() {
++    return range_of(707, 19420, -947, -26692);
++}
++
++/// What the AD5X panel emits at the display's edges: X normal, Y inverted
++TouchRangeSettings panel_edges() {
++    return range_of(150, 3900, 3608, 591);
++}
++
++/// The digitizer reading at a screen pixel on that panel
++Point raw_at(Point px) {
++    const TouchRangeSettings e = panel_edges();
++    return Point{e.min_x + px.x * (e.max_x - e.min_x) / (kW - 1),
++                 e.min_y + px.y * (e.max_y - e.min_y) / (kH - 1)};
++}
++
++/// The device as the session sees it: the live evdev range and where it came
++/// from, the declared range, the stored affine
++struct RangeSink : ICalibrationSink {
++    LiveTouchRange live;
++    LiveTouchRange declared;
++    TouchCalibration stored{};
++    bool affine_enabled = true;
++    std::vector<std::string> ops;
++
++    TouchCalibration current_calibration() const override {
++        return stored;
++    }
++    bool apply_calibration(const TouchCalibration& cal) override {
++        if (!cal.valid) {
++            return false;
++        }
++        stored = cal;
++        ops.push_back("apply");
++        return true;
++    }
++    void disable_affine() override {
++        affine_enabled = false;
++    }
++    void enable_affine() override {
++        affine_enabled = true;
++    }
++    void clear_calibration() override {
++        stored = TouchCalibration{};
++        ops.push_back("clear");
++    }
++    bool apply_touch_range(bool swap, int min_x, int min_y, int max_x, int max_y,
++                           TouchRangeSource source) override {
++        if (min_x == max_x || min_y == max_y) {
++            return false;
++        }
++        live.range = range_of(min_x, max_x, min_y, max_y, swap);
++        live.source = source;
++        ops.push_back(std::string("range:") + touch_range_source_name(source));
++        return true;
++    }
++    LiveTouchRange current_touch_range() const override {
++        return live;
++    }
++    LiveTouchRange declared_touch_range() const override {
++        return declared;
++    }
++
++    /// Where a tap at @p px lands under the live range (lv_evdev's output)
++    Point tap(Point px) const {
++        return evdev_point_from_raw(raw_at(px), live.range, kW, kH);
++    }
++};
++
++RangeSink sink_with_stored(const TouchRangeSettings& stored) {
++    RangeSink sink;
++    sink.live.range = stored;
++    sink.live.source = TouchRangeSource::Stored;
++    sink.declared.range = declared_4095();
++    sink.declared.source = TouchRangeSource::Declared;
++    return sink;
++}
++
++bool same_range(const TouchRangeSettings& a, const TouchRangeSettings& b) {
++    return a.swap_axes == b.swap_axes && a.min_x == b.min_x && a.max_x == b.max_x &&
++           a.min_y == b.min_y && a.max_y == b.max_y;
++}
++
++void write_stored_range(Config* cfg, const TouchRangeSettings& r) {
++    cfg->set<bool>("/input/touch_range/valid", true);
++    cfg->set<bool>("/input/touch_range/swap_axes", r.swap_axes);
++    cfg->set<int>("/input/touch_range/min_x", r.min_x);
++    cfg->set<int>("/input/touch_range/max_x", r.max_x);
++    cfg->set<int>("/input/touch_range/min_y", r.min_y);
++    cfg->set<int>("/input/touch_range/max_y", r.max_y);
++    cfg->set<int>("/input/touch_range/rotation", 0);
++}
++
++void reset_touch_keys() {
++    Config* cfg = Config::get_instance();
++    cfg->set<bool>("/input/calibration/valid", false);
++    cfg->set<bool>("/input/touch_range/valid", false);
++    cfg->set<bool>("/input/force_calibration", false);
++    set_declared_touch_range(TouchRangeSettings{});
++}
++
++/// Three taps on the panel's targets under the sink's live range
++void capture(TouchCalibrationPanel& panel, const RangeSink& sink) {
++    for (int step = 0; step < 3; step++) {
++        const Point target = panel.get_target_position(step);
++        const Point touch = sink.tap(target);
++        const Point raw = raw_at(target);
++        for (int s = 0; s < 3; s++) {
++            panel.add_sample(touch, &raw);
++        }
++    }
++}
++
++} // namespace
++
++// ---------------------------------------------------------------------------
++// The capture
++// ---------------------------------------------------------------------------
++
++TEST_CASE_METHOD(LVGLTestFixture,
++                 "Kiln touch cal range: a damaged stored range cannot be recalibrated through",
++                 "[kiln][touch-cal-range][touch-calibration]") {
++    // Why the capture must not run under it: every tap clamps to Y=0
++    RangeSink sink = sink_with_stored(reported_damaged());
++    for (const Point px : {Point{80, 48}, Point{720, 240}, Point{400, 432}}) {
++        CHECK(sink.tap(px).y == 0);
++    }
++    TouchCalibrationPanel panel;
++    panel.set_screen_size(kW, kH);
++    panel.start();
++    capture(panel, sink);
++    CHECK(panel.get_state() != TouchCalibrationPanel::State::VERIFY);
++}
++
++TEST_CASE_METHOD(LVGLTestFixture,
++                 "Kiln touch cal range: the capture uses the kernel range over a damaged one",
++                 "[kiln][touch-cal-range][touch-calibration]") {
++    RangeSink sink = sink_with_stored(reported_damaged());
++    TouchCalibrationSession session;
++    session.begin_capture(sink);
++
++    CHECK(sink.live.source == TouchRangeSource::Declared);
++    // laid out as the stored one runs: X up, Y down
++    CHECK(same_range(sink.live.range, declared_y_up()));
++    REQUIRE(session.capture_range() != nullptr);
++    CHECK(same_range(session.range_backup(), reported_damaged()));
++    CHECK_FALSE(sink.affine_enabled);
++
++    // The three taps are usable now, and the fit finds the panel's edges
++    TouchCalibrationPanel panel;
++    panel.set_screen_size(kW, kH);
++    panel.start();
++    capture(panel, sink);
++    REQUIRE(panel.get_state() == TouchCalibrationPanel::State::VERIFY);
++    REQUIRE(panel.get_calibration() != nullptr);
++    const TouchRangeFit& fit = panel.get_range_fit();
++    REQUIRE(fit.valid);
++    INFO("fit X(" << fit.min_x << ".." << fit.max_x << ") Y(" << fit.min_y << ".." << fit.max_y
++                  << ")");
++    CHECK(std::abs(fit.min_x - 150) <= 10);
++    CHECK(std::abs(fit.max_x - 3900) <= 10);
++    CHECK(std::abs(fit.min_y - 3608) <= 10);
++    CHECK(std::abs(fit.max_y - 591) <= 10);
++
++    // Accepted: the fitted range is saved, as before
++    set_kiln_touch_units_tagged_for_test(false);
++    CHECK(commit_calibration_result(&sink, *panel.get_calibration(), fit));
++    session.commit();
++    Config* cfg = Config::get_instance();
++    CHECK(cfg->get<bool>("/input/touch_range/valid", false));
++    CHECK(std::abs(cfg->get<int>("/input/touch_range/min_y", 0) - 3608) <= 10);
++    CHECK(std::abs(cfg->get<int>("/input/touch_range/max_y", 0) - 591) <= 10);
++    CHECK(sink.live.source == TouchRangeSource::Stored);
++
++    // A restore after the commit leaves the new range alone
++    session.restore(sink);
++    CHECK(std::abs(sink.live.range.max_x - 3900) <= 10);
++
++    set_kiln_touch_units_tagged_for_test(std::nullopt);
++    reset_touch_keys();
++}
++
++TEST_CASE_METHOD(LVGLTestFixture,
++                 "Kiln touch cal range: a forced calibration with no stored range succeeds",
++                 "[kiln][touch-cal-range][touch-calibration]") {
++    // What a start with touch_range and calibration both not valid and
++    // /input/force_calibration set gets (ad5x-touch-units, or a range refused
++    // by load_touch_range): the kernel's range live, the board's default
++    // affine stored (here Y flipped, as the AD5X's in stock units). The capture
++    // runs with the affine off, under the kernel's range, and finishes.
++    RangeSink sink;
++    sink.live.range = declared_4095();
++    sink.live.source = TouchRangeSource::Declared;
++    // As DisplayManager gives it on Kiln's own kernels: Y from the bottom up
++    sink.declared.range = uncalibrated_declared_orientation(declared_4095(), true);
++    sink.declared.source = TouchRangeSource::Declared;
++    CHECK(same_range(sink.declared.range, declared_y_up()));
++    TouchCalibration flipped{};
++    flipped.valid = true;
++    flipped.a = 0.2f;
++    flipped.e = -0.12f;
++    flipped.f = 480.0f;
++    sink.stored = flipped;
++
++    TouchCalibrationSession session;
++    session.begin_capture(sink);
++    // The kernel's range the right way up
++    REQUIRE(session.capture_range() != nullptr);
++    CHECK(same_range(sink.live.range, declared_y_up()));
++    CHECK_FALSE(sink.affine_enabled);
++    CHECK(sink.tap(Point{40, 450}).y > kH / 2); // a bottom-left button is at the bottom
++
++    TouchCalibrationPanel panel;
++    panel.set_screen_size(kW, kH);
++    panel.start();
++    capture(panel, sink);
++    REQUIRE(panel.get_state() == TouchCalibrationPanel::State::VERIFY);
++    REQUIRE(panel.get_calibration() != nullptr);
++    const TouchRangeFit& fit = panel.get_range_fit();
++    REQUIRE(fit.valid);
++    CHECK(std::abs(fit.min_y - 3608) <= 10);
++    CHECK(std::abs(fit.max_y - 591) <= 10);
++
++    set_kiln_touch_units_tagged_for_test(false);
++    Config* cfg = Config::get_instance();
++    cfg->set<bool>("/input/force_calibration", true);
++    CHECK(commit_calibration_result(&sink, *panel.get_calibration(), fit, session.capture_range()));
++    session.commit();
++    CHECK(cfg->get<bool>("/input/touch_range/valid", false));
++    CHECK(sink.live.source == TouchRangeSource::Stored);
++    // Done: the next start does not force it again
++    CHECK_FALSE(cfg->get<bool>("/input/force_calibration", true));
++    // The flipped default is gone: the range carries the mapping now
++    CHECK_FALSE((sink.stored.valid && sink.stored.e == Approx(-0.12f)));
++
++    set_kiln_touch_units_tagged_for_test(std::nullopt);
++    reset_touch_keys();
++}
++
++TEST_CASE("Kiln touch cal range: a good stored range is set aside for the capture and restored",
++          "[kiln][touch-cal-range][touch-calibration]") {
++    RangeSink sink = sink_with_stored(panel_edges());
++    TouchCalibration residual{};
++    residual.valid = true;
++    residual.a = 1.01f;
++    residual.e = 0.99f;
++    sink.stored = residual;
++
++    TouchCalibrationSession session;
++    session.begin_capture(sink);
++    CHECK(sink.live.source == TouchRangeSource::Declared);
++    CHECK(same_range(sink.live.range, declared_y_up()));
++
++    SECTION("the screen is the right way up during the capture") {
++        // The overlay's Cancel chip (bottom-left) and the wizard's Skip
++        // (bottom-right) are where they are drawn, not mirrored to the top
++        const Point cancel = sink.tap(Point{40, 450});
++        CHECK(cancel.x < kW / 4);
++        CHECK(cancel.y > kH * 3 / 4);
++        const Point skip = sink.tap(Point{760, 450});
++        CHECK(skip.x > kW * 3 / 4);
++        CHECK(skip.y > kH * 3 / 4);
++        const Point top_left = sink.tap(Point{40, 30});
++        CHECK(top_left.y < kH / 4);
++    }
++    SECTION("cancel puts the stored range and the affine back") {
++        session.restore(sink);
++        CHECK(sink.live.source == TouchRangeSource::Stored);
++        CHECK(same_range(sink.live.range, panel_edges()));
++        CHECK(sink.stored.a == Approx(1.01f));
++        CHECK(sink.affine_enabled);
++        CHECK(session.capture_range() == nullptr);
++    }
++    SECTION("retry after a candidate runs under the kernel range again") {
++        sink.apply_touch_range(false, 100, 3700, 3950, 500, TouchRangeSource::Stored);
++        session.revert_for_retry(sink);
++        CHECK(sink.live.source == TouchRangeSource::Declared);
++        CHECK(same_range(sink.live.range, declared_y_up()));
++        CHECK(sink.stored.a == Approx(1.01f));
++        CHECK_FALSE(sink.affine_enabled);
++        // and a cancel after that still restores the stored range
++        session.restore(sink);
++        CHECK(same_range(sink.live.range, panel_edges()));
++        CHECK(sink.live.source == TouchRangeSource::Stored);
++    }
++    SECTION("the pre-session mapping shown again, then a retry") {
++        session.show_pre_session(sink);
++        CHECK(same_range(sink.live.range, panel_edges()));
++        CHECK(sink.affine_enabled);
++        CHECK(sink.stored.a == Approx(1.01f));
++        CHECK(session.has_backup());
++        session.revert_for_retry(sink);
++        CHECK(same_range(sink.live.range, declared_y_up()));
++        CHECK_FALSE(sink.affine_enabled);
++    }
++}
++
++TEST_CASE("Kiln touch cal range: the capture keeps the stored swap and directions",
++          "[kiln][touch-cal-range][touch-calibration]") {
++    const TouchRangeSettings dev = range_of(0, 4095, 0, 1023);
++    // Post-swap X is the device's Y range, each axis the stored way round
++    const TouchRangeSettings a = orient_declared_like(dev, range_of(1000, 20, 300, 3900, true));
++    CHECK(a.swap_axes);
++    CHECK(a.min_x == 1023);
++    CHECK(a.max_x == 0);
++    CHECK(a.min_y == 0);
++    CHECK(a.max_y == 4095);
++    CHECK(a.capture_rotation == 0);
++    const TouchRangeSettings b = orient_declared_like(dev, range_of(4000, 90, 120, 900));
++    CHECK_FALSE(b.swap_axes);
++    CHECK(b.min_x == 4095);
++    CHECK(b.max_x == 0);
++    CHECK(b.min_y == 0);
++    CHECK(b.max_y == 1023);
++
++    // Uncalibrated: the device's Y reversed on Kiln's own kernels only
++    CHECK(same_range(uncalibrated_declared_orientation(declared_4095(), false), declared_4095()));
++    CHECK(same_range(uncalibrated_declared_orientation(declared_4095(), true), declared_y_up()));
++    const TouchRangeSettings sw =
++        uncalibrated_declared_orientation(range_of(0, 99, 0, 55, true), true);
++    CHECK(sw.min_x == 99); // under a swap the device's Y is the post-swap X
++    CHECK(sw.max_x == 0);
++    CHECK(sw.min_y == 0);
++}
++
++namespace {
++
++/// The owner's settings from before issue #90 (converted from stock units):
++/// min < max on both axes, the Y flip in the affine (e = -1)
++TouchCalibration owner_affine() {
++    TouchCalibration c{};
++    c.valid = true;
++    c.a = 1.0f;
++    c.b = 0.023826f;
++    c.c = -13.928667f;
++    c.d = -0.023210f;
++    c.e = -1.0f;
++    c.f = 478.312057f;
++    c.capture_rotation = 0;
++    return c;
++}
++
++} // namespace
++
++TEST_CASE("Kiln touch cal range: the capture is the right way up with the flip in the affine",
++          "[kiln][touch-cal-range][touch-calibration]") {
++    // Range X 307..3702 Y 649..3482 and e = -1: raw Y runs from the bottom
++    // up, as on the panel here (raw_at), so the capture must run Y 4095..0
++    RangeSink sink = sink_with_stored(range_of(307, 3702, 649, 3482));
++    sink.stored = owner_affine();
++
++    TouchCalibrationSession session;
++    session.begin_capture(sink);
++    REQUIRE(session.capture_range() != nullptr);
++    CHECK(same_range(sink.live.range, declared_y_up()));
++
++    const Point cancel = sink.tap(Point{40, 450}); // the overlay's Cancel, bottom-left
++    CHECK(cancel.x < kW / 4);
++    CHECK(cancel.y > kH * 3 / 4);
++    const Point skip = sink.tap(Point{760, 450}); // the wizard's Skip, bottom-right
++    CHECK(skip.x > kW * 3 / 4);
++    CHECK(skip.y > kH * 3 / 4);
++
++    SECTION("an affine-only result saves that range with the new affine") {
++        Config* cfg = Config::get_instance();
++        set_kiln_touch_units_tagged_for_test(false);
++        TouchCalibration full{};
++        full.valid = true;
++        full.a = 0.97f;
++        full.e = 1.03f;
++        CHECK(commit_calibration_result(&sink, full, TouchRangeFit{}, session.capture_range()));
++        session.commit();
++        CHECK(cfg->get<bool>("/input/touch_range/valid", false));
++        CHECK(cfg->get<int>("/input/touch_range/min_y", -1) == 4095);
++        CHECK(cfg->get<int>("/input/touch_range/max_y", -1) == 0);
++        CHECK(cfg->get<double>("/input/calibration/e", 0.0) == Approx(1.03));
++        // The device runs what was saved: no flip left in range and affine twice
++        CHECK(same_range(sink.live.range, declared_y_up()));
++        CHECK(sink.stored.e == Approx(1.03f));
++        set_kiln_touch_units_tagged_for_test(std::nullopt);
++        reset_touch_keys();
++    }
++    SECTION("cancel puts the range and the affine back") {
++        session.restore(sink);
++        CHECK(same_range(sink.live.range, range_of(307, 3702, 649, 3482)));
++        CHECK(sink.stored.e == Approx(-1.0f));
++    }
++}
++
++TEST_CASE("Kiln touch cal range: a flip in the range and one in the affine cancel out",
++          "[kiln][touch-cal-range][touch-calibration]") {
++    // Y 3482..649 and e = -1: the whole mapping runs Y from the top down, so
++    // the capture keeps the declared Y the other way, 0..4095
++    RangeSink sink = sink_with_stored(range_of(307, 3702, 3482, 649));
++    sink.stored = owner_affine();
++    TouchCalibrationSession session;
++    session.begin_capture(sink);
++    REQUIRE(session.capture_range() != nullptr);
++    CHECK(same_range(sink.live.range, declared_4095()));
++    // A panel whose raw Y runs from the top down: bottom-left lands bottom-left
++    const Point raw{150 + 40 * 3750 / (kW - 1), 591 + 450 * (3608 - 591) / (kH - 1)};
++    const Point landed = evdev_point_from_raw(raw, sink.live.range, kW, kH);
++    CHECK(landed.x < kW / 4);
++    CHECK(landed.y > kH * 3 / 4);
++}
++
++TEST_CASE("Kiln touch cal range: the layout of a range and an affine",
++          "[kiln][touch-cal-range][touch-calibration]") {
++    const TouchRangeSettings r = range_of(307, 3702, 649, 3482);
++    CHECK(same_range(range_layout_with_affine(r, TouchCalibration{}), r));
++    CHECK(same_range(range_layout_with_affine(r, owner_affine()), range_of(307, 3702, 3482, 649)));
++    TouchCalibration mx = owner_affine();
++    mx.a = -1.0f;
++    mx.e = 1.0f;
++    CHECK(same_range(range_layout_with_affine(r, mx), range_of(3702, 307, 649, 3482)));
++
++    // Off-diagonal terms dominate: the affine swaps the axes once more
++    TouchCalibration cross{};
++    cross.valid = true;
++    cross.a = 0.02f;
++    cross.b = -1.1f;
++    cross.d = 1.2f;
++    cross.e = 0.01f;
++    const TouchRangeSettings c = range_layout_with_affine(r, cross);
++    CHECK(c.swap_axes);
++    CHECK(c.min_x == 3482); // the range's Y, reversed by b < 0
++    CHECK(c.max_x == 649);
++    CHECK(c.min_y == 307); // the range's X, as d > 0
++    CHECK(c.max_y == 3702);
++    // and the capture takes the device's Y range for its X then
++    const TouchRangeSettings cap = orient_declared_like(range_of(0, 4095, 0, 1023), c);
++    CHECK(cap.swap_axes);
++    CHECK(cap.min_x == 1023);
++    CHECK(cap.max_x == 0);
++    CHECK(cap.min_y == 0);
++    CHECK(cap.max_y == 4095);
++}
++
++TEST_CASE("Kiln touch cal range: no stored range in play, nothing replaced",
++          "[kiln][touch-cal-range][touch-calibration]") {
++    RangeSink sink = sink_with_stored(panel_edges());
++
++    SECTION("the declared range is live already, the same way up") {
++        sink.live.range = declared_4095();
++        sink.live.source = TouchRangeSource::Declared;
++    }
++    SECTION("an environment override is the user's own") {
++        sink.live.source = TouchRangeSource::Environment;
++    }
++    SECTION("a display-size range stands in for a lying declaration") {
++        sink.live.range = range_of(0, kW, 0, kH);
++        sink.live.source = TouchRangeSource::DisplaySize;
++    }
++    SECTION("the declared range is unknown") {
++        sink.declared = LiveTouchRange{};
++    }
++    SECTION("the live range cannot be read back") {
++        sink.live.range.valid = false;
++    }
++    const LiveTouchRange before = sink.live;
++
++    TouchCalibrationSession session;
++    session.begin_capture(sink);
++    CHECK(session.capture_range() == nullptr);
++    CHECK(sink.live.source == before.source);
++    CHECK(same_range(sink.live.range, before.range));
++    CHECK(sink.ops.empty());
++}
++
++TEST_CASE("Kiln touch cal range: an affine-only result saves the range it was captured under",
++          "[kiln][touch-cal-range][touch-calibration]") {
++    // The affine was solved over the capture range (the declared one, the
++    // stored one's way up), so the next start must run that one, not the old
++    // stored range and not the declared one the other way up
++    RangeSink sink = sink_with_stored(panel_edges());
++    Config* cfg = Config::get_instance();
++    set_kiln_touch_units_tagged_for_test(false);
++    write_stored_range(cfg, panel_edges());
++    cfg->set<bool>("/input/force_calibration", true);
++
++    TouchCalibrationSession session;
++    session.begin_capture(sink);
++    REQUIRE(session.capture_range() != nullptr);
++    TouchCalibration full{};
++    full.valid = true;
++    full.a = 0.98f;
++    full.c = 3.0f;
++    full.e = 1.02f;
++    full.f = -2.0f;
++    CHECK(commit_calibration_result(&sink, full, TouchRangeFit{}, session.capture_range()));
++    session.commit();
++
++    CHECK(cfg->get<bool>("/input/touch_range/valid", false));
++    CHECK(cfg->get<int>("/input/touch_range/min_x", -1) == 0);
++    CHECK(cfg->get<int>("/input/touch_range/max_x", -1) == 4095);
++    CHECK(cfg->get<int>("/input/touch_range/min_y", -1) == 4095);
++    CHECK(cfg->get<int>("/input/touch_range/max_y", -1) == 0);
++    CHECK_FALSE(cfg->get<bool>("/input/touch_range/swap_axes", true));
++    CHECK(cfg->get<int>("/input/touch_range/rotation", -1) == 0);
++    CHECK(cfg->get<bool>("/input/calibration/valid", false));
++    CHECK(cfg->get<double>("/input/calibration/a", 0.0) == Approx(0.98));
++    CHECK_FALSE(cfg->get<bool>("/input/force_calibration", true));
++    // what the device runs now is what was saved
++    CHECK(same_range(sink.live.range, declared_y_up()));
++
++    set_kiln_touch_units_tagged_for_test(std::nullopt);
++    reset_touch_keys();
++}
++
++TEST_CASE("Kiln touch cal range: every successful commit clears a forced calibration",
++          "[kiln][touch-cal-range][touch-calibration]") {
++    // The Settings overlay, the hold and the wizard's touch step all commit
++    // through commit_calibration_result
++    Config* cfg = Config::get_instance();
++    set_kiln_touch_units_tagged_for_test(false);
++    cfg->set<bool>("/input/force_calibration", true);
++    RangeSink sink;
++    sink.live.range = declared_4095();
++    sink.live.source = TouchRangeSource::Declared;
++    TouchCalibration full{};
++    full.valid = true;
++    full.a = 0.2f;
++    full.e = 0.12f;
++    CHECK(commit_calibration_result(&sink, full, TouchRangeFit{}));
++    CHECK_FALSE(cfg->get<bool>("/input/force_calibration", true));
++    // and with no live device (persisted, not applied: false)
++    cfg->set<bool>("/input/force_calibration", true);
++    CHECK_FALSE(commit_calibration_result(nullptr, full, TouchRangeFit{}));
++    CHECK_FALSE(cfg->get<bool>("/input/force_calibration", true));
++
++    set_kiln_touch_units_tagged_for_test(std::nullopt);
++    reset_touch_keys();
++}
++
++// ---------------------------------------------------------------------------
++// The stored range against the device's
++// ---------------------------------------------------------------------------
++
++TEST_CASE("Kiln touch cal range: stored range against the declared range",
++          "[kiln][touch-cal-range][touch-calibration]") {
++    const TouchRangeSettings d = declared_4095();
++    CHECK_FALSE(stored_touch_range_fits_declared(reported_damaged(), d));
++
++    // Normal ones, either direction on either axis
++    CHECK(stored_touch_range_fits_declared(range_of(150, 3900, 591, 3608), d));
++    CHECK(stored_touch_range_fits_declared(range_of(150, 3900, 3608, 591), d));
++    CHECK(stored_touch_range_fits_declared(range_of(4000, 90, 3900, 120), d));
++    CHECK(stored_touch_range_fits_declared(range_of(0, 4095, 0, 4095), d));
++    // A panel emitting a little past its declared range, an extrapolated edge
++    CHECK(stored_touch_range_fits_declared(range_of(-300, 4400, 4500, -200), d));
++    // One emitting well past it (2x, 4x the span): the readings still reach
++    // half, a quarter of the axis, so its own calibration is not refused
++    CHECK(stored_touch_range_fits_declared(range_of(0, 8190, 591, 3608), d));
++    CHECK(stored_touch_range_fits_declared(range_of(150, 3900, 16000, -400), d));
++
++    // An axis the device's readings reach under 1/8 of: in effect one edge
++    CHECK_FALSE(stored_touch_range_fits_declared(range_of(150, 40000, 591, 3608), d));
++    CHECK_FALSE(stored_touch_range_fits_declared(range_of(150, 3900, 591, -30000), d));
++    // Off the device: every reading on one edge
++    CHECK_FALSE(stored_touch_range_fits_declared(range_of(150, 3900, -1900, -100), d));
++    CHECK_FALSE(stored_touch_range_fits_declared(range_of(4200, 6000, 591, 3608), d));
++
++    // The stored range is post-swap: its X is the device's Y
++    const TouchRangeSettings narrow_y = range_of(0, 4095, 0, 1023);
++    CHECK(stored_touch_range_fits_declared(range_of(100, 1000, 300, 3900, true), narrow_y));
++    CHECK_FALSE(stored_touch_range_fits_declared(range_of(2000, 3900, 100, 1000, true), narrow_y));
++
++    // Nothing to judge against
++    CHECK(stored_touch_range_fits_declared(reported_damaged(), TouchRangeSettings{}));
++    CHECK(stored_touch_range_fits_declared(reported_damaged(), range_of(0, 0, 0, 0)));
++}
++
++TEST_CASE("Kiln touch cal range: load_touch_range refuses a range off the device",
++          "[kiln][touch-cal-range][touch-calibration]") {
++    Config* cfg = Config::get_instance();
++    reset_touch_keys();
++
++    SECTION("the report's range: refused, the kernel's range applies, calibration asked for") {
++        write_stored_range(cfg, reported_damaged());
++        set_declared_touch_range(declared_4095());
++        CHECK_FALSE(load_touch_range().valid);
++        // The kernel's range with the board's default may be upside down, so
++        // the calibration opens at this start (Application reads the flag
++        // after the display is up, and clears it on success)
++        CHECK(cfg->get<bool>("/input/force_calibration", false));
++    }
++    SECTION("normal ranges load, inverted ones included") {
++        set_declared_touch_range(declared_4095());
++        for (const TouchRangeSettings& r :
++             {range_of(150, 3900, 3608, 591), range_of(4000, 90, 3900, 120),
++              range_of(150, 3900, 591, 3608, true)}) {
++            write_stored_range(cfg, r);
++            const TouchRangeSettings got = load_touch_range();
++            CHECK(got.valid);
++            CHECK(same_range(got, r));
++        }
++        CHECK_FALSE(cfg->get<bool>("/input/force_calibration", false));
++    }
++    SECTION("a range a calibration saved on a panel emitting past its range loads next start") {
++        // No loop: what a range fit saves on such a panel is not refused
++        set_declared_touch_range(declared_4095());
++        write_stored_range(cfg, range_of(-2000, 9000, 7000, -1500));
++        CHECK(load_touch_range().valid);
++        CHECK_FALSE(cfg->get<bool>("/input/force_calibration", false));
++    }
++    SECTION("an unknown device range judges nothing (upstream's behaviour)") {
++        write_stored_range(cfg, reported_damaged());
++        CHECK(load_touch_range().valid);
++        CHECK_FALSE(cfg->get<bool>("/input/force_calibration", false));
++    }
++    SECTION("a degenerate range is still refused, as upstream (no forced calibration)") {
++        write_stored_range(cfg, range_of(500, 500, 591, 3608));
++        set_declared_touch_range(declared_4095());
++        CHECK_FALSE(load_touch_range().valid);
++        CHECK_FALSE(cfg->get<bool>("/input/force_calibration", false));
++    }
++    SECTION("the affine check reads quietly: only the backend's load asks") {
++        write_stored_range(cfg, reported_damaged());
++        set_declared_touch_range(declared_4095());
++        cfg->set<bool>("/input/calibration/valid", false);
++        (void)load_touch_calibration();
++        CHECK_FALSE(cfg->get<bool>("/input/force_calibration", false));
++    }
++    reset_touch_keys();
++}
++
++TEST_CASE_METHOD(LVGLTestFixture,
++                 "Kiln touch cal range: the affine stored with a refused range is not loaded",
++                 "[kiln][touch-cal-range][touch-calibration]") {
++    Config* cfg = Config::get_instance();
++    reset_touch_keys();
++    cfg->set<bool>("/input/calibration/valid", true);
++    cfg->set<double>("/input/calibration/a", 1.37);
++    cfg->set<double>("/input/calibration/b", 0.0);
++    cfg->set<double>("/input/calibration/c", 5.0);
++    cfg->set<double>("/input/calibration/d", 0.0);
++    cfg->set<double>("/input/calibration/e", 1.21);
++    cfg->set<double>("/input/calibration/f", -4.0);
++    cfg->set<int>("/input/calibration/rotation", 0);
++    set_declared_touch_range(declared_4095());
++
++    SECTION("with a range off the device") {
++        write_stored_range(cfg, reported_damaged());
++        const TouchCalibration cal = load_touch_calibration();
++        // the uncalibrated path: no affine, or the board's default
++        CHECK_FALSE((cal.valid && cal.a == Approx(1.37f)));
++        const TouchCalibration def = platform_default_calibration();
++        CHECK(cal.valid == def.valid);
++        if (def.valid) {
++            CHECK(cal.a == Approx(def.a));
++            CHECK(cal.e == Approx(def.e));
++        }
++    }
++    SECTION("with a good range it loads as before") {
++        write_stored_range(cfg, panel_edges());
++        const TouchCalibration cal = load_touch_calibration();
++        CHECK(cal.valid);
++        CHECK(cal.a == Approx(1.37f));
++    }
++    reset_touch_keys();
++}
++
++// ---------------------------------------------------------------------------
++// The helpers
++// ---------------------------------------------------------------------------
++
++TEST_CASE("Kiln touch cal range: the declared range that can be trusted",
++          "[kiln][touch-cal-range][touch-calibration]") {
++    const TouchRangeSettings ok =
++        trusted_declared_touch_range(true, 0, 4095, 0, 4095, false, kW, kH);
++    CHECK(ok.valid);
++    CHECK(same_range(ok, declared_4095()));
++    CHECK(trusted_declared_touch_range(true, 0, 4095, 0, 4095, true, kW, kH).swap_axes);
++
++    CHECK_FALSE(trusted_declared_touch_range(false, 0, 4095, 0, 4095, false, kW, kH).valid);
++    CHECK_FALSE(trusted_declared_touch_range(true, 0, 0, 0, 0, false, kW, kH).valid);
++    CHECK_FALSE(trusted_declared_touch_range(true, 0, 4095, 7, 7, false, kW, kH).valid);
++    // The display transposed: that declaration lies
++    CHECK_FALSE(trusted_declared_touch_range(true, 0, kH, 0, kW, false, kW, kH).valid);
++}
++
++TEST_CASE("Kiln touch cal range: a reading through a range as lv_evdev scales it",
++          "[kiln][touch-cal-range][touch-calibration]") {
++    const TouchRangeSettings d = declared_4095();
++    CHECK(evdev_point_from_raw(Point{0, 0}, d, kW, kH).x == 0);
++    CHECK(evdev_point_from_raw(Point{4095, 4095}, d, kW, kH).x == kW - 1);
++    CHECK(evdev_point_from_raw(Point{4095, 4095}, d, kW, kH).y == kH - 1);
++    CHECK(evdev_point_from_raw(Point{2048, 1024}, d, kW, kH).x == 2048 * (kW - 1) / 4095);
++
++    // Inverted Y, and the clamp
++    const TouchRangeSettings e = panel_edges();
++    CHECK(evdev_point_from_raw(Point{150, 3608}, e, kW, kH).y == 0);
++    CHECK(evdev_point_from_raw(Point{3900, 591}, e, kW, kH).y == kH - 1);
++    CHECK(evdev_point_from_raw(Point{4095, 0}, e, kW, kH).x == kW - 1);
++    CHECK(evdev_point_from_raw(Point{4095, 0}, e, kW, kH).y == kH - 1);
++
++    // Swap comes first
++    const Point swapped =
++        evdev_point_from_raw(Point{0, 4095}, range_of(0, 4095, 0, 4095, true), kW, kH);
++    CHECK(swapped.x == kW - 1);
++    CHECK(swapped.y == 0);
++
++    // The report's range: Y on the top edge wherever the finger is
++    for (int y : {0, 1000, 2000, 4095}) {
++        CHECK(evdev_point_from_raw(Point{2000, y}, reported_damaged(), kW, kH).y == 0);
++    }
++}
+-- 
+2.56.0
+

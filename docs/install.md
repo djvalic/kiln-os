@@ -104,25 +104,50 @@ Kiln OS page follows the touch screen language (English and Russian so
 far).
 
 If the screen says **"Not installed"** or **"Installation failed"**, the
-printer waits with the message on screen. Remove the stick and power-cycle:
-it starts its old firmware as before. Nothing is switched before every check
+printer waits with the message on screen. To use it as before, remove the
+stick and power-cycle: it starts its old firmware. Nothing is switched before every check
 has passed, and the boot flag is the very last thing written. Read
-`ad5x-install.log` on the stick for the reason.
+`ad5x-install.log` on the stick for the reason. "Not installed" comes with
+one of three lines:
 
-If the printer starts its old firmware as usual with the stick in, no
-"Installing" screen and no `ad5x-install.log` on the stick, stock didn't
-find the stick: its startup only looks at the first USB storage device
-(`sda`), and with other USB storage attached the stick can come up as
-`sdb` (issue #27). Unplug the other USB storage so the stick is the only
-one, then power-cycle with the stick in. Once Kiln OS is installed, its
-updates and the recovery OS don't depend on the device name.
+- **"An earlier install didn't finish starting."** An earlier install
+  already switched to Kiln OS, and the printer is back on stock (see "If
+  the new system doesn't start"). To try again, put an empty file named
+  `ad5x-install-retry` on the stick, next to `flashforge_init.sh`, and
+  switch the printer off and on with the stick in.
+- **"The printer has to restart once first."** The boot flag names the
+  other slot (a Flashforge update waiting for its restart, for example).
+  Remove the stick, switch the printer off and on, let it start, then try
+  again with the stick.
+- **"This printer can't be installed this way."** Any other reason: not an
+  AD5X, not the stock firmware, a different eMMC layout, too little room
+  on the printer. The log says which.
+
+**Nothing happened?** If the printer starts its old firmware as usual with
+the stick in, with no "Installing" screen and no `ad5x-install.log` on the
+stick, stock didn't find or didn't run the stick. Stock's start-up looks
+for it only once, early on (it waits 2 seconds for USB). Check:
+
+- The stick is **FAT32**. Stock mounts only FAT; an exFAT or NTFS stick is
+  skipped.
+- `flashforge_init.sh` and the folder `ad5x-install/` are in the stick's
+  **top folder**, not in a subfolder (unzipping can add one).
+- **No other USB drive** is plugged in. Stock only looks at the first USB
+  storage device (`sda`); with another one attached the stick can come up
+  as `sdb` (issue #27). Unplug the others so the stick is the only one.
+- **No `AD5X-*.tgz`** is on the stick. Stock installs that as a Flashforge
+  firmware update instead and never runs `flashforge_init.sh`.
+
+Then power-cycle with the stick in. If still nothing happens, try another
+stick: a slow one may not be ready in time. Once Kiln OS is installed, its
+updates and the recovery OS don't depend on any of this.
 
 Markers you can put next to `flashforge_init.sh` on the stick:
 
 | File | Effect |
 |---|---|
 | `ad5x-no-emmc-backup` | Skip the eMMC copy to the stick |
-| `ad5x-install-retry` | Install again after an earlier attempt switched to Kiln OS and the printer is back on stock (see "If the new system doesn't start"). Deleted when used, so it can't start a loop |
+| `ad5x-install-retry` | Install again after an earlier attempt switched to Kiln OS and the printer is back on stock: the screen says "Not installed, an earlier install didn't finish starting" (see "If the new system doesn't start"). An empty file is enough. Deleted when used, so it can't start a loop |
 
 ## Method 2: SSH
 
@@ -237,10 +262,12 @@ zMod's files stay where they are.
 With stock in slot A, a main OS that fails during start-up lands back on stock
 at the next power cycle. If the install stick is still in, stock runs it
 again; it sees that an earlier install already switched (state `flag-set`)
-and stops with "Not installed" instead of installing in a loop. Take the
-stick out to use stock, look at `/usr/data/ad5x/install/install.log` and the
-boot trace (`docs/boot-slots.md`), and use `ad5x-install-retry` (stick) or
-`--retry` (SSH) to try again.
+and stops with "Not installed, an earlier install didn't finish starting"
+instead of installing in a loop. Take the stick out to use stock, look at
+`/usr/data/ad5x/install/install.log` and the boot trace
+(`docs/boot-slots.md`), and use `ad5x-install-retry` (stick: an empty file
+next to `flashforge_init.sh`, as the screen says) or `--retry` (SSH) to try
+again.
 
 ## Vendor files
 
@@ -371,7 +398,18 @@ that start; take the stick out afterwards.
 ### What it changes
 
 - The main slot (B) gets Flashforge's system; Kiln OS there is gone. Your
-  settings, prints and logs on the data partition stay.
+  settings, prints and logs on the data partition stay, unless you tick
+  **Also remove Kiln OS's settings and files** (below).
+- **Also remove Kiln OS's settings and files** (off by default): once
+  Flashforge's firmware is back, Kiln's data in `/data/ad5x` is deleted for
+  good: printer settings (Z offset, mesh, `variables.cfg`), Moonraker's
+  database, the screen's settings, network settings, plugins, SSH keys,
+  logs, the update cache. Kiln's copy of Flashforge's own files
+  (`/data/ad5x/stock`, `vendor`), the return's log and the print files
+  stay. **...and the uploaded print files too** (usable only with the
+  first box) deletes the print files as well. If the return doesn't finish,
+  nothing is deleted. Stock's own files and the usershare partition are
+  never touched. Details: `docs/recovery-os.md`, "Kiln's data".
 - The recovery OS stays in slot A as a safety net. Stock doesn't use it;
   stock's next firmware update writes over it.
 - With Kiln's own boot loader on the printer: its second stage (U-Boot) is
@@ -411,17 +449,30 @@ that start; take the stick out afterwards.
 
 Your Kiln settings on the data partition (`/data/ad5x`: tuning, Z
 offset, slot materials, plugins) are kept through the return and used
-again. Only Kiln's record of which IFS slot is in the toolhead is dropped
+again, unless you ticked **Also remove Kiln OS's settings and files**:
+then the new install is a first install, with the setup wizard. Only Kiln's record of which IFS slot is in the toolhead is dropped
 (by the return, and again by the installer): stock has loaded and
 unloaded since, so Kiln starts knowing no slot and the setup wizard's
 Filament step finds it.
+
+Your touch screen settings are kept too, and they say the setup wizard is
+done, so the reinstalled printer would go straight to the home screen.
+Instead, when the installer finds them it leaves a note
+(`/data/ad5x/helixscreen/offer-setup-wizard`), and at the first start the
+touch screen asks **Run the setup wizard?** (Flashforge's firmware may have
+changed the filament, the Z offset or the boards in between). **Run** starts
+the same wizard as Settings > Printer > Run Setup Wizard; **Skip** goes to
+the home screen and doesn't ask again. Your settings stay either way.
+Updates (Fluidd, `.swu`, recovery) never ask; a printer with no Kiln
+settings from before gets the wizard as a first run
+([setup-wizard.md](setup-wizard.md), "After a reinstall").
 
 The Kiln OS install stick works again as on any stock printer; no
 `ad5x-install-retry` file is needed after Return to Flashforge firmware,
 nor after any install that finished (state `done`: Kiln OS started
 completely). The installer refuses only when an earlier install switched
 to Kiln OS and Kiln OS never finished starting (state `flag-set`): then it
-needs `ad5x-install-retry`. A printer installed with an older release
+needs `ad5x-install-retry`, and its screen says so. A printer installed with an older release
 still has `flag-set`; its main OS changes it to `done` at its first start
 on a release with this check.
 

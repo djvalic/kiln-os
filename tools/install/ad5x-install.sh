@@ -97,8 +97,8 @@ SCREENS=$DIR/screens
 # exit trap. Signals are left as they were (a killed installer dies at
 # once): the loop sees that its installer is gone and ends by itself
 # within about a second.
-# Screens without frames (done, powercycle, failed, refused, installed)
-# stay as they are.
+# Screens without frames (done, powercycle, failed, refused, retry,
+# restart, installed) stay as they are.
 ANIM=
 anim_stop() {
 	[ -n "$ANIM" ] || return 0
@@ -132,7 +132,14 @@ show() {	# screen name (screens/NAME.jpg), only with --usb
 }
 trap anim_stop EXIT
 fail() { log "FAILED: $*"; show failed; exit 1; }
-refuse() { log "NOT INSTALLED: $*"; show "${REFUSE_SCREEN:-refused}"; exit 3; }
+# REFUSE_SCREEN: a refusal's own screen (installed, retry, restart);
+# refused.jpg for the rest, and if a stick lacks the named one
+refuse() {
+	log "NOT INSTALLED: $*"
+	rs=${REFUSE_SCREEN:-refused}
+	[ -f "$SCREENS/$rs.jpg" ] || rs=refused
+	show "$rs"; exit 3
+}
 step() { STEP=$1; log "== step $1/6: $2"; show "step$1"; }
 
 part() {	# GPT name -> device
@@ -311,8 +318,9 @@ case "$st" in
 flag-set)
 	# Switched, but Kiln OS never reported a finished start (the main OS
 	# writes "done" then: S99ad5x-install-recovery). Stock again means the
-	# new system didn't come up and the printer fell back: no install loop
-	[ -n "$retry" ] || refuse "an earlier install already switched to Kiln OS (state '$st', $I/install.log), and the printer is running stock again: the new system didn't finish starting, or stock was put back. To install again anyway: --retry (USB: put a file ad5x-install-retry on the stick)" ;;
+	# new system didn't come up and the printer fell back: no install loop.
+	# retry.jpg says how to try again (the ad5x-install-retry file)
+	[ -n "$retry" ] || { REFUSE_SCREEN=retry; refuse "an earlier install already switched to Kiln OS (state '$st', $I/install.log), and the printer is running stock again: the new system didn't finish starting, or stock was put back. To install again anyway: --retry (USB: put a file ad5x-install-retry on the stick)"; } ;;
 done)
 	# Kiln OS was installed and started completely; nothing of it falls
 	# back to stock by itself, so stock was put back on purpose
@@ -327,8 +335,9 @@ esac
 
 flag=$(read_flag)
 # the boot loader starts slot B on "ota:kernel2" and slot A on anything else
+# (restart.jpg: remove the stick, restart once, try again)
 case $RUN in A) [ "$flag" != ota:kernel2 ] ;; B) [ "$flag" = ota:kernel2 ] ;; esac ||
-	refuse "boot flag '$flag' doesn't name the running slot $RUN (a stock update pending?); restart first"
+	{ REFUSE_SCREEN=restart; refuse "boot flag '$flag' doesn't name the running slot $RUN (a stock update pending?); restart first"; }
 if [ $RUN = A ]; then
 	RUNROOT=$(part rootfs) RUNKERN=$(part kernel) DSTROOT=$(part rootfs2) DSTKERN=$(part kernel2)
 	DSTNAME=rootfs2 WHAT=main FLAG=ota:kernel2
@@ -603,6 +612,24 @@ if kv=$(ifs_forget "$KVARS"); then
 	[ -n "$kv" ] && log "Kiln's variables.cfg from before: the IFS slot record dropped ($kv; stock has run since)"
 else
 	log "WARNING: Kiln's variables.cfg from before couldn't be changed: Kiln OS may take a wrong IFS slot as loaded (the setup wizard's Filament step with the toolhead's slot named fixes it)"
+fi
+# The touch screen's settings from before are kept too, and they say the
+# setup wizard is done, so the new install would start on the home screen.
+# Stock may have changed the filament, the Z offset or the boards since:
+# the offer file makes the screen ask once at its next start whether to run
+# the setup wizard (Run or Skip; HelixScreen deletes the file, patch 0088;
+# docs/setup-wizard.md, "After a reinstall"). Without those settings the
+# screen starts fresh and the wizard runs anyway: no offer then.
+HSET=$U/ad5x/helixscreen/config/settings.json
+OFFER=$U/ad5x/helixscreen/offer-setup-wizard
+if [ -f "$HSET" ]; then
+	if echo "Kiln OS installed again over stock, $(date '+%Y-%m-%d %H:%M:%S'), ad5x-install.sh" > "$OFFER.part" &&
+	   mv -f "$OFFER.part" "$OFFER" && sync; then
+		log "the touch screen's settings from before kept: it offers the setup wizard at the first start"
+	else
+		rm -f "$OFFER.part" 2>/dev/null
+		log "WARNING: couldn't write $OFFER: the touch screen won't offer the setup wizard (Settings > Printer > Run Setup Wizard runs it)"
+	fi
 fi
 echo "state=staged" > "$I/state"
 

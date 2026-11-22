@@ -1,0 +1,1048 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 09:10:35 -0500
+Subject: [PATCH] touch: the hold to calibrate after review
+
+Follow-up to the previous patch (PR #91), after review:
+
+- The hold no longer opens the overlay over the setup wizard: closing it
+  hid the wizard's container (NavigationManager's go_back hides the
+  screen's other children). In the full wizard it goes back to the
+  wizard's own touch calibration step (force_touch_calibration_step,
+  ui_wizard_navigate_to_step; leaving a running AD5X step aborts it, as
+  Back does); in a targeted session (Settings > Printer > Run Setup
+  Wizard, SETUP_WIZARD), which has no such step, it does nothing.
+- Nothing fires while any calibration capture runs, the wizard's step
+  too: the read callback checks CalibrationContext::capture_active and
+  the handler DisplayManager::is_touch_calibration_active(), both set by
+  every session's begin(). A press seen then does not fire after the
+  calibration closes (the overlay's own hold-abort with the finger still
+  down), only after 3 s with no touch.
+- Open dialogs are closed first (ModalCloseReason::External, as the
+  remote control's reset): push_overlay keeps modals above the new
+  overlay, where they covered Accept and Retry. The reinstall offer
+  (0088) takes that as a dismissal and asks again at the next start.
+- The timing is TouchHoldGesture (touch_hold_gesture.h, no LVGL):
+  releases under 70 ms (two readings at 33 ms) are noise, not 200 ms,
+  which joined fast taps into a hold; a release seen and then a press
+  after the gap starts a new press, also when no released reading came at
+  the gap (a stale start time before); pressed readings far apart with no
+  release between (a slow frame) stay one press. The finger must stay
+  within 8% of the screen per axis of where the press began (driver
+  points, before the affine): a scroll, a slider drag or a jog across
+  the pad is no hold.
+- On success the overlay path refreshes Settings > Touch & Input's
+  status and clears /input/force_calibration, as the Settings and
+  --calibrate-touch paths do (refresh_calibration_status() made public).
+- A comment says why the widget gets PRESS_LOST twice.
+
+What the hold opens is touch_hold_action(), also without LVGL. Tests in
+test_kiln_touch_hold.cpp: the timing (10000 ms, once per press, the gap,
+the re-arm, a stale press, fast taps, the radius, a stuck panel,
+calibration on screen, the tick wrap), the choice of action, and the
+path through calibrated_read_cb with a button (PRESS_LOST, no click,
+wait_until_release, refused during a capture or by the handler).
+
+Upstream: not applicable (Kiln OS specific)
+---
+ include/touch_calibration_wrapper.h   |  12 +-
+ include/touch_hold_gesture.h          | 146 +++++++
+ include/ui_settings_touch.h           |   4 +-
+ src/api/touch_calibration_wrapper.cpp |  47 +--
+ src/application/application.cpp       |  87 +++-
+ tests/unit/test_kiln_touch_hold.cpp   | 571 ++++++++++++++++++++++++++
+ 6 files changed, 833 insertions(+), 34 deletions(-)
+ create mode 100644 include/touch_hold_gesture.h
+ create mode 100644 tests/unit/test_kiln_touch_hold.cpp
+
+diff --git a/include/touch_calibration_wrapper.h b/include/touch_calibration_wrapper.h
+index 43616a9..9f8025a 100644
+--- a/include/touch_calibration_wrapper.h
++++ b/include/touch_calibration_wrapper.h
+@@ -88,7 +88,13 @@ inline constexpr int kTransposedGuessCorroboration = 3;
+ /// LVGL hands the press to a widget, so it works with any calibration.
+ inline constexpr uint32_t kCalibrationHoldMs = 10000;
+ /// A release shorter than this inside a hold is digitizer noise, not a lift.
+-inline constexpr uint32_t kCalibrationHoldGapMs = 200;
++/// Kiln OS: two touch readings (LV_DEF_REFR_PERIOD 33 ms) and a little; 200 ms
++/// joined fast taps on one button into a hold.
++inline constexpr uint32_t kCalibrationHoldGapMs = 70;
++/// Kiln OS: the finger may move this much of the screen's width (height) during
++/// a hold, in driver points before the calibration; further starts it again, so
++/// a scroll or a slider drag is no hold.
++inline constexpr int kCalibrationHoldRadiusPercent = 8;
+ /// After the hold fires, it is armed again only once the panel has reported no
+ /// touch for this long, so a panel that reports a touch all the time does not
+ /// open calibration over and over.
+@@ -99,6 +105,10 @@ inline constexpr uint32_t kCalibrationHoldRearmMs = 3000;
+ /// calibration screen); the press is then ended so the widget under the finger
+ /// gets no click. Returns false to leave the press alone (calibration already
+ /// open). nullptr turns the gesture off.
++/// Kiln OS: nothing fires while a calibration capture is on screen
++/// (CalibrationContext::capture_active: the wizard's touch calibration step
++/// or the Settings overlay), and a press seen then does not fire after it
++/// closes. Timing: TouchHoldGesture (touch_hold_gesture.h).
+ void set_calibration_hold_handler(std::function<bool()> handler);
+ 
+ /// Read callback wrapper that applies affine touch calibration.
+diff --git a/include/touch_hold_gesture.h b/include/touch_hold_gesture.h
+new file mode 100644
+index 0000000..bc8fcf0
+--- /dev/null
++++ b/include/touch_hold_gesture.h
+@@ -0,0 +1,146 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#pragma once
++
++/**
++ * @file touch_hold_gesture.h
++ * @brief Kiln OS: the timing of the hold-to-calibrate gesture
++ *
++ * A finger held still anywhere on the screen opens touch calibration
++ * (set_calibration_hold_handler, touch_calibration_wrapper.h). The read
++ * callback feeds this every touch reading; it says on which reading the hold
++ * fires. No LVGL here, so it is tested on its own
++ * (tests/unit/test_kiln_touch_hold.cpp), as HoldRepeat is.
++ *
++ * - A press starts the timer. Released readings shorter than the gap are
++ *   digitizer noise and do not end the press; a longer release does. So does
++ *   a release followed by a pressed reading after the gap, also when no
++ *   released reading came in between at the gap (readings stopped). Pressed
++ *   readings far apart with no release between (a slow frame) are one press.
++ * - The finger must stay within the radius of where the press began (driver
++ *   points, before the calibration): moving further starts the timer again
++ *   from there, so a scroll, a slider drag or a jog across the pad is no hold.
++ * - The hold fires once, on a pressed reading at least the hold time after
++ *   the press began.
++ * - After that it is spent until the panel has reported no touch for the
++ *   re-arm time, so a panel that reports a touch all the time fires once.
++ * - While a calibration is on screen (blocked) nothing fires, and a press
++ *   seen then spends the gesture too: a finger still down when the
++ *   calibration closes (its own hold-abort, say) does not open it again
++ *   before the re-arm.
++ *
++ * Times are lv_tick_get() milliseconds; unsigned differences, so the tick
++ * may wrap.
++ */
++
++#include <cstdint>
++#include <cstdlib>
++
++namespace helix {
++
++class TouchHoldGesture {
++  public:
++    TouchHoldGesture(uint32_t hold_ms, uint32_t gap_ms, uint32_t rearm_ms)
++        : hold_ms_(hold_ms), gap_ms_(gap_ms), rearm_ms_(rearm_ms) {}
++
++    /// How far (driver points, each axis) the finger may move during a hold.
++    void set_radius(int radius_x, int radius_y) {
++        radius_x_ = radius_x;
++        radius_y_ = radius_y;
++    }
++
++    /// One touch reading at @p now, the driver point @p x, @p y. @p blocked: a
++    /// calibration is on screen. True on the reading where the hold fires.
++    bool feed(bool pressed, int x, int y, uint32_t now, bool blocked = false) {
++        if (!pressed && down_) {
++            release_seen_ = true;
++        }
++        // The press ended: released for the gap, or released and touched
++        // again after it
++        if (down_ && release_seen_ && now - last_pressed_ >= gap_ms_) {
++            down_ = false;
++        }
++        if (spent_ && !down_ && now - last_pressed_ >= rearm_ms_) {
++            spent_ = false;
++        }
++
++        if (pressed) {
++            if (down_ && (std::abs(x - x0_) > radius_x_ || std::abs(y - y0_) > radius_y_)) {
++                down_ = false; // moved away: a hold from here
++            }
++            if (!down_) {
++                down_ = true;
++                down_since_ = now;
++                x0_ = x;
++                y0_ = y;
++            }
++            last_pressed_ = now;
++            release_seen_ = false;
++        }
++
++        if (blocked && down_) {
++            spent_ = true;
++        }
++        if (spent_ || blocked || !down_ || !pressed || now - down_since_ < hold_ms_) {
++            return false;
++        }
++        spent_ = true;
++        return true;
++    }
++
++    /// A press is being timed (or one that fired is still down).
++    bool down() const {
++        return down_;
++    }
++    /// Fired or blocked, and not yet re-armed.
++    bool spent() const {
++        return spent_;
++    }
++
++  private:
++    uint32_t hold_ms_;
++    uint32_t gap_ms_;
++    uint32_t rearm_ms_;
++    int radius_x_ = 64;
++    int radius_y_ = 38;
++    bool down_ = false;
++    bool release_seen_ = false;
++    uint32_t down_since_ = 0;
++    uint32_t last_pressed_ = 0;
++    int x0_ = 0;
++    int y0_ = 0;
++    bool spent_ = false;
++};
++
++/// What a fired hold opens (the application's handler, application.cpp).
++enum class TouchHoldAction {
++    Refuse,     ///< Nothing; the press goes on to the widget as usual
++    WizardStep, ///< The setup wizard's own touch calibration step
++    Overlay,    ///< The Settings touch calibration overlay
++};
++
++struct TouchHoldState {
++    bool has_screen = true;          ///< The application screen exists
++    bool supports_calibration = true; ///< DisplayManager::supports_touch_calibration()
++    bool calibrating = false;        ///< DisplayManager::is_touch_calibration_active()
++    bool overlay_visible = false;    ///< The touch calibration overlay is up
++    bool wizard_active = false;      ///< is_wizard_active()
++    bool wizard_targeted = false;    ///< A targeted wizard session (no touch step)
++};
++
++/// The overlay is never opened over the wizard: closing it hides the screen's
++/// other children (NavigationManager's go_back), the wizard's container
++/// among them. The full wizard goes back to its own first step instead; a
++/// targeted session (Settings > Printer > Run Setup Wizard, SETUP_WIZARD)
++/// has no such step and is left alone.
++inline TouchHoldAction touch_hold_action(const TouchHoldState& s) {
++    if (!s.has_screen || !s.supports_calibration || s.calibrating || s.overlay_visible) {
++        return TouchHoldAction::Refuse;
++    }
++    if (s.wizard_active) {
++        return s.wizard_targeted ? TouchHoldAction::Refuse : TouchHoldAction::WizardStep;
++    }
++    return TouchHoldAction::Overlay;
++}
++
++} // namespace helix
+diff --git a/include/ui_settings_touch.h b/include/ui_settings_touch.h
+index 18f3717..abbfa0a 100644
+--- a/include/ui_settings_touch.h
++++ b/include/ui_settings_touch.h
+@@ -36,10 +36,12 @@ class TouchSettingsOverlay : public OverlayBase {
+     void deinit_subjects();
+     void register_callbacks() override;
+     void on_activate() override;
++    /// Kiln OS: public for the hold to calibrate (application.cpp), whose
++    /// calibration may finish with this overlay open underneath
++    void refresh_calibration_status();
+ 
+   private:
+     void init_input_sliders();
+-    void refresh_calibration_status();
+     void show_calibration_status(bool calibrated);
+     void handle_touch_calibration_clicked();
+ 
+diff --git a/src/api/touch_calibration_wrapper.cpp b/src/api/touch_calibration_wrapper.cpp
+index d59e0f6..526880c 100644
+--- a/src/api/touch_calibration_wrapper.cpp
++++ b/src/api/touch_calibration_wrapper.cpp
+@@ -6,6 +6,7 @@
+ #include "display_backend.h"
+ #include "helix_display_telemetry.h"
+ #include "pointer_frame_hook.h"
++#include "touch_hold_gesture.h"
+ 
+ #include "lvgl/src/indev/lv_indev_private.h" // pointer.act_obj: no public getter outside dispatch
+ 
+@@ -143,43 +144,31 @@ void note_raw_sample(CalibrationContext& ctx, int raw_x, int raw_y) {
+ }
+ 
+ /// The hold-to-calibrate gesture (set_calibration_hold_handler). LVGL thread only.
++/// The timing is TouchHoldGesture (touch_hold_gesture.h).
+ struct CalibrationHold {
+     std::function<bool()> handler;
+-    bool down = false;          ///< A press is being timed
+-    uint32_t down_since = 0;    ///< When it started
+-    uint32_t last_pressed = 0;  ///< Last read that reported a press
+-    bool fired = false;         ///< Fired; waiting for a quiet panel to re-arm
++    TouchHoldGesture gesture{kCalibrationHoldMs, kCalibrationHoldGapMs, kCalibrationHoldRearmMs};
+ };
+ CalibrationHold s_hold;
+ 
+ /// Time a press for the hold gesture. Runs on every read, ahead of LVGL's
+ /// processing of it, so ending the press here keeps it from reaching a widget.
+-void track_calibration_hold(lv_indev_t* indev, const lv_indev_data_t* data) {
++/// @p capture_active: a calibration capture is on screen (the wizard's touch
++/// calibration step or the Settings overlay); nothing fires then.
++void track_calibration_hold(lv_indev_t* indev, const lv_indev_data_t* data,
++                            const CalibrationContext& ctx) {
+     if (!s_hold.handler) {
+         return;
+     }
+-    const uint32_t now = lv_tick_get();
+-    if (data->state == LV_INDEV_STATE_PRESSED) {
+-        if (!s_hold.down) {
+-            s_hold.down = true;
+-            s_hold.down_since = now;
+-        }
+-        s_hold.last_pressed = now;
+-    } else if (s_hold.down && lv_tick_diff(now, s_hold.last_pressed) >= kCalibrationHoldGapMs) {
+-        s_hold.down = false;
+-    }
+-
+-    if (s_hold.fired) {
+-        if (!s_hold.down && lv_tick_diff(now, s_hold.last_pressed) >= kCalibrationHoldRearmMs) {
+-            s_hold.fired = false;
+-        }
+-        return;
+-    }
+-    if (!s_hold.down || data->state != LV_INDEV_STATE_PRESSED ||
+-        lv_tick_diff(now, s_hold.down_since) < kCalibrationHoldMs) {
++    s_hold.gesture.set_radius(ctx.screen_width * kCalibrationHoldRadiusPercent / 100,
++                              ctx.screen_height * kCalibrationHoldRadiusPercent / 100);
++    // capture_active is written on this thread too (set_touch_capture_active),
++    // so reading it without the diagnostics lock cannot miss a change.
++    if (!s_hold.gesture.feed(data->state == LV_INDEV_STATE_PRESSED,
++                             static_cast<int>(data->point.x), static_cast<int>(data->point.y),
++                             lv_tick_get(), ctx.capture_active)) {
+         return;
+     }
+-    s_hold.fired = true;
+     if (!s_hold.handler()) {
+         return;
+     }
+@@ -187,6 +176,11 @@ void track_calibration_hold(lv_indev_t* indev, const lv_indev_data_t* data) {
+                  kCalibrationHoldMs / 1000);
+     // The widget under the finger loses the press now (a jog pad stops its hold
+     // repeat on PRESS_LOST), and the release that follows is not a click.
++    // Kiln OS: the widget gets PRESS_LOST twice, on purpose: now, so a hold
++    // repeat or drag stops at once, and again from LVGL at the release
++    // (lv_indev.c indev_proc_release, wait_until_release). The handlers in the
++    // tree (jog pad, fan dial, bed mesh, grid edit, IFS slot, LVGL's slider and
++    // arc) only end what is under way, so the second one does nothing.
+     if (lv_obj_t* obj = indev->pointer.act_obj) {
+         lv_obj_send_event(obj, LV_EVENT_PRESS_LOST, indev);
+     }
+@@ -249,7 +243,8 @@ void calibrated_read_cb(lv_indev_t* indev, lv_indev_data_t* data) {
+         }
+     }
+ 
+-    track_calibration_hold(indev, data);
++    // The driver's point, before the affine below
++    track_calibration_hold(indev, data, *ctx);
+ 
+     // Apply affine calibration if valid (for both PRESSED and RELEASED states)
+     if (ctx->calibration.valid) {
+diff --git a/src/application/application.cpp b/src/application/application.cpp
+index 2fce0fb..0562271 100644
+--- a/src/application/application.cpp
++++ b/src/application/application.cpp
+@@ -153,6 +153,8 @@
+ #include "ui_tile_rung.h"
+ #include "ui_toast_manager.h"
+ #include "touch_calibration_wrapper.h"
++#include "touch_hold_gesture.h"
++#include "ui_settings_touch.h"
+ #include "ui_touch_calibration_overlay.h"
+ #include "ui_utils.h"
+ #include "ui_wizard.h"
+@@ -396,6 +398,28 @@ void graceful_quit_signal_handler(int sig) {
+     app_request_quit_signal_safe();
+ }
+ 
++/// Kiln OS: the hold to calibrate closes open dialogs before calibration
++/// opens: NavigationManager keeps modals above every overlay pushed under
++/// them, and the calibration's Accept and Retry would stay covered. Closed as
++/// a system sweep (External), so a dialog that waits for an answer sees a
++/// dismissal (the reinstall offer, patch 0088, asks again at the next start).
++/// As RemoteControlServer's reset: one top dialog at a time, at most 16.
++void close_dialogs_for_touch_calibration() {
++    constexpr int kMaxModalDepth = 16;
++    int closed = 0;
++    while (!ModalStack::instance().empty() && closed < kMaxModalDepth) {
++        lv_obj_t* top = Modal::get_top();
++        if (!top) {
++            break;
++        }
++        Modal::hide(top, ModalCloseReason::External);
++        ++closed;
++    }
++    if (closed > 0) {
++        spdlog::info("[Application] Closed {} dialog(s) for touch calibration", closed);
++    }
++}
++
+ } // namespace
+ 
+ // C bridge functions called from SDL event handler (lv_sdl_window.c)
+@@ -896,20 +920,71 @@ int Application::run(int argc, char** argv) {
+         // the only input, so a calibration that does not fit the panel must be
+         // fixable without hitting anything in particular. Any screen, wizard
+         // included; not while calibration is already open.
++        //
++        // Kiln OS: not while any calibration capture runs (the wizard's step
++        // too, DisplayManager::is_touch_calibration_active). In the setup
++        // wizard the wizard's own touch step opens instead: closing the overlay
++        // would hide the wizard's container (NavigationManager's go_back hides
++        // the screen's other children). Open dialogs are closed first, as a
++        // dismissal: they would sit above the overlay's Accept and Retry.
+         helix::set_calibration_hold_handler([this]() {
+             DisplayManager* dm = DisplayManager::instance();
+-            if (!m_screen || (dm && !dm->supports_touch_calibration()) ||
+-                helix::ui::get_touch_calibration_overlay().is_visible()) {
++            helix::TouchHoldState state;
++            state.has_screen = m_screen != nullptr;
++            state.supports_calibration = !dm || dm->supports_touch_calibration();
++            state.calibrating = dm && dm->is_touch_calibration_active();
++            state.overlay_visible = helix::ui::get_touch_calibration_overlay().is_visible();
++            state.wizard_active = is_wizard_active();
++            state.wizard_targeted = !ui_wizard_active_step_subset().empty();
++            const helix::TouchHoldAction action = helix::touch_hold_action(state);
++            if (action == helix::TouchHoldAction::Refuse) {
++                spdlog::info("[Application] Screen held: touch calibration not opened "
++                             "(calibrating={} overlay={} wizard={} targeted={})",
++                             state.calibrating, state.overlay_visible, state.wizard_active,
++                             state.wizard_targeted);
+                 return false;
+             }
++            if (action == helix::TouchHoldAction::WizardStep) {
++                lv_async_call(
++                    [](void*) {
++                        close_dialogs_for_touch_calibration();
++                        DisplayManager* d = DisplayManager::instance();
++                        if (!is_wizard_active() || !ui_wizard_active_step_subset().empty() ||
++                            (d && d->is_touch_calibration_active())) {
++                            return;
++                        }
++                        // Shown even when a calibration is saved (the step skips
++                        // itself then); commits on Next as at a first start
++                        force_touch_calibration_step(true);
++                        ui_wizard_navigate_to_step(helix::wizard::StepId::TouchCalibration);
++                    },
++                    nullptr);
++                return true;
++            }
+             lv_async_call(
+-                [](void* screen) {
++                [](void* app) {
++                    auto* self = static_cast<Application*>(app);
+                     auto& overlay = helix::ui::get_touch_calibration_overlay();
+-                    if (!overlay.is_visible()) {
+-                        overlay.show(static_cast<lv_obj_t*>(screen), nullptr);
++                    if (overlay.is_visible() || !self->m_screen) {
++                        return;
+                     }
++                    close_dialogs_for_touch_calibration();
++                    // As Settings > Touch & Input and --calibrate-touch do on success
++                    overlay.show(self->m_screen, [self](bool success) {
++                        if (!success) {
++                            return;
++                        }
++                        helix::settings::get_touch_settings_overlay().refresh_calibration_status();
++                        if (self->m_config &&
++                            self->m_config->get<bool>("/input/force_calibration", false)) {
++                            self->m_config->set<bool>("/input/force_calibration", false);
++                            self->m_config->save();
++                            spdlog::info("[Application] Cleared force_calibration config flag "
++                                         "after success");
++                        }
++                    });
+                 },
+-                m_screen);
++                this);
+             return true;
+         });
+ 
+diff --git a/tests/unit/test_kiln_touch_hold.cpp b/tests/unit/test_kiln_touch_hold.cpp
+new file mode 100644
+index 0000000..bb7b04b
+--- /dev/null
++++ b/tests/unit/test_kiln_touch_hold.cpp
+@@ -0,0 +1,571 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++/**
++ * Kiln OS: holding a finger still anywhere on the screen for 10 s opens touch
++ * calibration (patches 0089 and 0090, issue #90).
++ *
++ * The timing (TouchHoldGesture) is fed readings at a fixed poll rate, as the
++ * touch panel's read callback is; the application's choice of what to open
++ * (touch_hold_action); then the whole path through calibrated_read_cb and
++ * LVGL's input processing, with a button under the finger.
++ */
++
++#include "../lvgl_test_fixture.h"
++#include "lvgl/src/indev/lv_indev_private.h"
++#include "touch_calibration_wrapper.h"
++#include "touch_hold_gesture.h"
++
++#include <cstdint>
++
++#include "../catch_amalgamated.hpp"
++
++using helix::kCalibrationHoldGapMs;
++using helix::kCalibrationHoldMs;
++using helix::kCalibrationHoldRadiusPercent;
++using helix::kCalibrationHoldRearmMs;
++using helix::touch_hold_action;
++using helix::TouchHoldAction;
++using helix::TouchHoldGesture;
++using helix::TouchHoldState;
++
++namespace {
++
++constexpr uint32_t kPollMs = 10;
++constexpr int kRadiusX = 800 * kCalibrationHoldRadiusPercent / 100; // 64
++constexpr int kRadiusY = 480 * kCalibrationHoldRadiusPercent / 100; // 38
++
++TouchHoldGesture make_gesture() {
++    TouchHoldGesture g{kCalibrationHoldMs, kCalibrationHoldGapMs, kCalibrationHoldRearmMs};
++    g.set_radius(kRadiusX, kRadiusY);
++    return g;
++}
++
++/// Readings every `poll` ms into one gesture, counting the fires. A span of
++/// `ms` gives ms / poll readings, the first one `poll` after the last.
++struct Panel {
++    explicit Panel(uint32_t start = 1000, uint32_t poll_ms = kPollMs)
++        : now(start), poll(poll_ms) {}
++
++    int run(uint32_t ms, bool pressed, bool blocked = false) {
++        int fired = 0;
++        for (uint32_t t = 0; t < ms; t += poll) {
++            now += poll;
++            if (gesture.feed(pressed, x, y, now, blocked)) {
++                ++fired;
++                ++fires;
++                last_fire = now;
++            }
++        }
++        return fired;
++    }
++    int press(uint32_t ms, bool blocked = false) {
++        return run(ms, true, blocked);
++    }
++    int release(uint32_t ms, bool blocked = false) {
++        return run(ms, false, blocked);
++    }
++    /// No readings at all for @p ms (the read timer stalled or paused)
++    void silence(uint32_t ms) {
++        now += ms;
++    }
++
++    TouchHoldGesture gesture = make_gesture();
++    uint32_t now;
++    uint32_t poll;
++    int x = 400;
++    int y = 240;
++    int fires = 0;
++    uint32_t last_fire = 0;
++};
++
++} // namespace
++
++TEST_CASE("Kiln touch hold: the times", "[touch][kiln][touch-hold]") {
++    CHECK(kCalibrationHoldMs == 10000);
++    CHECK(kCalibrationHoldGapMs == 70);
++    CHECK(kCalibrationHoldRearmMs == 3000);
++    CHECK(kCalibrationHoldRadiusPercent == 8);
++}
++
++TEST_CASE("Kiln touch hold: fires at 10000 ms, not 9999, once per press",
++          "[touch][kiln][touch-hold]") {
++    TouchHoldGesture g = make_gesture();
++    const uint32_t t0 = 5000;
++    CHECK_FALSE(g.feed(true, 400, 240, t0));
++    CHECK_FALSE(g.feed(true, 400, 240, t0 + 5000));
++    CHECK_FALSE(g.feed(true, 400, 240, t0 + 9999));
++    CHECK(g.feed(true, 400, 240, t0 + 10000));
++    CHECK(g.spent());
++    CHECK_FALSE(g.feed(true, 400, 240, t0 + 10001));
++    CHECK_FALSE(g.feed(true, 400, 240, t0 + 60000));
++}
++
++TEST_CASE("Kiln touch hold: held on or released, no second fire", "[touch][kiln][touch-hold]") {
++    Panel p;
++    p.release(1000);
++    CHECK(p.press(kCalibrationHoldMs) == 0); // readings at 0 .. 9990 ms
++    CHECK(p.press(kPollMs) == 1);            // the one at 10000 ms
++
++    SECTION("held on") {
++        CHECK(p.press(60000) == 0);
++    }
++    SECTION("released") {
++        CHECK(p.release(kCalibrationHoldRearmMs + 1000) == 0);
++    }
++    CHECK(p.fires == 1);
++}
++
++TEST_CASE("Kiln touch hold: a release under the gap is bridged, a longer one is not",
++          "[touch][kiln][touch-hold]") {
++    Panel p;
++
++    SECTION("lifted 60 ms (last pressed to next pressed): one press") {
++        CHECK(p.press(5000) == 0);                         // up to 4990
++        CHECK(p.release(kCalibrationHoldGapMs - 20) == 0); // 5000 .. 5040
++        CHECK(p.gesture.down());
++        CHECK(p.press(10000 - 5050) == 0); // 5050 .. 9990
++        CHECK(p.press(kPollMs) == 1);      // 10000
++    }
++    SECTION("released readings for 70 ms: the press ended") {
++        CHECK(p.press(9000) == 0);
++        CHECK(p.release(kCalibrationHoldGapMs) == 0);
++        CHECK_FALSE(p.gesture.down());
++        CHECK(p.press(kCalibrationHoldMs) == 0);
++        CHECK(p.press(kPollMs) == 1);
++    }
++    SECTION("at the panel's 33 ms: two released readings are noise, three a lift") {
++        Panel q(1000, 33);
++        CHECK(q.press(3300) == 0);
++        CHECK(q.release(66) == 0); // two readings
++        CHECK(q.gesture.down());
++        CHECK(q.press(3300) == 0);
++        CHECK(q.release(99) == 0); // three
++        CHECK_FALSE(q.gesture.down());
++    }
++    SECTION("a short release at 10 s: fires on the next pressed reading, not during it") {
++        CHECK(p.press(kCalibrationHoldMs - 30) == 0); // up to 9960
++        CHECK(p.release(40) == 0);                     // 9970 .. 10000
++        CHECK(p.press(kPollMs) == 1);
++    }
++}
++
++TEST_CASE("Kiln touch hold: armed again only after 3000 ms with no touch",
++          "[touch][kiln][touch-hold]") {
++    Panel p;
++    REQUIRE(p.press(kCalibrationHoldMs + kPollMs) == 1); // last pressed at 10000
++
++    SECTION("lifted 2990 ms (last pressed to next pressed): still spent") {
++        CHECK(p.release(kCalibrationHoldRearmMs - 20) == 0);
++        CHECK(p.gesture.spent());
++        CHECK(p.press(kCalibrationHoldMs * 3) == 0);
++    }
++    SECTION("taps less than 3 s apart keep it spent") {
++        for (int i = 0; i < 20; ++i) {
++            CHECK(p.release(2000) == 0);
++            CHECK(p.press(100) == 0);
++        }
++        CHECK(p.press(kCalibrationHoldMs + 1000) == 0);
++    }
++    SECTION("3000 ms: armed, and a 10 s hold fires again") {
++        CHECK(p.release(kCalibrationHoldRearmMs) == 0);
++        CHECK_FALSE(p.gesture.spent());
++        CHECK(p.press(kCalibrationHoldMs) == 0);
++        CHECK(p.press(kPollMs) == 1);
++        CHECK(p.fires == 2);
++    }
++    SECTION("re-armed after a silence with no readings at all") {
++        CHECK(p.release(kPollMs) == 0);
++        p.silence(kCalibrationHoldRearmMs);
++        CHECK(p.press(kCalibrationHoldMs) == 0);
++        CHECK(p.press(kPollMs) == 1);
++    }
++}
++
++TEST_CASE("Kiln touch hold: a pressed reading after a long gap starts a new press",
++          "[touch][kiln][touch-hold]") {
++    Panel p;
++
++    SECTION("a release seen, then no readings, then a new tap") {
++        CHECK(p.press(8000) == 0);
++        CHECK(p.release(kPollMs) == 0); // one released reading: not yet a lift
++        p.silence(5000);                // readings stopped (event-driven indev)
++        CHECK(p.press(2100) == 0);      // would be 10 s since the first press
++        CHECK(p.press(kCalibrationHoldMs - 2100) == 0);
++        CHECK(p.press(kPollMs) == 1); // 10 s after the new tap
++    }
++    SECTION("slow frames: pressed readings 500 ms apart, no release, are one press") {
++        Panel q(1000, 500);
++        CHECK(q.press(kCalibrationHoldMs) == 0);
++        CHECK(q.press(500) == 1);
++    }
++}
++
++TEST_CASE("Kiln touch hold: fast taps do not fire", "[touch][kiln][touch-hold]") {
++    Panel p;
++
++    SECTION("5 taps a second for 30 s") {
++        for (int i = 0; i < 150; ++i) {
++            p.press(100);
++            p.release(100);
++        }
++    }
++    SECTION("at the panel's 33 ms, lifts of three readings") {
++        Panel q(1000, 33);
++        for (int i = 0; i < 100; ++i) {
++            q.press(165);
++            q.release(99);
++        }
++        CHECK(q.fires == 0);
++    }
++    CHECK(p.fires == 0);
++}
++
++TEST_CASE("Kiln touch hold: moving beyond the radius starts the hold again",
++          "[touch][kiln][touch-hold]") {
++    Panel p;
++
++    SECTION("a slow drift within the radius is still a hold") {
++        for (int i = 0; i < 10; ++i) {
++            p.x = 400 + i * 6; // 54 points over the hold
++            p.y = 240 - i * 3;
++            p.press(1000);
++        }
++        CHECK(p.press(kPollMs) == 1);
++    }
++    SECTION("past the radius in x") {
++        CHECK(p.press(6000) == 0);
++        p.x += kRadiusX + 1;
++        CHECK(p.press(kCalibrationHoldMs) == 0); // timed from the move
++        CHECK(p.press(kPollMs) == 1);
++    }
++    SECTION("past the radius in y") {
++        CHECK(p.press(6000) == 0);
++        p.y -= kRadiusY + 1;
++        CHECK(p.press(kCalibrationHoldMs) == 0);
++        CHECK(p.press(kPollMs) == 1);
++    }
++    SECTION("a slider drag back and forth for 30 s") {
++        for (int i = 0; i < 300; ++i) {
++            p.x = 100 + (i % 20) * 30;
++            CHECK(p.press(100) == 0);
++        }
++    }
++}
++
++TEST_CASE("Kiln touch hold: a panel stuck on a touch opens calibration once",
++          "[touch][kiln][touch-hold]") {
++    Panel p;
++
++    SECTION("pressed from the start, for 10 minutes") {
++        p.press(10 * 60 * 1000);
++    }
++    SECTION("pressed, with dropouts under the gap every second") {
++        for (int i = 0; i < 600; ++i) {
++            p.press(950);
++            p.release(50);
++        }
++    }
++    SECTION("pressed, with dropouts of 1 s (longer than the gap, shorter than the re-arm)") {
++        p.press(kCalibrationHoldMs);
++        for (int i = 0; i < 300; ++i) {
++            p.release(1000);
++            p.press(kCalibrationHoldMs + 1000);
++        }
++    }
++    SECTION("pressed, jumping around") {
++        for (int i = 0; i < 600; ++i) {
++            p.x = (i * 37) % 800;
++            p.press(1000);
++        }
++        // A jump every second: never 10 s in one place
++        CHECK(p.fires == 0);
++        p.press(kCalibrationHoldMs * 3);
++    }
++    CHECK(p.fires == 1);
++}
++
++TEST_CASE("Kiln touch hold: nothing fires while calibration is on screen",
++          "[touch][kiln][touch-hold]") {
++    Panel p;
++
++    SECTION("a hold on the calibration screen") {
++        CHECK(p.press(kCalibrationHoldMs * 3, true) == 0);
++    }
++    SECTION("the calibration closes under the finger (its own hold-abort): still nothing") {
++        CHECK(p.press(5000, true) == 0);
++        CHECK(p.press(kCalibrationHoldMs * 2, false) == 0);
++        CHECK(p.release(kCalibrationHoldRearmMs - 100) == 0);
++        CHECK(p.press(kCalibrationHoldMs * 2) == 0);
++    }
++    SECTION("calibration taps, then a hold within 3 s of the last tap") {
++        for (int i = 0; i < 4; ++i) {
++            CHECK(p.press(100, true) == 0);
++            CHECK(p.release(800, true) == 0);
++        }
++        // Accept tapped: calibration closes
++        CHECK(p.press(100, true) == 0);
++        CHECK(p.release(1000, false) == 0);
++        CHECK(p.press(kCalibrationHoldMs + 1000) == 0);
++    }
++    SECTION("a hold under way when a calibration opens") {
++        CHECK(p.press(5000) == 0);
++        CHECK(p.press(kCalibrationHoldMs, true) == 0);
++        CHECK(p.press(kCalibrationHoldMs, false) == 0);
++    }
++    CHECK(p.fires == 0);
++
++    SECTION("after calibration and 3 s with no touch the hold works again") {
++        CHECK(p.press(500, true) == 0);
++        CHECK(p.release(kCalibrationHoldRearmMs, false) == 0);
++        CHECK(p.press(kCalibrationHoldMs + kPollMs) == 1);
++    }
++}
++
++TEST_CASE("Kiln touch hold: taps and long presses do not fire", "[touch][kiln][touch-hold]") {
++    Panel p;
++
++    SECTION("a short tap") {
++        CHECK(p.press(80) == 0);
++        CHECK(p.release(kCalibrationHoldMs * 2) == 0);
++    }
++    SECTION("a 500 ms long press") {
++        CHECK(p.press(500) == 0);
++        CHECK(p.release(kCalibrationHoldMs * 2) == 0);
++    }
++    SECTION("taps and long presses for a minute, with lifts between them") {
++        for (int i = 0; i < 60; ++i) {
++            CHECK(p.press(i % 2 ? 500 : 80) == 0);
++            CHECK(p.release(400) == 0);
++        }
++    }
++    SECTION("a 9.9 s hold") {
++        CHECK(p.press(kCalibrationHoldMs - 100) == 0);
++        CHECK(p.release(1000) == 0);
++    }
++    CHECK(p.fires == 0);
++    CHECK_FALSE(p.gesture.spent());
++}
++
++TEST_CASE("Kiln touch hold: the tick may wrap", "[touch][kiln][touch-hold]") {
++    Panel p(UINT32_MAX - 4000);
++    CHECK(p.press(kCalibrationHoldMs) == 0);
++    CHECK(p.press(kPollMs) == 1);
++    CHECK(p.release(kCalibrationHoldRearmMs) == 0);
++    CHECK_FALSE(p.gesture.spent());
++    CHECK(p.press(kCalibrationHoldMs) == 0);
++    CHECK(p.press(kPollMs) == 1);
++}
++
++TEST_CASE("Kiln touch hold: what the application opens", "[touch][kiln][touch-hold]") {
++    TouchHoldState s;
++    CHECK(touch_hold_action(s) == TouchHoldAction::Overlay);
++
++    SECTION("refused while any calibration capture runs") {
++        s.calibrating = true;
++        CHECK(touch_hold_action(s) == TouchHoldAction::Refuse);
++        s.wizard_active = true;
++        CHECK(touch_hold_action(s) == TouchHoldAction::Refuse);
++    }
++    SECTION("refused while the overlay is up") {
++        s.overlay_visible = true;
++        CHECK(touch_hold_action(s) == TouchHoldAction::Refuse);
++    }
++    SECTION("refused without a calibratable touch panel or a screen") {
++        s.supports_calibration = false;
++        CHECK(touch_hold_action(s) == TouchHoldAction::Refuse);
++        s.supports_calibration = true;
++        s.has_screen = false;
++        CHECK(touch_hold_action(s) == TouchHoldAction::Refuse);
++    }
++    SECTION("in the setup wizard: its own touch step, never the overlay") {
++        s.wizard_active = true;
++        CHECK(touch_hold_action(s) == TouchHoldAction::WizardStep);
++    }
++    SECTION("in a targeted wizard session (no touch step): refused") {
++        s.wizard_active = true;
++        s.wizard_targeted = true;
++        CHECK(touch_hold_action(s) == TouchHoldAction::Refuse);
++    }
++}
++
++// --- Through calibrated_read_cb and LVGL --------------------------------------
++
++namespace {
++
++struct Finger {
++    bool down = false;
++    lv_point_t at{150, 75};
++};
++Finger s_finger;
++
++void finger_read(lv_indev_t* /*indev*/, lv_indev_data_t* data) {
++    data->point = s_finger.at;
++    data->state = s_finger.down ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
++}
++
++struct ButtonEvents {
++    int pressed = 0;
++    int long_pressed = 0;
++    int press_lost = 0;
++    int released = 0;
++    int clicked = 0;
++};
++
++void count_event(lv_event_t* e) {
++    auto* ev = static_cast<ButtonEvents*>(lv_event_get_user_data(e));
++    switch (lv_event_get_code(e)) {
++    case LV_EVENT_PRESSED:
++        ++ev->pressed;
++        break;
++    case LV_EVENT_LONG_PRESSED:
++        ++ev->long_pressed;
++        break;
++    case LV_EVENT_PRESS_LOST:
++        ++ev->press_lost;
++        break;
++    case LV_EVENT_RELEASED:
++        ++ev->released;
++        break;
++    case LV_EVENT_CLICKED:
++        ++ev->clicked;
++        break;
++    default:
++        break;
++    }
++}
++
++class TouchHoldFixture : public LVGLTestFixture {
++  public:
++    TouchHoldFixture() {
++        s_finger = Finger{};
++        touch = lv_indev_create();
++        lv_indev_set_type(touch, LV_INDEV_TYPE_POINTER);
++        lv_indev_set_read_cb(touch, finger_read);
++        // Read by hand below, one reading per tick step
++        lv_timer_pause(lv_indev_get_read_timer(touch));
++        helix::TouchCalibration cal; // not valid: points pass through
++        helix::install_calibration_wrapper(touch, context, cal, kTestDisplayWidth,
++                                           kTestDisplayHeight);
++        helix::set_calibration_hold_handler([this]() {
++            ++handler_calls;
++            return handler_takes;
++        });
++
++        button = lv_button_create(test_screen());
++        lv_obj_set_pos(button, 100, 50);
++        lv_obj_set_size(button, 100, 50);
++        lv_obj_add_event_cb(button, count_event, LV_EVENT_ALL, &events);
++        lv_obj_update_layout(test_screen());
++    }
++    ~TouchHoldFixture() override {
++        helix::set_calibration_hold_handler(nullptr);
++        helix::uninstall_calibration_wrapper(touch, context);
++        lv_indev_delete(touch);
++    }
++
++    /// @p ms of readings with the finger down or up
++    void hold(uint32_t ms, bool down) {
++        s_finger.down = down;
++        for (uint32_t t = 0; t < ms; t += kPollMs) {
++            lv_tick_inc(kPollMs);
++            lv_indev_read(touch);
++        }
++    }
++
++    lv_indev_t* touch = nullptr;
++    helix::CalibrationContext context;
++    lv_obj_t* button = nullptr;
++    ButtonEvents events;
++    int handler_calls = 0;
++    bool handler_takes = true;
++};
++
++} // namespace
++
++TEST_CASE_METHOD(TouchHoldFixture,
++                 "Kiln touch hold: a 10 s hold on a button opens calibration, no click",
++                 "[touch][kiln][touch-hold]") {
++    hold(kCalibrationHoldMs - 100, true);
++    CHECK(handler_calls == 0);
++    CHECK(events.pressed == 1);
++    CHECK(events.long_pressed == 1); // the button's own long press still acts
++    CHECK(events.press_lost == 0);
++
++    hold(200, true);
++    CHECK(handler_calls == 1);
++    CHECK(events.press_lost >= 1); // at once, not only at the release
++    CHECK(touch->wait_until_release);
++
++    hold(5000, true);
++    hold(500, false);
++    CHECK(handler_calls == 1);
++    CHECK(events.released == 0);
++    CHECK(events.clicked == 0);
++    CHECK_FALSE(touch->wait_until_release);
++
++    // The next tap after the re-arm time is a plain click again
++    hold(kCalibrationHoldRearmMs, false);
++    hold(80, true);
++    hold(200, false);
++    CHECK(events.clicked == 1);
++    CHECK(handler_calls == 1);
++}
++
++TEST_CASE_METHOD(TouchHoldFixture, "Kiln touch hold: not while a calibration capture is on screen",
++                 "[touch][kiln][touch-hold]") {
++    // What DisplayManager::set_capture_active() sets beside
++    // is_touch_calibration_active(), for the wizard's step and the overlay
++    helix::set_touch_capture_active(true);
++    hold(kCalibrationHoldMs * 2, true);
++    CHECK(handler_calls == 0);
++    CHECK(events.press_lost == 0);
++    CHECK_FALSE(touch->wait_until_release);
++    hold(200, false);
++    CHECK(events.released == 1);
++
++    // Closed while the finger is down: that press never fires
++    hold(1000, true);
++    helix::set_touch_capture_active(false);
++    hold(kCalibrationHoldMs * 2, true);
++    CHECK(handler_calls == 0);
++    hold(200, false);
++    CHECK(events.released == 2);
++}
++
++TEST_CASE_METHOD(TouchHoldFixture,
++                 "Kiln touch hold: a hold the handler refuses leaves the press alone",
++                 "[touch][kiln][touch-hold]") {
++    handler_takes = false; // calibration already open, a targeted wizard, no touch panel
++    hold(kCalibrationHoldMs + 1000, true);
++    CHECK(handler_calls == 1);
++    CHECK(events.press_lost == 0);
++    CHECK_FALSE(touch->wait_until_release);
++    hold(200, false);
++    CHECK(events.released == 1);
++
++    // Refused counts as fired: no retry every reading, nor before the re-arm
++    hold(kCalibrationHoldMs + 1000, true);
++    CHECK(handler_calls == 1);
++}
++
++TEST_CASE_METHOD(TouchHoldFixture, "Kiln touch hold: a tap, a long press and a drag stay what they are",
++                 "[touch][kiln][touch-hold]") {
++    hold(80, true);
++    hold(300, false);
++    CHECK(events.clicked == 1);
++
++    hold(500, true);
++    hold(300, false);
++    CHECK(events.long_pressed == 1);
++    CHECK(events.released == 2);
++
++    // A finger dragged around the screen for 15 s
++    s_finger.down = true;
++    for (int i = 0; i < 1500; ++i) {
++        s_finger.at = {static_cast<int32_t>(100 + (i / 20 % 10) * 70), 200};
++        lv_tick_inc(kPollMs);
++        lv_indev_read(touch);
++    }
++    hold(300, false);
++    CHECK(handler_calls == 0);
++}
+-- 
+2.56.0
+

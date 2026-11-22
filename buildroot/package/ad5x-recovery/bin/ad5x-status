@@ -9,7 +9,9 @@
 # net_if, net_ip (address/prefix, empty without a link), ssh (running|stopped),
 # swupdate (running|stopped), web_port, ui (running|absent|stopped),
 # update_pending (.swu files waiting in /data/ad5x/update), update_last (last
-# line of /data/ad5x/update/last.log), auto (running|done), stock_saved
+# line of /data/ad5x/update/last.log), auto (running|done|off: the start-up
+# actions, ad5x-recovery-auto, still running, done, or skipped by
+# /data/ad5x/recovery/noauto; jobs that need them done wait), stock_saved
 # (yes|no: /data/ad5x/stock), vendor (ok|missing|damaged: the printer's own
 # drivers in /data/ad5x/vendor), usb (count of mounted USB partitions; details:
 # ad5x-usb list), data (mounted|tmpfs), main_trace (last line of the main
@@ -18,12 +20,15 @@
 # /data/ad5x/return-stock/state), return_stock_open (request|usb, empty:
 # the page to open at start, ad5x-recovery-auto), bootloader_install
 # (none|started|installed|verified|unverified|removed: Kiln's own boot loader,
-# /data/ad5x/bootloader/state), bootloader_open (result|resume, empty: its
+# /data/ad5x/bootloader/state), bootloader_kind (install|upgrade, empty:
+# what that record's run was), bootloader_open (result|resume, empty: its
 # page to open at start, ad5x-bootloader-install --verify-start). With
-# --slots also bootloader (flashforge|kiln|kiln-spl|unknown) and
-# bootloader_offer (yes|no: "Install Kiln's boot loader" offered, the board
-# on the allowlist and, for now, /data/ad5x/bootloader-offer.enable there,
-# or an install stopped part-way; ad5x-bootloader-install --offer).
+# --slots also bootloader (flashforge|kiln|kiln-spl|unknown),
+# bootloader_upgrade (yes|no: "Update Kiln's boot loader" offered, Kiln's
+# boot loader of another build there to upgrade) and bootloader_offer
+# (yes|no: "Install Kiln's boot loader" offered, the board on the allowlist
+# and, for now, /data/ad5x/bootloader-offer.enable there, or an install
+# stopped part-way; ad5x-bootloader-install --offer).
 . /usr/lib/ad5x-recovery/recovery.sh
 running() { pidof "$1" >/dev/null && echo running || echo stopped; }
 echo "release=$(cat /etc/ad5x-release 2>/dev/null)"
@@ -49,7 +54,9 @@ echo "web_port=8080"
 if [ -x /usr/bin/ad5x-recovery-ui ]; then echo "ui=$(running ad5x-recovery-ui)"; else echo "ui=absent"; fi
 echo "update_pending=$(ls "$AD5X_DATA"/ad5x/update/*.swu 2>/dev/null | tr '\n' ' ')"
 echo "update_last=$(tail -n 1 "$AD5X_DATA/ad5x/update/last.log" 2>/dev/null)"
-[ -f "$AD5X_RUN/auto.done" ] && echo "auto=done" || echo "auto=running"
+if [ -f "$AD5X_RUN/auto.done" ]; then echo "auto=done"
+elif [ -e "$AD5X_DATA/ad5x/recovery/noauto" ]; then echo "auto=off"
+else echo "auto=running"; fi
 [ -f "$AD5X_DATA/ad5x/stock/rootfs.squashfs" ] && echo "stock_saved=yes" || echo "stock_saved=no"
 echo "vendor=$(AD5X_DATA=$AD5X_DATA ad5x-vendor status 2>/dev/null | sed -n 's/^vendor=//p')"
 echo "usb=$(rc_usb_mounts | wc -l | tr -d ' ')"
@@ -63,6 +70,7 @@ esac
 echo "return_stock_open=$(cat "$AD5X_RUN/return-stock.open" 2>/dev/null)"
 bl=$(sed -n 's/^state=//p' "$AD5X_DATA/ad5x/bootloader/state" 2>/dev/null)
 echo "bootloader_install=${bl:-none}"
+echo "bootloader_kind=$(sed -n 's/^kind=//p' "$AD5X_DATA/ad5x/bootloader/state" 2>/dev/null)"
 echo "bootloader_open=$(cat "$AD5X_RUN/bootloader.open" 2>/dev/null)"
 o=$(rc_part ota) && echo "main_trace=$(dd if="$o" bs=1024 skip=64 count=8 2>/dev/null | tr -d '\0' | tail -n 1)"
 if [ "$1" = --slots ]; then

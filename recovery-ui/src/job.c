@@ -3,6 +3,7 @@
 #define _GNU_SOURCE
 #endif
 #include "job.h"
+#include "progress.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -174,6 +175,14 @@ static pid_t spawn_sh(const char *cmd, int *rfd)
 	return c;
 }
 
+/* "[code] text" or "text" of a progress line (progress.h) */
+static void set_step(const char *s)
+{
+	const char *text;
+	pg_split(s, st.code, sizeof(st.code), st.arg, sizeof(st.arg), &text);
+	snprintf(st.step, sizeof(st.step), "%s", text);
+}
+
 /* A finished output line: look for progress. Returns true if the line is
  * a directive (not shown). Called with mu held. */
 static bool parse_line(const char *l)
@@ -186,11 +195,11 @@ static bool parse_line(const char *l)
 		while (*end == ' ')
 			end++;
 		if (*end)
-			snprintf(st.step, sizeof(st.step), "%s", end);
+			set_step(end);
 		return true;
 	}
 	if (!strncmp(l, "@step ", 6)) {
-		snprintf(st.step, sizeof(st.step), "%s", l + 6);
+		set_step(l + 6);
 		return true;
 	}
 	/* last "NN%" or "NN.N%" on the line */

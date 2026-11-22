@@ -1,0 +1,607 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 11:49:15 -0500
+Subject: [PATCH] touch: a finger drag scrolls the Settings pages again; easier
+ page arrows
+
+On the AD5X (resistive TSC2007 panel, 800x480) a drag on a Settings
+sub-page did not scroll it, a drag started on the page arrows did, and
+the arrows were hard to hit with a tap.
+
+Drag. Patch 0019's stop_drag_chain_on_buttons(), run by
+create_xml_hidden() over every overlay, cleared LV_OBJ_FLAG_SCROLL_CHAIN
+on every clickable, non-scrollable widget whose name has no "_row" and is
+not "row". The Settings rows are named row_* and their setting_group
+cards group_*, so both lost the chain, and LVGL's search for the object
+to scroll stops at the first widget without it (lv_indev_scroll.c,
+lv_indev_find_scroll_obj): a drag on a row scrolled nothing. The arrows
+are added later (PageScrollController::attach), so they kept the chain,
+which is why a drag from them worked.
+
+The walk now clears the chain on buttons only (lv_button and its
+subclasses, ui_button included) and never on a list row or inside one:
+a name "row", starting "row_" or containing "_row"
+(is_list_row_name()). Cards, containers, labels, icons and overlay roots
+keep the chain, as upstream. Buttons keep what 0019 gave them: a press
+on one does not start a scroll, so the Z jog keys' hold-to-repeat does
+not run on under a moving page. Sliders, arcs and rollers clear their
+own chain in LVGL. Narrowed rather than dropped: dropping the call would
+have changed every overlay button back to upstream at once, for a bug
+that is only in the rows.
+
+The top-level Settings list is built with app_layout (lv_xml_create),
+not create_xml_hidden, and the walk never reached it; the tests drag it
+from a row with the arrows on and it scrolls, before and after this
+patch.
+
+Arrows. ui_button turns press lock off, so one stray reading off a
+52x70 px arrow lost the press (PRESS_LOST, no click), and a wobble of
+the scroll limit (10 px) turned the tap into a scroll. Both arrows now
+have press lock on and the scroll chain off (set in attach(), after
+ui_button's own setup): a tap clicks the arrow it started on, a drag
+from an arrow pages instead of scrolling, and the rows drag the list.
+Each arrow has a 16 px ext_click_area (page_scroll_gutter.xml), half
+the medium-tier gap of 32 px, so a tap in the gap hits the nearer
+arrow. The area stops at the gutter's edges, as LVGL hit-tests a child
+only inside its parent. The arrows keep their size: a wider gutter
+would take the same width from every long page's content.
+
+Tests in test_kiln_drag_scroll.cpp: a drag from a row scrolls the
+top-level Settings list and the Printing page; a tap on a row clicks it
+and scrolls nothing; an arrow tap with one reading 90 px off still
+clicks and pages; a 12 px wobble on an arrow pages and starts no
+scroll; every pixel of the gap hits an arrow and a tap there pages; a
+held Z jog key in a scrolling column keeps the press and scrolls
+nothing; and what the walk clears.
+
+Upstream: not applicable (Kiln OS specific)
+---
+ include/ui_utils.h                       |  33 +-
+ src/ui/page_scroll_controller.cpp        |  11 +
+ tests/unit/test_kiln_drag_scroll.cpp     | 428 +++++++++++++++++++++++
+ ui_xml/components/page_scroll_gutter.xml |  10 +-
+ 4 files changed, 470 insertions(+), 12 deletions(-)
+ create mode 100644 tests/unit/test_kiln_drag_scroll.cpp
+
+diff --git a/include/ui_utils.h b/include/ui_utils.h
+index daaf16e..e064fd5 100644
+--- a/include/ui_utils.h
++++ b/include/ui_utils.h
+@@ -500,22 +500,37 @@ inline void set_event_bubble_recursive(lv_obj_t* obj) {
+     }
+ }
+ 
++/**
++ * @brief True when @p name names a list row: "row", a name starting "row_"
++ * (the settings rows: row_printer, row_display) or one containing "_row"
++ * (indexed and component names: profile_row_0, history_list_row_#).
++ */
++inline bool is_list_row_name(const char* name) {
++    return name != nullptr && (strncmp(name, "row_", 4) == 0 || strstr(name, "_row") != nullptr ||
++                               strcmp(name, "row") == 0);
++}
++
+ /**
+  * @brief Stop plain buttons under obj from passing a drag to the scroll container.
+  *
+  * A finger held on a button and moved a little scrolled the panel behind it,
+- * so the button moved. LVGL picks the drag-scroll target by walking up the
++ * so the button moved, and a hold-to-repeat (the Z jog keys) kept repeating
++ * under a moving page. LVGL picks the drag-scroll target by walking up the
+  * tree and stopping at an object with LV_OBJ_FLAG_SCROLL_CHAIN cleared, so a
+- * clickable, non-scrollable widget with the chain cleared keeps the drag.
+- *
+- * List rows keep the chain, so a drag that starts on a row still scrolls the
+- * list. A widget is a row when its name contains "_row" (so indexed names such
+- * as profile_row_0 match) or is "row", or when an ancestor's does.
++ * button with the chain cleared keeps the drag.
++ *
++ * Only buttons (lv_button and its subclasses, ui_button included) lose the
++ * chain. Everything else keeps it: setting_group cards, containers, labels,
++ * icons and overlay roots, so a drag that starts on any of them scrolls the
++ * page. Sliders, arcs and rollers clear their own chain in LVGL. List rows keep
++ * it even when they are buttons (setting_action_row is one), and so does
++ * everything inside a row: a widget is a row when is_list_row_name() says so
++ * for its name or for an ancestor's.
+  */
+ inline void stop_drag_chain_on_buttons(lv_obj_t* obj, bool in_row = false) {
+-    const char* name = lv_obj_get_name(obj);
+-    bool row = in_row || (name && (strstr(name, "_row") != nullptr || strcmp(name, "row") == 0));
+-    if (!row && lv_obj_has_flag(obj, LV_OBJ_FLAG_CLICKABLE) &&
++    bool row = in_row || is_list_row_name(lv_obj_get_name(obj));
++    if (!row && lv_obj_has_class(obj, &lv_button_class) &&
++        lv_obj_has_flag(obj, LV_OBJ_FLAG_CLICKABLE) &&
+         !lv_obj_has_flag(obj, LV_OBJ_FLAG_SCROLLABLE)) {
+         lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLL_CHAIN);
+     }
+diff --git a/src/ui/page_scroll_controller.cpp b/src/ui/page_scroll_controller.cpp
+index b0dcb50..5ef8292 100644
+--- a/src/ui/page_scroll_controller.cpp
++++ b/src/ui/page_scroll_controller.cpp
+@@ -50,6 +50,17 @@ bool PageScrollController::attach(lv_obj_t* container) {
+         return false;
+     }
+ 
++    // A tap on an arrow must page, however the panel reads it. ui_button turns
++    // press lock off, so on a resistive panel one stray reading off the arrow
++    // dropped the press (PRESS_LOST, no click); with press lock the release
++    // clicks the arrow it started on. The arrows also keep a finger's wobble:
++    // a drag that starts on one scrolls nothing (the list rows drag the list),
++    // so a tap that moves by the scroll limit still pages.
++    for (lv_obj_t* btn : {up_btn_, down_btn_}) {
++        lv_obj_add_flag(btn, LV_OBJ_FLAG_PRESS_LOCK);
++        lv_obj_remove_flag(btn, LV_OBJ_FLAG_SCROLL_CHAIN);
++    }
++
+     // Measure the gutter's natural width to size the reserved strip.
+     lv_obj_update_layout(gutter_);
+     gutter_w_ = lv_obj_get_width(gutter_);
+diff --git a/tests/unit/test_kiln_drag_scroll.cpp b/tests/unit/test_kiln_drag_scroll.cpp
+new file mode 100644
+index 0000000..fea39ff
+--- /dev/null
++++ b/tests/unit/test_kiln_drag_scroll.cpp
+@@ -0,0 +1,428 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//
++// Kiln OS: a finger drag scrolls Settings and the other long pages, and the
++// page-scroll arrows take a tap on the AD5X's resistive panel.
++//
++// A drag scrolls the object LVGL finds by walking up from the pressed widget,
++// past every widget that is not scrollable and keeps LV_OBJ_FLAG_SCROLL_CHAIN
++// (lib/lvgl/src/indev/lv_indev_scroll.c, lv_indev_find_scroll_obj). Pages built
++// through create_xml_hidden() (every overlay: the Settings sub-pages, Motion)
++// have stop_drag_chain_on_buttons() run over them, which cleared the chain on
++// every clickable widget but rows named "*_row*": the Settings rows (row_*)
++// and their setting_group cards stopped the walk, so a drag on them scrolled
++// nothing. It now clears the chain on buttons only, never on rows.
++//
++// Run with: ./build/bin/helix-tests "[kiln][drag_scroll]"
++
++#include "ui_panel_common.h"
++#include "ui_panel_motion.h"
++#include "ui_panel_settings.h"
++#include "ui_settings_printing.h"
++#include "ui_update_queue.h"
++#include "ui_utils.h"
++
++#include "../lvgl_ui_test_fixture.h"
++#include "../test_helpers/scoped_pointer_indev.h"
++#include "app_globals.h"
++#include "display_settings_manager.h"
++#include "helix-xml/src/xml/lv_xml.h"
++#include "moonraker_api_mock.h"
++#include "moonraker_client_mock.h"
++#include "page_scroll_auto_inject.h"
++#include "printer_state.h"
++#include "settings_manager.h"
++
++#include <cstring>
++
++#include "../catch_amalgamated.hpp"
++
++using helix_test::ScopedPointerIndev;
++
++namespace {
++
++/// The device's scroll limit (config /input/scroll_limit, default 10)
++constexpr int kScrollLimit = 10;
++
++lv_point_t center_of(lv_obj_t* obj) {
++    lv_area_t a;
++    lv_obj_get_coords(obj, &a);
++    return {(a.x1 + a.x2) / 2, (a.y1 + a.y2) / 2};
++}
++
++bool visible(lv_obj_t* obj) {
++    for (; obj != nullptr; obj = lv_obj_get_parent(obj)) {
++        if (lv_obj_has_flag(obj, LV_OBJ_FLAG_HIDDEN)) {
++            return false;
++        }
++    }
++    return true;
++}
++
++bool is_or_inside(lv_obj_t* obj, lv_obj_t* ancestor) {
++    for (; obj != nullptr; obj = lv_obj_get_parent(obj)) {
++        if (obj == ancestor) {
++            return true;
++        }
++    }
++    return false;
++}
++
++/// The first shown settings row (row_*) under @p root that lies wholly on
++/// screen and is what a press at its centre finds.
++lv_obj_t* first_row_on_screen(lv_obj_t* root) {
++    uint32_t n = lv_obj_get_child_count(root);
++    for (uint32_t i = 0; i < n; ++i) {
++        lv_obj_t* child = lv_obj_get_child(root, static_cast<int32_t>(i));
++        const char* name = lv_obj_get_name(child);
++        if (name && std::strncmp(name, "row_", 4) == 0 && visible(child) &&
++            lv_obj_get_height(child) > 20) {
++            lv_area_t a;
++            lv_obj_get_coords(child, &a);
++            lv_point_t c = center_of(child);
++            lv_obj_t* hit = lv_indev_search_obj(lv_screen_active(), &c);
++            if (a.y1 >= 0 && a.y2 < kTestDisplayHeight && is_or_inside(hit, child)) {
++                return child;
++            }
++        }
++        if (lv_obj_t* found = first_row_on_screen(child)) {
++            return found;
++        }
++    }
++    return nullptr;
++}
++
++/// The nearest ancestor of @p obj that scrolls vertically and overflows.
++lv_obj_t* scroller_of(lv_obj_t* obj) {
++    for (lv_obj_t* p = lv_obj_get_parent(obj); p != nullptr; p = lv_obj_get_parent(p)) {
++        if (lv_obj_has_flag(p, LV_OBJ_FLAG_SCROLLABLE) && lv_obj_get_scroll_bottom(p) > 0) {
++            return p;
++        }
++    }
++    return nullptr;
++}
++
++/// Read cadence on the AD5X under load (patch 0091): 70 ms
++constexpr uint32_t kReadMs = 70;
++
++/// A finger drag up from @p from's centre: @p steps readings @p step_px apart.
++/// Returns how far @p list scrolled.
++int32_t drag_up(lv_obj_t* from, lv_obj_t* list, int steps = 12, int step_px = 8) {
++    const lv_point_t c = center_of(from);
++    const int32_t before = lv_obj_get_scroll_y(list);
++    ScopedPointerIndev pointer;
++    lv_indev_set_scroll_limit(pointer.indev(), kScrollLimit);
++    int y = c.y;
++    pointer.press(c.x, y);
++    for (int i = 0; i < steps; ++i) {
++        lv_tick_inc(kReadMs);
++        lv_timer_handler_safe();
++        y -= step_px;
++        pointer.move(c.x, y);
++    }
++    lv_tick_inc(kReadMs);
++    pointer.release(c.x, y);
++    return lv_obj_get_scroll_y(list) - before;
++}
++
++int g_clicks = 0;
++void count_click(lv_event_t*) {
++    ++g_clicks;
++}
++
++/// Settings subjects and the page-scroll arrows on, as on the owner's printer
++struct DragFixture : LVGLUITestFixture {
++    MoonrakerClientMock client{MoonrakerClientMock::PrinterType::VORON_24};
++    MoonrakerAPIMock api{client, get_printer_state()};
++    bool arrows_were_on_ = false;
++
++    DragFixture() {
++        static lv_subject_t speaker_subject;
++        if (!lv_xml_get_subject(nullptr, "printer_has_speaker")) {
++            lv_subject_init_int(&speaker_subject, 1);
++            lv_xml_register_subject(nullptr, "printer_has_speaker", &speaker_subject);
++        }
++        SettingsManager::instance().init_subjects();
++        get_global_settings_panel().init_subjects();
++        helix::settings::get_printing_settings_overlay().register_callbacks();
++        set_moonraker_api(&api);
++        auto& dsm = helix::DisplaySettingsManager::instance();
++        dsm.init_subjects();
++        arrows_were_on_ = dsm.get_page_scroll_buttons();
++        auto& inj = helix::ui::PageScrollAutoInject::instance();
++        inj.shutdown();
++        inj.init();
++        dsm.set_page_scroll_buttons(true);
++        g_clicks = 0;
++    }
++
++    ~DragFixture() override {
++        auto& inj = helix::ui::PageScrollAutoInject::instance();
++        inj.shutdown();
++        helix::DisplaySettingsManager::instance().set_page_scroll_buttons(arrows_were_on_);
++        process_lvgl(20); // the gutters' async deletes
++        set_moonraker_api(nullptr);
++        helix::ui::UpdateQueue::instance().drain();
++        get_global_settings_panel().deinit_subjects();
++        helix::ui::UpdateQueue::instance().drain();
++    }
++
++    /// The top-level Settings panel as the app builds it (app_layout's
++    /// lv_xml_create), in the panel area beside the navbar, arrows attached
++    lv_obj_t* settings_root() {
++        lv_obj_t* holder = lv_obj_create(test_screen());
++        lv_obj_set_size(holder, 700, kTestDisplayHeight);
++        lv_obj_set_style_pad_all(holder, 0, 0);
++        lv_obj_set_style_border_width(holder, 0, 0);
++        lv_obj_t* root = static_cast<lv_obj_t*>(lv_xml_create(holder, "settings_panel", nullptr));
++        REQUIRE(root != nullptr);
++        process_lvgl(5);
++        helix::ui::PageScrollAutoInject::instance().on_root_shown(holder);
++        lv_obj_update_layout(test_screen());
++        return root;
++    }
++
++    /// The Printing sub-page as the app builds it (OverlayBase::create ->
++    /// create_xml_hidden), shown, arrows attached
++    lv_obj_t* printing_page() {
++        lv_obj_t* root = helix::ui::create_xml_hidden(test_screen(), "settings_printing_overlay");
++        REQUIRE(root != nullptr);
++        lv_obj_remove_flag(root, LV_OBJ_FLAG_HIDDEN);
++        process_lvgl(5);
++        helix::ui::PageScrollAutoInject::instance().on_root_shown(root);
++        lv_obj_update_layout(test_screen());
++        return root;
++    }
++};
++
++} // namespace
++
++TEST_CASE_METHOD(DragFixture, "drag: a drag from a row scrolls the top-level Settings list",
++                 "[kiln][drag_scroll]") {
++    lv_obj_t* root = settings_root();
++    lv_obj_t* row = lv_obj_find_by_name(root, "row_display");
++    REQUIRE(row != nullptr);
++    REQUIRE(scroller_of(row) == root);
++    REQUIRE(lv_obj_find_by_name(root, "up") != nullptr); // the owner has the arrows on
++
++    CHECK(drag_up(row, root) > 60);
++}
++
++TEST_CASE_METHOD(DragFixture, "drag: a drag from a row scrolls a Settings sub-page",
++                 "[kiln][drag_scroll]") {
++    lv_obj_t* root = printing_page();
++    lv_obj_t* row = first_row_on_screen(root);
++    REQUIRE(row != nullptr);
++    lv_obj_t* list = scroller_of(row);
++    REQUIRE(list != nullptr);
++    CAPTURE(lv_obj_get_name(row));
++
++    // The row and its card keep the chain the build-time walk used to clear
++    CHECK(lv_obj_has_flag(row, LV_OBJ_FLAG_SCROLL_CHAIN_VER));
++    CHECK(lv_obj_has_flag(lv_obj_get_parent(row), LV_OBJ_FLAG_SCROLL_CHAIN_VER));
++    CHECK(drag_up(row, list) > 60);
++    lv_obj_delete(root);
++}
++
++TEST_CASE_METHOD(DragFixture, "drag: a tap on a row still clicks it and scrolls nothing",
++                 "[kiln][drag_scroll]") {
++    lv_obj_t* root = printing_page();
++    lv_obj_t* row = first_row_on_screen(root);
++    REQUIRE(row != nullptr);
++    lv_obj_t* list = scroller_of(row);
++    REQUIRE(list != nullptr);
++    lv_obj_add_event_cb(row, count_click, LV_EVENT_CLICKED, nullptr);
++
++    // A resting finger on a resistive panel wobbles a few pixels
++    const lv_point_t c = center_of(row);
++    {
++        ScopedPointerIndev pointer;
++        lv_indev_set_scroll_limit(pointer.indev(), kScrollLimit);
++        pointer.press(c.x, c.y);
++        for (int dy : {2, -3, 4, 1}) {
++            lv_tick_inc(kReadMs);
++            pointer.move(c.x + 1, c.y + dy);
++        }
++        lv_tick_inc(kReadMs);
++        pointer.release(c.x, c.y);
++    }
++    CHECK(g_clicks == 1);
++    CHECK(lv_obj_get_scroll_y(list) == 0);
++    lv_obj_delete(root);
++}
++
++TEST_CASE_METHOD(DragFixture, "drag: a page arrow clicks through one stray reading",
++                 "[kiln][drag_scroll]") {
++    lv_obj_t* root = settings_root();
++    lv_obj_t* down = lv_obj_find_by_name(root, "down");
++    REQUIRE(down != nullptr);
++    CHECK(lv_obj_has_flag(down, LV_OBJ_FLAG_PRESS_LOCK));
++    lv_obj_add_event_cb(down, count_click, LV_EVENT_CLICKED, nullptr);
++
++    // One reading lands 90 px left of the arrow, on the list; the finger
++    // never moved
++    const lv_point_t c = center_of(down);
++    {
++        ScopedPointerIndev pointer;
++        lv_indev_set_scroll_limit(pointer.indev(), kScrollLimit);
++        pointer.press(c.x, c.y);
++        lv_tick_inc(kReadMs);
++        pointer.move(c.x - 90, c.y);
++        lv_tick_inc(kReadMs);
++        pointer.move(c.x, c.y);
++        lv_tick_inc(kReadMs);
++        pointer.release(c.x, c.y);
++    }
++    CHECK(g_clicks == 1);
++    process_lvgl(600); // the page step's animation, when animations are on
++    CHECK(lv_obj_get_scroll_y(root) > 100);
++}
++
++TEST_CASE_METHOD(DragFixture, "drag: a wobbly tap on a page arrow pages and does not drag",
++                 "[kiln][drag_scroll]") {
++    lv_obj_t* root = settings_root();
++    lv_obj_t* down = lv_obj_find_by_name(root, "down");
++    REQUIRE(down != nullptr);
++    CHECK_FALSE(lv_obj_has_flag(down, LV_OBJ_FLAG_SCROLL_CHAIN_VER));
++    lv_obj_add_event_cb(down, count_click, LV_EVENT_CLICKED, nullptr);
++
++    // The finger rolls 12 px up while pressing, past the scroll limit
++    const lv_point_t c = center_of(down);
++    {
++        ScopedPointerIndev pointer;
++        lv_indev_set_scroll_limit(pointer.indev(), kScrollLimit);
++        pointer.press(c.x, c.y);
++        for (int dy : {-4, -8, -12}) {
++            lv_tick_inc(kReadMs);
++            pointer.move(c.x, c.y + dy);
++            CHECK(pointer.indev()->pointer.scroll_obj == nullptr);
++        }
++        CHECK(lv_obj_get_scroll_y(root) == 0);
++        lv_tick_inc(kReadMs);
++        pointer.release(c.x, c.y - 12);
++    }
++    CHECK(g_clicks == 1);
++}
++
++TEST_CASE_METHOD(DragFixture, "drag: every pixel of the gap between the page arrows hits one",
++                 "[kiln][drag_scroll]") {
++    lv_obj_t* root = settings_root();
++    lv_obj_t* up = lv_obj_find_by_name(root, "up");
++    lv_obj_t* down = lv_obj_find_by_name(root, "down");
++    REQUIRE(up != nullptr);
++    REQUIRE(down != nullptr);
++    lv_area_t ua;
++    lv_area_t da;
++    lv_obj_get_coords(up, &ua);
++    lv_obj_get_coords(down, &da);
++    REQUIRE(da.y1 > ua.y2 + 1); // a gap exists
++    CHECK(da.y1 - ua.y2 - 1 <= 2 * 16);
++
++    const int32_t x = (ua.x1 + ua.x2) / 2;
++    for (int32_t y = ua.y2 + 1; y < da.y1; ++y) {
++        lv_point_t p{x, y};
++        lv_obj_t* hit = lv_indev_search_obj(lv_screen_active(), &p);
++        CAPTURE(y);
++        CHECK((is_or_inside(hit, up) || is_or_inside(hit, down)));
++    }
++    // ... and a tap in the middle of the gap pages. Partway down the list, so
++    // neither arrow is dimmed (a dimmed arrow takes no click).
++    lv_obj_scroll_to_y(root, 100, LV_ANIM_OFF);
++    lv_obj_update_layout(root);
++    REQUIRE_FALSE(lv_obj_has_state(up, LV_STATE_DISABLED));
++    REQUIRE_FALSE(lv_obj_has_state(down, LV_STATE_DISABLED));
++    lv_obj_add_event_cb(down, count_click, LV_EVENT_CLICKED, nullptr);
++    lv_obj_add_event_cb(up, count_click, LV_EVENT_CLICKED, nullptr);
++    ScopedPointerIndev pointer;
++    const int32_t mid = (ua.y2 + da.y1) / 2;
++    pointer.press(x, mid);
++    lv_tick_inc(kReadMs);
++    pointer.release(x, mid);
++    CHECK(g_clicks == 1);
++}
++
++namespace {
++// Jog keys in a scrolling column, built like an overlay
++constexpr const char* kJogScroller = R"(<component>
++  <view extends="lv_obj" width="400" height="200" style_pad_all="0" flex_flow="column"
++        scrollable="true">
++    <motion_jog_button name="z_up_large" jog="z_up_large" icon="arrow_up" width="200" height="80"/>
++    <motion_jog_button name="z_up_small" jog="z_up_small" icon="arrow_up" width="200" height="80"/>
++    <motion_jog_button name="z_down_small" jog="z_down_small" icon="arrow_down" width="200" height="80"/>
++    <motion_jog_button name="z_down_large" jog="z_down_large" icon="arrow_down" width="200" height="80"/>
++  </view>
++</component>)";
++} // namespace
++
++TEST_CASE_METHOD(DragFixture, "drag: a held jog key keeps the press and does not scroll its parent",
++                 "[kiln][drag_scroll]") {
++    get_global_motion_panel().register_callbacks();
++    lv_xml_register_component_from_data("test_kiln_jog_scroller", kJogScroller);
++    lv_obj_t* root = helix::ui::create_xml_hidden(test_screen(), "test_kiln_jog_scroller");
++    REQUIRE(root != nullptr);
++    lv_obj_remove_flag(root, LV_OBJ_FLAG_HIDDEN);
++    lv_obj_update_layout(root);
++    REQUIRE(lv_obj_get_scroll_bottom(root) > 0);
++    lv_obj_t* key = lv_obj_find_by_name(root, "z_up_small");
++    REQUIRE(key != nullptr);
++    CHECK_FALSE(lv_obj_has_flag(key, LV_OBJ_FLAG_SCROLL_CHAIN_VER));
++
++    // Held well past the long press, the finger drifting 15 px up and back
++    const lv_point_t c = center_of(key);
++    {
++        ScopedPointerIndev pointer;
++        lv_indev_set_scroll_limit(pointer.indev(), kScrollLimit);
++        pointer.press(c.x, c.y);
++        int y = c.y;
++        for (int i = 0; i < 20; ++i) {
++            lv_tick_inc(kReadMs);
++            lv_timer_handler_safe();
++            y = c.y - (i < 10 ? i * 3 / 2 : (20 - i) * 3 / 2);
++            pointer.move(c.x, y);
++            CHECK(pointer.indev()->pointer.scroll_obj == nullptr);
++            CHECK(pointer.indev()->pointer.act_obj == key);
++        }
++        CHECK(lv_obj_get_scroll_y(root) == 0);
++        CHECK(lv_obj_has_state(key, LV_STATE_PRESSED));
++        lv_tick_inc(kReadMs);
++        pointer.release(c.x, y);
++    }
++    get_global_motion_panel().jog_hold_timer().cancel();
++    lv_obj_delete(root);
++    helix::ui::UpdateQueue::instance().drain();
++}
++
++TEST_CASE_METHOD(LVGLUITestFixture, "drag: the build-time walk stops drags on buttons only",
++                 "[kiln][drag_scroll]") {
++    lv_obj_t* page = lv_obj_create(test_screen());
++    lv_obj_t* card = lv_obj_create(page); // a setting_group card: clickable lv_obj
++    lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
++    lv_obj_t* row = lv_button_create(card); // setting_action_row: an lv_button
++    lv_obj_set_name(row, "row_printer");
++    lv_obj_t* in_row = lv_button_create(row);
++    lv_obj_t* indexed = lv_button_create(card);
++    lv_obj_set_name(indexed, "profile_row_0");
++    lv_obj_t* button = lv_button_create(page);
++    lv_obj_t* label = lv_label_create(page);
++    lv_obj_add_flag(label, LV_OBJ_FLAG_CLICKABLE);
++    lv_obj_t* slider = lv_slider_create(page);
++
++    helix::ui::stop_drag_chain_on_buttons(page);
++
++    CHECK(lv_obj_has_flag(page, LV_OBJ_FLAG_SCROLL_CHAIN_VER));
++    CHECK(lv_obj_has_flag(card, LV_OBJ_FLAG_SCROLL_CHAIN_VER));
++    CHECK(lv_obj_has_flag(row, LV_OBJ_FLAG_SCROLL_CHAIN_VER));
++    CHECK(lv_obj_has_flag(in_row, LV_OBJ_FLAG_SCROLL_CHAIN_VER));
++    CHECK(lv_obj_has_flag(indexed, LV_OBJ_FLAG_SCROLL_CHAIN_VER));
++    CHECK(lv_obj_has_flag(label, LV_OBJ_FLAG_SCROLL_CHAIN_VER));
++    CHECK_FALSE(lv_obj_has_flag(button, LV_OBJ_FLAG_SCROLL_CHAIN));
++    // A slider keeps what LVGL gave it: no chain along its own axis
++    CHECK_FALSE(lv_obj_has_flag(slider, LV_OBJ_FLAG_SCROLL_CHAIN_HOR));
++
++    CHECK(helix::ui::is_list_row_name("row"));
++    CHECK(helix::ui::is_list_row_name("row_display"));
++    CHECK(helix::ui::is_list_row_name("history_list_row_#"));
++    CHECK_FALSE(helix::ui::is_list_row_name("arrow_up"));
++    CHECK_FALSE(helix::ui::is_list_row_name("group_printer"));
++    CHECK_FALSE(helix::ui::is_list_row_name(nullptr));
++    lv_obj_delete(page);
++}
+diff --git a/ui_xml/components/page_scroll_gutter.xml b/ui_xml/components/page_scroll_gutter.xml
+index fe91247..9cea4c3 100644
+--- a/ui_xml/components/page_scroll_gutter.xml
++++ b/ui_xml/components/page_scroll_gutter.xml
+@@ -6,7 +6,11 @@
+      are easy tap targets on small touch screens; width stays #button_height so
+      the reserved gutter costs no extra horizontal space.
+      style_opa="170" (~67%) keeps the chevrons subtle at rest; ui_button's pressed
+-     state brightens them on touch. -->
++     state brightens them on touch.
++     ext_click_area="16" widens each arrow's touch area by half the medium-tier
++     gap (#space_2xl, 32 px), so a tap in the gap still hits the nearer arrow.
++     The area stops at the gutter's edges: LVGL hit-tests a child only inside
++     its parent. -->
+ <component>
+   <view extends="lv_obj"
+         width="#button_height" height="content" style_bg_opa="0" style_border_width="0" style_pad_all="0"
+@@ -14,12 +18,12 @@
+         scrollable="false" floating="true" align="right_mid">
+     <ui_button name="up"
+                width="#button_height" height="#button_height_lg" style_radius="9999" variant="secondary"
+-               focusable="false" style_opa="170">
++               focusable="false" style_opa="170" ext_click_area="16">
+       <icon src="chevron_up" size="md" variant="text" align="center" clickable="false" event_bubble="true"/>
+     </ui_button>
+     <ui_button name="down"
+                width="#button_height" height="#button_height_lg" style_radius="9999" variant="secondary"
+-               focusable="false" style_opa="170">
++               focusable="false" style_opa="170" ext_click_area="16">
+       <icon src="chevron_down" size="md" variant="text" align="center" clickable="false" event_bubble="true"/>
+     </ui_button>
+   </view>
+-- 
+2.56.0
+

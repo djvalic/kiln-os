@@ -1,0 +1,625 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Fri, 20 Nov 2026 08:52:34 -0500
+Subject: [PATCH] kiln: offer the setup wizard after a reinstall over stock
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Return to Flashforge firmware keeps Kiln's data, and with it the
+screen's settings, where the setup wizard is marked done; a reinstall
+from the install stick went straight to the home screen. The installer
+now leaves HELIX_WIZARD_OFFER_FILE (S70helixscreen:
+/data/ad5x/helixscreen/offer-setup-wizard) when it finds those
+settings. At the next start, when no wizard runs, the screen asks
+"Run the setup wizard?" once: Run deletes the file and opens the same
+session as Settings > Printer > Run Setup Wizard (refused with a toast
+while a print may move the printer; the file stays), Skip deletes it
+and stays home, a dismissal keeps it for the next start. A wizard
+running at that start anyway, or a SETUP_WIZARD from Klipper while the
+question is up, answers it: the file goes, the question closes.
+Nothing happens without the variable. The two new texts are in en.yml
+and, with Russian values, in ru.yml (Run and Skip are existing keys);
+the Russian uses the printer terms of the other Kiln strings (мастер
+настройки, филамент, смещение по Z, платы). Tests in
+test_kiln_wizard_offer.cpp.
+
+Upstream: not applicable (Kiln OS specific)
+---
+ include/ui_kiln_wizard_offer.h        |  85 +++++++++
+ src/application/application.cpp       |   5 +
+ src/ui/ui_kiln_wizard_offer.cpp       | 157 ++++++++++++++++
+ src/ui/ui_wizard_ad5x_setup.cpp       |   3 +
+ tests/unit/test_kiln_wizard_offer.cpp | 259 ++++++++++++++++++++++++++
+ translations/en.yml                   |   3 +
+ translations/ru.yml                   |   3 +
+ 7 files changed, 515 insertions(+)
+ create mode 100644 include/ui_kiln_wizard_offer.h
+ create mode 100644 src/ui/ui_kiln_wizard_offer.cpp
+ create mode 100644 tests/unit/test_kiln_wizard_offer.cpp
+
+diff --git a/include/ui_kiln_wizard_offer.h b/include/ui_kiln_wizard_offer.h
+new file mode 100644
+index 0000000..fbb97b6
+--- /dev/null
++++ b/include/ui_kiln_wizard_offer.h
+@@ -0,0 +1,85 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++/**
++ * @file ui_kiln_wizard_offer.h
++ * @brief Kiln OS: "Run the setup wizard?" at the first start after a
++ *        reinstall over Flashforge's firmware
++ *
++ * Return to Flashforge firmware keeps Kiln's data (/data/ad5x), and with it
++ * HelixScreen's settings, where the wizard is marked done. When Kiln OS is
++ * installed again from the install stick (or over SSH), the installer finds
++ * that settings file and writes the offer file (HELIX_WIZARD_OFFER_FILE, set
++ * by S70helixscreen: /data/ad5x/helixscreen/offer-setup-wizard). The settings
++ * stay as they are; at its next start the screen asks once whether to run
++ * the setup wizard, because stock may have changed the filament, the Z offset
++ * or the boards since:
++ *
++ * - Run: the offer file goes, and the setup steps run as Settings > Printer >
++ *   Run Setup Wizard runs them (ad5x_setup::launch_targeted). While the
++ *   printer may move for a print it is refused with a toast, and the offer
++ *   stays for the next start.
++ * - Skip: the offer file goes; the home screen stays. Not asked again.
++ * - Closed some other way (backdrop tap): nothing changes; asked again at the
++ *   next start.
++ *
++ * When a wizard runs at that start anyway (a fresh settings file, or
++ * SETUP_WIZARD's run-setup-wizard flag), the offer is answered by it and the
++ * file goes without a question; so does a SETUP_WIZARD from Klipper while the
++ * question is up. Without the environment variable (other builds) nothing
++ * happens.
++ *
++ * @threading Main thread only
++ */
++
++#pragma once
++
++#include "lvgl/lvgl.h"
++
++#include <functional>
++#include <string>
++
++namespace helix::kiln_wizard_offer {
++
++/// The environment variable naming the offer file
++inline constexpr const char* kEnv = "HELIX_WIZARD_OFFER_FILE";
++
++/// The offer file (HELIX_WIZARD_OFFER_FILE), empty when it isn't set
++std::string flag_path();
++
++/// True when the offer file exists
++bool pending();
++
++/// Remove the offer file; true when it is gone afterwards (or never was)
++bool drop();
++
++/// What the start does with the offer
++enum class StartAction {
++    Nothing, ///< no offer, or no setup steps on this printer: leave it
++    Drop,    ///< a wizard runs at this start anyway: it answers the offer
++    Ask,     ///< ask "Run the setup wizard?"
++};
++
++/// The decision at a start: @p offered (the file exists), @p wizard_running
++/// (the first-run wizard or a requested re-run is up), @p setup_available
++/// (the printer has the AD5X setup steps)
++StartAction start_action(bool offered, bool wizard_running, bool setup_available);
++
++/// At the screen's start, once it is known whether a wizard runs: drop the
++/// offer, ask, or do nothing (start_action()).
++void at_start(bool wizard_running);
++
++/// Show the question now (at_start() calls it). Nothing when it is up already.
++void ask();
++
++/// The question is up
++bool asking();
++
++/// Answered elsewhere (a SETUP_WIZARD from Klipper opened the setup steps):
++/// the offer file goes and an open question closes without an answer.
++void answered_elsewhere();
++
++/// Tests: what Run starts instead of ad5x_setup::launch_targeted
++/// (nullptr: the real one)
++void set_launch_for_test(std::function<void()> launch);
++
++} // namespace helix::kiln_wizard_offer
+diff --git a/src/application/application.cpp b/src/application/application.cpp
+index 1c2863d..d671e5d 100644
+--- a/src/application/application.cpp
++++ b/src/application/application.cpp
+@@ -211,6 +211,7 @@
+ #include "action_prompt_manager.h"
+ #include "action_prompt_modal.h"
+ #include "app_globals.h"
++#include "ui_kiln_wizard_offer.h"
+ #include "ui_wizard_ad5x_setup.h"
+ #include "helix_fs.h"
+ #include "detection_manager.h"
+@@ -904,6 +905,10 @@ int Application::run(int argc, char** argv) {
+             // default layout reflects currently-connected hardware.
+             get_global_home_panel().finalize_setup();
+         }
++        // Kiln OS reinstalled over Flashforge's firmware with the settings
++        // kept: ask once whether to run the setup wizard (a wizard running now
++        // answers it)
++        helix::kiln_wizard_offer::at_start(m_wizard_active);
+ 
+         // Phase 14: Load plugins (HELIX_PLUGIN_DIR for authors, otherwise the
+         // per-printer cache of the Moonraker plugin folder, synced on connect)
+diff --git a/src/ui/ui_kiln_wizard_offer.cpp b/src/ui/ui_kiln_wizard_offer.cpp
+new file mode 100644
+index 0000000..9ea020d
+--- /dev/null
++++ b/src/ui/ui_kiln_wizard_offer.cpp
+@@ -0,0 +1,157 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include "ui_kiln_wizard_offer.h"
++
++#include "ui_modal.h"
++#include "ui_toast_manager.h"
++#include "ui_wizard_ad5x_setup.h"
++
++#include "app_globals.h"
++#include "helix_fs.h"
++#include "lvgl/src/others/translation/lv_translation.h"
++#include "printer_state.h"
++
++#include <spdlog/spdlog.h>
++
++#include <cerrno>
++#include <cstdlib>
++#include <cstring>
++
++namespace helix::kiln_wizard_offer {
++
++namespace {
++
++lv_obj_t* g_dialog = nullptr;
++std::function<void()> g_launch_override;
++
++/// The dialog is still on the screen (a fixture or a rebuild can delete it
++/// without telling us)
++bool dialog_up() {
++    if (g_dialog && !lv_obj_is_valid(g_dialog)) {
++        g_dialog = nullptr;
++    }
++    return g_dialog != nullptr;
++}
++
++bool motion_blocked() {
++    return lv_subject_get_int(
++               get_printer_state().print_state().get_machine_motion_blocked_subject()) != 0;
++}
++
++void on_run() {
++    g_dialog = nullptr;
++    if (motion_blocked()) {
++        // Asked again at the next start
++        ToastManager::instance().show(ToastSeverity::WARNING,
++                                      lv_tr("Cannot calibrate while printing"), 3000);
++        return;
++    }
++    drop();
++    spdlog::info("[Kiln wizard offer] Run: opening the setup steps");
++    if (g_launch_override) {
++        g_launch_override();
++    } else {
++        helix::ad5x_setup::launch_targeted(lv_screen_active());
++    }
++}
++
++void on_skip() {
++    g_dialog = nullptr;
++    spdlog::info("[Kiln wizard offer] Skip: not asked again");
++    drop();
++}
++
++void on_dismiss() {
++    // No answer: the file stays, asked again at the next start
++    g_dialog = nullptr;
++}
++
++} // namespace
++
++std::string flag_path() {
++    const char* env = std::getenv(kEnv);
++    return env ? env : "";
++}
++
++bool pending() {
++    const std::string path = flag_path();
++    return !path.empty() && helix::fs::exists(path);
++}
++
++bool drop() {
++    const std::string path = flag_path();
++    if (path.empty()) {
++        return true;
++    }
++    if (!helix::fs::remove(path) && errno != ENOENT) {
++        spdlog::warn("[Kiln wizard offer] Could not remove {}: {}", path, std::strerror(errno));
++        return false;
++    }
++    return true;
++}
++
++StartAction start_action(bool offered, bool wizard_running, bool setup_available) {
++    if (!offered) {
++        return StartAction::Nothing;
++    }
++    if (wizard_running) {
++        return StartAction::Drop;
++    }
++    return setup_available ? StartAction::Ask : StartAction::Nothing;
++}
++
++void at_start(bool wizard_running) {
++    const bool offered = pending();
++    switch (start_action(offered, wizard_running,
++                         offered && !wizard_running && helix::ad5x_setup::available())) {
++    case StartAction::Nothing:
++        if (offered) {
++            spdlog::info("[Kiln wizard offer] {} kept: no setup steps on this printer",
++                         flag_path());
++        }
++        return;
++    case StartAction::Drop:
++        spdlog::info("[Kiln wizard offer] The setup wizard runs anyway: {} dropped", flag_path());
++        drop();
++        return;
++    case StartAction::Ask:
++        spdlog::info("[Kiln wizard offer] Reinstalled over Flashforge's firmware: asking");
++        ask();
++        return;
++    }
++}
++
++void ask() {
++    if (dialog_up()) {
++        return;
++    }
++    helix::ui::ConfirmOptions opts;
++    opts.cancel_text = lv_tr("Skip");
++    opts.on_cancel = []() { on_skip(); };
++    opts.on_dismiss = []() { on_dismiss(); };
++    g_dialog = helix::ui::modal_confirm(
++        lv_tr("Run the setup wizard?"),
++        lv_tr("Kiln OS is installed again and kept your settings. Flashforge's firmware ran in "
++              "between and may have changed the filament, the Z offset or the boards. The setup "
++              "wizard checks and tunes the printer again; every step can be skipped."),
++        ModalSeverity::Info, lv_tr("Run"), []() { on_run(); }, opts);
++}
++
++bool asking() {
++    return dialog_up();
++}
++
++void answered_elsewhere() {
++    if (dialog_up()) {
++        lv_obj_t* dialog = g_dialog;
++        g_dialog = nullptr;
++        helix::ui::modal_hide(dialog);
++    }
++    drop();
++}
++
++void set_launch_for_test(std::function<void()> launch) {
++    g_launch_override = std::move(launch);
++}
++
++} // namespace helix::kiln_wizard_offer
+diff --git a/src/ui/ui_wizard_ad5x_setup.cpp b/src/ui/ui_wizard_ad5x_setup.cpp
+index b378d16..edafd8e 100644
+--- a/src/ui/ui_wizard_ad5x_setup.cpp
++++ b/src/ui/ui_wizard_ad5x_setup.cpp
+@@ -7,6 +7,7 @@
+ #include "ui_emergency_stop.h"
+ #include "ui_error_reporting.h"
+ #include "ui_event_safety.h"
++#include "ui_kiln_wizard_offer.h"
+ #include "ui_modal.h"
+ #include "ui_settings_language_time.h"
+ #include "ui_update_queue.h"
+@@ -1522,6 +1523,8 @@ void watch_wizard_requests() {
+                 if (const char* flag = std::getenv("HELIX_WIZARD_FLAG_FILE")) {
+                     helix::fs::remove(flag);
+                 }
++                // Kiln OS: so is the question after a reinstall (and it closes)
++                kiln_wizard_offer::answered_elsewhere();
+                 if (!available()) {
+                     return;
+                 }
+diff --git a/tests/unit/test_kiln_wizard_offer.cpp b/tests/unit/test_kiln_wizard_offer.cpp
+new file mode 100644
+index 0000000..2fc7ac0
+--- /dev/null
++++ b/tests/unit/test_kiln_wizard_offer.cpp
+@@ -0,0 +1,259 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++/**
++ * Kiln OS: after a reinstall over Flashforge's firmware the settings are kept
++ * (the wizard is marked done), and the installer leaves the offer file
++ * (HELIX_WIZARD_OFFER_FILE). The screen's next start asks "Run the setup
++ * wizard?": Run removes the file and opens the setup steps, Skip removes it
++ * and stays home, a dismissal keeps it for the next start. A wizard running
++ * at that start anyway answers the offer: the file goes, nothing is asked.
++ * In Russian the whole question is Russian, with no English line beside it.
++ */
++
++#include "ui_kiln_wizard_offer.h"
++#include "ui_modal.h"
++#include "ui_toast_manager.h"
++#include "ui_update_queue.h"
++
++#include "../lvgl_ui_test_fixture.h"
++#include "../test_helpers/modal_answer.h"
++#include "../ui_test_utils.h"
++#include "app_globals.h"
++#include "config.h"
++#include "lvgl/src/others/translation/lv_translation.h"
++#include "printer_state.h"
++#include "translation_loader.h"
++
++#include <cstdint>
++#include <cstdlib>
++#include <filesystem>
++#include <fstream>
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "../catch_amalgamated.hpp"
++
++using namespace helix;
++using Catch::Matchers::ContainsSubstring;
++namespace offer = helix::kiln_wizard_offer;
++namespace fs = std::filesystem;
++
++TEST_CASE("Kiln wizard offer: the start's decision", "[kiln][kiln_wizard_offer]") {
++    using A = offer::StartAction;
++    // No offer file: nothing, whatever else is true
++    CHECK(offer::start_action(false, false, true) == A::Nothing);
++    CHECK(offer::start_action(false, true, true) == A::Nothing);
++    // A wizard running at this start answers it
++    CHECK(offer::start_action(true, true, true) == A::Drop);
++    CHECK(offer::start_action(true, true, false) == A::Drop);
++    // Otherwise asked, where the setup steps exist; kept where they don't
++    CHECK(offer::start_action(true, false, true) == A::Ask);
++    CHECK(offer::start_action(true, false, false) == A::Nothing);
++}
++
++namespace {
++
++struct OfferFixture : LVGLUITestFixture {
++    fs::path dir;
++    fs::path flag;
++    int launches = 0;
++    std::vector<std::pair<ToastSeverity, std::string>> toasts;
++    bool had_preset = false;
++
++    OfferFixture() {
++        helix::ui::modal_init_subjects();
++        dir = fs::temp_directory_path() /
++              ("kiln-wizard-offer-" + std::to_string(reinterpret_cast<uintptr_t>(this)));
++        fs::create_directories(dir);
++        flag = dir / "offer-setup-wizard";
++        setenv(offer::kEnv, flag.c_str(), 1);
++        offer::set_launch_for_test([this]() { ++launches; });
++        helix::ui::set_test_toast_hook([this](ToastSeverity sev, const std::string& text,
++                                              uint32_t) { toasts.emplace_back(sev, text); });
++        Config* cfg = Config::get_instance();
++        REQUIRE(cfg != nullptr);
++        had_preset = cfg->get_preset() == "ad5x";
++        cfg->set_preset("ad5x");
++        state().update_from_status({{"print_stats", {{"state", "standby"}}}});
++        settle();
++    }
++
++    ~OfferFixture() override {
++        while (ModalStack::instance().top_dialog() != nullptr) {
++            Modal::hide(ModalStack::instance().top_dialog());
++            process_lvgl(5);
++        }
++        settle();
++        offer::set_launch_for_test(nullptr);
++        helix::ui::set_test_toast_hook(nullptr);
++        if (!had_preset) {
++            Config::get_instance()->clear_preset();
++        }
++        unsetenv(offer::kEnv);
++        std::error_code ec;
++        fs::remove_all(dir, ec);
++    }
++
++    void settle() {
++        helix::ui::UpdateQueue::instance().drain();
++        process_lvgl(10);
++    }
++
++    void write_flag() {
++        std::ofstream(flag) << "reinstalled over stock\n";
++        REQUIRE(fs::exists(flag));
++    }
++};
++
++} // namespace
++
++TEST_CASE_METHOD(OfferFixture, "Kiln wizard offer: no offer file, no question",
++                 "[kiln][kiln_wizard_offer]") {
++    offer::at_start(/*wizard_running=*/false);
++    settle();
++    CHECK(ModalStack::instance().top_dialog() == nullptr);
++    CHECK_FALSE(offer::asking());
++    CHECK(launches == 0);
++}
++
++TEST_CASE_METHOD(OfferFixture, "Kiln wizard offer: a wizard running anyway answers it",
++                 "[kiln][kiln_wizard_offer]") {
++    write_flag();
++    offer::at_start(/*wizard_running=*/true);
++    settle();
++    CHECK(ModalStack::instance().top_dialog() == nullptr);
++    CHECK_FALSE(fs::exists(flag));
++    CHECK(launches == 0);
++}
++
++TEST_CASE_METHOD(OfferFixture, "Kiln wizard offer: asked once with Run and Skip",
++                 "[kiln][kiln_wizard_offer]") {
++    write_flag();
++    offer::at_start(/*wizard_running=*/false);
++    settle();
++    REQUIRE(ModalStack::instance().top_dialog() != nullptr);
++    CHECK(offer::asking());
++    const std::string text = test::top_modal_text();
++    CHECK_THAT(text, ContainsSubstring("Run the setup wizard?"));
++    CHECK_THAT(text, ContainsSubstring("kept your settings"));
++    CHECK_THAT(text, ContainsSubstring("the filament, the Z offset or the boards"));
++    lv_obj_t* dialog = ModalStack::instance().top_dialog();
++    CHECK_THAT(test::subtree_text(lv_obj_find_by_name(dialog, "btn_primary")),
++               ContainsSubstring("Run"));
++    CHECK_THAT(test::subtree_text(lv_obj_find_by_name(dialog, "btn_secondary")),
++               ContainsSubstring("Skip"));
++    // Asking again while it is up shows no second dialog
++    offer::ask();
++    settle();
++    CHECK(ModalStack::instance().top_dialog() == dialog);
++
++    SECTION("Run removes the offer and opens the setup steps") {
++        test::answer_top_modal("btn_primary");
++        settle();
++        CHECK(launches == 1);
++        CHECK_FALSE(fs::exists(flag));
++        CHECK_FALSE(offer::asking());
++        // The next start asks nothing
++        offer::at_start(false);
++        settle();
++        CHECK(ModalStack::instance().top_dialog() == nullptr);
++    }
++
++    SECTION("Skip removes the offer and opens nothing") {
++        test::answer_top_modal("btn_secondary");
++        settle();
++        CHECK(launches == 0);
++        CHECK_FALSE(fs::exists(flag));
++        CHECK(ModalStack::instance().top_dialog() == nullptr);
++        offer::at_start(false);
++        settle();
++        CHECK(ModalStack::instance().top_dialog() == nullptr);
++    }
++
++    SECTION("Closed without an answer: asked again at the next start") {
++        test::dismiss_top_modal();
++        settle();
++        CHECK(launches == 0);
++        CHECK(fs::exists(flag));
++        CHECK_FALSE(offer::asking());
++        offer::at_start(false);
++        settle();
++        CHECK(ModalStack::instance().top_dialog() != nullptr);
++    }
++
++    SECTION("SETUP_WIZARD from Klipper answers it and closes the question") {
++        offer::answered_elsewhere();
++        settle();
++        CHECK_FALSE(fs::exists(flag));
++        CHECK_FALSE(offer::asking());
++        CHECK(launches == 0);
++    }
++}
++
++TEST_CASE_METHOD(OfferFixture, "Kiln wizard offer: Run is refused while a print runs",
++                 "[kiln][kiln_wizard_offer]") {
++    write_flag();
++    offer::at_start(false);
++    settle();
++    REQUIRE(ModalStack::instance().top_dialog() != nullptr);
++    state().update_from_status({{"print_stats", {{"state", "printing"}}}});
++    settle();
++
++    test::answer_top_modal("btn_primary");
++    settle();
++    CHECK(launches == 0);
++    // Kept: asked again at the next start
++    CHECK(fs::exists(flag));
++    bool warned = false;
++    for (const auto& t : toasts) {
++        warned = warned || (t.first == ToastSeverity::WARNING &&
++                            t.second == "Cannot calibrate while printing");
++    }
++    CHECK(warned);
++
++    state().update_from_status({{"print_stats", {{"state", "standby"}}}});
++    settle();
++}
++
++TEST_CASE_METHOD(OfferFixture, "Kiln wizard offer: without the variable nothing happens",
++                 "[kiln][kiln_wizard_offer]") {
++    write_flag();
++    unsetenv(offer::kEnv);
++    CHECK(offer::flag_path().empty());
++    CHECK_FALSE(offer::pending());
++    offer::at_start(false);
++    settle();
++    CHECK(ModalStack::instance().top_dialog() == nullptr);
++    CHECK(offer::drop());
++    CHECK(fs::exists(flag));
++}
++
++TEST_CASE_METHOD(OfferFixture, "Kiln wizard offer: in Russian, only Russian",
++                 "[kiln][kiln_wizard_offer][i18n]") {
++    struct RestoreLanguage {
++        ~RestoreLanguage() {
++            lv_translation_set_language(helix::ui::kIdentityLocale);
++        }
++    } restore;
++    helix::ui::ensure_translation_loaded("ru");
++    lv_translation_set_language("ru");
++
++    write_flag();
++    offer::at_start(false);
++    settle();
++    REQUIRE(ModalStack::instance().top_dialog() != nullptr);
++    const std::string text = test::top_modal_text();
++    CHECK_THAT(text, ContainsSubstring("Запустить мастер настройки?"));
++    CHECK_THAT(text, ContainsSubstring("смещение по Z или платы"));
++    // One language on the screen: none of the English texts beside it
++    CHECK_THAT(text, !ContainsSubstring("setup wizard"));
++    CHECK_THAT(text, !ContainsSubstring("kept your settings"));
++    lv_obj_t* dialog = ModalStack::instance().top_dialog();
++    const std::string run = test::subtree_text(lv_obj_find_by_name(dialog, "btn_primary"));
++    const std::string skip = test::subtree_text(lv_obj_find_by_name(dialog, "btn_secondary"));
++    CHECK_THAT(run, ContainsSubstring("Запуск"));
++    CHECK_THAT(run, !ContainsSubstring("Run"));
++    CHECK_THAT(skip, ContainsSubstring("Пропустить"));
++    CHECK_THAT(skip, !ContainsSubstring("Skip"));
++}
+diff --git a/translations/en.yml b/translations/en.yml
+index 2ada29d..6639f2a 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -5395,3 +5395,6 @@ translations:
+   'Which slot is in the toolhead?': 'Which slot is in the toolhead?'
+   'Kiln can''t tell which slot''s filament is in the toolhead. Look at the tubes: tap the slot whose filament goes into the toolhead. Nothing is fed until you choose.': 'Kiln can''t tell which slot''s filament is in the toolhead. Look at the tubes: tap the slot whose filament goes into the toolhead. Nothing is fed until you choose.'
+   'I pulled it out by hand': 'I pulled it out by hand'
++  # Kiln OS reinstalled over Flashforge's firmware: the setup wizard offered once (patch 0088)
++  'Run the setup wizard?': 'Run the setup wizard?'
++  'Kiln OS is installed again and kept your settings. Flashforge''s firmware ran in between and may have changed the filament, the Z offset or the boards. The setup wizard checks and tunes the printer again; every step can be skipped.': 'Kiln OS is installed again and kept your settings. Flashforge''s firmware ran in between and may have changed the filament, the Z offset or the boards. The setup wizard checks and tunes the printer again; every step can be skipped.'
+diff --git a/translations/ru.yml b/translations/ru.yml
+index bb03bc7..e902639 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -5561,3 +5561,6 @@ translations:
+   'Which slot is in the toolhead?': 'Какой слот в печатающей головке?'
+   'Kiln can''t tell which slot''s filament is in the toolhead. Look at the tubes: tap the slot whose filament goes into the toolhead. Nothing is fed until you choose.': 'Kiln не может определить, филамент какого слота в печатающей головке. Посмотрите на трубки и нажмите слот, филамент которого идёт в печатающую головку. Пока вы не выберете, ничего не подаётся.'
+   'I pulled it out by hand': 'Филамент вытянут вручную'
++  # Kiln OS reinstalled over Flashforge's firmware: the setup wizard offered once (patch 0088)
++  'Run the setup wizard?': 'Запустить мастер настройки?'
++  'Kiln OS is installed again and kept your settings. Flashforge''s firmware ran in between and may have changed the filament, the Z offset or the boards. The setup wizard checks and tunes the printer again; every step can be skipped.': 'Kiln OS установлена снова, ваши настройки сохранены. До этого работала прошивка Flashforge: она могла изменить филамент, смещение по Z или платы. Мастер настройки снова проверит и настроит принтер, любой шаг можно пропустить.'

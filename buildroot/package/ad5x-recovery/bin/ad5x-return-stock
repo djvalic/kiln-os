@@ -7,8 +7,8 @@
 # OS first, which then waits for a tap). docs/install.md, "Going back to
 # stock".
 #
-# usage: ad5x-return-stock [--check] [--source SRC] [--flashforge-spl]
-#        ad5x-return-stock --yes [--source SRC] [--flashforge-spl]
+# usage: ad5x-return-stock [--check] [--source SRC] [--flashforge-spl] [WIPE]
+#        ad5x-return-stock --yes [--source SRC] [--flashforge-spl] [WIPE]
 #        ad5x-return-stock --status
 #        ad5x-return-stock --forget
 #   --check      (the default) every check, the stock files found, what
@@ -24,9 +24,58 @@
 #   --flashforge-spl  also put Flashforge's own boot loader (its SPL) back,
 #                from this printer's saved first MiB (boot.img); offered
 #                only when that file checks and matches this disk
+#   --remove-kiln-data  (WIPE) also delete Kiln OS's settings and files
+#                in /data/ad5x once the return is done and checked (the
+#                last step, 9; below: what goes and what stays)
+#   --remove-prints  (WIPE, only with --remove-kiln-data) the uploaded print
+#                files (printer_data/gcodes) go too
 #   --forget     drop the record of an unfinished return (the recovery
 #                screen then allows Boot main OS and Install again)
 #   --stop-after N   tests: stop (exit 9) once step N is done
+#
+# Kiln's data (/data/ad5x) stays by default, so Kiln OS installed again
+# finds the owner's settings. --remove-kiln-data deletes it as step 9, the
+# last: only in a --yes run in which steps 1-8 are all done, checked on
+# the disk (steps 1-7 once more before the boot flag), and the boot flag
+# read back on slot B again just before; a return refused, stopped or
+# failed deletes nothing. Kiln OS installed later is
+# then a first install: its setup wizard runs as at a first start.
+# Deleted: every entry of /data/ad5x except those kept below, e.g.
+# printer_data/ (config: printer.cfg, the Z offset, mesh, variables.cfg;
+# Moonraker's database, logs, comms), helixscreen/ (the screen's
+# settings), NetworkManager/, wpa_supplicant.conf, network.conf, plugins/,
+# plugins-root/, ssh/ (root's keys and the host keys), kiln-log/, update/,
+# kiln-update/, kiln-stage/, kiln-status/, apps/, web/, nginx/, kernel/,
+# mcu/, install/ (the installer then starts afresh), recovery/ (but
+# touch-cal), the switches (*.enable, *.disable, ...), clock, logo.jpg,
+# camera.conf, screen.conf, kiln-os.token, swupdate-tmp/, moonraker-tmp/.
+# Kept, and why:
+#   stock/, stock.prev-*/  Kiln's copy of Flashforge's own files (stock's
+#       root, kernel, boot.img): the source of a later return, the way back
+#       to Flashforge's boot loader, what vendor/ is refilled from, and
+#       what a later Kiln install and boot loader install compare with
+#   vendor/  Flashforge's driver modules and board tools from this printer:
+#       this recovery OS (it stays in slot A as the safety net) needs them
+#       on Flashforge's kernel for the screen, touch and Ethernet
+#   recovery/touch-cal  that safety net's touch range
+#   bootloader/  the record and log of Kiln's boot loader writes (Kiln's
+#       SPL stays in the first MiB unless --flashforge-spl):
+#       ad5x-bootloader-install reads it
+#   return-stock/  this return's log and record (ad5x-status, a later
+#       return; with a .tgz source its unpacked stock files in work/)
+#   printer_data/gcodes  the print files, unless --remove-prints
+# Nothing outside /data/ad5x: stock's own files on the data partition
+# (config/, zmod/, ...) and the usershare partition are never touched.
+# Safety: refused (nothing written at all) when /data isn't mounted,
+# /data/ad5x isn't a folder, anything is mounted inside it, or, keeping
+# the print files, printer_data is a link or printer_data/gcodes a link
+# into /data/ad5x. Links are never followed: a link is removed itself, never
+# what it points to. Each part is first renamed into /data/ad5x/
+# .kiln-removed (the same partition: each goes at once), then that folder
+# is removed; one left by a power cut is removed by the next run. Every
+# part with its size goes into the return's log. A part that can't be
+# removed doesn't undo the return: "wipe_failed: yes", a later --yes
+# --remove-kiln-data tries again.
 #
 # Where the stock files come from, the first that checks: 1. /data/ad5x/
 # stock (kernel.img, rootfs.squashfs, SHA256SUMS); 2. its copy on the
@@ -120,7 +169,13 @@
 # "source_kind: stock|usershare|copy|backup|package" and "source_file:"
 # (the folder, backup or package name; none for stock and usershare),
 # "target:" with "target_kind: kiln-spl|flashforge-spl|flashforge",
-# "config:" with "config_kind: zmod|missing|mixed" and "config_lines: N".
+# "config:" with "config_kind: zmod|missing|mixed" and "config_lines: N";
+# Kiln's data for the two boxes, at every --check: "wipe_option: yes|no",
+# "kiln_data_kb: N" (what --remove-kiln-data deletes, print files apart),
+# "prints_kb: N" and "prints_files: N" (printer_data/gcodes), "wipe_asked:
+# kiln|prints" (an unfinished return was asked to delete it); after step 9
+# "wipe_removed_kb: N" with "wipe_prints: removed|kept", or "wipe_failed:
+# yes".
 #
 # A usershare that Kiln OS's PC tool made after the factory's was lost
 # (tools/ad5x_usershare.py, KILN-GENERATED.txt) is warned about: stock's
@@ -131,13 +186,15 @@
 # has them (p1-p6, p7's start); the first MiB holds Kiln's or Flashforge's
 # boot loader; slot A's kernel a whole uImage and its root a squashfs (the
 # safety net while slot B is rewritten); a stock source that checks.
-# Progress lines "@progress N text" for the touch screen; log in
+# Progress lines "@progress N [code] text" for the touch screen (the code
+# is the screen's translation: recovery-ui/src/progress.c); log in
 # /data/ad5x/return-stock/log; record of an unfinished return in
 # /data/ad5x/return-stock/state.
 # Exit: 0 done (or nothing to do), 1 refused (nothing written), 2 checks
 # passed (no --yes), 3 a write failed but the boot flag is still on slot A
 # (this recovery OS starts again; run it again), 4 the boot loader area is
-# not as before (don't switch off; run it again), 9 stopped by --stop-after.
+# not as before (don't switch off; run it again), 5 the return done but
+# step 9 not run (nothing of Kiln's data removed), 9 stopped by --stop-after.
 # AD5X_RECOVERY_LIB, AD5X_LIB, AD5X_FF_DECRYPT (tests).
 . ${AD5X_RECOVERY_LIB:-/usr/lib/ad5x-recovery}/recovery.sh
 LIB=${AD5X_LIB:-/usr/lib/ad5x}
@@ -160,7 +217,7 @@ LOG=$RS/log
 WORK=$RS/work
 MARK=kiln-stock-backup					# a stock copy's folder name
 
-mode=check src_arg= ffspl= stop_after= dry=
+mode=check src_arg= ffspl= stop_after= dry= wipe= wprints=
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--check) mode=check ;;
@@ -170,12 +227,15 @@ while [ $# -gt 0 ]; do
 	--dry-run) dry=1 ;;
 	--source) src_arg=$2; shift ;;
 	--flashforge-spl) ffspl=1 ;;
+	--remove-kiln-data) wipe=1 ;;
+	--remove-prints) wprints=1 ;;
 	--stop-after) stop_after=$2; shift ;;
 	-h|--help) sed -n '2,/^# AD5X_RECOVERY_LIB/p' "$0"; exit 0 ;;
-	*) sed -n '2,32p' "$0" >&2; exit 1 ;;
+	*) sed -n '2,38p' "$0" >&2; exit 1 ;;
 	esac
 	shift
 done
+[ -n "$wprints" ] && [ -z "$wipe" ] && { echo "$ME: --remove-prints only with --remove-kiln-data" >&2; exit 1; }
 [ -n "$dry" ] && [ "$mode" = yes ] && mode=check
 
 mkdir -p "$RS" 2>/dev/null
@@ -190,7 +250,9 @@ nfail=0
 ok() { say "  ok    $*"; }
 bad() { say "  FAIL  $*"; nfail=$((nfail + 1)); }
 note() { say "  note  $*"; }
-prog() { echo "@progress $*"; }
+# prog N CODE TEXT: the screen's progress line, not in the log; CODE may
+# be code:ARG (ARG without "]")
+prog() { echo "@progress $1 [$2] $3"; }
 loud() {
 	say "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
 	for l in "$@"; do say "!! $l"; done
@@ -300,6 +362,11 @@ if [ "$mode" = status ]; then
 	echo "record: ${st:-none}$([ -n "$(stval source)" ] && echo " (source $(stval source))")"
 	[ "$(stval cfg)" = failed ] && echo "printer.cfg: couldn't be changed at the return (left as it was)"
 	[ "$(stval usboot)" = failed ] && echo "boot.img: couldn't be copied to usershare at the return (it is in /data/ad5x/stock)"
+	case "$(stval wipe)" in
+	done) echo "Kiln's data: removed at the return ($([ "$(stval wipe_prints)" = yes ] && echo "print files too" || echo "print files kept"))" ;;
+	failed|started) echo "Kiln's data: not all removed (--yes --remove-kiln-data tries again)" ;;
+	asked) echo "Kiln's data: to be removed at the end of the return" ;;
+	esac
 	if [ "$st" = started ]; then w=unfinished
 	elif [ "$h4" = stock ] && [ "$k3" = stock ] && [ -z "$UB_HAVE" ] && [ "$fl" = ota:kernel2 ]; then
 		w="stock on $LOADER's boot loader"
@@ -322,7 +389,7 @@ fi
 # ------------------------------------------------------------- checks
 say "== $ME $(date '+%Y-%m-%d %H:%M:%S') ($mode${src_arg:+, source $src_arg}${ffspl:+, Flashforge's boot loader too})"
 say "checks:"
-prog 2 "Checking"
+prog 2 checking "Checking"
 if [ "$(id -u)" = 0 ]; then ok "root"; else bad "not root"; fi
 if [ -f "${AD5X_ROOT:-}/etc/ad5x-recovery" ] && [ "$(rc_slot)" = A ]; then
 	ok "the recovery OS, slot A ($(rc_root))"
@@ -492,7 +559,7 @@ try_tgz() {	# FILE
 		av=$(df -k "$WORK" 2>/dev/null | awk 'NR == 2 { print $4 }')
 		[ -n "$av" ] && [ "$av" -ge 65536 ] || { rm -rf "$C"; WHY="less than 64 MiB free in $WORK"; return 1; }
 		say "  ...   decrypting ${F##*/} (a minute or two)"
-		prog 4 "Unpacking ${F##*/}"
+		prog 4 "rs_unpack:$(printf '%s' "${F##*/}" | tr -d ']')" "Unpacking ${F##*/}"
 		names=$("$FFDEC" < "$F" 2>"$T/dec.err" | tar -tf - 2>/dev/null)
 		[ -s "$T/dec.err" ] && { WHY="$(head -n 1 "$T/dec.err" | sed 's/^ad5x-ff-decrypt: //')"; rm -rf "$C"; return 1; }
 		kn=$(echo "$names" | grep -E '^(\./)?kernel-[0-9][0-9.]*\.tar(\.xz)?$' | head -n 1)
@@ -716,6 +783,130 @@ ifs_forget() {
 	return 1
 }
 
+# ------------------------------------------------------------- Kiln's data (step 9)
+# --remove-kiln-data: the header says what goes and what stays. KD is
+# never followed through a link; mv moves a link itself and rm -r never
+# follows one, and nothing may be mounted inside KD (wipe_check), so
+# every removal stays on this partition, inside KD
+KD=$AD5X_DATA/ad5x
+WTRASH=$KD/.kiln-removed
+kb_h() { awk -v k="$1" 'BEGIN { if (k >= 1048576) printf "%.1f GiB", k / 1048576
+	else if (k >= 1024) printf "%.1f MiB", k / 1024; else printf "%d KiB", k }'; }
+# the files' own sizes, not du's blocks: a compressing file system (the
+# builder's) would read them as nearly empty (as ad5x-stock-copy's kb())
+kb_of() { find "$1" -xdev -type f 2>/dev/null | while read -r f; do wc -c < "$f"; done | awk '{ s += $1 } END { print int(s / 1024) }'; }
+# wipe_each FN [prints]: FN REL for each part of KD that step 9 removes
+# (REL: its path under KD), print files apart; "prints": printer_data
+# goes whole (--remove-prints) when it is a folder. The left-over
+# .kiln-removed isn't named (step 9 removes it first)
+wipe_each() {
+	local we_e we_n we_c
+	for we_e in "$KD"/* "$KD"/.[!.]* "$KD"/..?*; do
+		[ -e "$we_e" ] || [ -L "$we_e" ] || continue
+		we_n=${we_e##*/}
+		case "$we_n" in
+		stock|stock.prev-*|vendor|return-stock|bootloader|.kiln-removed) continue ;;
+		esac
+		if [ ! -L "$we_e" ] && [ -d "$we_e" ] &&
+		   { [ "$we_n" = recovery ] || { [ "$we_n" = printer_data ] && [ "${2:-}" != prints ]; }; }; then
+			for we_c in "$we_e"/* "$we_e"/.[!.]* "$we_e"/..?*; do
+				[ -e "$we_c" ] || [ -L "$we_c" ] || continue
+				case "$we_n/${we_c##*/}" in printer_data/gcodes|recovery/touch-cal) continue ;; esac
+				"$1" "$we_n/${we_c##*/}"
+			done
+		else
+			"$1" "$we_n"
+		fi
+	done
+}
+# wipe_scan: KILN_KB and $T/wipe.list ("KB<TAB>REL", for the plan and the
+# log) of what step 9 removes, print files apart; PR_KB, PR_FILES:
+# printer_data/gcodes (regular files, not in hidden folders: Moonraker's
+# .thumbs), PR_LINK: it is a link (to that)
+wipe_add() {
+	local k
+	k=$(kb_of "$KD/$1"); k=${k:-0}
+	printf '%s\t%s\n' "$k" "$1" >> "$T/wipe.list"
+	KILN_KB=$((KILN_KB + k))
+}
+wipe_scan() {
+	local g
+	: > "$T/wipe.list"; KILN_KB=0 PR_KB=0 PR_FILES=0 PR_LINK=
+	[ -d "$KD" ] && [ ! -L "$KD" ] || return 0
+	if [ -e "$WTRASH" ] || [ -L "$WTRASH" ]; then wipe_add .kiln-removed; fi
+	wipe_each wipe_add
+	[ ! -L "$KD/printer_data" ] && [ -d "$KD/printer_data" ] || return 0
+	g=$KD/printer_data/gcodes
+	if [ -L "$g" ]; then
+		PR_LINK=$(readlink "$g")
+	elif [ -d "$g" ]; then
+		PR_KB=$(kb_of "$g"); PR_KB=${PR_KB:-0}
+		PR_FILES=$(cd "$g" && find . -type f 2>/dev/null | grep -vc '/\.')
+	fi
+}
+# wipe_check: step 9 may run (0); else WIPE_WHY says why not
+wipe_check() {
+	local mp r
+	WIPE_WHY=
+	if [ -L "$KD" ] || [ ! -d "$KD" ]; then WIPE_WHY="$KD isn't a folder"; return 1; fi
+	if ! awk -v m="$AD5X_DATA" '$2 == m { f = 1 } END { exit !f }' "$AD5X_MOUNTS"; then
+		WIPE_WHY="the data partition isn't mounted at $AD5X_DATA"; return 1
+	fi
+	mp=$(awk -v d="$KD" '$2 == d || index($2, d "/") == 1 { print $2; exit }' "$AD5X_MOUNTS")
+	if [ -n "$mp" ]; then WIPE_WHY="something is mounted inside $KD ($mp)"; return 1; fi
+	if [ -z "$wprints" ]; then
+		if [ -L "$KD/printer_data" ]; then
+			WIPE_WHY="printer_data is a link (the print files may be behind it)"; return 1
+		fi
+		if [ -L "$KD/printer_data/gcodes" ]; then
+			r=$(readlink -f "$KD/printer_data/gcodes" 2>/dev/null)
+			case "$r" in "$KD"|"$KD"/*)
+				WIPE_WHY="printer_data/gcodes is a link into $KD ($r): the print files would go too"; return 1 ;;
+			esac
+		fi
+	fi
+	return 0
+}
+# wipe_left: what step 9 would still remove, nothing (0) when it is done
+wipe_one() { wl=$((wl + 1)); }
+wipe_left() {
+	wl=0
+	[ -d "$KD" ] && [ ! -L "$KD" ] || return 0
+	{ [ -e "$WTRASH" ] || [ -L "$WTRASH" ]; } && wl=$((wl + 1))
+	if [ -n "$wprints" ]; then wipe_each wipe_one prints
+	else wipe_each wipe_one; fi
+	[ "$wl" = 0 ]
+}
+# wipe_run: step 9. Each part renamed into .kiln-removed (one left by a cut
+# short run removed first), then that folder removed; every part logged
+wi=0 wfail=0 wkb=0
+wipe_mv() {
+	local k
+	wi=$((wi + 1))
+	k=$(kb_of "$KD/$1"); k=${k:-0}
+	if mv -f "$KD/$1" "$WTRASH/$wi" 2>/dev/null && [ ! -e "$KD/$1" ] && [ ! -L "$KD/$1" ]; then
+		say "  removed: $1 ($(kb_h "$k"))"
+		wkb=$((wkb + k))
+	else
+		wfail=$((wfail + 1))
+		say "  FAIL  couldn't remove $1"
+	fi
+}
+wipe_run() {
+	wi=0 wfail=0 wkb=0
+	if [ -e "$WTRASH" ] || [ -L "$WTRASH" ]; then
+		say "  removing .kiln-removed (left by an earlier removal cut short)"
+		rm -rf "$WTRASH"
+	fi
+	mkdir "$WTRASH" 2>/dev/null && [ ! -L "$WTRASH" ] || { say "  FAIL  can't make $WTRASH"; return 1; }
+	if [ -n "$wprints" ]; then wipe_each wipe_mv prints
+	else wipe_each wipe_mv; fi
+	sync
+	rm -rf "$WTRASH"
+	sync
+	[ "$wfail" = 0 ] && wipe_left
+}
+
 # try SPEC: one source; prints what was tried
 SK= SR= SDESC= SKIND= SFILE= SSPEC= BOOT_CANDS= tried=
 try() {
@@ -893,6 +1084,40 @@ fi
 kv=$(ifs_forget "$KVARS" check)
 [ -n "$kv" ] && note "Kiln's variables.cfg names the IFS slot in the toolhead ($kv): step 7 drops it (stock loads and unloads with its own record; Kiln OS installed again finds the slot)"
 
+# Kiln's data (step 9, --remove-kiln-data): what it removes, with sizes,
+# at every check (the screen's boxes show the sizes before they are ticked)
+wipe_scan
+wipe_ok=1
+wipe_check || wipe_ok=
+if [ -n "$wipe_ok" ] && [ -s "$T/wipe.list" ]; then
+	say "wipe_option: yes"
+else
+	say "wipe_option: no"
+fi
+say "kiln_data_kb: $KILN_KB"
+say "prints_kb: $PR_KB"
+say "prints_files: $PR_FILES"
+case "$(stval state):$(stval wipe)" in
+started:asked) say "wipe_asked: $([ "$(stval wipe_prints)" = yes ] && echo prints || echo kiln)" ;;
+esac
+if [ -n "$wipe" ]; then
+	if [ -z "$wipe_ok" ]; then
+		bad "--remove-kiln-data: $WIPE_WHY"
+	else
+		note "--remove-kiln-data: after the return (step 9), removed from $KD for good:"
+		while IFS="$TAB" read -r k rel; do
+			say "          $rel  $(kb_h "$k")"
+		done < "$T/wipe.list"
+		[ -s "$T/wipe.list" ] || say "          (nothing)"
+		if [ -n "$wprints" ]; then
+			say "          printer_data/gcodes (print files: $PR_FILES, $(kb_h "$PR_KB"))${PR_LINK:+ (a link to $PR_LINK: only the link)}"
+		fi
+		say "        kept: stock/ (Flashforge's files), vendor/, recovery/touch-cal, bootloader/, return-stock/$([ -z "$wprints" ] && echo ", printer_data/gcodes (print files: $PR_FILES, $(kb_h "$PR_KB"))")"
+	fi
+elif [ "$KILN_KB" -gt 0 ] 2>/dev/null; then
+	note "Kiln OS's settings and files in $KD ($(kb_h "$KILN_KB"); print files: $PR_FILES, $(kb_h "$PR_KB")) stay for a later install of Kiln OS (--remove-kiln-data removes them)"
+fi
+
 # ------------------------------------------------------------- the steps
 # done_N: step N is done on the disk (or doesn't apply)
 done_1() {	# U-Boot out of 0xA400
@@ -941,16 +1166,19 @@ done_7_left() {
 	return 0
 }
 done_8() { [ "$(rc_read_flag)" = ota:kernel2 ]; }
+done_9() { wipe_left; }
 NAME_1="Kiln's U-Boot out of 0xA400" NAME_2="U-Boot's settings in ota cleared"
 NAME_3="rootfs2 (p4) <- stock root" NAME_4="kernel2 (p3) <- stock kernel"
 NAME_5="kernel (p1) <- stock kernel" NAME_6="Flashforge's boot loader (SPL)"
 NAME_7="stock's board update armed, install state set" NAME_8="boot flag -> slot B"
+NAME_9="Kiln OS's settings and files removed"
 [ -n "$US_BOOT" ] && NAME_7="$NAME_7, boot.img to usershare"
 [ -s "$T/cfg.todo" ] && NAME_7="$NAME_7, $(wc -l < "$T/cfg.todo" | tr -d ' ') line(s) of stock's printer.cfg switched off"
 applies() {
 	case "$1" in
 	1) [ "$LOADER" = kiln ] ;;
 	5|6) [ -n "$ffspl" ] ;;
+	9) [ -n "$wipe" ] ;;
 	*) true ;;
 	esac
 }
@@ -958,8 +1186,9 @@ applies() {
 ndone=0 todo=
 if [ "$nfail" = 0 ]; then
 	say "plan (in this order; the boot flag stays on slot A until the last):"
-	for n in 1 2 3 4 5 6 7 8; do
+	for n in 1 2 3 4 5 6 7 8 9; do
 		eval "nm=\$NAME_$n"
+		[ $n = 9 ] && nm="$nm ($(kb_h "$KILN_KB")$([ -n "$wprints" ] && echo ", print files too: $PR_FILES, $(kb_h "$PR_KB")"))"
 		if ! applies $n; then continue
 		elif done_$n; then say "  $n. $nm: done$([ $n = 7 ] && done_7_left)"; ndone=$((ndone + 1))
 		else say "  $n. $nm"; todo="$todo $n"; fi
@@ -980,8 +1209,12 @@ if [ -z "$todo" ]; then
 	say "result: done: Flashforge's stock system is in slot B and the boot flag points at it. Switch the printer off and on$(cfg_scan && [ "$(stval cfg)" = failed ] && echo ". Stock's printer.cfg couldn't be changed: see above")"
 	exit 0
 fi
+# todo_ret: the return's own steps still to do (without step 9)
+todo_ret=$(for n in $todo; do [ "$n" = 9 ] || echo $n; done | tr '\n' ' ')
 if [ "$mode" != yes ]; then
-	if [ "$(stval state)" = started ]; then
+	if [ -z "$todo_ret" ]; then
+		say "result: ready: Flashforge's firmware is back already; only Kiln OS's settings and files to remove (--yes removes them)"
+	elif [ "$(stval state)" = started ]; then
 		say "result: ready to go on: an earlier return stopped after part of the work (--yes finishes it)"
 	else
 		say "result: ready: nothing written yet (--yes starts it)"
@@ -993,11 +1226,20 @@ fi
 mkdir "$LOCK" 2>/dev/null || { say "result: refused: another $ME runs ($LOCK)"; exit 1; }
 locked=1
 trap '' HUP INT TERM PIPE
-stset state started
-stset date "$(date '+%Y-%m-%d %H:%M:%S')"
-stset source "$SSPEC"
-stset spl "$PLAN_SPL"
-ad5x-bootlog "return-stock: started ($SSPEC)" 2>/dev/null
+if [ -n "$todo_ret" ]; then
+	stset state started
+	stset date "$(date '+%Y-%m-%d %H:%M:%S')"
+	stset source "$SSPEC"
+	stset spl "$PLAN_SPL"
+fi
+# step 9 asked (the screen ticks its boxes again for an unfinished return)
+if [ -n "$wipe" ]; then
+	stset wipe asked
+	stset wipe_prints "$([ -n "$wprints" ] && echo yes || echo no)"
+elif [ "$(stval wipe)" = asked ]; then
+	stset wipe none
+fi
+[ -n "$todo_ret" ] && ad5x-bootlog "return-stock: started ($SSPEC)" 2>/dev/null
 say "writing (don't switch the printer off):"
 
 fail3() {	# WHAT: a write failed, nothing unsafe left
@@ -1066,7 +1308,7 @@ step_2() {
 }
 step_3() {
 	say "  rootfs2 ($P4) <- stock root, $RLEN bytes"
-	prog 30 "Writing Flashforge's root (slot B)"
+	prog 30 rs_root "Writing Flashforge's root (slot B)"
 	head -c "$RLEN" "$SR" | dd of="$P4" bs=65536 conv=notrunc,fsync 2>/dev/null && done_3
 }
 step_4() {
@@ -1228,9 +1470,9 @@ step_8() {
 }
 
 si=0 total=$(echo $todo | wc -w)
-for sn in $todo; do
+for sn in $todo_ret; do
 	eval "nm=\$NAME_$sn"
-	prog $((10 + si * 85 / total)) "Step $sn: $nm"
+	prog $((10 + si * 85 / total)) rs_step$sn "Step $sn: $nm"
 	if [ "$sn" = 8 ]; then
 		# every step before it, checked once more on the disk
 		for sm in 1 2 3 4 5 6 7; do
@@ -1247,12 +1489,48 @@ for sn in $todo; do
 done
 stset state done
 rm -f "$RS/before-spl.img"
-ad5x-bootlog "return-stock: done" 2>/dev/null
-prog 100 "Done"
+[ -n "$todo_ret" ] && ad5x-bootlog "return-stock: done" 2>/dev/null
+wipe_refused() {	# WHY: step 9 not run, nothing of Kiln's data removed
+	loud "Kiln OS's settings and files were not removed: $1." "Nothing of them was removed."
+	stset wipe failed
+	say "wipe_failed: yes"
+	say "result: failed: Kiln OS's settings and files not removed ($1)"
+	exit 5
+}
+# Step 9, the last: Kiln's data, only once every step of the return reads
+# back done on the disk (the boot flag on slot B)
+wipew=
+case " $todo " in
+*" 9 "*)
+	prog $((10 + si * 85 / total)) rs_step9 "Step 9: $NAME_9"
+	# steps 1-7 were checked on the disk in this run (the plan, or once
+	# more before the boot flag); the boot flag is read back here again
+	[ "$(stval state)" = done ] && done_8 || wipe_refused "the boot flag isn't on slot B"
+	wipe_check || wipe_refused "$WIPE_WHY"
+	stset wipe started
+	ad5x-bootlog "return-stock: removing Kiln's data" 2>/dev/null
+	say "  removing Kiln OS's settings and files from $KD$([ -n "$wprints" ] && echo ", the print files too"):"
+	if wipe_run; then
+		stset wipe done
+		say "  step 9 done: $NAME_9 ($(kb_h "$wkb"))"
+		say "wipe_removed_kb: $wkb"
+		say "wipe_prints: $([ -n "$wprints" ] && echo removed || echo kept)"
+		wipew=". Kiln OS's settings and files were removed ($(kb_h "$wkb"))"
+		ad5x-bootlog "return-stock: Kiln's data removed" 2>/dev/null
+	else
+		stset wipe failed
+		loud "Some of Kiln OS's settings and files couldn't be removed (FAIL lines above)." \
+			"Flashforge's firmware is back all the same. --yes --remove-kiln-data tries again."
+		say "wipe_failed: yes"
+		wipew=". Some of Kiln OS's files couldn't be removed: see above"
+		ad5x-bootlog "return-stock: Kiln's data not all removed" 2>/dev/null
+	fi ;;
+esac
+prog 100 done "Done"
 cfgw=
 if [ -n "$CFG_FAILED" ] || { [ "$(stval cfg)" = failed ] && cfg_scan; }; then
 	say "config_failed: yes"
 	cfgw=". Stock's printer.cfg couldn't be changed: remove the [include] lines listed above if stock's Klipper doesn't start"
 fi
-say "result: done. Switch the printer off and on: Flashforge's firmware starts$cfgw"
+say "result: done. Switch the printer off and on: Flashforge's firmware starts$cfgw$wipew"
 exit 0

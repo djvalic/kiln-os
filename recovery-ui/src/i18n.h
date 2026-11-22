@@ -3,6 +3,8 @@
 #ifndef RUI_I18N_H
 #define RUI_I18N_H
 
+#include <stdbool.h>
+
 #include "i18n_ids.h"
 
 /* Language for tr() from now on; unknown values mean English */
@@ -12,6 +14,11 @@ rui_lang i18n_get_lang(void);
 /* The text of a string in the current language (English when the
  * translation is still empty). Valid for the life of the program. */
 const char *tr(enum rui_str id);
+
+/* True when the current language has its own text for id (not English,
+ * not an empty translation): run-time text (progress.c) is shown
+ * translated only then */
+bool tr_has(enum rui_str id);
 
 /* "sym  text" for buttons and labels with an icon. The buffer is shared
  * by the last 8 calls: use the result at once (LVGL copies label text). */

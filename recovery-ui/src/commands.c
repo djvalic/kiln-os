@@ -28,11 +28,13 @@ static const struct {
 	[CMD_BACKUP]        = { "CMD_BACKUP",        "ad5x-backup {DRY} {ALL} {DEST}" },
 	[CMD_RESTORE]       = { "CMD_RESTORE",       "ad5x-restore {DRY} {SRC} {PARTS}" },
 	[CMD_RESTORE_STOCK] = { "CMD_RESTORE_STOCK", "ad5x-restore-stock {DRY}" },
-	[CMD_RETURN_CHECK]  = { "CMD_RETURN_CHECK",  "ad5x-return-stock --check {SPL}" },
-	[CMD_RETURN_STOCK]  = { "CMD_RETURN_STOCK",  "ad5x-return-stock --yes {SPL}" },
+	[CMD_RETURN_CHECK]  = { "CMD_RETURN_CHECK",  "ad5x-return-stock --check {SPL} {WIPE}" },
+	[CMD_RETURN_STOCK]  = { "CMD_RETURN_STOCK",  "ad5x-return-stock --yes {SPL} {WIPE}" },
 	[CMD_STOCK_COPY_USB] = { "CMD_STOCK_COPY_USB", "ad5x-stock-copy usb" },
 	[CMD_BOOTLOADER_CHECK] = { "CMD_BOOTLOADER_CHECK", "ad5x-bootloader-install --check" },
 	[CMD_BOOTLOADER_INSTALL] = { "CMD_BOOTLOADER_INSTALL", "ad5x-bootloader-install --yes" },
+	[CMD_BOOTLOADER_UPGRADE_CHECK] = { "CMD_BOOTLOADER_UPGRADE_CHECK", "ad5x-bootloader-install --check --upgrade" },
+	[CMD_BOOTLOADER_UPGRADE] = { "CMD_BOOTLOADER_UPGRADE", "ad5x-bootloader-install --yes --upgrade" },
 	[CMD_BOOT_MAIN]     = { "CMD_BOOT_MAIN",     "ad5x-boot-main" },
 	[CMD_REBOOT]        = { "CMD_REBOOT",        "sync; reboot" },
 	[CMD_POWEROFF]      = { "CMD_POWEROFF",      "sync; poweroff" },
@@ -114,7 +116,8 @@ static void sb_adds(struct sb *b, const char *s)
 
 static void add_value(struct sb *b, const char *name, const char *val)
 {
-	if (!strcmp(name, "DRY") || !strcmp(name, "ALL") || !strcmp(name, "SPL")) {
+	if (!strcmp(name, "DRY") || !strcmp(name, "ALL") || !strcmp(name, "SPL") ||
+	    !strcmp(name, "WIPE")) {
 		sb_adds(b, val);	/* flags as given */
 	} else if (!strcmp(name, "PARTS")) {
 		char *copy = strdup(val), *save = NULL;
@@ -161,7 +164,7 @@ char *cmd_expand(rui_entry e, const char *const *vars)
 		if (val)
 			add_value(&b, name, val);
 		else if (strcmp(name, "DRY") && strcmp(name, "ALL") && strcmp(name, "SPL") &&
-			 strcmp(name, "PARTS"))
+			 strcmp(name, "WIPE") && strcmp(name, "PARTS"))
 			sb_add(&b, open, close - open + 1);	/* unknown: keep */
 		t = close + 1;
 	}

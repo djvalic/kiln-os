@@ -2,7 +2,7 @@
 """Keep HelixScreen's touch calibration valid on both kernels.
 
 usage: ad5x-touch-units [SETTINGS_JSON] [--kernel stock|own] [--dry-run]
-                        [--recovery-cal FILE]
+                        [--recovery-cal FILE] [--seed FILE]
 
 The two kernels report the TSC2007 touch in different units:
   stock  Flashforge's tsc2007_touch.ko scales the 12-bit readings to the
@@ -14,10 +14,59 @@ correction (input.calibration a..f) in screen pixels, applied after the
 range maps the device units to 800x480. This rewrites both for the running
 kernel and records the units in input.ad5x_touch_units. HelixScreen
 (patch 0071) writes that tag itself with every range it saves ("stock" on
-the 5.10 kernel, "own" on ours); a range without it is taken for stock
-units (calibrations from before patch 0071, and the seed settings).
+the 5.10 kernel, "own" on ours); a range without it (calibrations from
+before patch 0071, and the seed settings) is taken for stock units when
+its values fit them, else for own units (below).
 Converting twice gives the original values back, so switching kernels
 keeps one calibration.
+
+The units are checked against the values first (issue #90: a range in own
+units without the tag was taken for stock and converted a second time, to
+X 707..19420 Y -947..-26692). A range fits stock units when every value is
+within 0-800 x 0-480, own units when every value is within 0-4095 on both
+axes, each with a 5% margin of its full scale: stock -40..840 x -24..504,
+own -205..4301 (the stock edges converted and rounded outward, so a range
+that fits stock still fits own once converted and rounded, and back).
+Each axis must also span a quarter of its scale (as S80ad5x-recovery-ui
+asks; one unit less for the rounding), in either order. With swap_axes
+the range's x is the device's Y axis and its y the device's X
+(HelixScreen's range fit in touch_calibration.cpp), so in stock units x
+is the 0-480 axis. Converting such a range goes edge for edge in the
+range, the affine as it is, and the recovery file is left alone (the
+recovery UI has no swapped axes).
+Without the tag, a range that fits stock units is taken for stock as
+before; one that doesn't but fits own units (a value past -40..840 in X
+or -24..504 in Y) is tagged own and not converted. A range that fits
+neither, or not the units of its tag, is replaced as a fresh install
+starts: the seed's range converted to the running kernel's units as
+above (own: X 307..3702 Y 3482..649), valid, with the seed's affine not
+valid, and input.force_calibration set. The seed is --seed FILE, by
+default the one S70helixscreen copies on a fresh install:
+/usr/share/ad5x/helixscreen-settings.json. Taps then map roughly right,
+and HelixScreen opens its touch calibration at its next start (in the
+setup wizard its touch step, when the wizard is still to run). Without a usable seed the
+range is marked not valid instead (HelixScreen then maps by the kernel's
+range). The script records what it wrote (input.ad5x_touch_forced:
+[min_x, max_x, min_y, max_y], converted along when the kernel changes;
+null without a seed, for "not valid"). At a later start, before anything
+else, it drops the record and keeps the flag off once a calibration has
+been saved since: the flag is off (HelixScreen clears it when it saves
+one), the affine is valid, or the range is no longer what was written
+(another range, or not valid after a calibration with an affine and no
+range fit; without a seed, a valid range). While the written state is
+still there and the flag on, both stay, so a calibration that was
+cancelled is asked for again. The flag is only ever set again for a new
+range that fits no units.
+
+Where the Y flip goes: with a valid affine (calibrations from before
+issue #90, converted from stock units) the range keeps min below max and
+the affine carries the flip, as it always did. Without one (the seed, which
+since issue #90 leaves the affine invalid so that HelixScreen asks for a
+calibration on the first start, or a calibration that needed no residual
+affine) HelixScreen maps by the range alone, so the flip goes into the range
+edge for edge: min is the reading at the screen's top, max at its bottom,
+and min is above max on our kernel (the seed's Y 72..404 becomes 3482..649),
+as recovery-ui/src/touch_cal.c touch_cal_to_raw does.
 
 --recovery-cal FILE also writes the calibrated range for the recovery OS's
 touch UI (issue #47): "min_x min_y max_x max_y" in stock-kernel units
@@ -40,29 +89,139 @@ def kernel_now():
     return "stock" if os.uname().release.startswith("5.10.") else "own"
 
 
+def affine_valid(c):
+    return bool(c and c.get("valid"))
+
+
+# per unit and device axis (X, Y): the full scale and the values allowed,
+# a 5% margin past it (see above). Own is the stock edges converted
+# (-40 * 4096 / 800 = -204.8, 840 * 4096 / 800 = 4300.8, the same for Y)
+# rounded outward.
+SCALE = {"stock": ((W, -40, 840), (H, -24, 504)),
+         "own": ((RAW, -205, 4301), (RAW, -205, 4301))}
+
+
+def fits(r, units):
+    """the range is possible in these units: every value within the allowed
+    edges and a quarter of the scale spanned, either order"""
+    try:
+        v = {k: float(r[k]) for k in ("min_x", "max_x", "min_y", "max_y")}
+    except (KeyError, TypeError, ValueError):
+        return False
+    scales = SCALE[units]
+    if r.get("swap_axes"):
+        scales = scales[::-1]
+    for axis, (full, lo_ok, hi_ok) in zip("xy", scales):
+        lo, hi = v["min_" + axis], v["max_" + axis]
+        if not (lo_ok <= lo <= hi_ok and lo_ok <= hi <= hi_ok):
+            return False
+        if abs(hi - lo) < full / 4 - 1:
+            return False
+    return True
+
+
+SEED = "/usr/share/ad5x/helixscreen-settings.json"
+KEYS = ("min_x", "max_x", "min_y", "max_y")
+
+
+def seed_for(path, want):
+    """the seed's range and affine in the running kernel's units, the range
+    valid and the affine not; None when the seed can't be used"""
+    try:
+        with open(path) as f:
+            inp = json.load(f).get("input", {})
+        r = dict(inp["touch_range"])
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+        print(f"ad5x-touch-units: seed {path}: {e}", file=sys.stderr)
+        return None
+    c = inp.get("calibration")
+    c = dict(c, valid=False) if isinstance(c, dict) else None
+    have = units_of(r, inp.get("ad5x_touch_units")) if r.get("valid") else None
+    if have is None:
+        print(f"ad5x-touch-units: seed {path}: no usable touch range", file=sys.stderr)
+        return None
+    if have != want:
+        r, _ = (to_own if want == "own" else to_stock)(r, None)
+        for k in KEYS:
+            r[k] = round(r[k])
+    return r, c
+
+
+def calibrated_since(inp):
+    """a calibration was saved since the script wrote the seed range (or,
+    without a seed, marked the range not valid) and recorded it in
+    ad5x_touch_forced: the flag is off (HelixScreen clears it when it saves
+    one), the affine is valid, or the range is no longer the one written
+    (a range that fits nothing, or not valid, after an affine-only save)"""
+    forced = inp.get("ad5x_touch_forced")
+    r = inp.get("touch_range") or {}
+    valid = bool(r.get("valid"))
+    if not inp.get("force_calibration") or affine_valid(inp.get("calibration")):
+        return True
+    if forced is None:
+        return valid
+    return not valid or [r.get(k) for k in KEYS] != forced
+
+
+def units_of(r, tag):
+    """the units the range is in: its tag when the values fit it; without
+    a tag stock when they fit stock, own when they fit own; else None"""
+    if tag in SCALE:
+        return tag if fits(r, tag) else None
+    for units in ("stock", "own"):
+        if fits(r, units):
+            return units
+    return None
+
+
 def to_own(r, c):
-    """stock units -> raw units (Y flipped); affine compensates the flip"""
+    """stock units -> raw units (Y flipped): in the affine when it is valid,
+    else edge for edge in the range"""
     r2 = dict(r)
+    if r.get("swap_axes"):
+        # x is the device's Y (0-480, flipped), y its X: edge for edge in
+        # the range, so the screen points before the affine stay the same
+        # and the affine stays as it is
+        r2["min_x"] = (H - r["min_x"]) * RAW / H
+        r2["max_x"] = (H - r["max_x"]) * RAW / H
+        r2["min_y"] = r["min_y"] * RAW / W
+        r2["max_y"] = r["max_y"] * RAW / W
+        return r2, c
     r2["min_x"] = r["min_x"] * RAW / W
     r2["max_x"] = r["max_x"] * RAW / W
-    r2["min_y"] = (H - r["max_y"]) * RAW / H
-    r2["max_y"] = (H - r["min_y"]) * RAW / H
+    if affine_valid(c):
+        r2["min_y"] = (H - r["max_y"]) * RAW / H
+        r2["max_y"] = (H - r["min_y"]) * RAW / H
+    else:
+        r2["min_y"] = (H - r["min_y"]) * RAW / H
+        r2["max_y"] = (H - r["max_y"]) * RAW / H
     return r2, flip_affine(c)
 
 
 def to_stock(r, c):
+    """the inverse of to_own"""
     r2 = dict(r)
+    if r.get("swap_axes"):
+        r2["min_x"] = H - r["min_x"] * H / RAW
+        r2["max_x"] = H - r["max_x"] * H / RAW
+        r2["min_y"] = r["min_y"] * W / RAW
+        r2["max_y"] = r["max_y"] * W / RAW
+        return r2, c
     r2["min_x"] = r["min_x"] * W / RAW
     r2["max_x"] = r["max_x"] * W / RAW
-    r2["min_y"] = H - r["max_y"] * H / RAW
-    r2["max_y"] = H - r["min_y"] * H / RAW
+    if affine_valid(c):
+        r2["min_y"] = H - r["max_y"] * H / RAW
+        r2["max_y"] = H - r["min_y"] * H / RAW
+    else:
+        r2["min_y"] = H - r["min_y"] * H / RAW
+        r2["max_y"] = H - r["max_y"] * H / RAW
     return r2, flip_affine(c)
 
 
 def flip_affine(c):
     """normalised y becomes H - y: X = a x + b (H - y) + c, same for Y.
     Its own inverse."""
-    if not c or not c.get("valid"):
+    if not affine_valid(c):
         return c
     c2 = dict(c)
     c2["b"] = -c["b"]
@@ -79,7 +238,7 @@ def recovery_cal(r, c, units):
     affine (a or e negative, as to_own/to_stock leave it), so the edges come
     from both, not from the range alone."""
     a = e = 1.0
-    if c and c.get("valid"):
+    if affine_valid(c):
         a, e = c.get("a", 1.0), c.get("e", 1.0)
     left, right = (r["min_x"], r["max_x"]) if a >= 0 else (r["max_x"], r["min_x"])
     top, bottom = (r["min_y"], r["max_y"]) if e >= 0 else (r["max_y"], r["min_y"])
@@ -116,6 +275,7 @@ def main(argv):
     want = kernel_now()
     dry = False
     cal_path = None
+    seed_path = SEED
     args = list(argv)
     while args:
         a = args.pop(0)
@@ -125,6 +285,8 @@ def main(argv):
             dry = True
         elif a == "--recovery-cal":
             cal_path = args.pop(0)
+        elif a == "--seed":
+            seed_path = args.pop(0)
         elif a in ("-h", "--help"):
             print(__doc__)
             return 0
@@ -141,14 +303,57 @@ def main(argv):
         return 1
     inp = s.get("input", {})
     r = inp.get("touch_range")
-    have = inp.get("ad5x_touch_units", "stock")
+    tag = inp.get("ad5x_touch_units")
+    changed = False
+    if "ad5x_touch_forced" in inp and calibrated_since(inp):
+        # HelixScreen saved a calibration since this script asked for one:
+        # the record goes, and the flag stays off
+        del inp["ad5x_touch_forced"]
+        inp["force_calibration"] = False
+        changed = True
     if not r or not r.get("valid"):
         print("ad5x-touch-units: no touch calibration, nothing to do")
+        if changed and save(path, s, dry):
+            return 1
         return 0
+    have = units_of(r, tag)
+    if have is None:
+        # converted twice, or never right: start as a fresh install does,
+        # and HelixScreen opens its touch calibration (issue #90)
+        old = (f"X {r.get('min_x')}..{r.get('max_x')} Y {r.get('min_y')}..{r.get('max_y')}"
+               f"{'' if tag is None else ' (tagged ' + str(tag) + ')'}")
+        seed = seed_for(seed_path, want)
+        if seed:
+            r, c = seed
+            inp["touch_range"] = r
+            if c is not None:
+                inp["calibration"] = c
+            inp["ad5x_touch_units"] = want
+            inp["ad5x_touch_forced"] = [r[k] for k in KEYS]
+            done = (f"the seed's X {r['min_x']}..{r['max_x']} "
+                    f"Y {r['min_y']}..{r['max_y']} put in")
+        else:
+            r["valid"] = False
+            c = inp.get("calibration")
+            if isinstance(c, dict):
+                c["valid"] = False
+            inp["ad5x_touch_forced"] = None
+            done = "marked not valid"
+        inp["force_calibration"] = True
+        print(f"ad5x-touch-units: touch range {old} fits no units: {done}, "
+              f"the screen opens its touch calibration")
+        return save(path, s, dry)
     if have == want:
-        print(f"ad5x-touch-units: calibration already in {want} units")
-        if cal_path:
-            write_recovery_cal(cal_path, recovery_cal(r, inp.get("calibration"), have), dry)
+        if tag == have:
+            print(f"ad5x-touch-units: calibration already in {want} units")
+        else:
+            # an own range from before the tag: tag it, nothing to convert
+            print(f"ad5x-touch-units: untagged calibration already in {want} units, tagged {want}")
+            inp["ad5x_touch_units"] = have
+            changed = True
+        if changed and save(path, s, dry):
+            return 1
+        recovery(cal_path, r, inp.get("calibration"), have, dry)
         return 0
     conv = to_own if want == "own" else to_stock
     r2, c2 = conv(r, inp.get("calibration"))
@@ -158,23 +363,46 @@ def main(argv):
     if c2 is not None:
         inp["calibration"] = c2
     inp["ad5x_touch_units"] = want
+    if inp.get("ad5x_touch_forced"):
+        # the seed range still in: the record follows it
+        inp["ad5x_touch_forced"] = [r2[k] for k in KEYS]
     s["input"] = inp
     print(f"ad5x-touch-units: {have} -> {want}: "
           f"X {r2['min_x']}..{r2['max_x']} Y {r2['min_y']}..{r2['max_y']}")
+    if save(path, s, dry):
+        return 1
+    recovery(cal_path, r2, inp.get("calibration"), want, dry)
+    return 0
+
+
+def recovery(cal_path, r, c, units, dry):
+    """the recovery UI's file (--recovery-cal); its range has no swapped
+    axes, so a swapped calibration leaves the file as it is"""
+    if not cal_path:
+        return
+    if r.get("swap_axes"):
+        print("ad5x-touch-units: swapped axes, recovery touch calibration left as it is")
+        return
+    write_recovery_cal(cal_path, recovery_cal(r, c, units), dry)
+
+
+def save(path, s, dry):
+    """write the settings back (with --dry-run print the input part);
+    0 when done"""
     if dry:
-        print(json.dumps(inp, indent=2))
-        if cal_path:
-            write_recovery_cal(cal_path, recovery_cal(r2, inp.get("calibration"), want), dry)
+        print(json.dumps(s.get("input", {}), indent=2))
         return 0
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(s, f, indent=2)
-        f.write("\n")
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
-    if cal_path:
-        write_recovery_cal(cal_path, recovery_cal(r2, inp.get("calibration"), want), dry)
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(s, f, indent=2)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except OSError as e:
+        print(f"ad5x-touch-units: {path}: {e}", file=sys.stderr)
+        return 1
     return 0
 
 

@@ -1,0 +1,495 @@
+From e275e2ccbce97965a8a2bf9cf299b6f161fa9620 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Fri, 20 Nov 2026 12:00:00 -0500
+Subject: [PATCH] ad5x: IFS load, unload, eject and tune home an idle printer
+ first
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+After a Klipper restart (the setup wizard's last step restarts it)
+nothing is homed. Unload on the IFS or Filament screen sent
+`IFS_UNLOAD SLOT=n`, which Kiln's module refuses on an unhomed printer:
+the user saw at most a short "IFS: home the printer first (G28)" toast
+and nothing moved. Eject of the loaded lane and the IFS tuning (it
+unloads the loaded slot first) went the same way. A load homed first
+(ensure_homed_then), but showed "Heating nozzle" while it did.
+
+The module's IFS_LOAD, IFS_UNLOAD, IFS_EJECT and IFS_TUNE now carry
+HOME=1. Kiln's module then homes an idle printer that is not homed
+itself, inside the operation (printer.ifs phase homing_printer), and
+refuses during a print or a pause with a message that says so. Typed in
+the console without HOME=1 the commands only ask for a home, as before.
+The module's load no longer sends a G28 of its own (skip_homing): one
+homing path, decided by Klipper with the live print state.
+
+The screen shows the homing: phase homing_printer is the first step
+(Heat), "· Homing first..." in the line of an operation the module
+started, and "Homing first..." in place of the heating line for a load
+or unload started from the screen (the phase tracker keeps its steps).
+A module phase change counts as progress, so the Heat step doesn't turn
+to "Working..." while the printer homes with a nozzle already hot. The
+text is the existing key "Homing first..." (en, ru and the other
+languages already have it).
+
+zMod's own macros (INSERT_PRUTOK_IFS, _IFS_REMOVE_CURRENT_PRUTOK,
+A_CHANGE_FILAMENT) and the module's T<n> are unchanged.
+
+Upstream: not applicable (AD5X OS specific)
+---
+ include/ams_backend_ad5x_ifs.h          |  9 +++-
+ src/printer/ams_backend_ad5x_ifs.cpp    | 59 +++++++++++++++++++----
+ tests/unit/test_ams_ad5x_ifs_module.cpp | 64 ++++++++++++++++++-------
+ tests/unit/test_ams_ad5x_kiln_ifs.cpp   | 49 ++++++++++++++++++-
+ tests/unit/test_unload_lane_choice.cpp  |  4 +-
+ 5 files changed, 155 insertions(+), 30 deletions(-)
+
+diff --git a/include/ams_backend_ad5x_ifs.h b/include/ams_backend_ad5x_ifs.h
+index da149b5..50306ad 100644
+--- a/include/ams_backend_ad5x_ifs.h
++++ b/include/ams_backend_ad5x_ifs.h
+@@ -1129,6 +1129,10 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
+     /// Cutting filament". Caller holds mutex_.
+     [[nodiscard]] std::string kiln_step_detail_locked() const;
+ 
++    /// Kiln's module is homing the printer before an operation (HOME=1:
++    /// operation set, phase homing_printer). Caller holds mutex_.
++    [[nodiscard]] bool kiln_homing_first_locked() const;
++
+     /// Z-Mod's change macro keeps the target tool in
+     /// `gcode_macro END_CHANGE_FILAMENT`.last_data.channel from the start of a
+     /// filament change to its end, and 99 otherwise. Its runout auto-swap and
+@@ -1353,8 +1357,9 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
+     // rule and locking as finalize_op_after_macro().
+     void fail_op_after_macro(bool is_unload, const MoonrakerError& err);
+     // Home if needed, then send a load macro that finalizes or fails the op on
+-    // its own answer.
+-    AmsError dispatch_load_macro(std::string gcode);
++    // its own answer. module_homes: the macro homes an unhomed printer itself
++    // (Kiln's IFS_LOAD HOME=1), so no G28 of ours.
++    AmsError dispatch_load_macro(std::string gcode, bool module_homes);
+ 
+     int find_first_tool_for_port(int port_1based) const;
+ 
+diff --git a/src/printer/ams_backend_ad5x_ifs.cpp b/src/printer/ams_backend_ad5x_ifs.cpp
+index e7b0d24..1df0d31 100644
+--- a/src/printer/ams_backend_ad5x_ifs.cpp
++++ b/src/printer/ams_backend_ad5x_ifs.cpp
+@@ -226,6 +226,13 @@ bool AmsBackendAd5xIfs::owns_filament_sensor(const std::string& bare_name,
+ }
+ 
+ namespace {
++/// Appended to the module's IFS_LOAD / IFS_UNLOAD / IFS_EJECT / IFS_TUNE:
++/// Kiln's module homes an idle printer that is not homed before it cuts or
++/// moves the extruder (printer.ifs phase homing_printer while it does), and
++/// refuses during a print or pause. Typed in the console without it, the
++/// command only says "home the printer first".
++constexpr const char* kKilnHomeFirst = " HOME=1";
++
+ /// Z-Mod's change macro; its last_data.channel is the change in flight.
+ constexpr const char* kZmodChangeMacro = "gcode_macro END_CHANGE_FILAMENT";
+ /// last_data.channel when no change is running.
+@@ -1907,12 +1914,17 @@ AmsError AmsBackendAd5xIfs::do_load_filament(int slot_index) {
+         // unload whichever lane is seated, feed to the toolhead sensor, then
+         // the colour-distance-scaled purge. Same ack-finalize contract as the
+         // zmod macro below: the ack fires only after the purge fully ran.
+-        return dispatch_load_macro("IFS_LOAD SLOT=" + std::to_string(port));
++        // HOME=1: Kiln's module homes an idle, unhomed printer itself, inside
++        // the operation (phase homing_printer, shown as "Homing first..."),
++        // and refuses during a print or pause - so no G28 of ours.
++        return dispatch_load_macro("IFS_LOAD SLOT=" + std::to_string(port) + kKilnHomeFirst,
++                                   /*module_homes=*/true);
+     }
+-    return dispatch_load_macro("INSERT_PRUTOK_IFS PRUTOK=" + std::to_string(port));
++    return dispatch_load_macro("INSERT_PRUTOK_IFS PRUTOK=" + std::to_string(port),
++                               /*module_homes=*/false);
+ }
+ 
+-AmsError AmsBackendAd5xIfs::dispatch_load_macro(std::string gcode) {
++AmsError AmsBackendAd5xIfs::dispatch_load_macro(std::string gcode, bool module_homes) {
+     auto token = lifetime_.token();
+     return ensure_homed_then(
+         std::move(gcode), [this]() { finalize_op_after_macro(/*is_unload=*/false); },
+@@ -1920,7 +1932,7 @@ AmsError AmsBackendAd5xIfs::dispatch_load_macro(std::string gcode) {
+             token.defer("Ad5xIfsBackend::load_macro_failed",
+                         [this, err]() { fail_op_after_macro(/*is_unload=*/false, err); });
+         },
+-        IMoonrakerAPI::kAmsOperationTimeoutMs, /*skip_homing=*/false, /*silent=*/true,
++        IMoonrakerAPI::kAmsOperationTimeoutMs, /*skip_homing=*/module_homes, /*silent=*/true,
+         // The firmware's own `!!` error is the user-facing report; this
+         // callback only moves the op to ERROR.
+         /*caller_surfaces_errors=*/false);
+@@ -2163,12 +2175,15 @@ AmsError AmsBackendAd5xIfs::do_unload_filament(int slot_index) {
+     } else if (module_live) {
+         // Standalone module: IFS_UNLOAD takes the nozzle contents back into the
+         // lane and leaves it threaded (70 mm), resolving the heat from the
+-        // slot's material.
++        // slot's material. It cuts, so the printer must be homed: HOME=1 has
++        // Kiln's module home an idle printer first (an unhomed one only drew
++        // "IFS: home the printer first (G28)" and nothing moved).
+         std::string cmd = "IFS_UNLOAD";
+         if (lane >= 0) {
+             cmd += " SLOT=";
+             cmd += std::to_string(lane + 1); // DISPLAY_NUMBERING_OK: gcode wire, not a label
+         }
++        cmd += kKilnHomeFirst;
+         result = execute_gcode(std::move(cmd), on_complete, on_error);
+     } else {
+         // _IFS_REMOVE_CURRENT_PRUTOK unloads the lane in FFMInfo.channel and
+@@ -2426,8 +2441,11 @@ AmsError AmsBackendAd5xIfs::eject_lane(int slot_index) {
+         // is the loaded one. One command, one ack.
+         spdlog::info("{} Eject lane {} (port {}) -> IFS_EJECT", backend_log_tag(), slot_index,
+                      port);
++        // HOME=1: the loaded lane's eject unloads the nozzle first (a cut),
++        // which needs a homed printer; Kiln's module homes an idle one.
+         err39 = execute_gcode("IFS_EJECT SLOT=" + port_str +
+-                              (eject_temp_c ? " TEMP=" + std::to_string(*eject_temp_c) : ""));
++                              (eject_temp_c ? " TEMP=" + std::to_string(*eject_temp_c) : "") +
++                              kKilnHomeFirst);
+     } else {
+         spdlog::info("{} Cold eject lane {} (port {}, material '{}') -> IFS_F24 / IFS_F11 LEN={} "
+                      "SPEED={} / IFS_F39",
+@@ -5265,6 +5283,11 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+             kiln_step_.operation = *operation;
+         }
+         if (phase) {
++            // A step of the module's is progress for our own op too (its
++            // homing first runs with the temperature still).
++            if (phase_tracker_.active && kiln_step_.phase != *phase) {
++                note_phase_progress_locked();
++            }
+             kiln_step_.phase = *phase;
+         }
+         if (target_channel) {
+@@ -5274,6 +5297,13 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+             kiln_step_.activity_channel = *activity_channel;
+         }
+         action_changed = apply_kiln_step_locked();
++        // Our own op's detail follows the module's homing too (the tracker
++        // keeps its steps, the line says "Homing first...").
++        if (phase_tracker_.active) {
++            const std::string detail_before = system_info_.operation_detail;
++            action_changed = apply_phase_action_locked() || action_changed ||
++                             system_info_.operation_detail != detail_before;
++        }
+     }
+ 
+     // Kiln OS's auto-refill: the endless-spool capabilities read it, so a
+@@ -5389,7 +5419,8 @@ AmsBackendAd5xIfs::KilnStepView AmsBackendAd5xIfs::kiln_step_view(const std::str
+         v.op = op;
+         v.phase_index = index;
+     };
+-    if (phase == "heating") {
++    if (phase == "heating" || phase == "homing_printer") {
++        // Homing the printer first (HOME=1) is the preparation, as heating.
+         set(AmsAction::HEATING, operation == "load" ? load_op : StepOperationType::UNLOAD, 0);
+     } else if (phase == "cutting") {
+         set(AmsAction::CUTTING, StepOperationType::UNLOAD, 1);
+@@ -5486,6 +5517,8 @@ std::string AmsBackendAd5xIfs::kiln_step_detail_locked() const {
+         step = lv_tr("Retracting filament");
+     } else if (s.phase == "homing") {
+         step = lv_tr("Homing the IFS");
++    } else if (s.phase == "homing_printer") {
++        step = lv_tr("Homing first...");
+     } else if (s.phase == "selecting") {
+         step = lv_tr("Selecting the slot");
+     } else if (s.phase == "feeding") {
+@@ -6735,6 +6768,11 @@ bool AmsBackendAd5xIfs::apply_phase_action_locked() {
+     default:
+         break;
+     }
++    // Kiln's module homes the printer before our op moves anything (HOME=1):
++    // say that rather than the heating, which only starts meanwhile.
++    if (kiln_homing_first_locked()) {
++        detail = lv_tr("Homing first...");
++    }
+ 
+     bool changed = false;
+     if (system_info_.action != synth) {
+@@ -6762,6 +6800,10 @@ void AmsBackendAd5xIfs::set_operation_detail_locked(std::string detail) {
+     system_info_.operation_detail = std::move(detail);
+ }
+ 
++bool AmsBackendAd5xIfs::kiln_homing_first_locked() const {
++    return !kiln_step_.operation.value_or("").empty() && kiln_step_.phase == "homing_printer";
++}
++
+ void AmsBackendAd5xIfs::detect_load_unload_completion(bool head_detected) {
+     // Phase-tracker-driven operations (load/unload WE started) advance phases
+     // via on_head_transition_locked rather than completing here — the head
+@@ -7341,7 +7383,8 @@ AmsError AmsBackendAd5xIfs::do_execute_device_action(const std::string& action_i
+                                    : fmt::format("IFS_MAP_MODE MODE={}", name));
+     }
+     if (action_id == "kiln_tune") {
+-        return execute_gcode("IFS_TUNE");
++        // The tuning unloads a loaded slot first (a cut): HOME=1 as above.
++        return execute_gcode(std::string("IFS_TUNE") + kKilnHomeFirst);
+     }
+     if (action_id.rfind(kKilnPrefeedPrefix, 0) == 0) {
+         const auto channel =
+diff --git a/tests/unit/test_ams_ad5x_ifs_module.cpp b/tests/unit/test_ams_ad5x_ifs_module.cpp
+index 25a3cc7..0dec7e2 100644
+--- a/tests/unit/test_ams_ad5x_ifs_module.cpp
++++ b/tests/unit/test_ams_ad5x_ifs_module.cpp
+@@ -592,7 +592,7 @@ TEST_CASE("AD5X IFS module's own lane record outranks the remembered seated lane
+ 
+     backend.captured_gcodes.clear();
+     REQUIRE(backend.unload_filament(-1).success());
+-    CHECK(backend.has_gcode("IFS_UNLOAD SLOT=2"));
++    CHECK(backend.has_gcode("IFS_UNLOAD SLOT=2 HOME=1"));
+     CHECK_FALSE(backend.has_gcode_containing("SLOT=4"));
+ }
+ 
+@@ -613,7 +613,7 @@ TEST_CASE("AD5X IFS module with nothing recorded does not seat the remembered la
+     CHECK_FALSE(Ad5xIfsTestAccess::persisted_seated_slot(backend).has_value());
+     backend.captured_gcodes.clear();
+     REQUIRE(backend.unload_filament(-1).success());
+-    CHECK(backend.captured_gcodes == std::vector<std::string>{"IFS_UNLOAD SLOT=2"});
++    CHECK(backend.captured_gcodes == std::vector<std::string>{"IFS_UNLOAD SLOT=2 HOME=1"});
+ }
+ 
+ TEST_CASE("AD5X IFS module with no lane record keeps the remembered-lane fallback",
+@@ -629,7 +629,7 @@ TEST_CASE("AD5X IFS module with no lane record keeps the remembered-lane fallbac
+     CHECK(Ad5xIfsTestAccess::seated_chan(backend) == 4);
+     backend.captured_gcodes.clear();
+     REQUIRE(backend.unload_filament(-1).success());
+-    CHECK(backend.has_gcode("IFS_UNLOAD SLOT=4"));
++    CHECK(backend.has_gcode("IFS_UNLOAD SLOT=4 HOME=1"));
+ }
+ 
+ TEST_CASE("AD5X IFS module ignores an ifs_loaded that names no real lane",
+@@ -670,7 +670,7 @@ TEST_CASE("AD5X IFS module keeps the ifs_loaded lane while another lane's eject
+     CHECK(backend.get_current_slot() == 1);
+     backend.captured_gcodes.clear();
+     REQUIRE(backend.unload_filament(-1).success());
+-    CHECK(backend.has_gcode("IFS_UNLOAD SLOT=2"));
++    CHECK(backend.has_gcode("IFS_UNLOAD SLOT=2 HOME=1"));
+     CHECK_FALSE(backend.has_gcode_containing("SLOT=3"));
+ }
+ 
+@@ -741,24 +741,24 @@ TEST_CASE("AD5X IFS module eject of its loaded lane names a temperature when the
+         record(3);
+         REQUIRE(Ad5xIfsTestAccess::seated_chan(backend) == 3);
+         REQUIRE(backend.unload_filament(-1).success());
+-        CHECK(backend.captured_gcodes == std::vector<std::string>{"IFS_EJECT SLOT=3 TEMP=220"});
++        CHECK(backend.captured_gcodes == std::vector<std::string>{"IFS_EJECT SLOT=3 TEMP=220 HOME=1"});
+     }
+     SECTION("a nozzle the user already heated keeps its target") {
+         record(3);
+         Ad5xIfsTestAccess::handle_status(
+             backend, json{{"extruder", {{"target", 255.0}, {"temperature", 30.0}}}});
+         REQUIRE(backend.unload_filament(-1).success());
+-        CHECK(backend.captured_gcodes == std::vector<std::string>{"IFS_EJECT SLOT=3 TEMP=255"});
++        CHECK(backend.captured_gcodes == std::vector<std::string>{"IFS_EJECT SLOT=3 TEMP=255 HOME=1"});
+     }
+     SECTION("a labelled loaded lane leaves the temperature to the module's material") {
+         record(2);
+         REQUIRE(backend.unload_filament(-1).success());
+-        CHECK(backend.captured_gcodes == std::vector<std::string>{"IFS_EJECT SLOT=2"});
++        CHECK(backend.captured_gcodes == std::vector<std::string>{"IFS_EJECT SLOT=2 HOME=1"});
+     }
+     SECTION("an unlabelled lane that is not the loaded one needs no temperature") {
+         record(1);
+         REQUIRE(backend.eject_lane(2).success());
+-        CHECK(backend.captured_gcodes == std::vector<std::string>{"IFS_EJECT SLOT=3"});
++        CHECK(backend.captured_gcodes == std::vector<std::string>{"IFS_EJECT SLOT=3 HOME=1"});
+     }
+ }
+ 
+@@ -811,8 +811,8 @@ TEST_CASE("AD5X IFS module slotless unload names a lane the module can retract",
+         Ad5xIfsTestAccess::set_persisted_seated_slot(backend, 1);
+         CHECK(backend.unload_lane_question().lanes.empty());
+         REQUIRE(backend.unload_filament(-1).success());
+-        CHECK(backend.has_gcode("IFS_UNLOAD SLOT=2"));
+-        CHECK_FALSE(backend.has_gcode("IFS_UNLOAD"));
++        CHECK(backend.has_gcode("IFS_UNLOAD SLOT=2 HOME=1"));
++        CHECK_FALSE(backend.has_gcode("IFS_UNLOAD HOME=1"));
+     }
+     SECTION("with no remembered lane the present lanes are offered and nothing is sent") {
+         Ad5xIfsTestAccess::set_persisted_seated_slot(backend, std::nullopt);
+@@ -831,7 +831,7 @@ TEST_CASE("AD5X IFS module slotless unload names a lane the module can retract",
+     SECTION("an explicit lane is sent as given") {
+         Ad5xIfsTestAccess::set_persisted_seated_slot(backend, std::nullopt);
+         REQUIRE(backend.unload_filament(0).success());
+-        CHECK(backend.has_gcode("IFS_UNLOAD SLOT=1"));
++        CHECK(backend.has_gcode("IFS_UNLOAD SLOT=1 HOME=1"));
+     }
+ }
+ 
+@@ -950,7 +950,7 @@ TEST_CASE("AD5X IFS module unloads the lane holding the hub without asking",
+ 
+     CHECK(backend.unload_lane_question().lanes.empty());
+     REQUIRE(backend.unload_filament(-1).success());
+-    CHECK(backend.captured_gcodes == std::vector<std::string>{"IFS_UNLOAD SLOT=2"});
++    CHECK(backend.captured_gcodes == std::vector<std::string>{"IFS_UNLOAD SLOT=2 HOME=1"});
+ 
+     SECTION("an at-hub lane that has emptied asks instead") {
+         TestableModuleBackend emptied;
+@@ -975,7 +975,7 @@ TEST_CASE("AD5X IFS module asks to confirm the one lane holding filament",
+ 
+     SECTION("a confirmed lane is unloaded by number") {
+         REQUIRE(backend.unload_filament(2).success());
+-        CHECK(backend.captured_gcodes == std::vector<std::string>{"IFS_UNLOAD SLOT=3"});
++        CHECK(backend.captured_gcodes == std::vector<std::string>{"IFS_UNLOAD SLOT=3 HOME=1"});
+     }
+ }
+ 
+@@ -1036,6 +1036,36 @@ TEST_CASE("AD5X IFS module clears the extruder alone when no lane can be named",
+     }
+ }
+ 
++TEST_CASE("AD5X IFS module leaves homing an unhomed printer to Kiln's module",
++          "[ams][ad5x_ifs][ifs_module]") {
++    // After a Klipper restart nothing is homed. The module's IFS_LOAD,
++    // IFS_UNLOAD, IFS_EJECT and IFS_TUNE take HOME=1: Kiln's module homes an
++    // idle printer itself, inside the operation, and refuses during a print or
++    // pause. Without it an unload only drew "IFS: home the printer first
++    // (G28)". No G28 of ours, so there is one homing path and the screen shows
++    // it ("Homing first...").
++    TestableModuleBackend backend;
++    Ad5xIfsTestAccess::set_running(backend, true);
++    Ad5xIfsTestAccess::handle_status(backend, module_ifs_frame(2, {1, 2}));
++    Ad5xIfsTestAccess::set_head_filament(backend, true);
++    REQUIRE(backend.get_current_slot() == 1);
++    backend.homed = false;
++    backend.captured_gcodes.clear();
++
++    SECTION("load") {
++        REQUIRE(backend.load_filament(2).success());
++        CHECK(backend.captured_gcodes == std::vector<std::string>{"IFS_LOAD SLOT=3 HOME=1"});
++    }
++    SECTION("toolhead unload") {
++        REQUIRE(backend.unload_filament(1).success());
++        CHECK(backend.captured_gcodes == std::vector<std::string>{"IFS_UNLOAD SLOT=2 HOME=1"});
++    }
++    SECTION("eject") {
++        REQUIRE(backend.eject_lane(0).success());
++        CHECK(backend.captured_gcodes == std::vector<std::string>{"IFS_EJECT SLOT=1 HOME=1"});
++    }
++}
++
+ TEST_CASE("AD5X IFS module never sends a bare IFS_UNLOAD", "[ams][ad5x_ifs][ifs_module][1324]") {
+     // Bare, the module's IFS_UNLOAD falls back on its own records; Helix always
+     // names the lane or sends the explicit clear, in every row of the table.
+@@ -1091,21 +1121,21 @@ TEST_CASE("AD5X IFS module ops dispatch the module's macros", "[ams][ad5x_ifs][i
+ 
+     SECTION("load") {
+         REQUIRE(backend.load_filament(2).success());
+-        CHECK(backend.has_gcode("IFS_LOAD SLOT=3"));
++        CHECK(backend.has_gcode("IFS_LOAD SLOT=3 HOME=1"));
+         CHECK_FALSE(backend.has_gcode_containing("INSERT_PRUTOK_IFS"));
+     }
+     SECTION("toolhead unload") {
+         REQUIRE(backend.unload_filament(1).success());
+-        CHECK(backend.has_gcode("IFS_UNLOAD SLOT=2"));
++        CHECK(backend.has_gcode("IFS_UNLOAD SLOT=2 HOME=1"));
+         CHECK_FALSE(backend.has_gcode_containing("_IFS_REMOVE_CURRENT_PRUTOK"));
+     }
+     SECTION("unload whatever is active names the active lane") {
+         REQUIRE(backend.unload_filament(-1).success());
+-        CHECK(backend.captured_gcodes == std::vector<std::string>{"IFS_UNLOAD SLOT=2"});
++        CHECK(backend.captured_gcodes == std::vector<std::string>{"IFS_UNLOAD SLOT=2 HOME=1"});
+     }
+     SECTION("cold lane eject") {
+         REQUIRE(backend.eject_lane(0).success());
+-        CHECK(backend.has_gcode("IFS_EJECT SLOT=1"));
++        CHECK(backend.has_gcode("IFS_EJECT SLOT=1 HOME=1"));
+         CHECK_FALSE(backend.has_gcode_containing("IFS_F11"));
+     }
+     SECTION("tool change uses the slicer spelling") {
+diff --git a/tests/unit/test_ams_ad5x_kiln_ifs.cpp b/tests/unit/test_ams_ad5x_kiln_ifs.cpp
+index 3e92cf1..1f888c4 100644
+--- a/tests/unit/test_ams_ad5x_kiln_ifs.cpp
++++ b/tests/unit/test_ams_ad5x_kiln_ifs.cpp
+@@ -100,6 +100,19 @@ TEST_CASE("AD5X IFS maps Kiln's operation and phase onto steps", "[ams][ad5x_ifs
+         CHECK(v.action == AmsAction::PURGING);
+         CHECK(v.op == StepOperationType::LOAD_FRESH);
+     }
++    SECTION("homing the printer first (HOME=1) is the first step, as heating") {
++        auto v = V::kiln_step_view("unload", "homing_printer", "ready");
++        CHECK(v.action == AmsAction::HEATING);
++        CHECK(v.phase_index == 0);
++        CHECK(v.op == StepOperationType::UNLOAD);
++        v = V::kiln_step_view("load", "homing_printer", "ready");
++        CHECK(v.action == AmsAction::HEATING);
++        CHECK(v.phase_index == 0);
++        CHECK(v.op == StepOperationType::LOAD_FRESH);
++        v = V::kiln_step_view("eject", "homing_printer", "ready");
++        CHECK(v.action == AmsAction::HEATING);
++        CHECK(v.op == StepOperationType::UNLOAD);
++    }
+     SECTION("a lane-only move has no toolhead steps") {
+         for (const char* op : {"prefeed", "feed", "retract", "select", "tune"}) {
+             auto v = V::kiln_step_view(op, "feeding", "loading");
+@@ -224,6 +237,40 @@ TEST_CASE("AD5X IFS leaves our own load's steps to the phase tracker",
+     CHECK_FALSE(backend.running_step_operation().has_value());
+ }
+ 
++TEST_CASE("AD5X IFS says when Kiln homes the printer first", "[ams][ad5x_ifs][kiln_ifs]") {
++    AmsBackendAd5xIfs backend(nullptr, nullptr);
++    Ad5xIfsTestAccess::handle_status(backend, kiln_idle_frame());
++
++    SECTION("an operation the console or a macro started (UNLOAD_FILAMENT)") {
++        Ad5xIfsTestAccess::handle_status(backend,
++                                         kiln_step("unload", "homing_printer", 1, 0, "ready"));
++        auto info = backend.get_system_info();
++        CHECK(info.action == AmsAction::HEATING);
++        CHECK(info.operation_phase == 0);
++        CHECK(info.operation_detail.find("Homing first...") != std::string::npos);
++        // Homed: the unload's own steps follow.
++        Ad5xIfsTestAccess::handle_status(backend, kiln_step("unload", "cutting", 1, 1, "unloading"));
++        info = backend.get_system_info();
++        CHECK(info.action == AmsAction::CUTTING);
++        CHECK(info.operation_detail.find("Homing") == std::string::npos);
++    }
++    SECTION("our own unload keeps the tracker's steps, the line says so") {
++        Ad5xIfsTestAccess::begin_phase_tracking(backend, /*is_unload=*/true);
++        REQUIRE(Ad5xIfsTestAccess::action(backend) == AmsAction::HEATING);
++        Ad5xIfsTestAccess::handle_status(backend,
++                                         kiln_step("unload", "homing_printer", 1, 0, "ready"));
++        auto info = backend.get_system_info();
++        CHECK(info.action == AmsAction::HEATING);
++        CHECK(info.operation_phase == 0);
++        CHECK(info.operation_detail == "Homing first...");
++        // The module homed and heats now: the tracker's heating line again.
++        Ad5xIfsTestAccess::handle_status(backend, kiln_step("unload", "heating", 1, 0, "ready"));
++        info = backend.get_system_info();
++        CHECK(info.action == AmsAction::HEATING);
++        CHECK(info.operation_detail.find("Heating nozzle") != std::string::npos);
++    }
++}
++
+ namespace {
+ 
+ /// LVGL plus the global PrinterState the runout detector reads.
+@@ -544,7 +591,7 @@ TEST_CASE("AD5X IFS lists Kiln's device operations", "[ams][ad5x_ifs][kiln_ifs][
+         REQUIRE(backend.execute_device_action("kiln_tune").success());
+         REQUIRE(backend.execute_device_action("kiln_prefeed_3").success());
+         CHECK(backend.sent == std::vector<std::string>{"IFS_AUTO_REFILL MATCH=exact",
+-                                                       "IFS_MAP_MODE MODE=loaded", "IFS_TUNE",
++                                                       "IFS_MAP_MODE MODE=loaded", "IFS_TUNE HOME=1",
+                                                        "IFS_PREFEED CHANNEL=3"});
+         CHECK_FALSE(backend.execute_device_action("kiln_prefeed_1").success());
+         CHECK_FALSE(
+diff --git a/tests/unit/test_unload_lane_choice.cpp b/tests/unit/test_unload_lane_choice.cpp
+index 133cc48..82002c8 100644
+--- a/tests/unit/test_unload_lane_choice.cpp
++++ b/tests/unit/test_unload_lane_choice.cpp
+@@ -159,7 +159,7 @@ TEST_CASE_METHOD(UnloadLaneSidebarFixture,
+ 
+     SECTION("a named lane counts as loaded and is unloaded by number") {
+         sidebar_->handle_unload(2, /*lane_in_toolhead=*/true);
+-        CHECK(backend_->sent == std::vector<std::string>{"IFS_UNLOAD SLOT=3"});
++        CHECK(backend_->sent == std::vector<std::string>{"IFS_UNLOAD SLOT=3 HOME=1"});
+     }
+     SECTION("the same lane from the context menu is still nothing loaded") {
+         sidebar_->handle_unload(2);
+@@ -308,7 +308,7 @@ TEST_CASE_METHOD(UnloadLaneSidebarFixture,
+         REQUIRE(find_on_screen("extra_choice") != nullptr);
+         // The lane rows come in slot order; the first is slot 1.
+         tap(find_on_screen("filament_picker_row_0"));
+-        CHECK(backend_->sent == std::vector<std::string>{"IFS_UNLOAD SLOT=1"});
++        CHECK(backend_->sent == std::vector<std::string>{"IFS_UNLOAD SLOT=1 HOME=1"});
+     }
+     SECTION("no lane holding filament asks to confirm the clear, which then runs") {
+         empty_every_lane(*backend_);

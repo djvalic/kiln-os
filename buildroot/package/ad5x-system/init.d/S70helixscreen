@@ -18,8 +18,11 @@
 # (docs/setup-wizard.md); the hardware pickers stay collapsed. An existing
 # settings.json is never touched, so an update does not bring the wizard
 # back. printer_data/comms/run-setup-wizard (SETUP_WIZARD) runs it once more on
-# the next start; HelixScreen deletes the flag. In USB test mode the stock
-# app is not running, so nothing else draws on fb0.
+# the next start; HelixScreen deletes the flag. helixscreen/offer-setup-wizard
+# (the installer writes it when it reinstalls Kiln OS over stock and finds
+# these settings from before) makes the screen ask once whether to run the
+# setup wizard; HelixScreen deletes it at Run or Skip (patch 0088). In USB
+# test mode the stock app is not running, so nothing else draws on fb0.
 
 # Files this creates are readable by klipper and www-data, whoever started
 # it (a root SSH session may run with umask 077; issue #31)
@@ -36,10 +39,14 @@ start)
 	fi
 	# $D/.helixscreen: settings backups ($HOME/.helixscreen; /var/lib is read-only)
 	mkdir -p $D/config $D/cache $D/.helixscreen ${LOG%/*}
+	# The seed (fresh install only) has the stock touch range but no valid
+	# affine calibration, so HelixScreen's wizard starts with its touch
+	# calibration; until then taps map by the range alone (issue #90)
 	[ -f $D/config/settings.json ] || \
 		cp /usr/share/ad5x/helixscreen-settings.json $D/config/settings.json
 	# touch calibration in the running kernel's units (stock 0-800/0-480
-	# with Y flipped, our 6.6 raw 0-4095): ad5x-touch-units. The same
+	# with Y flipped, our 6.6 raw 0-4095; without a valid affine the flip
+	# goes into the range): ad5x-touch-units. The same
 	# range in stock units for the recovery OS's touch UI (S80ad5x-recovery-ui
 	# reads it and converts it at use on our kernel, issue #47)
 	ad5x-touch-units $D/config/settings.json \
@@ -81,6 +88,7 @@ start)
 	HELIX_DISABLE_AUTO_UPDATES=1 \
 	HELIX_DISPLAY_BACKEND=$BACKEND \
 	HELIX_WIZARD_FLAG_FILE=/data/ad5x/printer_data/comms/run-setup-wizard \
+	HELIX_WIZARD_OFFER_FILE=$D/offer-setup-wizard \
 	HELIX_OOM_SCORE_ADJ=300 \
 	MALLOC_ARENA_MAX=2 \
 	start-stop-daemon -S -b -m -p $PID -N 10 \

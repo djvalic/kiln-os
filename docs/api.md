@@ -1023,7 +1023,7 @@ The IFS (4-slot filament unit). Absent when a plugin drives the IFS
 | `activity` | string | What the unit does: `ready`, `selecting`, `polling`, `homing`, `loading`, `unloading`, `clamped`, `unclamping`, `driver_error`, `unknown(<n>)`, or null |
 | `activity_channel` | int or null | Slot of `activity`, 0 whole unit |
 | `operation` | string | The running operation: `load`, `unload`, `swap`, `eject`, `prefeed`, `refill`, `tune`, `select`, `feed`, `retract`; "" idle. Since v0.0.44 |
-| `phase` | string | Its step: `heating`, `cutting`, `unloading`, `homing`, `selecting`, `feeding`, `purging`, `priming`; "" idle. Since v0.0.44 |
+| `phase` | string | Its step: `heating`, `cutting`, `unloading`, `homing` (the IFS selector), `selecting`, `feeding`, `purging`, `priming`; `homing_printer` (G28 before the operation, `HOME=1`; next release); "" idle. Since v0.0.44 |
 | `target_channel` | int | Slot the operation works on, 0 none. Since v0.0.44 |
 | `error` | string or null | The last failure, null none |
 | `error_channel` | int | Slot of that failure, 0 none or unknown. Since v0.0.44 |
@@ -1153,11 +1153,11 @@ are not API and may change in any release. Commands from plugins
 | Command | Parameters | | Since |
 |---|---|---|---|
 | `T0`-`T3` | | Load the slot the tool map names | v0.0.1 |
-| `IFS_LOAD` | `SLOT=` `[TEMP=]` | Load a slot (unloads the current one first) | v0.0.1 |
-| `IFS_UNLOAD` | `[SLOT=]` `[TEMP=]` | Cut and unload the nozzle; refused while `tube_blocked`. Failing after the strand left the toolhead sensor: nothing recorded as loaded, `tube_blocked` set | v0.0.1 |
+| `IFS_LOAD` | `SLOT=` `[TEMP=]` `[HOME=1]` | Load a slot (unloads the current one first). Not homed: refused ("home the printer first (G28)"); with `HOME=1` an idle printer homes first, never during a print or a pause (`HOME=1` next release; the touch screen sends it) | v0.0.1 |
+| `IFS_UNLOAD` | `[SLOT=]` `[TEMP=]` `[HOME=1]` | Cut and unload the nozzle; refused while `tube_blocked`. Failing after the strand left the toolhead sensor: nothing recorded as loaded, `tube_blocked` set. `HOME=1` as `IFS_LOAD` (`UNLOAD_FILAMENT` sends it) | v0.0.1 |
 | `IFS_FIND_HEAD_SLOT` | `[TEMP=]` `[SLOT=]` | Filament in the toolhead from a slot Kiln doesn't know (or only adopted at startup, `loaded_source` `adopted`: that slot tried first): find the slot (cut, the extruder alone, then short pulls of each slot) and unload it; `SLOT=` names it | (next release) |
-| `IFS_SWAP` | `CHANNEL=` `[TEMP=] [FLUSH=] [ROUNDS=] [PURGE=0\|1]` | Colour change with purge. To the slot already loaded: nothing to do, unless it was only adopted at startup (`loaded_source` `adopted`): then it is loaded again (next release) | v0.0.1 |
-| `IFS_EJECT` | `SLOT=` | Pull a slot's filament out of the IFS | v0.0.1 |
+| `IFS_SWAP` | `CHANNEL=` `[TEMP=] [FLUSH=] [ROUNDS=] [PURGE=0\|1] [HOME=1]` | Colour change with purge (`HOME=1` as `IFS_LOAD`). To the slot already loaded: nothing to do, unless it was only adopted at startup (`loaded_source` `adopted`): then it is loaded again (next release) | v0.0.1 |
+| `IFS_EJECT` | `SLOT=` `[HOME=1]` | Pull a slot's filament out of the IFS (the loaded slot: unloads the nozzle first; `HOME=1` as `IFS_LOAD`) | v0.0.1 |
 | `IFS_PREFEED` | `CHANNEL=` | Feed a new spool up to the IFS | v0.0.1 |
 | `IFS_STOP` | | Stop the IFS | v0.0.1 |
 | `IFS_STATUS`, `IFS_MATERIALS` | | Report | v0.0.1 |
