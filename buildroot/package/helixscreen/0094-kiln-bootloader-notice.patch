@@ -1,0 +1,1068 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Sun, 22 Nov 2026 14:00:00 -0500
+Subject: [PATCH] kiln: tell once about Kiln's own boot loader (update ready,
+ or installable)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Kiln's own boot loader is installed and updated only by hand, on the
+recovery screen's Reboot / Power page, and most people rarely start the
+recovery OS. Kiln OS's ad5x-bootloader-notice (a root script, at each
+complete start) now writes HELIX_KILN_BL_NOTICE_FILE (S70helixscreen:
+/run/ad5x-bootloader-notice) when there is something to do there:
+kind=update when Kiln's boot loader is installed and the recovery OS in
+slot A carries a newer build, kind=install when the printer still has
+Flashforge's boot loader on a board Kiln's supports (after 3 complete
+starts). The screen shows it once as a dialog with OK, with the real
+menu path (Settings > System > Boot into recovery > Reboot / Power >
+Update Kiln's boot loader, or Install Kiln's boot loader (experimental)
+with the guide's address). Only at idle: not while the setup wizard
+runs or is required, not while a re-run is requested or 0088's "Run the
+setup wizard?" waits, not while a print holds the printer (motion
+blocked), not over another dialog; it looks again every 10 s, since the
+script writes the file after the screen has started. OK or a backdrop
+tap counts as shown, in HELIX_KILN_BL_STATE_DIR
+(/data/ad5x/bootloader-notice): update-seen holds the notice's key (the
+carried build), so an update notice comes back only for a newer build;
+install-dismissed ends the install notice for good. Nothing happens
+without the variables, and nothing here writes the boot loader.
+
+The texts are in en.yml and every other language file, as 0088's. Patch
+0055's six Settings > System > Boot into recovery strings (the row, its
+description, the question and its text, the restart line, the refusal)
+were English outside en and ru; they are translated here in de, es, fr,
+it, ja, ko, pt, tr and zh, each with its file's own word for recovery
+(Wiederherstellung, recuperación, récupération, ripristino, 復旧, 복구,
+recuperação, kurtarma, 恢复), so every notice names the row as the screen
+shows it. Only the recovery screen's entries (Reboot / Power, Update
+Kiln's boot loader, Install Kiln's boot loader (experimental)) and its
+Boot main OS stay English in those languages: the recovery screen shows
+them in English there. The Russian names the menus as the Russian
+screens show them (Настройки > Система > Загрузить систему
+восстановления, then the recovery screen's Питание > Обновить /
+Установить загрузчик Kiln). The Chinese and Japanese words are ones the
+baked CJK fonts have. Tests in test_kiln_bootloader_notice.cpp (the
+file's lines, the gates, once per build, never again after an install
+notice, printing, the wizard, another dialog, Russian, German with its
+translated row, Boot into recovery and the notice's path in every
+language).
+
+Upstream: not applicable (Kiln OS specific)
+---
+ include/ui_kiln_bootloader_notice.h        | 103 +++++
+ src/application/application.cpp            |   4 +
+ src/ui/ui_kiln_bootloader_notice.cpp       | 234 ++++++++++++
+ tests/unit/test_kiln_bootloader_notice.cpp | 415 +++++++++++++++++++++
+ translations/de.yml                        |  12 +
+ translations/en.yml                        |   5 +
+ translations/es.yml                        |  12 +
+ translations/fr.yml                        |  12 +
+ translations/it.yml                        |  12 +
+ translations/ja.yml                        |  12 +
+ translations/ko.yml                        |  12 +
+ translations/pt.yml                        |  12 +
+ translations/ru.yml                        |   5 +
+ translations/tr.yml                        |  12 +
+ translations/zh.yml                        |  12 +
+ 15 files changed, 874 insertions(+)
+
+diff --git a/include/ui_kiln_bootloader_notice.h b/include/ui_kiln_bootloader_notice.h
+new file mode 100644
+index 0000000..98dd95b
+--- /dev/null
++++ b/include/ui_kiln_bootloader_notice.h
+@@ -0,0 +1,103 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++/**
++ * @file ui_kiln_bootloader_notice.h
++ * @brief Kiln OS: a one-off notice about Kiln's own boot loader
++ *
++ * Kiln's own boot loader (SPL and U-Boot in the eMMC's first MiB) is only
++ * ever installed or updated by hand, on the recovery screen's Reboot / Power
++ * page. Most people rarely start the recovery OS, so the main OS tells them
++ * when there is something to do there. The root script ad5x-bootloader-notice
++ * (Kiln OS, run at each complete start) compares the boot loader on the disk
++ * with the build the recovery OS in slot A carries and writes the notice file
++ * (HELIX_KILN_BL_NOTICE_FILE, set by S70helixscreen:
++ * /run/ad5x-bootloader-notice), key=value lines:
++ *
++ *   kind=update    Kiln's boot loader is installed and the recovery OS
++ *                  carries a newer build: "A boot loader update is ready"
++ *   kind=install   Flashforge's boot loader on a board Kiln's boot loader
++ *                  supports, after a few complete starts: "Kiln OS has its
++ *                  own boot loader for this printer"
++ *   key=...        what "shown" refers to (the carried build for an update)
++ *
++ * The screen shows it once, at idle: not while the setup wizard runs or is
++ * pending (the first-run wizard, a requested re-run, the "Run the setup
++ * wizard?" offer of patch 0088), not while a print holds the printer, and not
++ * over another dialog; it looks again every few seconds, since the script
++ * writes the file after the screen has started. Closing it in any way (OK, a
++ * backdrop tap) counts as shown, in HELIX_KILN_BL_STATE_DIR
++ * (/data/ad5x/bootloader-notice): update-seen holds the key, so an update
++ * notice comes back only for a newer carried build; install-dismissed ends the
++ * install notice for good. Without the environment variables (other builds)
++ * nothing happens. Nothing here writes the boot loader.
++ *
++ * @threading Main thread only
++ */
++
++#pragma once
++
++#include <string>
++
++namespace helix::kiln_bl_notice {
++
++/// The environment variable naming the notice file
++inline constexpr const char* kNoticeEnv = "HELIX_KILN_BL_NOTICE_FILE";
++/// The environment variable naming the folder of what was shown
++inline constexpr const char* kStateEnv = "HELIX_KILN_BL_STATE_DIR";
++/// How often the screen looks for the notice (ms)
++inline constexpr unsigned kPollMs = 10000;
++
++enum class Kind {
++    None,    ///< no notice (no file, or nothing this screen knows)
++    Update,  ///< a newer build of Kiln's boot loader is ready
++    Install, ///< Kiln's boot loader can be installed on this printer
++};
++
++struct Notice {
++    Kind kind = Kind::None;
++    std::string key; ///< what "shown" refers to
++};
++
++/// The notice file's text, parsed (pure). An unknown kind, or an update
++/// without a key, is no notice.
++Notice parse(const std::string& text);
++
++/// The notice file (HELIX_KILN_BL_NOTICE_FILE), read now; Kind::None without it
++Notice read_notice();
++
++/// Shown already (update-seen holds its key; install-dismissed exists)
++bool shown_already(const Notice& notice);
++
++/// Record it as shown; true when written
++bool mark_shown(const Notice& notice);
++
++/// What keeps a notice from showing right now
++struct Gates {
++    bool wizard_active = false;  ///< the setup wizard runs (or is required)
++    bool wizard_pending = false; ///< a re-run requested, or the 0088 offer waiting
++    bool printing = false;       ///< a print holds the printer (motion blocked)
++    bool dialog_up = false;      ///< another dialog is on the screen
++};
++
++/// Show it now? (pure) A notice there, not shown already, nothing in the way
++bool should_show(const Notice& notice, bool shown, const Gates& gates);
++
++/// The two notices' title and text, translated (lv_tr)
++std::string title(Kind kind);
++std::string text(Kind kind);
++
++/// At the screen's start: look now and every kPollMs. Nothing without
++/// HELIX_KILN_BL_NOTICE_FILE.
++void start();
++
++/// Look once (start()'s timer): read the file and show the notice when
++/// should_show() says so
++void check_now();
++
++/// The notice is on the screen
++bool showing();
++
++/// Tests: the timer gone, the dialog forgotten
++void reset_for_test();
++
++} // namespace helix::kiln_bl_notice
+diff --git a/src/application/application.cpp b/src/application/application.cpp
+index c9b7581..dedcf9a 100644
+--- a/src/application/application.cpp
++++ b/src/application/application.cpp
+@@ -217,6 +217,7 @@
+ #include "action_prompt_manager.h"
+ #include "action_prompt_modal.h"
+ #include "app_globals.h"
++#include "ui_kiln_bootloader_notice.h"
+ #include "ui_kiln_wizard_offer.h"
+ #include "ui_wizard_ad5x_setup.h"
+ #include "helix_fs.h"
+@@ -1054,6 +1055,9 @@ int Application::run(int argc, char** argv) {
+         // kept: ask once whether to run the setup wizard (a wizard running now
+         // answers it)
+         helix::kiln_wizard_offer::at_start(m_wizard_active);
++        // Kiln OS: a boot loader update ready in the recovery OS, or Kiln's
++        // boot loader installable on this printer: told once, at idle
++        helix::kiln_bl_notice::start();
+ 
+         // Phase 14: Load plugins (HELIX_PLUGIN_DIR for authors, otherwise the
+         // per-printer cache of the Moonraker plugin folder, synced on connect)
+diff --git a/src/ui/ui_kiln_bootloader_notice.cpp b/src/ui/ui_kiln_bootloader_notice.cpp
+new file mode 100644
+index 0000000..35f0ba0
+--- /dev/null
++++ b/src/ui/ui_kiln_bootloader_notice.cpp
+@@ -0,0 +1,234 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include "ui_kiln_bootloader_notice.h"
++
++#include "ui_kiln_wizard_offer.h"
++#include "ui_modal.h"
++
++#include "app_globals.h"
++#include "config.h"
++#include "helix_fs.h"
++#include "lvgl/lvgl.h"
++#include "lvgl/src/others/translation/lv_translation.h"
++#include "printer_state.h"
++
++#include <spdlog/spdlog.h>
++
++#include <cstdlib>
++#include <fstream>
++#include <sstream>
++
++namespace helix::kiln_bl_notice {
++
++namespace {
++
++lv_obj_t* g_dialog = nullptr;
++lv_timer_t* g_timer = nullptr;
++
++/// The dialog is still on the screen (a fixture or a rebuild can delete it
++/// without telling us)
++bool dialog_up() {
++    if (g_dialog && !lv_obj_is_valid(g_dialog)) {
++        g_dialog = nullptr;
++    }
++    return g_dialog != nullptr;
++}
++
++std::string env(const char* name) {
++    const char* v = std::getenv(name);
++    return v ? v : "";
++}
++
++std::string state_file(const char* name) {
++    const std::string dir = env(kStateEnv);
++    return dir.empty() ? "" : dir + "/" + name;
++}
++
++std::string read_file(const std::string& path) {
++    std::ifstream f(path);
++    if (!f) {
++        return "";
++    }
++    std::ostringstream s;
++    s << f.rdbuf();
++    return s.str();
++}
++
++std::string trim(std::string s) {
++    while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ')) {
++        s.pop_back();
++    }
++    return s;
++}
++
++bool motion_blocked() {
++    return lv_subject_get_int(
++               get_printer_state().print_state().get_machine_motion_blocked_subject()) != 0;
++}
++
++bool wizard_pending() {
++    if (kiln_wizard_offer::pending() || kiln_wizard_offer::asking()) {
++        return true;
++    }
++    const std::string flag = env("HELIX_WIZARD_FLAG_FILE");
++    return !flag.empty() && helix::fs::exists(flag);
++}
++
++void closed(const Notice& notice) {
++    g_dialog = nullptr;
++    if (mark_shown(notice)) {
++        spdlog::info("[Kiln boot loader notice] {} shown, not again", notice.key);
++    }
++}
++
++void timer_cb(lv_timer_t*) {
++    check_now();
++}
++
++} // namespace
++
++Notice parse(const std::string& text) {
++    Notice n;
++    std::string kind;
++    std::istringstream in(text);
++    std::string line;
++    while (std::getline(in, line)) {
++        line = trim(line);
++        if (line.rfind("kind=", 0) == 0) {
++            kind = line.substr(5);
++        } else if (line.rfind("key=", 0) == 0) {
++            n.key = line.substr(4);
++        }
++    }
++    if (kind == "update" && !n.key.empty()) {
++        n.kind = Kind::Update;
++    } else if (kind == "install") {
++        n.kind = Kind::Install;
++        if (n.key.empty()) {
++            n.key = "install";
++        }
++    } else {
++        n.key.clear();
++    }
++    return n;
++}
++
++Notice read_notice() {
++    const std::string path = env(kNoticeEnv);
++    if (path.empty() || !helix::fs::exists(path)) {
++        return {};
++    }
++    return parse(read_file(path));
++}
++
++bool shown_already(const Notice& notice) {
++    switch (notice.kind) {
++    case Kind::Update: {
++        const std::string f = state_file("update-seen");
++        return !f.empty() && trim(read_file(f)) == notice.key;
++    }
++    case Kind::Install: {
++        const std::string f = state_file("install-dismissed");
++        return !f.empty() && helix::fs::exists(f);
++    }
++    case Kind::None:
++        break;
++    }
++    return true;
++}
++
++bool mark_shown(const Notice& notice) {
++    const std::string dir = env(kStateEnv);
++    if (dir.empty() || notice.kind == Kind::None) {
++        return false;
++    }
++    helix::fs::create_directories(dir);
++    const std::string f =
++        state_file(notice.kind == Kind::Update ? "update-seen" : "install-dismissed");
++    std::ofstream out(f, std::ios::trunc);
++    out << notice.key << "\n";
++    out.close();
++    if (!out) {
++        spdlog::warn("[Kiln boot loader notice] Could not write {}", f);
++        return false;
++    }
++    return true;
++}
++
++bool should_show(const Notice& notice, bool shown, const Gates& gates) {
++    if (notice.kind == Kind::None || shown) {
++        return false;
++    }
++    return !gates.wizard_active && !gates.wizard_pending && !gates.printing && !gates.dialog_up;
++}
++
++std::string title(Kind kind) {
++    return kind == Kind::Update ? lv_tr("Boot loader update ready") : lv_tr("Kiln's own boot loader");
++}
++
++std::string text(Kind kind) {
++    if (kind == Kind::Update) {
++        return lv_tr("A boot loader update is ready. To install it: Settings > System > Boot into "
++                     "recovery > Reboot / Power > Update Kiln's boot loader. Nothing is written "
++                     "until you start it there.");
++    }
++    return lv_tr("Kiln OS has its own boot loader for this printer. To install it: Settings > "
++                 "System > Boot into recovery > Reboot / Power > Install Kiln's boot loader "
++                 "(experimental). Read the boot loader guide first; it explains the risk and the "
++                 "rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md");
++}
++
++void start() {
++    if (env(kNoticeEnv).empty() || g_timer) {
++        return;
++    }
++    g_timer = lv_timer_create(timer_cb, kPollMs, nullptr);
++    check_now();
++}
++
++void check_now() {
++    if (dialog_up()) {
++        return;
++    }
++    const Notice notice = read_notice();
++    if (notice.kind == Kind::None) {
++        return;
++    }
++    const bool shown = shown_already(notice);
++    Gates gates;
++    gates.wizard_active = Config::get_instance()->is_wizard_required() || is_wizard_active();
++    gates.wizard_pending = wizard_pending();
++    gates.printing = motion_blocked();
++    gates.dialog_up = Modal::any_visible();
++    if (!should_show(notice, shown, gates)) {
++        if (!shown) {
++            spdlog::debug("[Kiln boot loader notice] {} waits (wizard {}{}, printing {}, dialog {})",
++                          notice.key, gates.wizard_active ? "running" : "-",
++                          gates.wizard_pending ? ", pending" : "", gates.printing,
++                          gates.dialog_up);
++        }
++        return;
++    }
++    spdlog::info("[Kiln boot loader notice] Showing the {} notice ({})",
++                 notice.kind == Kind::Update ? "update" : "install", notice.key);
++    const std::string t = title(notice.kind);
++    const std::string m = text(notice.kind);
++    helix::ui::AlertOptions opts;
++    opts.on_dismiss = [notice]() { closed(notice); };
++    g_dialog = helix::ui::modal_alert(t.c_str(), m.c_str(), ModalSeverity::Info, lv_tr("OK"),
++                                      [notice]() { closed(notice); }, opts);
++}
++
++bool showing() {
++    return dialog_up();
++}
++
++void reset_for_test() {
++    if (g_timer) {
++        lv_timer_delete(g_timer);
++        g_timer = nullptr;
++    }
++    g_dialog = nullptr;
++}
++
++} // namespace helix::kiln_bl_notice
+diff --git a/tests/unit/test_kiln_bootloader_notice.cpp b/tests/unit/test_kiln_bootloader_notice.cpp
+new file mode 100644
+index 0000000..7468a97
+--- /dev/null
++++ b/tests/unit/test_kiln_bootloader_notice.cpp
+@@ -0,0 +1,415 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++/**
++ * Kiln OS: the one-off notice about Kiln's own boot loader. The root script
++ * ad5x-bootloader-notice writes the notice file (HELIX_KILN_BL_NOTICE_FILE):
++ * kind=update (the recovery OS carries a newer build) or kind=install
++ * (Flashforge's boot loader on a supported board), with a key. The screen
++ * shows it at idle only: not while the setup wizard runs or is pending, not
++ * while a print holds the printer, not over another dialog. Closing it in
++ * any way counts as shown (HELIX_KILN_BL_STATE_DIR): an update comes back
++ * only for a new key, the install notice never. In Russian the notice is
++ * Russian only; in German its sentences are German (the menu names of the
++ * screens that show English there stay as those screens show them).
++ */
++
++#include "ui_kiln_bootloader_notice.h"
++#include "ui_kiln_wizard_offer.h"
++#include "ui_modal.h"
++#include "ui_update_queue.h"
++
++#include "../lvgl_ui_test_fixture.h"
++#include "../test_helpers/modal_answer.h"
++#include "../ui_test_utils.h"
++#include "app_globals.h"
++#include "config.h"
++#include "lvgl/src/others/translation/lv_translation.h"
++#include "printer_state.h"
++#include "translation_loader.h"
++
++#include <cstdint>
++#include <cstdlib>
++#include <filesystem>
++#include <fstream>
++#include <sstream>
++#include <string>
++
++#include "../catch_amalgamated.hpp"
++
++using namespace helix;
++using Catch::Matchers::ContainsSubstring;
++namespace bln = helix::kiln_bl_notice;
++namespace fs = std::filesystem;
++
++TEST_CASE("Kiln boot loader notice: the file's lines", "[kiln][kiln_bl_notice]") {
++    using K = bln::Kind;
++    auto n = bln::parse("kind=update\nkey=update 1794903199\ninstalled=Nov 15 2026 - 19:48:50 "
++                        "+0000\ncarries=Nov 17 2026 - 08:13:19 +0000\n");
++    CHECK(n.kind == K::Update);
++    CHECK(n.key == "update 1794903199");
++    n = bln::parse("kind=install\nkey=install\ncarries=Nov 17 2026 - 08:13:19 +0000\n");
++    CHECK(n.kind == K::Install);
++    CHECK(n.key == "install");
++    // An install without a key still has one; CRLF and blanks are fine
++    n = bln::parse("\r\nkind=install\r\n");
++    CHECK(n.kind == K::Install);
++    CHECK(n.key == "install");
++    // An update without a key, an unknown kind, nothing: no notice
++    CHECK(bln::parse("kind=update\n").kind == K::None);
++    CHECK(bln::parse("kind=downgrade\nkey=x\n").kind == K::None);
++    CHECK(bln::parse("").kind == K::None);
++    CHECK(bln::parse("garbage").kind == K::None);
++}
++
++TEST_CASE("Kiln boot loader notice: when it may show", "[kiln][kiln_bl_notice]") {
++    bln::Notice update{bln::Kind::Update, "update 1"};
++    bln::Notice install{bln::Kind::Install, "install"};
++    bln::Gates idle;
++    CHECK(bln::should_show(update, false, idle));
++    CHECK(bln::should_show(install, false, idle));
++    // Shown already, or no notice: never
++    CHECK_FALSE(bln::should_show(update, true, idle));
++    CHECK_FALSE(bln::should_show(install, true, idle));
++    CHECK_FALSE(bln::should_show(bln::Notice{}, false, idle));
++    // Each gate holds it back
++    for (int g = 0; g < 4; ++g) {
++        bln::Gates gates;
++        gates.wizard_active = g == 0;
++        gates.wizard_pending = g == 1;
++        gates.printing = g == 2;
++        gates.dialog_up = g == 3;
++        CAPTURE(g);
++        CHECK_FALSE(bln::should_show(update, false, gates));
++        CHECK_FALSE(bln::should_show(install, false, gates));
++    }
++}
++
++namespace {
++
++struct NoticeFixture : LVGLUITestFixture {
++    fs::path dir;
++    fs::path notice;
++    fs::path seen_dir;
++    fs::path offer;
++    bool had_required = false;
++
++    NoticeFixture() {
++        helix::ui::modal_init_subjects();
++        dir = fs::temp_directory_path() /
++              ("kiln-bl-notice-" + std::to_string(reinterpret_cast<uintptr_t>(this)));
++        fs::create_directories(dir);
++        notice = dir / "ad5x-bootloader-notice";
++        seen_dir = dir / "bootloader-notice";
++        offer = dir / "offer-setup-wizard";
++        setenv(bln::kNoticeEnv, notice.c_str(), 1);
++        setenv(bln::kStateEnv, seen_dir.c_str(), 1);
++        setenv(helix::kiln_wizard_offer::kEnv, offer.c_str(), 1);
++        Config* cfg = Config::get_instance();
++        REQUIRE(cfg != nullptr);
++        had_required = cfg->is_wizard_required();
++        set_wizard_completed(true);
++        set_wizard_active(false);
++        state().update_from_status({{"print_stats", {{"state", "standby"}}}});
++        settle();
++    }
++
++    ~NoticeFixture() override {
++        while (ModalStack::instance().top_dialog() != nullptr) {
++            Modal::hide(ModalStack::instance().top_dialog());
++            process_lvgl(5);
++        }
++        settle();
++        bln::reset_for_test();
++        set_wizard_active(false);
++        if (had_required) {
++            set_wizard_completed(false);
++        }
++        unsetenv(bln::kNoticeEnv);
++        unsetenv(bln::kStateEnv);
++        unsetenv(helix::kiln_wizard_offer::kEnv);
++        std::error_code ec;
++        fs::remove_all(dir, ec);
++    }
++
++    void settle() {
++        helix::ui::UpdateQueue::instance().drain();
++        process_lvgl(10);
++    }
++
++    /// wizard_completed where is_wizard_required() reads it: the printer's
++    /// entry when there is an active printer, the root key otherwise
++    static void set_wizard_completed(bool done) {
++        Config* cfg = Config::get_instance();
++        cfg->set<bool>(cfg->df() + "wizard_completed", done);
++        cfg->set<bool>("/wizard_completed", done);
++    }
++
++    void write_notice(const std::string& text) {
++        std::ofstream(notice) << text;
++        REQUIRE(fs::exists(notice));
++    }
++
++    void write_update(const std::string& key = "update 1794903199") {
++        write_notice("kind=update\nkey=" + key +
++                     "\ninstalled=Nov 15 2026 - 19:48:50 +0000\ncarries=Nov 17 2026 - 08:13:19 "
++                     "+0000\n");
++    }
++
++    void write_install() {
++        write_notice("kind=install\nkey=install\ncarries=Nov 17 2026 - 08:13:19 +0000\n");
++    }
++
++    std::string read(const fs::path& p) {
++        std::ifstream f(p);
++        std::stringstream s;
++        s << f.rdbuf();
++        return s.str();
++    }
++
++    bool dialog() {
++        return ModalStack::instance().top_dialog() != nullptr;
++    }
++
++    void check() {
++        bln::check_now();
++        settle();
++    }
++};
++
++} // namespace
++
++TEST_CASE_METHOD(NoticeFixture, "Kiln boot loader notice: no file, nothing",
++                 "[kiln][kiln_bl_notice]") {
++    check();
++    CHECK_FALSE(dialog());
++    CHECK_FALSE(bln::showing());
++    CHECK_FALSE(fs::exists(seen_dir));
++}
++
++TEST_CASE_METHOD(NoticeFixture, "Kiln boot loader notice: an update, once per carried build",
++                 "[kiln][kiln_bl_notice]") {
++    write_update();
++    check();
++    REQUIRE(dialog());
++    CHECK(bln::showing());
++    const std::string text = test::top_modal_text();
++    CHECK_THAT(text, ContainsSubstring("Boot loader update ready"));
++    CHECK_THAT(text, ContainsSubstring("Settings > System > Boot into recovery > Reboot / Power > "
++                                       "Update Kiln's boot loader"));
++    // Looking again while it is up shows no second dialog
++    lv_obj_t* first = ModalStack::instance().top_dialog();
++    check();
++    CHECK(ModalStack::instance().top_dialog() == first);
++
++    SECTION("OK: shown, not again for this build") {
++        test::answer_top_modal("btn_primary");
++        settle();
++        CHECK_FALSE(dialog());
++        CHECK(read(seen_dir / "update-seen") == "update 1794903199\n");
++        check();
++        CHECK_FALSE(dialog());
++    }
++    SECTION("A backdrop tap counts as shown too") {
++        test::dismiss_top_modal();
++        settle();
++        CHECK_FALSE(dialog());
++        CHECK(read(seen_dir / "update-seen") == "update 1794903199\n");
++        check();
++        CHECK_FALSE(dialog());
++    }
++    SECTION("A newer carried build after it: shown again") {
++        test::answer_top_modal("btn_primary");
++        settle();
++        write_update("update 1795077060");
++        check();
++        CHECK(dialog());
++    }
++}
++
++TEST_CASE_METHOD(NoticeFixture, "Kiln boot loader notice: install, never again once closed",
++                 "[kiln][kiln_bl_notice]") {
++    write_install();
++    check();
++    REQUIRE(dialog());
++    const std::string text = test::top_modal_text();
++    CHECK_THAT(text, ContainsSubstring("Kiln OS has its own boot loader for this printer"));
++    CHECK_THAT(text, ContainsSubstring("Reboot / Power > Install Kiln's boot loader"));
++    CHECK_THAT(text, ContainsSubstring("rescue stick"));
++    CHECK_THAT(text, ContainsSubstring("docs/own-boot-loader.md"));
++    test::dismiss_top_modal();
++    settle();
++    CHECK(fs::exists(seen_dir / "install-dismissed"));
++    check();
++    CHECK_FALSE(dialog());
++    // A dismissal kept from an earlier start: not shown at all
++    bln::reset_for_test();
++    check();
++    CHECK_FALSE(dialog());
++}
++
++TEST_CASE_METHOD(NoticeFixture, "Kiln boot loader notice: not while printing, shown at idle",
++                 "[kiln][kiln_bl_notice]") {
++    write_install();
++    state().update_from_status({{"print_stats", {{"state", "printing"}}}});
++    settle();
++    check();
++    CHECK_FALSE(dialog());
++    CHECK_FALSE(fs::exists(seen_dir / "install-dismissed"));
++    state().update_from_status({{"print_stats", {{"state", "complete"}}}});
++    settle();
++    check();
++    CHECK(dialog());
++}
++
++TEST_CASE_METHOD(NoticeFixture, "Kiln boot loader notice: not while the setup wizard runs or waits",
++                 "[kiln][kiln_bl_notice]") {
++    write_update();
++    SECTION("the wizard running") {
++        set_wizard_active(true);
++        check();
++        CHECK_FALSE(dialog());
++        set_wizard_active(false);
++        check();
++        CHECK(dialog());
++    }
++    SECTION("the wizard required (not completed)") {
++        set_wizard_completed(false);
++        check();
++        CHECK_FALSE(dialog());
++        set_wizard_completed(true);
++        check();
++        CHECK(dialog());
++    }
++    SECTION("the \"Run the setup wizard?\" offer waiting") {
++        std::ofstream(offer) << "reinstalled over stock\n";
++        check();
++        CHECK_FALSE(dialog());
++        fs::remove(offer);
++        check();
++        CHECK(dialog());
++    }
++    CHECK_FALSE(fs::exists(seen_dir / "update-seen"));
++}
++
++TEST_CASE_METHOD(NoticeFixture, "Kiln boot loader notice: not over another dialog",
++                 "[kiln][kiln_bl_notice]") {
++    write_update();
++    helix::ui::modal_alert("Something else", "Another dialog");
++    settle();
++    lv_obj_t* other = ModalStack::instance().top_dialog();
++    REQUIRE(other != nullptr);
++    check();
++    CHECK(ModalStack::instance().top_dialog() == other);
++    CHECK_FALSE(bln::showing());
++    Modal::hide(other);
++    process_lvgl(50);
++    settle();
++    check();
++    CHECK(bln::showing());
++}
++
++TEST_CASE_METHOD(NoticeFixture, "Kiln boot loader notice: without the variables nothing happens",
++                 "[kiln][kiln_bl_notice]") {
++    write_update();
++    unsetenv(bln::kNoticeEnv);
++    CHECK(bln::read_notice().kind == bln::Kind::None);
++    bln::start();
++    check();
++    CHECK_FALSE(dialog());
++}
++
++TEST_CASE_METHOD(NoticeFixture, "Kiln boot loader notice: in Russian, only Russian",
++                 "[kiln][kiln_bl_notice][i18n]") {
++    struct RestoreLanguage {
++        ~RestoreLanguage() {
++            lv_translation_set_language(helix::ui::kIdentityLocale);
++        }
++    } restore;
++    helix::ui::ensure_translation_loaded("ru");
++    lv_translation_set_language("ru");
++
++    write_update();
++    check();
++    REQUIRE(dialog());
++    std::string text = test::top_modal_text();
++    CHECK_THAT(text, ContainsSubstring("Готово обновление загрузчика"));
++    CHECK_THAT(text, ContainsSubstring("Настройки > Система > Загрузить систему восстановления > "
++                                       "Питание > Обновить загрузчик Kiln"));
++    CHECK_THAT(text, !ContainsSubstring("boot loader"));
++    CHECK_THAT(text, !ContainsSubstring("Settings"));
++    test::answer_top_modal("btn_primary");
++    settle();
++
++    write_install();
++    check();
++    REQUIRE(dialog());
++    text = test::top_modal_text();
++    CHECK_THAT(text, ContainsSubstring("собственный загрузчик"));
++    CHECK_THAT(text, ContainsSubstring("Установить загрузчик Kiln (экспериментально)"));
++    CHECK_THAT(text, ContainsSubstring("флешка для восстановления"));
++    CHECK_THAT(text, !ContainsSubstring("boot loader"));
++    CHECK_THAT(text, !ContainsSubstring("Read the"));
++}
++
++TEST_CASE_METHOD(NoticeFixture, "Kiln boot loader notice: in German, German sentences",
++                 "[kiln][kiln_bl_notice][i18n]") {
++    struct RestoreLanguage {
++        ~RestoreLanguage() {
++            lv_translation_set_language(helix::ui::kIdentityLocale);
++        }
++    } restore;
++    helix::ui::ensure_translation_loaded("de");
++    lv_translation_set_language("de");
++
++    // Settings > System's row is German, and the notice names it so; only
++    // the recovery screen's entries stay English (that screen shows them in
++    // English in German)
++    CHECK(std::string(lv_tr("Boot into recovery")) == "Wiederherstellungssystem starten");
++    CHECK(std::string(lv_tr("Boot into recovery?")) == "Wiederherstellungssystem starten?");
++
++    write_update();
++    check();
++    REQUIRE(dialog());
++    std::string text = test::top_modal_text();
++    CHECK_THAT(text, ContainsSubstring("Bootloader-Update bereit"));
++    CHECK_THAT(text, ContainsSubstring("Einstellungen > System > Wiederherstellungssystem starten > "
++                                       "Reboot / Power > Update Kiln's boot loader"));
++    CHECK_THAT(text, !ContainsSubstring("Boot into recovery"));
++    CHECK_THAT(text, !ContainsSubstring("is ready"));
++    CHECK_THAT(text, !ContainsSubstring("To install it"));
++    test::answer_top_modal("btn_primary");
++    settle();
++
++    write_install();
++    check();
++    REQUIRE(dialog());
++    text = test::top_modal_text();
++    CHECK_THAT(text, ContainsSubstring("Einstellungen > System > Wiederherstellungssystem starten > "
++                                       "Reboot / Power > Install Kiln's boot loader (experimental)"));
++    CHECK_THAT(text, !ContainsSubstring("Boot into recovery"));
++}
++
++TEST_CASE("Kiln boot loader notice: Boot into recovery in every language, the notice with it",
++          "[kiln][kiln_bl_notice][i18n]") {
++    struct RestoreLanguage {
++        ~RestoreLanguage() {
++            lv_translation_set_language(helix::ui::kIdentityLocale);
++        }
++    } restore;
++    for (const char* lang : {"de", "es", "fr", "it", "ja", "ko", "pt", "ru", "tr", "zh"}) {
++        CAPTURE(lang);
++        helix::ui::ensure_translation_loaded(lang);
++        lv_translation_set_language(lang);
++        const std::string label = lv_tr("Boot into recovery");
++        CHECK(label != "Boot into recovery");
++        CHECK(std::string(lv_tr("Boot into recovery?")) != "Boot into recovery?");
++        CHECK(std::string(lv_tr("Restarting into the recovery OS...")) !=
++              "Restarting into the recovery OS...");
++        // Both notices go through the row's own name
++        for (bln::Kind kind : {bln::Kind::Update, bln::Kind::Install}) {
++            const std::string text = bln::text(kind);
++            CHECK_THAT(text, ContainsSubstring(" > " + label + " > "));
++            CHECK_THAT(text, !ContainsSubstring("Boot into recovery"));
++        }
++    }
++}
+diff --git a/translations/de.yml b/translations/de.yml
+index a0396b2..d5f756d 100644
+--- a/translations/de.yml
++++ b/translations/de.yml
+@@ -5145,3 +5145,15 @@ translations:
+   # Kiln OS reinstalled over Flashforge's firmware: the setup wizard offered once (patch 0088)
+   'Run the setup wizard?': 'Einrichtungsassistenten starten?'
+   'Kiln OS is installed again and kept your settings. Flashforge''s firmware ran in between and may have changed the filament, the Z offset or the boards. The setup wizard checks and tunes the printer again; every step can be skipped.': 'Kiln OS ist neu installiert und hat deine Einstellungen behalten. Dazwischen lief die Firmware von Flashforge und hat vielleicht das Filament, den Z-Offset oder die Steuerplatinen geändert. Der Einrichtungsassistent prüft und optimiert den Drucker erneut; jeder Schritt lässt sich überspringen.'
++  # Kiln OS: a boot loader update ready, or Kiln's boot loader installable (patch 0094)
++  'Boot loader update ready': 'Bootloader-Update bereit'
++  'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.': 'Ein Bootloader-Update ist bereit. So installierst du es: Einstellungen > System > Wiederherstellungssystem starten > Reboot / Power > Update Kiln''s boot loader. Es wird nichts geschrieben, bevor du es dort startest.'
++  'Kiln''s own boot loader': 'Kilns eigener Bootloader'
++  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader (experimental). Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS hat einen eigenen Bootloader für diesen Drucker. So installierst du ihn: Einstellungen > System > Wiederherstellungssystem starten > Reboot / Power > Install Kiln''s boot loader (experimental). Lies vorher die Bootloader-Anleitung; sie erklärt das Risiko und den Rettungs-USB-Stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
++  # Kiln OS: Settings > System > Boot into recovery (patch 0055) in this language too (patch 0094)
++  'Boot into recovery': 'Wiederherstellungssystem starten'
++  'Boot into recovery?': 'Wiederherstellungssystem starten?'
++  'Can''t boot into recovery: {}': 'Wiederherstellungssystem kann nicht gestartet werden: {}'
++  'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': 'Neustart ins Wiederherstellungssystem (ein Update von einem USB-Stick oder über die Webseite auf Port 8080 installieren)'
++  'Restarting into the recovery OS...': 'Neustart ins Wiederherstellungssystem...'
++  'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'Der Drucker startet ins Wiederherstellungssystem neu, wo er nicht drucken kann. Zum Zurückkehren dort auf Boot main OS tippen.'
+diff --git a/translations/en.yml b/translations/en.yml
+index 6639f2a..9d300c9 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -5398,3 +5398,8 @@ translations:
+   # Kiln OS reinstalled over Flashforge's firmware: the setup wizard offered once (patch 0088)
+   'Run the setup wizard?': 'Run the setup wizard?'
+   'Kiln OS is installed again and kept your settings. Flashforge''s firmware ran in between and may have changed the filament, the Z offset or the boards. The setup wizard checks and tunes the printer again; every step can be skipped.': 'Kiln OS is installed again and kept your settings. Flashforge''s firmware ran in between and may have changed the filament, the Z offset or the boards. The setup wizard checks and tunes the printer again; every step can be skipped.'
++  # Kiln OS: a boot loader update ready, or Kiln's boot loader installable (patch 0094)
++  'Boot loader update ready': 'Boot loader update ready'
++  'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.': 'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.'
++  'Kiln''s own boot loader': 'Kiln''s own boot loader'
++  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader (experimental). Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader (experimental). Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
+diff --git a/translations/es.yml b/translations/es.yml
+index 7b956d7..0cb6d42 100644
+--- a/translations/es.yml
++++ b/translations/es.yml
+@@ -5135,3 +5135,15 @@ translations:
+   # Kiln OS reinstalled over Flashforge's firmware: the setup wizard offered once (patch 0088)
+   'Run the setup wizard?': '¿Ejecutar el asistente de configuración?'
+   'Kiln OS is installed again and kept your settings. Flashforge''s firmware ran in between and may have changed the filament, the Z offset or the boards. The setup wizard checks and tunes the printer again; every step can be skipped.': 'Kiln OS se ha vuelto a instalar y ha conservado tus ajustes. Mientras tanto funcionó el firmware de Flashforge, que puede haber cambiado el filamento, el desfase Z o las placas controladoras. El asistente de configuración vuelve a comprobar y ajustar la impresora; puedes omitir cualquier paso.'
++  # Kiln OS: a boot loader update ready, or Kiln's boot loader installable (patch 0094)
++  'Boot loader update ready': 'Actualización del cargador de arranque lista'
++  'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.': 'Hay una actualización del cargador de arranque lista. Para instalarla: Ajustes > Sistema > Iniciar el sistema de recuperación > Reboot / Power > Update Kiln''s boot loader. No se escribe nada hasta que la inicies allí.'
++  'Kiln''s own boot loader': 'El cargador de arranque propio de Kiln'
++  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader (experimental). Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS tiene su propio cargador de arranque para esta impresora. Para instalarlo: Ajustes > Sistema > Iniciar el sistema de recuperación > Reboot / Power > Install Kiln''s boot loader (experimental). Lee antes la guía del cargador de arranque; explica el riesgo y la memoria USB de rescate: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
++  # Kiln OS: Settings > System > Boot into recovery (patch 0055) in this language too (patch 0094)
++  'Boot into recovery': 'Iniciar el sistema de recuperación'
++  'Boot into recovery?': '¿Iniciar el sistema de recuperación?'
++  'Can''t boot into recovery: {}': 'No se puede iniciar el sistema de recuperación: {}'
++  'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': 'Reiniciar en el sistema de recuperación (instalar una actualización desde una memoria USB o la página web del puerto 8080)'
++  'Restarting into the recovery OS...': 'Reiniciando en el sistema de recuperación...'
++  'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'La impresora se reinicia en el sistema de recuperación, donde no puede imprimir. Para volver, toca Boot main OS en su pantalla.'
+diff --git a/translations/fr.yml b/translations/fr.yml
+index 110e76c..94b5aa7 100644
+--- a/translations/fr.yml
++++ b/translations/fr.yml
+@@ -5171,3 +5171,15 @@ translations:
+   # Kiln OS reinstalled over Flashforge's firmware: the setup wizard offered once (patch 0088)
+   'Run the setup wizard?': 'Lancer l''assistant de configuration ?'
+   'Kiln OS is installed again and kept your settings. Flashforge''s firmware ran in between and may have changed the filament, the Z offset or the boards. The setup wizard checks and tunes the printer again; every step can be skipped.': 'Kiln OS a été réinstallé et a conservé vos paramètres. Entre-temps, le firmware de Flashforge a fonctionné et a pu modifier le filament, le décalage Z ou les cartes contrôleur. L''assistant de configuration vérifie et règle de nouveau l''imprimante ; chaque étape peut être passée.'
++  # Kiln OS: a boot loader update ready, or Kiln's boot loader installable (patch 0094)
++  'Boot loader update ready': 'Mise à jour du chargeur d''amorçage prête'
++  'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.': 'Une mise à jour du chargeur d''amorçage est prête. Pour l''installer : Paramètres > Système > Démarrer le système de récupération > Reboot / Power > Update Kiln''s boot loader. Rien n''est écrit tant que vous ne la lancez pas là-bas.'
++  'Kiln''s own boot loader': 'Le chargeur d''amorçage de Kiln'
++  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader (experimental). Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS a son propre chargeur d''amorçage pour cette imprimante. Pour l''installer : Paramètres > Système > Démarrer le système de récupération > Reboot / Power > Install Kiln''s boot loader (experimental). Lisez d''abord le guide du chargeur d''amorçage ; il explique le risque et la clé USB de secours : github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
++  # Kiln OS: Settings > System > Boot into recovery (patch 0055) in this language too (patch 0094)
++  'Boot into recovery': 'Démarrer le système de récupération'
++  'Boot into recovery?': 'Démarrer le système de récupération ?'
++  'Can''t boot into recovery: {}': 'Impossible de démarrer le système de récupération : {}'
++  'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': 'Redémarrer dans le système de récupération (installer une mise à jour depuis une clé USB ou la page web du port 8080)'
++  'Restarting into the recovery OS...': 'Redémarrage dans le système de récupération...'
++  'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'L''imprimante redémarre dans le système de récupération, où elle ne peut pas imprimer. Pour revenir, touchez Boot main OS sur son écran.'
+diff --git a/translations/it.yml b/translations/it.yml
+index 34ee5da..302d594 100644
+--- a/translations/it.yml
++++ b/translations/it.yml
+@@ -5136,3 +5136,15 @@ translations:
+   # Kiln OS reinstalled over Flashforge's firmware: the setup wizard offered once (patch 0088)
+   'Run the setup wizard?': 'Avviare la procedura guidata di configurazione?'
+   'Kiln OS is installed again and kept your settings. Flashforge''s firmware ran in between and may have changed the filament, the Z offset or the boards. The setup wizard checks and tunes the printer again; every step can be skipped.': 'Kiln OS è stato reinstallato e ha mantenuto le tue impostazioni. Nel frattempo ha funzionato il firmware di Flashforge, che potrebbe aver cambiato il filamento, l''offset Z o le schede controller. La procedura guidata di configurazione controlla e regola di nuovo la stampante; ogni passaggio si può saltare.'
++  # Kiln OS: a boot loader update ready, or Kiln's boot loader installable (patch 0094)
++  'Boot loader update ready': 'Aggiornamento del bootloader pronto'
++  'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.': 'È pronto un aggiornamento del bootloader. Per installarlo: Impostazioni > Sistema > Avvia il sistema di ripristino > Reboot / Power > Update Kiln''s boot loader. Non viene scritto nulla finché non lo avvii lì.'
++  'Kiln''s own boot loader': 'Il bootloader di Kiln'
++  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader (experimental). Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS ha un proprio bootloader per questa stampante. Per installarlo: Impostazioni > Sistema > Avvia il sistema di ripristino > Reboot / Power > Install Kiln''s boot loader (experimental). Leggi prima la guida al bootloader; spiega il rischio e la chiavetta USB di ripristino: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
++  # Kiln OS: Settings > System > Boot into recovery (patch 0055) in this language too (patch 0094)
++  'Boot into recovery': 'Avvia il sistema di ripristino'
++  'Boot into recovery?': 'Avviare il sistema di ripristino?'
++  'Can''t boot into recovery: {}': 'Impossibile avviare il sistema di ripristino: {}'
++  'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': 'Riavvia nel sistema di ripristino (installa un aggiornamento da una chiavetta USB o dalla pagina web sulla porta 8080)'
++  'Restarting into the recovery OS...': 'Riavvio nel sistema di ripristino...'
++  'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'La stampante si riavvia nel sistema di ripristino, dove non può stampare. Per tornare, tocca Boot main OS sulla sua schermata.'
+diff --git a/translations/ja.yml b/translations/ja.yml
+index 58efee5..54474d1 100644
+--- a/translations/ja.yml
++++ b/translations/ja.yml
+@@ -4879,3 +4879,15 @@ translations:
+   # Kiln OS reinstalled over Flashforge's firmware: the setup wizard offered once (patch 0088)
+   'Run the setup wizard?': 'セットアップウィザードを実行しますか？'
+   'Kiln OS is installed again and kept your settings. Flashforge''s firmware ran in between and may have changed the filament, the Z offset or the boards. The setup wizard checks and tunes the printer again; every step can be skipped.': 'Kiln OSが再インストールされ、設定は保持されています。その間にFlashforgeのファームウェアが動作し、フィラメント、Zオフセット、またはコントローラーボードが変更された可能性があります。セットアップウィザードでプリンターを再度確認・調整します。各ステップはスキップできます。'
++  # Kiln OS: a boot loader update ready, or Kiln's boot loader installable (patch 0094)
++  'Boot loader update ready': 'ブートローダーの更新があります'
++  'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.': 'ブートローダーの更新を利用できます。インストールするには: 設定 > システム > 復旧システムで起動 > Reboot / Power > Update Kiln''s boot loader。そこで開始するまで何も書き込まれません。'
++  'Kiln''s own boot loader': 'Kiln 独自のブートローダー'
++  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader (experimental). Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS にはこのプリンター用の独自ブートローダーがあります。インストールするには: 設定 > システム > 復旧システムで起動 > Reboot / Power > Install Kiln''s boot loader (experimental)。先にブートローダーのガイドをお読みください。リスクとレスキュー用 USB メモリについて説明しています: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
++  # Kiln OS: Settings > System > Boot into recovery (patch 0055) in this language too (patch 0094)
++  'Boot into recovery': '復旧システムで起動'
++  'Boot into recovery?': '復旧システムで起動しますか？'
++  'Can''t boot into recovery: {}': '復旧システムで起動できません: {}'
++  'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': '復旧システムで再起動します (USB メモリまたはポート 8080 の Web ページから更新をインストール)'
++  'Restarting into the recovery OS...': '復旧システムで再起動しています...'
++  'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'プリンターは復旧システムで再起動し、そこでは印刷できません。戻るには、その画面で Boot main OS をタップしてください。'
+diff --git a/translations/ko.yml b/translations/ko.yml
+index 28a85e7..a2be084 100644
+--- a/translations/ko.yml
++++ b/translations/ko.yml
+@@ -4678,3 +4678,15 @@ translations:
+   'Kiln OS is installed again and kept your settings. Flashforge''s firmware ran in between and may have changed the filament, the Z offset or the boards. The setup wizard checks and tunes the printer again; every step can be skipped.': 'Kiln OS가 다시 설치되었고 설정은 유지되었습니다. 그 사이 Flashforge 펌웨어가 실행되어 필라멘트, Z 오프셋 또는 컨트롤러 보드가 바뀌었을 수 있습니다. 설정 마법사가 프린터를 다시 점검하고 조정합니다. 모든 단계는 건너뛸 수 있습니다.'
+   # Run refused during a print (an upstream key this language lacked)
+   'Cannot calibrate while printing': '인쇄 중에는 보정할 수 없습니다'
++  # Kiln OS: a boot loader update ready, or Kiln's boot loader installable (patch 0094)
++  'Boot loader update ready': '부트로더 업데이트 준비됨'
++  'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.': '부트로더 업데이트가 준비되었습니다. 설치하려면: 설정 > 시스템 > 복구 시스템으로 부팅 > Reboot / Power > Update Kiln''s boot loader. 그곳에서 시작하기 전에는 아무것도 기록되지 않습니다.'
++  'Kiln''s own boot loader': 'Kiln 자체 부트로더'
++  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader (experimental). Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS에는 이 프린터용 자체 부트로더가 있습니다. 설치하려면: 설정 > 시스템 > 복구 시스템으로 부팅 > Reboot / Power > Install Kiln''s boot loader (experimental). 먼저 부트로더 안내서를 읽어 주세요. 위험과 복구용 USB 메모리에 대해 설명합니다: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
++  # Kiln OS: Settings > System > Boot into recovery (patch 0055) in this language too (patch 0094)
++  'Boot into recovery': '복구 시스템으로 부팅'
++  'Boot into recovery?': '복구 시스템으로 부팅할까요?'
++  'Can''t boot into recovery: {}': '복구 시스템으로 부팅할 수 없음: {}'
++  'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': '복구 시스템으로 다시 시작 (USB 메모리 또는 포트 8080의 웹 페이지에서 업데이트 설치)'
++  'Restarting into the recovery OS...': '복구 시스템으로 다시 시작하는 중...'
++  'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': '프린터가 복구 시스템으로 다시 시작되며, 그곳에서는 인쇄할 수 없습니다. 돌아오려면 그 화면에서 Boot main OS를 누르세요.'
+diff --git a/translations/pt.yml b/translations/pt.yml
+index 28c8cb0..c75369d 100644
+--- a/translations/pt.yml
++++ b/translations/pt.yml
+@@ -5139,3 +5139,15 @@ translations:
+   # Kiln OS reinstalled over Flashforge's firmware: the setup wizard offered once (patch 0088)
+   'Run the setup wizard?': 'Executar o assistente de configuração?'
+   'Kiln OS is installed again and kept your settings. Flashforge''s firmware ran in between and may have changed the filament, the Z offset or the boards. The setup wizard checks and tunes the printer again; every step can be skipped.': 'O Kiln OS foi instalado novamente e manteve suas configurações. Nesse meio-tempo, o firmware da Flashforge rodou e pode ter alterado o filamento, o deslocamento Z ou as placas controladoras. O assistente de configuração verifica e ajusta a impressora de novo; qualquer etapa pode ser pulada.'
++  # Kiln OS: a boot loader update ready, or Kiln's boot loader installable (patch 0094)
++  'Boot loader update ready': 'Atualização do carregador de inicialização pronta'
++  'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.': 'Há uma atualização do carregador de inicialização pronta. Para instalá-la: Configurações > Sistema > Iniciar o sistema de recuperação > Reboot / Power > Update Kiln''s boot loader. Nada é gravado até que você a inicie lá.'
++  'Kiln''s own boot loader': 'O carregador de inicialização próprio do Kiln'
++  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader (experimental). Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'O Kiln OS tem um carregador de inicialização próprio para esta impressora. Para instalá-lo: Configurações > Sistema > Iniciar o sistema de recuperação > Reboot / Power > Install Kiln''s boot loader (experimental). Leia antes o guia do carregador de inicialização; ele explica o risco e o pendrive de resgate: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
++  # Kiln OS: Settings > System > Boot into recovery (patch 0055) in this language too (patch 0094)
++  'Boot into recovery': 'Iniciar o sistema de recuperação'
++  'Boot into recovery?': 'Iniciar o sistema de recuperação?'
++  'Can''t boot into recovery: {}': 'Não foi possível iniciar o sistema de recuperação: {}'
++  'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': 'Reiniciar no sistema de recuperação (instalar uma atualização de um pendrive ou pela página web na porta 8080)'
++  'Restarting into the recovery OS...': 'Reiniciando no sistema de recuperação...'
++  'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'A impressora reinicia no sistema de recuperação, onde não pode imprimir. Para voltar, toque em Boot main OS na tela dele.'
+diff --git a/translations/ru.yml b/translations/ru.yml
+index e902639..b7ce9a2 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -5564,3 +5564,8 @@ translations:
+   # Kiln OS reinstalled over Flashforge's firmware: the setup wizard offered once (patch 0088)
+   'Run the setup wizard?': 'Запустить мастер настройки?'
+   'Kiln OS is installed again and kept your settings. Flashforge''s firmware ran in between and may have changed the filament, the Z offset or the boards. The setup wizard checks and tunes the printer again; every step can be skipped.': 'Kiln OS установлена снова, ваши настройки сохранены. До этого работала прошивка Flashforge: она могла изменить филамент, смещение по Z или прошивку плат. Мастер настройки снова проверит и настроит принтер, любой шаг можно пропустить.'
++  # Kiln OS: a boot loader update ready, or Kiln's boot loader installable (patch 0094)
++  'Boot loader update ready': 'Готово обновление загрузчика'
++  'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.': 'Готово обновление загрузчика. Чтобы установить его: Настройки > Система > Загрузить систему восстановления > Питание > Обновить загрузчик Kiln. Пока вы не запустите обновление там, ничего не записывается.'
++  'Kiln''s own boot loader': 'Собственный загрузчик Kiln'
++  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader (experimental). Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'У Kiln OS есть собственный загрузчик для этого принтера. Чтобы установить его: Настройки > Система > Загрузить систему восстановления > Питание > Установить загрузчик Kiln (экспериментально). Сначала прочитайте руководство по загрузчику, в нём описаны риск и флешка для восстановления: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
+diff --git a/translations/tr.yml b/translations/tr.yml
+index 09136f8..de315e5 100644
+--- a/translations/tr.yml
++++ b/translations/tr.yml
+@@ -4678,3 +4678,15 @@ translations:
+   'Kiln OS is installed again and kept your settings. Flashforge''s firmware ran in between and may have changed the filament, the Z offset or the boards. The setup wizard checks and tunes the printer again; every step can be skipped.': 'Kiln OS yeniden kuruldu ve ayarlarınız korundu. Arada Flashforge donanım yazılımı çalıştı ve filamenti, Z ofsetini veya kontrolcü kartlarını değiştirmiş olabilir. Kurulum sihirbazı yazıcıyı yeniden kontrol eder ve ayarlar; her adım atlanabilir.'
+   # Run refused during a print (an upstream key this language lacked)
+   'Cannot calibrate while printing': 'Yazdırma sırasında kalibrasyon yapılamaz'
++  # Kiln OS: a boot loader update ready, or Kiln's boot loader installable (patch 0094)
++  'Boot loader update ready': 'Önyükleyici güncellemesi hazır'
++  'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.': 'Bir önyükleyici güncellemesi hazır. Yüklemek için: Ayarlar > Sistem > Kurtarma sistemini başlat > Reboot / Power > Update Kiln''s boot loader. Orada başlatana kadar hiçbir şey yazılmaz.'
++  'Kiln''s own boot loader': 'Kiln''in kendi önyükleyicisi'
++  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader (experimental). Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS''un bu yazıcı için kendi önyükleyicisi var. Yüklemek için: Ayarlar > Sistem > Kurtarma sistemini başlat > Reboot / Power > Install Kiln''s boot loader (experimental). Önce önyükleyici kılavuzunu okuyun; riski ve kurtarma USB belleğini anlatır: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
++  # Kiln OS: Settings > System > Boot into recovery (patch 0055) in this language too (patch 0094)
++  'Boot into recovery': 'Kurtarma sistemini başlat'
++  'Boot into recovery?': 'Kurtarma sistemi başlatılsın mı?'
++  'Can''t boot into recovery: {}': 'Kurtarma sistemi başlatılamıyor: {}'
++  'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': 'Kurtarma sisteminde yeniden başlat (USB bellekten veya 8080 numaralı bağlantı noktasındaki web sayfasından güncelleme yükleyin)'
++  'Restarting into the recovery OS...': 'Kurtarma sisteminde yeniden başlatılıyor...'
++  'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'Yazıcı kurtarma sisteminde yeniden başlar; orada yazdıramaz. Geri dönmek için oradaki ekranda Boot main OS''a dokunun.'
+diff --git a/translations/zh.yml b/translations/zh.yml
+index b86a84f..0a97287 100644
+--- a/translations/zh.yml
++++ b/translations/zh.yml
+@@ -4869,3 +4869,15 @@ translations:
+   # Kiln OS reinstalled over Flashforge's firmware: the setup wizard offered once (patch 0088)
+   'Run the setup wizard?': '运行设置向导？'
+   'Kiln OS is installed again and kept your settings. Flashforge''s firmware ran in between and may have changed the filament, the Z offset or the boards. The setup wizard checks and tunes the printer again; every step can be skipped.': 'Kiln OS 已重新安装，并保留了您的设置。在此期间运行过 Flashforge 固件，可能更改了耗材、Z 偏移或控制板。设置向导会重新检查并调校打印机；每一步都可以跳过。'
++  # Kiln OS: a boot loader update ready, or Kiln's boot loader installable (patch 0094)
++  'Boot loader update ready': '引导加载程序更新已就绪'
++  'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.': '引导加载程序更新已就绪。安装方法：设置 > 系统 > 启动到恢复系统 > Reboot / Power > Update Kiln''s boot loader。开始更新之前不会写入任何内容。'
++  'Kiln''s own boot loader': 'Kiln 自有的引导加载程序'
++  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader (experimental). Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS 为这台打印机提供了自有的引导加载程序。安装方法：设置 > 系统 > 启动到恢复系统 > Reboot / Power > Install Kiln''s boot loader (experimental)。请先查看引导加载程序指南，其中说明了风险和恢复用 U 盘：github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
++  # Kiln OS: Settings > System > Boot into recovery (patch 0055) in this language too (patch 0094)
++  'Boot into recovery': '启动到恢复系统'
++  'Boot into recovery?': '启动到恢复系统？'
++  'Can''t boot into recovery: {}': '无法启动到恢复系统：{}'
++  'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': '重启到恢复系统（从 U 盘或端口 8080 的网页安装更新）'
++  'Restarting into the recovery OS...': '正在重启到恢复系统...'
++  'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': '打印机将重启到恢复系统，在恢复系统中无法打印。要返回，请在其屏幕上点按 Boot main OS。'

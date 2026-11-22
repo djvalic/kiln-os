@@ -1,0 +1,308 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Sun, 22 Nov 2026 12:00:00 +0000
+Subject: [PATCH] file_manager: report files it can't write as read-only
+
+Moonraker's file lists (server.files.get_directory, server.files.list,
+the file change notifications) reported "permissions": "rw" for every
+file in a root it may write to, whoever owns the file. A plugin folder
+copied into /data/ad5x/plugins as root over SSH (root:root, 0755, files
+0644) was listed as writable to Moonraker (user klipper), so Fluidd
+opened its files for editing, and each save failed with "Destination
+file exists and appears to be read-only" and a 500 that Fluidd doesn't
+show (issue #96, fluidd-core/fluidd#2040).
+
+get_path_info() now lowers "rw" to "r" when the process can't write the
+item (os.access W_OK with the effective ids, as the upload check does):
+a file needs write access to itself and to the folder that holds it, a
+folder to itself. An upload is moved over the file from the temp folder
+(TMPDIR, on the data partition on Kiln OS): the rename needs the folder,
+the copy shutil.move() falls back to needs the file, and a delete or a
+rename needs the folder, so "rw" means all of these work; a file that
+only one of the two ways could replace is listed "r" as well. A folder
+is "r" when nothing can be created in it.
+
+The rules before stay: read-only roots, linked files, .git and the
+reserved paths (the update manager's git_repo folders without a
+.writeable file) give what they gave, and nothing that was "r" or ""
+becomes "rw". The roots themselves (root_info, server.files.roots)
+still follow full_access_roots. The listings check each folder once
+(folder_access), so a listing costs one access() per entry and one per
+folder.
+
+Fluidd shows a file listed "r" with a lock and doesn't offer to save it.
+
+Upstream: not submitted (AD5X open OS)
+---
+ .../components/file_manager/file_manager.py   |  50 +++++-
+ tests/test_file_manager.py                    | 145 ++++++++++++++++++
+ 2 files changed, 192 insertions(+), 3 deletions(-)
+ create mode 100644 tests/test_file_manager.py
+
+diff --git a/moonraker/components/file_manager/file_manager.py b/moonraker/components/file_manager/file_manager.py
+index e8626e2..0752aa0 100644
+--- a/moonraker/components/file_manager/file_manager.py
++++ b/moonraker/components/file_manager/file_manager.py
+@@ -7,6 +7,7 @@
+ from __future__ import annotations
+ import os
+ import sys
++import stat
+ import pathlib
+ import shutil
+ import logging
+@@ -64,6 +65,12 @@ WATCH_FLAGS = iFlags.CREATE | iFlags.DELETE | iFlags.MODIFY \
+     | iFlags.MOVED_TO | iFlags.MOVED_FROM | iFlags.ONLYDIR \
+     | iFlags.CLOSE_WRITE
+ 
++def _have_write_access(path: StrOrPath) -> bool:
++    # Kiln OS: as the upload check in _parse_upload_args()
++    if os.access in os.supports_effective_ids:
++        return os.access(path, os.W_OK, effective_ids=True)
++    return os.access(path, os.W_OK)
++
+ class FileManager:
+     def __init__(self, config: ConfigHelper) -> None:
+         self.server = config.get_server()
+@@ -763,11 +770,13 @@ class FileManager:
+                 f"Directory does not exist ({path})")
+         self.check_reserved_path(path, False)
+         flist: Dict[str, Any] = {'dirs': [], 'files': []}
++        folder_access: Dict[str, bool] = {}
+         for fname in os.listdir(path):
+             full_path = os.path.join(path, fname)
+             if not os.path.exists(full_path):
+                 continue
+-            path_info = self.get_path_info(full_path, root)
++            path_info = self.get_path_info(
++                full_path, root, folder_access=folder_access)
+             if os.path.isdir(full_path):
+                 path_info['dirname'] = fname
+                 flist['dirs'].append(path_info)
+@@ -794,7 +803,11 @@ class FileManager:
+         return flist
+ 
+     def get_path_info(
+-        self, path: StrOrPath, root: str, raise_error: bool = True
++        self,
++        path: StrOrPath,
++        root: str,
++        raise_error: bool = True,
++        folder_access: Optional[Dict[str, bool]] = None
+     ) -> Dict[str, Any]:
+         if isinstance(path, str):
+             path = pathlib.Path(path)
+@@ -820,12 +833,41 @@ class FileManager:
+                         permissions = ""
+                         break
+                     permissions = "r"
++            if (
++                permissions == "rw" and
++                not self._can_write(
++                    path, stat.S_ISDIR(fstat.st_mode), folder_access)
++            ):
++                permissions = "r"
+         return {
+             'modified': fstat.st_mtime,
+             'size': fstat.st_size,
+             'permissions': permissions
+         }
+ 
++    def _can_write(
++        self,
++        path: pathlib.Path,
++        is_dir: bool,
++        folder_access: Optional[Dict[str, bool]] = None
++    ) -> bool:
++        """Kiln OS: can this process change the item at path? A folder: can
++        it write into it. A file: can it write the file and the folder
++        that holds it. An upload is moved over the file from the temp
++        folder: a rename needs the folder, the copy shutil.move() falls
++        back to needs the file; a delete or a rename needs the folder.
++        folder_access caches the folder results over one listing."""
++        if not _have_write_access(path):
++            return False
++        if is_dir:
++            return True
++        folder = os.path.dirname(path)
++        if folder_access is None:
++            return _have_write_access(folder)
++        if folder not in folder_access:
++            folder_access[folder] = _have_write_access(folder)
++        return folder_access[folder]
++
+     def gen_temp_upload_path(self) -> str:
+         loop_time = int(self.event_loop.get_loop_time())
+         return os.path.join(
+@@ -1067,6 +1109,7 @@ class FileManager:
+             except OSError:
+                 continue
+             unlisted.add((ust.st_dev, ust.st_ino))
++        folder_access: Dict[str, bool] = {}
+         for dir_path, dir_names, files in os.walk(path, followlinks=True):
+             scan_dirs: List[str] = []
+             # Filter out directories that have already been visited. This
+@@ -1090,7 +1133,8 @@ class FileManager:
+                 if not os.path.exists(full_path):
+                     continue
+                 fname = full_path[len(path) + 1:]
+-                finfo = self.get_path_info(full_path, root)
++                finfo = self.get_path_info(
++                    full_path, root, folder_access=folder_access)
+                 filelist[fname] = finfo
+         if list_format:
+             flist: List[Dict[str, Any]] = []
+diff --git a/tests/test_file_manager.py b/tests/test_file_manager.py
+new file mode 100644
+index 0000000..8ebd020
+--- /dev/null
++++ b/tests/test_file_manager.py
+@@ -0,0 +1,145 @@
++# Unit tests for the permissions the file manager reports
++#
++# This file may be distributed under the terms of the GNU GPLv3 license.
++from __future__ import annotations
++import os
++import pathlib
++import pytest
++from typing import Dict, Iterator, Tuple
++from unittest import mock
++from moonraker.components.file_manager import file_manager as fm_module
++from moonraker.components.file_manager.file_manager import FileManager
++
++# Root bypasses the mode bits, os.access() is True for everything
++pytestmark = pytest.mark.skipif(
++    os.geteuid() == 0, reason="permission checks don't apply to root"
++)
++
++
++def make_manager(root_path: pathlib.Path) -> FileManager:
++    # A bare FileManager without running __init__: get_path_info() and the
++    # listings only read these attributes.
++    fm = FileManager.__new__(FileManager)
++    fm.file_paths = {"config": str(root_path)}
++    fm.full_access_roots = {"config"}
++    fm.reserved_paths = {}
++    fm.unlisted_paths = set()
++    return fm
++
++
++@pytest.fixture
++def config_root(tmp_path: pathlib.Path) -> Iterator[pathlib.Path]:
++    root = tmp_path.joinpath("config")
++    root.mkdir()
++    root.joinpath("printer.cfg").write_text("[printer]\n")
++    root.joinpath("locked.cfg").write_text("[locked]\n")
++    root.joinpath("locked.cfg").chmod(0o444)
++    plugin = root.joinpath("plugin")
++    plugin.mkdir()
++    for name in ("plugin.cfg", "macros.cfg"):
++        plugin.joinpath(name).write_text("[gcode_macro TEST]\n")
++    plugin.chmod(0o555)
++    yield root
++    # let pytest remove the folder
++    plugin.chmod(0o755)
++
++
++def perms(fm: FileManager, path: pathlib.Path, **kwargs) -> str:
++    return fm.get_path_info(path, "config", **kwargs)["permissions"]
++
++
++def test_writable_file(config_root: pathlib.Path) -> None:
++    fm = make_manager(config_root)
++    assert perms(fm, config_root.joinpath("printer.cfg")) == "rw"
++
++
++def test_unwritable_file(config_root: pathlib.Path) -> None:
++    fm = make_manager(config_root)
++    assert perms(fm, config_root.joinpath("locked.cfg")) == "r"
++
++
++def test_file_in_unwritable_folder(config_root: pathlib.Path) -> None:
++    # The file itself is writable, but an upload replaces it with a file
++    # moved into its folder
++    fm = make_manager(config_root)
++    path = config_root.joinpath("plugin", "plugin.cfg")
++    assert os.access(path, os.W_OK)
++    assert perms(fm, path) == "r"
++
++
++def test_folders(config_root: pathlib.Path) -> None:
++    fm = make_manager(config_root)
++    assert perms(fm, config_root) == "rw"
++    assert perms(fm, config_root.joinpath("plugin")) == "r"
++
++
++def test_link_to_unwritable_folder(config_root: pathlib.Path) -> None:
++    # A file reached through a linked folder is checked in the folder the
++    # link points to
++    fm = make_manager(config_root)
++    link = config_root.joinpath("linked")
++    link.symlink_to(config_root.joinpath("plugin"))
++    assert perms(fm, link) == "r"
++    assert perms(fm, link.joinpath("macros.cfg")) == "r"
++
++
++def test_existing_rules_kept(config_root: pathlib.Path) -> None:
++    # Only "rw" is lowered: read only roots and reserved paths stay as they
++    # were, and an unwritable file never becomes writable
++    fm = make_manager(config_root)
++    fm.full_access_roots = set()
++    assert perms(fm, config_root.joinpath("printer.cfg")) == "r"
++    assert perms(fm, config_root.joinpath("locked.cfg")) == "r"
++    fm.full_access_roots = {"config"}
++    fm.reserved_paths = {
++        "update_manager plugin": (config_root.joinpath("plugin"), True),
++        "secrets": (config_root.joinpath("printer.cfg").resolve(), False),
++    }
++    assert perms(fm, config_root.joinpath("plugin", "plugin.cfg")) == "r"
++    assert perms(fm, config_root.joinpath("printer.cfg")) == ""
++    assert perms(fm, config_root.joinpath("locked.cfg")) == "r"
++
++
++def count_access(fm: FileManager, call) -> Tuple[Dict[str, int], object]:
++    calls: Dict[str, int] = {}
++    real_access = fm_module._have_write_access
++
++    def counted(path) -> bool:
++        calls[str(path)] = calls.get(str(path), 0) + 1
++        return real_access(path)
++    with mock.patch.object(fm_module, "_have_write_access", counted):
++        result = call()
++    return calls, result
++
++
++def test_list_directory(config_root: pathlib.Path) -> None:
++    fm = make_manager(config_root)
++    plugin = config_root.joinpath("plugin")
++    calls, result = count_access(
++        fm, lambda: fm._list_directory(str(plugin), "config"))
++    files = {f["filename"]: f["permissions"] for f in result["files"]}
++    assert files == {"plugin.cfg": "r", "macros.cfg": "r"}
++    # the folder is checked once for the whole listing
++    assert calls[str(plugin)] == 1
++    calls, result = count_access(
++        fm, lambda: fm._list_directory(str(config_root), "config"))
++    files = {f["filename"]: f["permissions"] for f in result["files"]}
++    dirs = {d["dirname"]: d["permissions"] for d in result["dirs"]}
++    assert files == {"printer.cfg": "rw", "locked.cfg": "r"}
++    assert dirs == {"plugin": "r"}
++    # printer.cfg's folder; locked.cfg stops at the file
++    assert calls[str(config_root)] == 1
++    assert result["root_info"] == {"name": "config", "permissions": "rw"}
++
++
++def test_file_list(config_root: pathlib.Path) -> None:
++    fm = make_manager(config_root)
++    calls, result = count_access(fm, lambda: fm.get_file_list("config"))
++    found = {name: info["permissions"] for name, info in result.items()}
++    assert found == {
++        "printer.cfg": "rw",
++        "locked.cfg": "r",
++        os.path.join("plugin", "plugin.cfg"): "r",
++        os.path.join("plugin", "macros.cfg"): "r",
++    }
++    assert calls[str(config_root.joinpath("plugin"))] == 1
+-- 
+2.56.0
+

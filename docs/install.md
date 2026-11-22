@@ -413,14 +413,19 @@ that start; take the stick out afterwards.
 - The recovery OS stays in slot A as a safety net. Stock doesn't use it;
   stock's next firmware update writes over it.
 - With Kiln's own boot loader on the printer: its second stage (U-Boot) is
-  removed, and its small first stage stays and starts Flashforge's firmware
-  the way Flashforge's own boot loader does. If the printer still has its
-  own first MiB from before Kiln's boot loader (saved as
-  `/data/ad5x/stock/boot.img`), the page also offers **Also put back
-  Flashforge's own boot loader**. You don't need it for stock to work.
-  If `/data/ad5x/stock` has no `boot.img`, the page also looks for one in
-  the usershare copy (`kiln-stock-backup`) and on a USB stick
-  (`kiln-stock-backup`).
+  removed, and Flashforge's own boot loader goes back whenever the
+  printer's own first MiB from before Kiln's boot loader is found (saved
+  as `/data/ad5x/stock/boot.img`; if that one is missing, the page also
+  looks in the usershare copy and on a USB stick, both in
+  `kiln-stock-backup`). The page then shows **Also put back Flashforge's
+  own boot loader**, ticked. Untick it to keep Kiln's small first stage
+  (SPL): it starts Flashforge's firmware the way Flashforge's own boot
+  loader does.
+- If no `boot.img` of this printer is found, there is no box: the page says
+  that Flashforge's own boot loader can't be put back because the printer's
+  saved copy wasn't found. Kiln's small first stage then stays, and
+  Flashforge's firmware works all the same. A return that was stopped
+  (Continue) goes on with the choice it started with.
 - If you keep Kiln's boot loader, `boot.img` is also copied to the usershare
   partition (`kiln-stock-backup`). So the way back to Flashforge's own boot
   loader stays even if the data partition is wiped later. If that copy
@@ -443,7 +448,9 @@ that start; take the stick out afterwards.
   put a `#` in front of them).
 - Over SSH in the recovery OS the same tool is `ad5x-return-stock --check`
   and `ad5x-return-stock --yes` (`--status` shows how far it got; details
-  in `docs/recovery-os.md`).
+  in `docs/recovery-os.md`). It puts Flashforge's boot loader back the same
+  way; `--keep-kiln-spl` keeps Kiln's SPL, and `--flashforge-spl` refuses
+  to go on without a matching `boot.img`.
 
 ### Installing Kiln OS again
 

@@ -754,7 +754,7 @@ an update.
 
 ## HelixScreen side (`buildroot/package/helixscreen/000*.patch`)
 
-Patches on HelixScreen v1.1.0-rc.1 (85 files, `0001` to `0093`; the missing
+Patches on HelixScreen v1.1.0-rc.1 (86 files, `0001` to `0094`; the missing
 numbers were dropped because upstream has them), applied by Buildroot after
 extract (after the `GIT_INIT` hook has committed the pristine tree, so
 upstream's own submodule patching is unaffected; they touch `src/`,

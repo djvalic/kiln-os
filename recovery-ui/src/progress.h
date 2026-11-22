@@ -25,4 +25,23 @@ void pg_split(const char *s, char *code, size_t ccap, char *arg, size_t acap,
 const char *pg_text(const char *code, const char *arg, const char *english,
 		    char *buf, size_t cap);
 
+/* A tool's refusal reason (the text after its first "  FAIL  ", or its
+ * "result:" text when there is no FAIL line) in the screen's language:
+ * the tool's own English text on an English screen (or in a language
+ * without these strings yet); else the translated reason when it starts
+ * with one of the tools' known texts, or a translated general line (the
+ * English details stay in the session log). Never English inside a
+ * translated screen. Written into buf, which is returned. */
+const char *why_text(const char *why, char *buf, size_t cap);
+
+/* The home screen's last update, from the last line of
+ * /data/ad5x/update/last.log (ad5x-recovery-auto's "YYYY-MM-DD HH:MM:SS
+ * text"; sys_last_update() adds "  (YYYY-MM-DD HH:MM)", the file's time):
+ * the line as it is on an English screen (or in a language without these
+ * strings yet); else the outcome in the screen's language with the file
+ * name and the time: installed (OK, SUCCESS, the reboot after it), failed,
+ * started and not finished, skipped as installed before; any other line
+ * points to Logs > Updates. Written into buf, which is returned. */
+const char *update_text(const char *line, char *buf, size_t cap);
+
 #endif

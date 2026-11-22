@@ -257,6 +257,32 @@ bl_fingerprint() {
 	echo "chip:   $(bl_variant_says)"
 	echo "ram:    MemTotal ${BL_MEM_KB:-?} kB; ${BL_MEM_BANKS:-no mem= banks}"
 }
+# bl_boot_img_why FILE: FILE is the stock first MiB as S99ad5x-booted saves
+# it (boot.img): 1 MiB, its FILE.sha256 checks, FILE.info names
+# Flashforge's SPL, and its own bytes have the INGE block, a GPT, LPSM,
+# Flashforge's SPL banner and Flashforge's raw U-Boot at 0xA400 (no
+# uImage). Prints why not and is false otherwise
+bl_boot_img_why() {
+	bbw=$1
+	if [ ! -f "$bbw" ]; then echo "missing"
+	elif [ "$(bl_fsize "$bbw")" != $BL_MIB ]; then echo "$(bl_fsize "$bbw") bytes, not 1 MiB"
+	elif [ "$(sha256sum < "$bbw" | cut -d' ' -f1)" != "$(cut -d' ' -f1 "$bbw.sha256" 2>/dev/null)" ]; then echo "its sha256 differs from boot.img.sha256"
+	elif ! sed -n 1p "$bbw.info" 2>/dev/null | grep -q "^Flashforge's boot loader: U-Boot SPL 2013\.07"; then echo "boot.img.info doesn't name Flashforge's SPL"
+	elif [ "$(bl_loader "$bbw")" != flashforge ] || [ "$(head -c 4 "$bbw")" != INGE ] ||
+	     [ "$(tail -c +513 "$bbw" | head -c 8)" != "EFI PART" ] || [ "$(tail -c +$((BL_SPL_OFF + 1)) "$bbw" | head -c 4)" != LPSM ]; then
+		echo "no INGE block, GPT, LPSM or Flashforge's SPL banner in it"
+	elif [ "$(bl_ufield "$bbw" $BL_UB_OFF)" = 27051956 ]; then echo "a uImage at 0xA400: not Flashforge's raw U-Boot"
+	else return 0; fi
+	return 1
+}
+# bl_sdnand DISKNAME (mmcblk0): the printer's memory is SD-NAND (an SD
+# card's protocol, a board Kiln's boot loader doesn't support), not eMMC:
+# its sysfs type says SD, or the command line has dev_type=SDNAND
+bl_sdnand() {
+	[ "$(cat "${AD5X_SYS:-/sys}/class/block/$1/device/type" 2>/dev/null)" = SD ] && return 0
+	case " $(cat "${AD5X_CMDLINE:-/proc/cmdline}" 2>/dev/null) " in *" dev_type=SDNAND "*) return 0 ;; esac
+	return 1
+}
 # bl_allowed SPL DDR: on the allowlist; BL_BOARD gets its note
 bl_allowed() {
 	BL_BOARD=$(printf '%s\n' "$BL_ALLOWLIST" | awk -v s="$1" -v d="$2" '
@@ -286,6 +312,9 @@ bl_spl_image_ok() {
 }
 
 bl_ufield() { od -An -v -t x1 -j "$2" -N 4 "$1" 2>/dev/null | tr -d ' \n'; }
+# bl_kiln_ub FILE (a first MiB): Kiln's U-Boot at 0xA400 (a uImage named
+# "Kiln U-Boot")
+bl_kiln_ub() { [ "$(bl_ufield "$1" $BL_UB_OFF)" = 27051956 ] && [ "$(tail -c +$((BL_UB_OFF + 33)) "$1" | head -c 11)" = "Kiln U-Boot" ]; }
 
 # bl_rescue_rec FILE (a first MiB): its last sector is a network rescue
 # record ("KILN-RESCUE 1" first); bl_rescue_says FILE: what it says
@@ -298,6 +327,87 @@ bl_rescue_says() {
 			END { printf "server %s:%s, %d of 3 tries made", s, p, t }'
 }
 bl_ubyte() { od -An -v -t u1 -j "$2" -N 1 "$1" 2>/dev/null | tr -d ' '; }
+
+# Build dates. U-Boot puts its build time in its version strings: "U-Boot
+# SPL 2026.10 (Nov 19 2026 - 08:31:00 +0000)" in the SPL, "U-Boot 2026.10
+# (...)" in U-Boot proper (U_BOOT_DATE, U_BOOT_TIME, U_BOOT_TZ).
+# bl_built WHAT FILE OFF LEN: the part in brackets of the version string
+# WHAT ("U-Boot SPL" or "U-Boot") within LEN bytes of FILE from OFF; empty
+# when there is none
+bl_built() {
+	tail -c +$(($3 + 1)) "$2" 2>/dev/null | head -c "$4" | tr -c ' -~' '\n' |
+		grep -o "$1 20[0-9][0-9]\.[0-9][0-9]*[^ ]* ([^)]*)" | head -n 1 | sed 's/^[^(]*(\([^)]*\)).*/\1/'
+}
+# bl_mib_dates FILE (a first MiB): BL_D_SPL, BL_D_UB, the build dates of its
+# SPL and of the U-Boot uImage at 0xA400 (empty: none)
+bl_mib_dates() {
+	BL_D_SPL=$(bl_built "U-Boot SPL" "$1" $BL_SPL_OFF $((BL_SPL_END - BL_SPL_OFF))) BL_D_UB=
+	[ "$(bl_ufield "$1" $BL_UB_OFF)" = 27051956 ] &&
+		BL_D_UB=$(bl_built "U-Boot" "$1" $BL_UB_OFF $((BL_MIB - BL_UB_OFF)))
+	return 0
+}
+# bl_files_dates [DIR]: BL_D_SPL, BL_D_UB of the images DIR (default
+# BL_FILES) carries: spl-mmc.img, u-boot-emmc.img; false without them
+bl_files_dates() {
+	bfd=${1:-$BL_FILES} BL_D_SPL= BL_D_UB=
+	[ -f "$bfd/spl-mmc.img" ] && [ -f "$bfd/u-boot-emmc.img" ] || return 1
+	BL_D_SPL=$(bl_built "U-Boot SPL" "$bfd/spl-mmc.img" 0 $((BL_SPL_END - BL_SPL_OFF)))
+	BL_D_UB=$(bl_built "U-Boot" "$bfd/u-boot-emmc.img" 0 $BL_MIB)
+}
+# bl_epoch DATE ("Nov 19 2026 - 08:31:00 +0000"): its seconds since 1970
+# UTC (the zone taken off); empty when it isn't such a date. No date(1):
+# BusyBox's can't read this form. Days from the civil date as in
+# Hinnant's days_from_civil; leading zeros dropped (no octal)
+bl_nz() { bnz=$1; while [ "${#bnz}" -gt 1 ] && [ "${bnz#0}" != "$bnz" ]; do bnz=${bnz#0}; done; echo "$bnz"; }
+bl_epoch() {
+	# shellcheck disable=SC2086 # split into its words on purpose
+	set -f; set -- $1; set +f
+	[ $# = 5 ] || [ $# = 6 ] || return 0
+	[ "$4" = - ] || return 0
+	case "$1" in
+	Jan) bem=1 ;; Feb) bem=2 ;; Mar) bem=3 ;; Apr) bem=4 ;; May) bem=5 ;; Jun) bem=6 ;;
+	Jul) bem=7 ;; Aug) bem=8 ;; Sep) bem=9 ;; Oct) bem=10 ;; Nov) bem=11 ;; Dec) bem=12 ;;
+	*) return 0 ;;
+	esac
+	bez=${6:-+0000}
+	case "$2:$3:$5:$bez" in
+	*[!0-9:+-]*) return 0 ;;
+	[0-9]:20[0-9][0-9]:[0-2][0-9]:[0-5][0-9]:[0-6][0-9]:[+-][0-9][0-9][0-9][0-9] | \
+	[0-3][0-9]:20[0-9][0-9]:[0-2][0-9]:[0-5][0-9]:[0-6][0-9]:[+-][0-9][0-9][0-9][0-9]) ;;
+	*) return 0 ;;
+	esac
+	bed=$(bl_nz "$2") bey=$3
+	beh=$(bl_nz "${5%%:*}") bemi=${5#*:} bes=$(bl_nz "${bemi#*:}") bemi=$(bl_nz "${bemi%%:*}")
+	bezh=$(bl_nz "$(echo "$bez" | cut -c2-3)") bezm=$(bl_nz "$(echo "$bez" | cut -c4-5)")
+	[ "$bed" -ge 1 ] && [ "$bed" -le 31 ] && [ "$beh" -le 23 ] || return 0
+	[ "$bem" -le 2 ] && bey=$((bey - 1))
+	bera=$((bey / 400)) beyoe=$((bey - bey / 400 * 400))
+	if [ "$bem" -gt 2 ]; then bemp=$((bem - 3)); else bemp=$((bem + 9)); fi
+	bedoy=$(((153 * bemp + 2) / 5 + bed - 1))
+	bedoe=$((beyoe * 365 + beyoe / 4 - beyoe / 100 + bedoy))
+	beo=$((bezh * 3600 + bezm * 60))
+	[ "$(echo "$bez" | cut -c1)" = - ] && beo=$((0 - beo))
+	echo $(( (bera * 146097 + bedoe - 719468) * 86400 + beh * 3600 + bemi * 60 + bes - beo ))
+}
+# bl_build_time SPL-DATE UBOOT-DATE: a boot loader build's time, in
+# seconds: the later of its two dates (both come from one build of u-boot/,
+# the SPL first; where they differ, the build is as new as its newer half,
+# a mixed pair from the bench tools included). Empty when neither reads
+bl_build_time() {
+	bbt1=$(bl_epoch "$1") bbt2=$(bl_epoch "$2")
+	if [ -z "$bbt1" ]; then echo "$bbt2"
+	elif [ -z "$bbt2" ] || [ "$bbt1" -ge "$bbt2" ]; then echo "$bbt1"
+	else echo "$bbt2"; fi
+}
+# bl_compare_builds CARRIED-SPL CARRIED-UB DISK-SPL DISK-UB: newer (the
+# carried build is later than the one on the disk), older, or unknown (a
+# date missing or unreadable, or the same time with other bytes)
+bl_compare_builds() {
+	bcb1=$(bl_build_time "$1" "$2") bcb2=$(bl_build_time "$3" "$4")
+	if [ -z "$bcb1" ] || [ -z "$bcb2" ] || [ "$bcb1" = "$bcb2" ]; then echo unknown
+	elif [ "$bcb1" -gt "$bcb2" ]; then echo newer
+	else echo older; fi
+}
 # bl_uboot_image_ok FILE MAX: a U-Boot uImage Kiln's SPL starts
 # (spl_load_uimage: magic, header and data CRCs, MIPS, OS U-Boot) and
 # Kiln's (load = entry 0x80100000, "Kiln U-Boot"), header + ih_size

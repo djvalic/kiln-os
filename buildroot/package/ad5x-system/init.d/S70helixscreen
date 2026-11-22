@@ -21,7 +21,11 @@
 # the next start; HelixScreen deletes the flag. helixscreen/offer-setup-wizard
 # (the installer writes it when it reinstalls Kiln OS over stock and finds
 # these settings from before) makes the screen ask once whether to run the
-# setup wizard; HelixScreen deletes it at Run or Skip (patch 0088). In USB
+# setup wizard; HelixScreen deletes it at Run or Skip (patch 0088).
+# /run/ad5x-bootloader-notice (ad5x-bootloader-notice, from
+# S99ad5x-update-recovery) makes it tell once that a boot loader update is
+# ready, or (on Flashforge's boot loader) that Kiln's can be installed;
+# what was shown goes into /data/ad5x/bootloader-notice (patch 0094). In USB
 # test mode the stock app is not running, so nothing else draws on fb0.
 
 # Files this creates are readable by klipper and www-data, whoever started
@@ -89,6 +93,8 @@ start)
 	HELIX_DISPLAY_BACKEND=$BACKEND \
 	HELIX_WIZARD_FLAG_FILE=/data/ad5x/printer_data/comms/run-setup-wizard \
 	HELIX_WIZARD_OFFER_FILE=$D/offer-setup-wizard \
+	HELIX_KILN_BL_NOTICE_FILE=/run/ad5x-bootloader-notice \
+	HELIX_KILN_BL_STATE_DIR=/data/ad5x/bootloader-notice \
 	HELIX_OOM_SCORE_ADJ=300 \
 	MALLOC_ARENA_MAX=2 \
 	start-stop-daemon -S -b -m -p $PID -N 10 \

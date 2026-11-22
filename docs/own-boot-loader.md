@@ -131,17 +131,29 @@ only eMMC.
 
 ## Install from the recovery screen
 
-For now the recovery screen shows the button only after
-`touch /data/ad5x/bootloader-offer.enable` over SSH (in the main OS or the
-recovery OS), until the install has been tested on more printers. An
-install that stopped part-way is offered to finish without it. Deleting
-the file hides the button again. The SSH commands below work either way.
+The recovery screen shows the button on every printer whose board is on
+the allowlist and doesn't have Kiln's boot loader yet; nothing has to be
+set up over SSH first (before v1.0.0-rc7 it needed
+`/data/ad5x/bootloader-offer.enable`; that file does nothing now). An
+install that stopped part-way is offered to finish. The SSH commands below
+work too.
+
+The main OS's touch screen says once that this exists, from the third
+complete start of Kiln OS on: "Kiln OS has its own boot loader for this
+printer. To install it: Settings > System > Boot into recovery > Reboot /
+Power > Install Kiln's boot loader (experimental). Read the boot loader
+guide first; it explains the risk and the rescue stick", with this page's
+address. Only on a printer the recovery screen would offer it on (a known
+board, an X2600H, eMMC, Kiln's boot loader images in the recovery OS),
+only at idle (not during the setup wizard, not while a print runs), and
+never again once closed (`/data/ad5x/bootloader-notice/install-dismissed`;
+the same script as the update notice below, "The main OS tells you").
 
 1. Boot into recovery (touch screen: Settings > System > Boot into
    recovery).
 2. Tap **Reboot / Power**. On a known board without Kiln's boot loader
-   (and with the file above) there is a button **Install Kiln's boot
-   loader (experimental)**. It isn't there on other boards.
+   there is a button **Install Kiln's boot loader (experimental)**. It
+   isn't there on other boards.
 3. The page checks everything first and shows the result. Nothing is
    written yet.
 4. Tap **Install** and confirm twice. Wait until the screen says it is
@@ -238,18 +250,64 @@ with every update, and updates never touch the boot loader.
 ## Upgrading the boot loader
 
 The recovery OS carries the boot loader of its own release. When the
-printer has Kiln's boot loader of another build (an earlier install, or
+printer has Kiln's boot loader of an older build (an earlier install, or
 the bench tools), it can be upgraded to the one this release carries.
+Nothing updates it by itself: a Kiln OS update brings a new recovery OS
+(the main OS writes it into slot A after its first complete start), and
+that recovery OS brings the new boot loader images, but writing them is
+always your step, because a power cut in the SPL write needs the USB-boot
+rescue.
+
+Which build is newer is told by the build dates in the version strings
+(`U-Boot SPL 2026.10 (Nov 19 2026 - 08:31:00 +0000)` in the SPL, the same
+form in U-Boot), read as times with their zones. SPL and U-Boot come from
+one build and their dates differ by seconds at most; where they differ
+more (a mixed pair from the bench tools), a build counts as new as its
+newer half. A build whose dates can't be read, or two builds of the same
+time with other bytes, can't be told apart: the update is offered as
+before.
+
+### The main OS tells you
+
+Most people rarely start the recovery OS, so the main OS's touch screen
+says it once when an update is waiting: "A boot loader update is ready.
+To install it: Settings > System > Boot into recovery > Reboot / Power >
+Update Kiln's boot loader." It shows when the printer has Kiln's boot
+loader and the recovery OS in slot A carries a newer build (on a known
+board, eMMC), at idle only: not during the setup wizard, not while a
+print runs, not over another dialog. OK (or tapping beside it) closes it
+for that build; it comes back only for a newer one.
+
+At each complete start, `ad5x-bootloader-notice --start`
+(S99ad5x-update-recovery, after it has written slot A when that was due)
+reads the first MiB's version strings and slot A's
+`/usr/share/ad5x/bootloader` images (slot A mounted read-only for a
+moment), checks the board by the stock first MiB saved before Kiln's boot
+loader (`/data/ad5x/stock/boot.img`, or after a wiped `/data` its copy in
+usershare's or a mounted USB stick's `kiln-stock-backup/`, as the recovery
+finds it; usershare is only read) and writes `/run/ad5x-bootloader-notice`, which HelixScreen reads
+(patch 0094). It reads slot A itself, not the recovery image the main OS
+brings (that one reaches slot A only after the first complete start) and
+not a file the recovery OS would write (one from the recovery OS before
+an update would still name the old build). What was shown is kept in
+`/data/ad5x/bootloader-notice/` (`update-seen`, `install-dismissed`;
+`starts` counts the complete starts, `last` says what the last check
+found). `ad5x-bootloader-notice --print` shows what it finds without
+writing anything. Nothing there writes the boot loader.
 
 ### On the recovery screen
 
 1. Boot into recovery (touch screen: Settings > System > Boot into
    recovery).
 2. Tap **Reboot / Power**. When the printer has Kiln's boot loader of
-   another build (on a known board), there is a button **Update Kiln's
+   an older build (on a known board), there is a button **Update Kiln's
    boot loader**. No opt-in file is needed: you installed Kiln's boot
    loader already. The button isn't there when the boot loader is already
-   this release's.
+   this release's, nor when it is newer than this recovery OS's (you went
+   back to an older Kiln release): then the line above the buttons says
+   "installed, build X (this recovery carries an older build, Y)", and
+   the screen never offers that downgrade (over SSH it is possible, see
+   below).
 3. The page checks everything first and shows the build on the printer
    and the one after the update. Nothing is written yet.
 4. Tap **Update** and confirm twice (the same risk note as the install).
@@ -274,6 +332,11 @@ ad5x-bootloader-install            # checks; prints "upgrade: Kiln boot loader <
 ad5x-bootloader-install --yes      # upgrade (or finish one that stopped)
 ```
 
+`ad5x-bootloader-install --yes` also goes back to an older build than
+the one on the disk (a downgrade, the same steps and checks): `--check`
+and `--status` say so ("this recovery OS carries an older build than the
+one on the disk: a downgrade"). The screen's `--upgrade` refuses it.
+
 It needs the same as an install (`/data/ad5x/stock/boot.img` above all:
 the disk no longer has Flashforge's SPL), and the disk must be exactly
 that `boot.img` with a whole Kiln SPL and U-Boot in it. It keeps the old
@@ -293,10 +356,18 @@ Return to Flashforge firmware works after an upgrade as after an install.
 
 **Return to Flashforge firmware** (recovery screen: **Restore stock**,
 `docs/install.md` "Going back to stock") works with Kiln's boot loader:
-it removes Kiln's U-Boot, and with **Also put back Flashforge's own boot
-loader** it writes this printer's stock SPL back from `boot.img`. Then
-install Kiln OS again with the install stick if you want Kiln OS on
-Flashforge's boot loader.
+it removes Kiln's U-Boot and, whenever this printer's `boot.img` is found
+(`/data/ad5x/stock`, usershare's or a USB stick's `kiln-stock-backup`),
+writes this printer's stock SPL back from it too. The page's box **Also put
+back Flashforge's own boot loader** is ticked then; untick it (over SSH:
+`ad5x-return-stock --keep-kiln-spl`) to keep Kiln's SPL, which starts
+stock the way Flashforge's does. Without a matching `boot.img` Kiln's SPL
+stays, and the page says plainly that Flashforge's own boot loader can't be
+put back because the printer's saved copy wasn't found; stock works all the
+same. `--flashforge-spl` makes the return refuse instead. A stopped return
+goes on with the choice it started with, also one an older recovery OS
+started (it kept Kiln's SPL by default). Then install Kiln OS again with
+the install stick if you want Kiln OS on Flashforge's boot loader.
 
 ## If the printer doesn't start
 

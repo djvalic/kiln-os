@@ -521,10 +521,16 @@ static struct {
 	capture *cap;
 	bool cap_slots, want_slots;
 	char text[4096];
-	char slots[512];	/* slot_a=, slot_b=, bootloader= lines from the last --slots */
+	char slots[1024];	/* slot_a=, slot_b=, bootloader= lines from the last --slots */
+	/* a --slots run has finished (the power page's boot loader line says
+	 * "reading" before), and the last one ran during the start-up
+	 * actions (auto=running): one more once they are done */
+	bool slots_read, slots_auto;
 	unsigned seq;
 	time_t last;
 } stc;
+
+static bool kv_in(const char *text, const char *key, char *out, size_t cap);
 
 static bool status_busy(void)
 {
@@ -544,6 +550,8 @@ static void status_poll(void)
 			return;
 		const char *t = capture_text(stc.cap);
 		snprintf(stc.text, sizeof(stc.text), "%s", t ? t : "");
+		char au[16];
+		bool auto_run = kv_in(stc.text, "auto", au, sizeof(au)) && !strcmp(au, "running");
 		if (stc.cap_slots) {
 			stc.slots[0] = 0;
 			for (const char *l = stc.text; l && *l; l = strchr(l, '\n') ? strchr(l, '\n') + 1 : NULL)
@@ -552,6 +560,15 @@ static void status_poll(void)
 					snprintf(stc.slots + n, sizeof(stc.slots) - n, "%.*s\n",
 						 (int)strcspn(l, "\n"), l);
 				}
+			stc.slots_read = true;
+			stc.slots_auto = auto_run;
+		} else if (stc.slots_auto && !auto_run) {
+			/* the start-up actions are done (they may have installed
+			 * the main OS or mounted a stick): the slots and the boot
+			 * loader once more, as they are now */
+			stc.slots_auto = false;
+			stc.want_slots = true;
+			stc.last = 0;
 		}
 		capture_free(stc.cap);
 		stc.cap = NULL;
@@ -744,8 +761,11 @@ static void home_refresh(void)
 	else
 		set_iconed(hm.trace, LV_SYMBOL_EYE_OPEN, "   ", "%s", tr(RS_HOME_NO_TRACE));
 
-	if (kv("update_last", buf, sizeof(buf)) || sys_last_update(buf, sizeof(buf)))
-		set_iconed(hm.last, LV_SYMBOL_DOWNLOAD, "   ", tr(RS_HOME_LAST_UPDATE), buf);
+	if (kv("update_last", buf, sizeof(buf)) || sys_last_update(buf, sizeof(buf))) {
+		char u[400];
+		set_iconed(hm.last, LV_SYMBOL_DOWNLOAD, "   ", tr(RS_HOME_LAST_UPDATE),
+			   update_text(buf, u, sizeof(u)));
+	}
 	else
 		set_iconed(hm.last, LV_SYMBOL_DOWNLOAD, "   ", "%s", tr(RS_HOME_NO_UPDATE));
 
@@ -1438,8 +1458,8 @@ static void page_restore(void)
 
 /* ad5x-return-stock --check runs in the background when the page opens (and
  * after Check): its "source:", "target:", "config:" (include lines of
- * stock's printer.cfg it switches off: zMod leftovers), "spl_option:" and
- * "result:" lines fill the page. The first three are English; the codes
+ * stock's printer.cfg it switches off: zMod leftovers), "spl_option:",
+ * "spl_missing:" and "result:" lines fill the page. The first three are English; the codes
  * next to them ("source_kind:" with "source_file:", "target_kind:",
  * "config_kind:" with "config_lines:") give the page's own translation, the
  * English line only when a code is unknown. Return to Flashforge is enabled only when
@@ -1447,28 +1467,40 @@ static void page_restore(void)
  * shows the whole check as a job. The return itself is a job that writes
  * the eMMC ("don't switch off"); after it, Shut down. */
 static struct {
-	lv_obj_t *status, *files, *after, *cfg, *spl, *go, *check, *save;
+	lv_obj_t *card, *status, *files, *after, *cfg, *spl, *spl_note, *go, *check, *save;
 	lv_obj_t *wipe, *prints, *wipe_note;	/* Kiln's data: the two boxes */
 	capture *cap;
 	char source[200], target[240], config[240], why[240];
 	char source_kind[16], source_file[200], target_kind[24], config_kind[16];
 	int config_lines, prints_files;
 	unsigned long long kiln_kb, prints_kb;
-	bool spl_offer, ready, resume, done_already, checked, cfg_failed;
+	bool spl_offer, spl_missing, spl_ticked_once, ready, resume, done_already, checked, cfg_failed;
 	bool wipe_offer, wipe_ticked_once;
 	char wipe_asked[16];	/* "kiln" or "prints": an unfinished return asked it */
 } rt;
 
 static void rt_free(lv_event_t *e)
 {
-	(void)e;
+	/* the old page's card goes after the new page is made (go()): the
+	 * page opened again over itself keeps its new check running */
+	if (lv_event_get_target(e) != rt.card)
+		return;
 	capture_free(rt.cap);
 	rt.cap = NULL;
 }
 
-static bool rt_spl(void)
+/* "Also put back Flashforge's own boot loader": offered when this
+ * printer's saved boot.img is found for a new return, and then ticked by
+ * default (the tool's default too). Ticked: --flashforge-spl (required:
+ * refused if boot.img went away since the check); unticked:
+ * --keep-kiln-spl. Not offered (no boot.img, an unfinished return going on
+ * with its own choice, Flashforge's boot loader there already): no
+ * option, the tool decides as its check said */
+static const char *rt_spl_flag(void)
 {
-	return rt.spl && rt.spl_offer && lv_obj_has_state(rt.spl, LV_STATE_CHECKED);
+	if (!rt.spl || !rt.spl_offer)
+		return "";
+	return lv_obj_has_state(rt.spl, LV_STATE_CHECKED) ? "--flashforge-spl" : "--keep-kiln-spl";
 }
 
 /* "Also remove Kiln OS's settings and files" and, only with it, "...and the
@@ -1494,7 +1526,7 @@ static void rt_start_check(void)
 {
 	if (rt.cap || job_running())
 		return;
-	const char *v[] = { "SPL", rt_spl() ? "--flashforge-spl" : "", "WIPE", rt_wipe_flags(), NULL };
+	const char *v[] = { "SPL", rt_spl_flag(), "WIPE", rt_wipe_flags(), NULL };
 	char *c = cmd_expand(CMD_RETURN_CHECK, v);
 	slog("return to Flashforge: %s", c);
 	rt.cap = capture_start(c, 16384);
@@ -1537,6 +1569,7 @@ static void rt_parse(const char *t)
 	/* an earlier run couldn't change stock's printer.cfg (it went on) */
 	rt.cfg_failed = text_has_line(t, "config_failed: yes");
 	rt.spl_offer = rt_line(t, "spl_option", v, sizeof(v)) && !strcmp(v, "yes");
+	rt.spl_missing = rt_line(t, "spl_missing", v, sizeof(v)) && !strcmp(v, "yes");
 	rt.wipe_offer = rt_line(t, "wipe_option", v, sizeof(v)) && !strcmp(v, "yes");
 	rt.kiln_kb = rt_line(t, "kiln_data_kb", v, sizeof(v)) ? strtoull(v, NULL, 10) : 0;
 	rt.prints_kb = rt_line(t, "prints_kb", v, sizeof(v)) ? strtoull(v, NULL, 10) : 0;
@@ -1555,6 +1588,8 @@ static void rt_parse(const char *t)
 		}
 	if (!rt.why[0] && !rt.ready && !rt.done_already)
 		snprintf(rt.why, sizeof(rt.why), "%s", res[0] ? res : "?");
+	if (rt.why[0])
+		slog("return to Flashforge: not possible: %s", rt.why);
 	rt.checked = true;
 }
 
@@ -1632,6 +1667,12 @@ static void rt_show(void)
 	lv_obj_set_style_text_color(rt.cfg, rt.cfg_failed ? C_WARN : C_MUTED, 0);
 	show(rt.cfg, rt.cfg_failed || rt.config[0] != 0);
 	show(rt.spl, rt.spl_offer && !rt.done_already);
+	if (rt.spl_missing)
+		iconed(t, sizeof(t), LV_SYMBOL_WARNING, "  ", "%s", tr(RS_RS_SPL_MISSING));
+	else
+		t[0] = 0;
+	lv_label_set_text(rt.spl_note, t);
+	show(rt.spl_note, rt.spl_missing && !rt.done_already);
 	rt_show_wipe();
 	if (!rt.checked)
 		return;
@@ -1643,7 +1684,8 @@ static void rt_show(void)
 	else if (rt.ready)
 		snprintf(t, sizeof(t), "%s", tr_sym(LV_SYMBOL_OK, RS_RS_READY));
 	else
-		iconed(t, sizeof(t), LV_SYMBOL_CLOSE, "  ", tr(RS_RS_REFUSED), rt.why), c = C_WARN;
+		iconed(t, sizeof(t), LV_SYMBOL_CLOSE, "  ", tr(RS_RS_REFUSED),
+		       why_text(rt.why, v, sizeof(v))), c = C_WARN;
 	lv_label_set_text(rt.status, t);
 	lv_obj_set_style_text_color(rt.status, c, 0);
 	lv_label_set_text(lv_obj_get_child(rt.go, 0),
@@ -1660,6 +1702,11 @@ static void rt_refresh(void)
 		rt_parse(t ? t : "");
 		capture_free(rt.cap);
 		rt.cap = NULL;
+		/* the boot loader box: ticked the first time it is offered */
+		if (rt.spl_offer && !rt.spl_ticked_once) {
+			rt.spl_ticked_once = true;
+			lv_obj_add_state(rt.spl, LV_STATE_CHECKED);
+		}
 		/* an unfinished return was asked to remove Kiln's data: the
 		 * boxes ticked again as then, and checked with them */
 		if (rt.wipe_asked[0] && rt.wipe_offer && !rt.wipe_ticked_once) {
@@ -1677,7 +1724,7 @@ static void rt_refresh(void)
 
 static void return_now(void)
 {
-	const char *v[] = { "SPL", rt_spl() ? "--flashforge-spl" : "", "WIPE", rt_wipe_flags(), NULL };
+	const char *v[] = { "SPL", rt_spl_flag(), "WIPE", rt_wipe_flags(), NULL };
 	char *c = cmd_expand(CMD_RETURN_STOCK, v), src[240];
 	start_job_x(JK_CMD, tr(RS_RS_RUNNING), rt_source_text(src, sizeof(src)), c, false, false,
 		    true, AFTER_POWEROFF);
@@ -1719,7 +1766,7 @@ static void on_rt_go(lv_event_t *e)
 static void on_rt_check(lv_event_t *e)
 {
 	(void)e;
-	const char *v[] = { "SPL", rt_spl() ? "--flashforge-spl" : "", "WIPE", rt_wipe_flags(), NULL };
+	const char *v[] = { "SPL", rt_spl_flag(), "WIPE", rt_wipe_flags(), NULL };
 	char *c = cmd_expand(CMD_RETURN_CHECK, v);
 	start_job(JK_CMD, tr(RS_RS_CHECKING_TITLE), "", c, true, false);
 	free(c);
@@ -1784,9 +1831,13 @@ static void page_return(void)
 	lv_obj_add_flag(c, LV_OBJ_FLAG_SCROLLABLE);
 	lv_obj_set_scroll_dir(c, LV_DIR_VER);
 	lv_obj_add_event_cb(c, rt_free, LV_EVENT_DELETE, NULL);
+	rt.card = c;
 	wrap_label(c, tr(RS_RS_TEXT), F20, C_TEXT);
 	rt.files = wrap_label(c, "", F16, C_MUTED);
 	rt.after = wrap_label(c, "", F16, C_MUTED);
+	/* no boot.img: Flashforge's boot loader can't go back, said plainly */
+	rt.spl_note = wrap_label(c, "", F16, C_MUTED);
+	show(rt.spl_note, false);
 	rt.cfg = wrap_label(c, "", F16, C_MUTED);
 	show(rt.cfg, false);
 	rt.status = wrap_label(c, "", F20B, C_MUTED);
@@ -1965,6 +2016,8 @@ static void bl_parse(const char *t)
 		}
 	if (!bl.why[0] && !bl.ready && !bl.done_already)
 		snprintf(bl.why, sizeof(bl.why), "%s", res[0] ? res : "?");
+	if (bl.why[0])
+		slog("Kiln's boot loader: not possible: %s", bl.why);
 	bl.checked = true;
 }
 
@@ -1997,7 +2050,9 @@ static void bl_show(void)
 	} else if (bl.ready) {
 		snprintf(t, sizeof(t), "%s", tr_sym(LV_SYMBOL_OK, BL_S(RS_BL_READY, RS_BL_UP_READY)));
 	} else {
-		iconed(t, sizeof(t), LV_SYMBOL_CLOSE, "  ", tr(RS_RS_REFUSED), bl.why), c = C_WARN;
+		char w[240];
+		iconed(t, sizeof(t), LV_SYMBOL_CLOSE, "  ", tr(RS_RS_REFUSED), why_text(bl.why, w, sizeof(w)));
+		c = C_WARN;
 	}
 	if (bl.result) {
 		/* the outcome stays the headline; the check's line goes under
@@ -2431,6 +2486,120 @@ static void on_poweroff(lv_event_t *e)
 		false, NULL, poweroff_now);
 }
 
+/* Kiln's own boot loader's entry on the power page: offered on a board on
+ * the allowlist without it while slot B holds Kiln OS, or to finish an
+ * install that stopped; its update when the printer has Kiln's boot
+ * loader of another build (bootloader_upgrade=yes), or to finish an
+ * update that stopped (ad5x-status --slots) */
+enum pw_entry { PW_NONE, PW_INSTALL, PW_UPDATE };
+
+static enum pw_entry power_entry(void)
+{
+	char v[16], sb[96];
+	bool kiln_b = kv("slot_b", sb, sizeof(sb)) && !strncmp(sb, "ad5x ", 5);
+	bool started = kv("bootloader_install", v, sizeof(v)) && !strcmp(v, "started");
+	if ((kv("bootloader_upgrade", v, sizeof(v)) && !strcmp(v, "yes") && kiln_b) ||
+	    (started && bl_record_upgrade()))
+		return PW_UPDATE;
+	if ((kv("bootloader_offer", v, sizeof(v)) && !strcmp(v, "yes") && kiln_b) || started)
+		return PW_INSTALL;
+	return PW_NONE;
+}
+
+/* A build date as ad5x-status has it ("Nov 19 2026 - 08:31:00 +0000",
+ * or "SPL date / U-Boot date"), without the time zones; "?" when none */
+static const char *bl_date(const char *key, char *out, size_t cap)
+{
+	char v[128];
+	if (!kv(key, v, sizeof(v))) {
+		snprintf(out, cap, "?");
+		return out;
+	}
+	size_t k = 0;
+	for (const char *p = v; *p && k + 1 < cap;) {
+		if (!strncmp(p, " +0000", 6)) {
+			p += 6;
+			continue;
+		}
+		out[k++] = *p++;
+	}
+	out[k] = 0;
+	return out;
+}
+
+/* The power page's boot loader line, always there and read only (issue
+ * #97): Kiln's installed and the build this recovery carries (up to
+ * date), installed with an update offered (a newer build here), installed
+ * with an older build here (bootloader_carries_newer=no: never offered),
+ * installed with another build here that isn't offered, Flashforge's, or "reading" until a --slots
+ * run has finished (at start, or during the start-up actions: read again
+ * when they are done) and only then "couldn't be read" */
+static void power_bl_line(char *t, size_t cap, lv_color_t *c)
+{
+	char b[16], same[8], nw[16], d1[96], d2[96];
+	if (!kv("bootloader", b, sizeof(b)) || !strcmp(b, "unknown")) {
+		if (!stc.slots_read || stc.slots_auto || auto_running()) {
+			iconed(t, cap, LV_SYMBOL_REFRESH, "  ", "%s", tr(RS_BL_LINE_READING));
+			*c = C_MUTED;
+		} else {
+			iconed(t, cap, LV_SYMBOL_WARNING, "  ", "%s", tr(RS_BL_LINE_UNKNOWN));
+			*c = C_WARN;
+		}
+		return;
+	}
+	*c = C_MUTED;
+	if (!strcmp(b, "kiln")) {
+		bl_date("bootloader_build", d1, sizeof(d1));
+		if (power_entry() == PW_UPDATE) {
+			iconed(t, cap, LV_SYMBOL_DOWNLOAD, "  ", tr(RS_BL_LINE_UPDATE), d1);
+			*c = C_ACCENT;
+		} else if (kv("bootloader_same", same, sizeof(same)) && !strcmp(same, "yes")) {
+			iconed(t, cap, LV_SYMBOL_OK, "  ", tr(RS_BL_LINE_CURRENT), d1);
+			*c = C_OK;
+		} else if (kv("bootloader_carries", d2, sizeof(d2)) &&
+			   kv("bootloader_carries_newer", nw, sizeof(nw)) && !strcmp(nw, "no")) {
+			/* an older build here (someone went back to an older
+			 * release): no Update, never a downgrade from the screen */
+			iconed(t, cap, LV_SYMBOL_DRIVE, "  ", tr(RS_BL_LINE_OLDER), d1,
+			       bl_date("bootloader_carries", d2, sizeof(d2)));
+		} else if (kv("bootloader_carries", d2, sizeof(d2))) {
+			iconed(t, cap, LV_SYMBOL_DRIVE, "  ", tr(RS_BL_LINE_OTHER), d1,
+			       bl_date("bootloader_carries", d2, sizeof(d2)));
+		} else {
+			iconed(t, cap, LV_SYMBOL_DRIVE, "  ", tr(RS_BL_LINE_INSTALLED), d1);
+		}
+	} else if (!strcmp(b, "kiln-spl")) {
+		iconed(t, cap, LV_SYMBOL_WARNING, "  ", "%s", tr(RS_BL_LINE_SPL));
+		*c = C_WARN;
+	} else {
+		iconed(t, cap, LV_SYMBOL_DRIVE, "  ", "%s", tr(RS_BL_LINE_FLASHFORGE));
+	}
+}
+
+static struct {
+	lv_obj_t *bl;
+	enum pw_entry entry;
+	unsigned seen;
+} pw;
+
+/* A new ad5x-status: the line again; the page again when the entry
+ * changes (the boot loader read at start, after the start-up actions) */
+static void power_refresh(void)
+{
+	if (pw.seen == stc.seq + 1)
+		return;
+	pw.seen = stc.seq + 1;
+	if (power_entry() != pw.entry) {
+		go(page_power);
+		return;
+	}
+	char t[300];
+	lv_color_t c;
+	power_bl_line(t, sizeof(t), &c);
+	lv_label_set_text(pw.bl, t);
+	lv_obj_set_style_text_color(pw.bl, c, 0);
+}
+
 static void page_power(void)
 {
 	lv_obj_t *body = page_frame(tr(RS_REBOOT_POWER), true);
@@ -2439,24 +2608,20 @@ static void page_power(void)
 	lv_obj_set_flex_grow(c, 1);
 	lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
 	lv_obj_set_style_pad_all(c, 18, 0);
-	lv_obj_set_style_pad_row(c, 10, 0);
+	lv_obj_set_style_pad_row(c, 8, 0);
 	label(c, tr_sym(LV_SYMBOL_POWER, RS_POWER), F24B, C_TEXT);
 	wrap_label(c, tr(RS_POWER_TEXT), F20, C_TEXT);
 	wrap_label(c, tr(RS_POWER_TEXT2), F20, C_MUTED);
-	/* Kiln's own boot loader: offered on a board on the allowlist without
-	 * it while slot B holds Kiln OS, or to finish an install that stopped;
-	 * its update when the printer has Kiln's boot loader of another build
-	 * (bootloader_upgrade=yes), or to finish an update that stopped
-	 * (ad5x-status --slots) */
-	char v[16], sb[96];
-	bool kiln_b = kv("slot_b", sb, sizeof(sb)) && !strncmp(sb, "ad5x ", 5);
-	bool started = kv("bootloader_install", v, sizeof(v)) && !strcmp(v, "started");
-	if ((kv("bootloader_upgrade", v, sizeof(v)) && !strcmp(v, "yes") && kiln_b) ||
-	    (started && bl_record_upgrade())) {
+	/* the boot loader line: one line of 16 px, so it fits with the entry
+	 * under it in English and Russian */
+	memset(&pw, 0, sizeof(pw));
+	pw.bl = wrap_label(c, "", F16, C_MUTED);
+	pw.entry = power_entry();
+	if (pw.entry == PW_UPDATE) {
 		lv_obj_t *b = button(c, LV_SYMBOL_DRIVE, tr(RS_BL_UP_ENTRY), 0, on_go,
 				     page_bootloader_upgrade);
 		lv_obj_set_width(b, lv_pct(100));
-	} else if ((kv("bootloader_offer", v, sizeof(v)) && !strcmp(v, "yes") && kiln_b) || started) {
+	} else if (pw.entry == PW_INSTALL) {
 		lv_obj_t *b = button(c, LV_SYMBOL_DRIVE, tr(RS_BL_ENTRY), 0, on_go, page_bootloader);
 		lv_obj_set_width(b, lv_pct(100));
 	}
@@ -2469,6 +2634,7 @@ static void page_power(void)
 	lv_obj_set_flex_grow(b1, 1);
 	lv_obj_set_flex_grow(b2, 1);
 	lv_obj_set_flex_grow(b3, 1);
+	cur_refresh = power_refresh;
 }
 
 /* -------------------------------------------------------------- job page */
@@ -2656,7 +2822,17 @@ static void job_refresh(void)
 				last = p;
 		if (last && ok && jb.done_text && !strncmp(last, "result: done", 12))
 			lv_label_set_text(jp.step, jb.done_text);	/* in the screen's language */
-		else if (last)
+		else if (last && !strncmp(last, "result: refused", 15) && tr_has(RS_WHY_OTHER)) {
+			/* why: its first FAIL line, else the result's own text */
+			char why[240], wt[240];
+			snprintf(why, sizeof(why), "%.*s", (int)strcspn(last + 8, "\n"), last + 8);
+			for (const char *l = t; *l; l = strchr(l, '\n') ? strchr(l, '\n') + 1 : l + strlen(l))
+				if (!strncmp(l, "  FAIL  ", 8)) {
+					snprintf(why, sizeof(why), "%.*s", (int)strcspn(l + 8, "\n"), l + 8);
+					break;
+				}
+			lv_label_set_text_fmt(jp.step, tr(RS_RS_REFUSED), why_text(why, wt, sizeof(wt)));
+		} else if (last)
 			lv_label_set_text_fmt(jp.step, "%.*s", (int)strcspn(last, "\n"), last);
 		/* Return to Flashforge firmware went on without its printer.cfg
 		 * edit (ad5x-return-stock's "config_failed: yes"): said here */
@@ -3142,6 +3318,15 @@ static const char *power_bl_entry(void)
 	return "";
 }
 
+/* The power page's line holds this text (a translated format and its
+ * build dates) */
+static bool power_line_is(enum rui_str id, const char *d1, const char *d2)
+{
+	char want[300];
+	snprintf(want, sizeof(want), tr(id), d1 ? d1 : "", d2 ? d2 : "");
+	return pw.bl && cur_page == page_power && strstr(lv_label_get_text(pw.bl), want) != NULL;
+}
+
 /* The boot loader page shows a refusal ("Not possible now: ...", or the
  * busy start-up actions) in its headline or under it */
 static bool bl_refused_shown(void)
@@ -3262,7 +3447,10 @@ static int bl_update_shots(void (*shot)(const char *name))
 		if (cond) { slog("shots: ok   %s", what); } \
 		else { slog("shots: FAIL %s", what); fails++; } } while (0)
 	/* an earlier install's record, verified: not the page's result now */
-	sim_file("sim-bl-slots", "bootloader=kiln\nbootloader_upgrade=yes\nbootloader_offer=no\n");
+	sim_file("sim-bl-slots", "bootloader=kiln\nbootloader_build=Nov 15 2026 - 19:48:50 +0000\n"
+		 "bootloader_carries=Nov 19 2026 - 10:02:11 +0000\nbootloader_same=no\n"
+		 "bootloader_carries_newer=yes\n"
+		 "bootloader_upgrade=yes\nbootloader_offer=no\n");
 	sim_file("sim-bl-state", "verified");
 	sim_file("sim-bl-kind", "install");
 	status_wait(true);
@@ -3270,6 +3458,8 @@ static int bl_update_shots(void (*shot)(const char *name))
 	settle(200);
 	BL_CHECK(strstr(power_bl_entry(), tr(RS_BL_UP_ENTRY)) != NULL,
 		 "bootloader_upgrade=yes: Update Kiln's boot loader on the power page");
+	BL_CHECK(power_line_is(RS_BL_LINE_UPDATE, "Nov 15 2026 - 19:48:50", NULL),
+		 "bootloader_upgrade=yes: the line says installed, its build, an update");
 	shot("21f-power-bl-update");
 	go(page_bootloader_upgrade);
 	for (int i = 0; i < 100 && bl.cap; i++)
@@ -3300,7 +3490,9 @@ static int bl_update_shots(void (*shot)(const char *name))
 	wait_job();
 	shot("21j-bl-update-done");
 	/* the first start after it: --verify-start recorded it */
-	sim_file("sim-bl-slots", "bootloader=kiln\nbootloader_upgrade=no\nbootloader_offer=no\n");
+	sim_file("sim-bl-slots", "bootloader=kiln\nbootloader_build=Nov 19 2026 - 10:02:11 +0000\n"
+		 "bootloader_carries=Nov 19 2026 - 10:02:11 +0000\nbootloader_same=yes\n"
+		 "bootloader_upgrade=no\nbootloader_offer=no\n");
 	sim_file("sim-bl-state", "verified");
 	sim_file("sim-bl-kind", "upgrade");
 	status_wait(true);
@@ -3308,6 +3500,8 @@ static int bl_update_shots(void (*shot)(const char *name))
 	go(page_power);
 	settle(200);
 	BL_CHECK(!power_bl_entry()[0], "after the update: no boot loader entry on the power page");
+	BL_CHECK(power_line_is(RS_BL_LINE_CURRENT, "Nov 19 2026 - 10:02:11", NULL),
+		 "after the update: the line says installed, the new build, up to date");
 	go(bl_record_upgrade() ? page_bootloader_upgrade : page_bootloader);
 	for (int i = 0; i < 100 && bl.cap; i++)
 		settle(20);
@@ -3323,6 +3517,100 @@ static int bl_update_shots(void (*shot)(const char *name))
 	sim_file("sim-bl-state", NULL);
 	sim_file("sim-bl-kind", NULL);
 	status_wait(true);
+#undef BL_CHECK
+	return fails;
+}
+
+/* The power page's boot loader line (issue #97), always there: Kiln's
+ * installed and up to date (the reporter's printer: the record of an
+ * update, verified), another build here that isn't offered, Kiln's SPL
+ * alone; "reading" at start and while the start-up actions run, read
+ * again once they are done and only then "couldn't be read"; the line
+ * and the entry follow a new read while the page is open */
+static int bl_line_shots(void (*shot)(const char *name))
+{
+	int fails = 0;
+#define BL_CHECK(cond, what) do { \
+		if (cond) { slog("shots: ok   %s", what); } \
+		else { slog("shots: FAIL %s", what); fails++; } } while (0)
+	const char *now = "Nov 19 2026 - 08:31:00", *old = "Nov 15 2026 - 19:48:50";
+	sim_file("sim-bl-slots", "bootloader=kiln\nbootloader_build=Nov 19 2026 - 08:31:00 +0000\n"
+		 "bootloader_carries=Nov 19 2026 - 08:31:00 +0000\nbootloader_same=yes\n"
+		 "bootloader_upgrade=no\nbootloader_offer=no\n");
+	sim_file("sim-bl-state", "verified");
+	sim_file("sim-bl-kind", "upgrade");
+	status_wait(true);
+	go(page_power);
+	settle(200);
+	BL_CHECK(!power_bl_entry()[0] && power_line_is(RS_BL_LINE_CURRENT, now, NULL),
+		 "this build there: no entry, the line says installed, its build, up to date");
+	shot("20b-power-bl-up-to-date");
+
+	sim_file("sim-bl-slots", "bootloader=kiln\nbootloader_build=Nov 15 2026 - 19:48:50 +0000\n"
+		 "bootloader_carries=Nov 19 2026 - 08:31:00 +0000\nbootloader_same=no\n"
+		 "bootloader_carries_newer=yes\n"
+		 "bootloader_upgrade=no\nbootloader_offer=no\n");
+	sim_file("sim-bl-kind", "install");
+	status_wait(true);
+	settle(200);
+	BL_CHECK(!power_bl_entry()[0] && power_line_is(RS_BL_LINE_OTHER, old, now),
+		 "another build, no update offered: no entry, the line names both builds (a new read, the page open)");
+	shot("20c-power-bl-other-build");
+
+	/* an older build in this recovery (an older Kiln release went on):
+	 * the line says so, no Update entry (never a downgrade from here) */
+	sim_file("sim-bl-slots", "bootloader=kiln\nbootloader_build=Nov 19 2026 - 08:31:00 +0000\n"
+		 "bootloader_carries=Nov 15 2026 - 19:48:50 +0000\nbootloader_same=no\n"
+		 "bootloader_carries_newer=no\n"
+		 "bootloader_upgrade=no\nbootloader_offer=no\n");
+	status_wait(true);
+	settle(200);
+	BL_CHECK(!power_bl_entry()[0] && power_line_is(RS_BL_LINE_OLDER, now, old),
+		 "an older build carried: no entry, the line says installed, its build, the older one here");
+	shot("20g-power-bl-older-build");
+
+	sim_file("sim-bl-slots", "bootloader=kiln-spl\nbootloader_upgrade=no\nbootloader_offer=no\n");
+	sim_file("sim-bl-state", NULL);
+	sim_file("sim-bl-kind", NULL);
+	status_wait(true);
+	settle(200);
+	BL_CHECK(!power_bl_entry()[0] && power_line_is(RS_BL_LINE_SPL, NULL, NULL),
+		 "Kiln's SPL alone: the line says so");
+	shot("20d-power-bl-spl-only");
+
+	/* the start: nothing read yet, the start-up actions running, and the
+	 * tool can't tell (bootloader=unknown) */
+	sim_file("sim-bl-slots", "bootloader=unknown\nbootloader_upgrade=no\nbootloader_offer=no\n");
+	sim_file("sim-auto", "running");
+	status_wait(false);
+	stc.slots[0] = 0;
+	stc.slots_read = stc.slots_auto = false;
+	go(page_power);
+	settle(200);
+	BL_CHECK(power_line_is(RS_BL_LINE_READING, NULL, NULL),
+		 "at start, before the first --slots run: reading, not unknown");
+	shot("20e-power-bl-reading");
+	status_wait(true);
+	settle(200);
+	BL_CHECK(stc.slots_read && stc.slots_auto && power_line_is(RS_BL_LINE_READING, NULL, NULL),
+		 "read during the start-up actions, unknown: still reading");
+	sim_file("sim-auto", NULL);
+	status_wait(false);
+	for (int i = 0; i < 300 && (stc.slots_auto || stc.want_slots || stc.cap); i++)
+		settle(20);
+	settle(200);
+	BL_CHECK(!stc.slots_auto && power_line_is(RS_BL_LINE_UNKNOWN, NULL, NULL),
+		 "the start-up actions done: read again by itself, then couldn't be read");
+	shot("20f-power-bl-unknown");
+
+	/* a read that finds Flashforge's with the install offered: the page
+	 * again, with its entry */
+	sim_file("sim-bl-slots", NULL);
+	status_wait(true);
+	settle(300);
+	BL_CHECK(strstr(power_bl_entry(), tr(RS_BL_ENTRY)) && power_line_is(RS_BL_LINE_FLASHFORGE, NULL, NULL),
+		 "Flashforge's, install offered, read with the page open: the entry appears, the line says Flashforge's");
+	sim_file("sim-bl-calls", NULL);
 #undef BL_CHECK
 	return fails;
 }
@@ -3436,6 +3724,12 @@ int ui_run_shots(void (*shot)(const char *name))
 		slog("shots: FAIL at start, before any job: Install Kiln's boot loader on the power page");
 		fails++;
 	}
+	if (power_line_is(RS_BL_LINE_FLASHFORGE, NULL, NULL)) {
+		slog("shots: ok   at start: the boot loader line says Flashforge's");
+	} else {
+		slog("shots: FAIL at start: the boot loader line says Flashforge's");
+		fails++;
+	}
 	go(page_home);
 	settle(200);
 
@@ -3532,6 +3826,64 @@ int ui_run_shots(void (*shot)(const char *name))
 	shot("16c-return-running");
 	wait_job();
 	shot("16d-return-done");
+
+	/* Flashforge's boot loader: the box ticked by default when this
+	 * printer's boot.img is found (15 above); unticked it keeps Kiln's
+	 * SPL; no boot.img: no box, the plain note; an unfinished return goes
+	 * on with its own choice (no box) */
+	go(page_return);
+	for (int i = 0; i < 100 && rt.cap; i++)
+		settle(20);
+	settle(200);
+	if (!lv_obj_has_flag(rt.spl, LV_OBJ_FLAG_HIDDEN) && lv_obj_has_state(rt.spl, LV_STATE_CHECKED) &&
+	    !strcmp(rt.target_kind, "flashforge-spl") && lv_obj_has_flag(rt.spl_note, LV_OBJ_FLAG_HIDDEN) &&
+	    !strcmp(rt_spl_flag(), "--flashforge-spl")) {
+		slog("shots: ok   boot.img found: Flashforge's boot loader box shown and ticked, it goes back");
+	} else {
+		slog("shots: FAIL boot.img found: the boot loader box is not shown ticked (target %s)", rt.target_kind);
+		fails++;
+	}
+	lv_obj_remove_state(rt.spl, LV_STATE_CHECKED);
+	lv_obj_send_event(rt.spl, LV_EVENT_VALUE_CHANGED, NULL);
+	for (int i = 0; i < 100 && rt.cap; i++)
+		settle(20);
+	settle(200);
+	if (!lv_obj_has_flag(rt.spl, LV_OBJ_FLAG_HIDDEN) && !lv_obj_has_state(rt.spl, LV_STATE_CHECKED) &&
+	    !strcmp(rt.target_kind, "kiln-spl") && !strcmp(rt_spl_flag(), "--keep-kiln-spl") && rt.ready) {
+		slog("shots: ok   boot loader box unticked: Kiln's SPL stays (--keep-kiln-spl)");
+	} else {
+		slog("shots: FAIL boot loader box unticked: target %s, flag %s", rt.target_kind, rt_spl_flag());
+		fails++;
+	}
+	shot("15b-return-keep-kiln-spl");
+	sim_file("sim-no-bootimg", "");
+	go(page_return);
+	for (int i = 0; i < 100 && rt.cap; i++)
+		settle(20);
+	settle(200);
+	if (lv_obj_has_flag(rt.spl, LV_OBJ_FLAG_HIDDEN) && !lv_obj_has_flag(rt.spl_note, LV_OBJ_FLAG_HIDDEN) &&
+	    !strcmp(rt.target_kind, "kiln-spl") && !rt_spl_flag()[0] && rt.ready) {
+		slog("shots: ok   no boot.img: no box, the note says Flashforge's boot loader can't go back");
+	} else {
+		slog("shots: FAIL no boot.img: box or note wrong (target %s)", rt.target_kind);
+		fails++;
+	}
+	shot("15c-return-no-bootimg");
+	sim_file("sim-no-bootimg", NULL);
+	sim_file("sim-rs-resume", "kiln");
+	go(page_return);
+	for (int i = 0; i < 100 && rt.cap; i++)
+		settle(20);
+	settle(200);
+	if (lv_obj_has_flag(rt.spl, LV_OBJ_FLAG_HIDDEN) && lv_obj_has_flag(rt.spl_note, LV_OBJ_FLAG_HIDDEN) &&
+	    !strcmp(rt.target_kind, "kiln-spl") && rt.resume && !rt_spl_flag()[0]) {
+		slog("shots: ok   unfinished return that kept Kiln's SPL: no box, goes on that way");
+	} else {
+		slog("shots: FAIL unfinished return that kept Kiln's SPL: box, note or target wrong (target %s)", rt.target_kind);
+		fails++;
+	}
+	shot("15d-return-resume-kept");
+	sim_file("sim-rs-resume", NULL);
 
 	/* stock's printer.cfg couldn't be changed: the return went on (the
 	 * sim's ad5x-return-stock says so when sim-cfg-failed is there) */
@@ -3672,6 +4024,7 @@ int ui_run_shots(void (*shot)(const char *name))
 	shot("21e-bootloader-done");
 	fails += bl_update_shots(shot);
 	fails += bl_result_shots(shot);
+	fails += bl_line_shots(shot);
 
 	/* A browser upload arriving while on the home screen, with a dialog
 	 * open (its second stage, arm timer running): the job page replaces

@@ -15,7 +15,9 @@
 # returns here without changing anything. Switch the printer off and on
 # once it is done. With Kiln's own boot loader the recovery OS also takes
 # Flashforge's files from a USB stick (a Flashforge AD5X-*.tgz), so a
-# missing /data/ad5x/stock is only noted.
+# missing /data/ad5x/stock is only noted, and puts Flashforge's own boot
+# loader back too whenever this printer's saved boot.img is found (the
+# page's box, ticked by default; Kiln's SPL stays without one).
 #
 # If slot A still holds stock (the recovery OS was never written,
 # S99ad5x-install-recovery gave up), the reboot starts stock directly.

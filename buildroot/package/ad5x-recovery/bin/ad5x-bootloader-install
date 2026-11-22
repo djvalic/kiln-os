@@ -23,7 +23,10 @@
 #                  nothing written) unless the disk holds Kiln's boot loader
 #                  of another build to upgrade, or an upgrade that stopped
 #                  (the record's kind=upgrade); this build's already (nothing
-#                  to do) is fine. Never an install over Flashforge's SPL
+#                  to do) is fine. Never an install over Flashforge's SPL,
+#                  and never a downgrade: an older build than the disk's
+#                  (by build time, see --offer) is refused; --yes alone
+#                  over SSH does it
 #   --unsupported-board  expert override, SSH only: go on although this
 #                  board's fingerprint is not on the allowlist (asks for a
 #                  typed confirmation on a terminal; never from the touch
@@ -39,14 +42,25 @@
 #                  LBA 2047, and the install record
 #   --offer        read only, quick (ad5x-status --slots): bootloader=,
 #                  bootloader_upgrade=yes|no and bootloader_offer=yes|no for
-#                  the recovery screen. offer: yes only with
-#                  /data/ad5x/bootloader-offer.enable (opt-in for now) or
-#                  for an install that stopped part-way. upgrade: yes when
-#                  the disk holds Kiln's boot loader of another build and
-#                  this one could replace it (no opt-in file needed). The
+#                  the recovery screen. offer: yes on a board on the
+#                  allowlist without Kiln's boot loader, or for an install
+#                  that stopped part-way. upgrade: yes when
+#                  the disk holds Kiln's boot loader of another build,
+#                  this one is newer (or its age can't be told) and could
+#                  replace it; an older one is not offered. The
 #                  saved stock first MiB: /data's, else (a wiped /data) its
 #                  copy in usershare's or a mounted USB stick's
-#                  kiln-stock-backup/ (usershare mounted read-only for it)
+#                  kiln-stock-backup/ (usershare mounted read-only for it).
+#                  With Kiln's boot loader also bootloader_build= (its
+#                  build date), bootloader_carries= (the build this
+#                  recovery OS carries, empty without images),
+#                  bootloader_same=yes|no and bootloader_carries_newer=
+#                  yes|no|unknown, for the screen's status line. Newer or
+#                  older by build time: each build's later date of its SPL
+#                  and U-Boot (they come from one build of u-boot/, and a
+#                  mixed pair is as new as its newer half), the zones
+#                  taken into account (lib/bootloader.sh, bl_compare_builds);
+#                  unknown when a date is missing or both times are equal
 #   --verify-start at the recovery OS's start (ad5x-recovery-auto): the first
 #                  start after an install is recorded (by Kiln's U-Boot or
 #                  not) and the screen opens the result
@@ -236,35 +250,20 @@ P1=$(rc_part kernel) P3=$(rc_part kernel2) P4=$(rc_part rootfs2) P5=$(rc_part ot
 cur_mib() { bl_read "$DISK" 0 2048 "$1"; }
 cpspr() { command -v devmem >/dev/null 2>&1 && devmem 0x10000034 32 2>/dev/null; }
 # the first MiB's U-Boot at 0xA400: Kiln's (a uImage named Kiln U-Boot)
-kiln_ub_at() { [ "$(bl_ufield "$1" $BL_UB_OFF)" = 27051956 ] && [ "$(tail -c +$((BL_UB_OFF + 33)) "$1" | head -c 11)" = "Kiln U-Boot" ]; }
+kiln_ub_at() { bl_kiln_ub "$1"; }
 emmc_type() { cat "$AD5X_SYS/class/block/$dn/device/type" 2>/dev/null; }
-sdnand() {
-	[ "$(emmc_type)" = SD ] && return 0
-	case " $(cat "$AD5X_CMDLINE" 2>/dev/null) " in *" dev_type=SDNAND "*) return 0 ;; esac
-	return 1
-}
+# SD-NAND, not eMMC (lib/bootloader.sh)
+sdnand() { bl_sdnand "$dn"; }
 parts_line() {
 	for n in $RC_PARTS; do rc_part_start "$n" 2>/dev/null; done | tr '\n' ' ' | sed 's/ $//'
 }
 emmc_line() {
 	echo "$(cat "$AD5X_SYS/class/block/$dn/device/name" 2>/dev/null) $(cat "$AD5X_SYS/class/block/$dn/size" 2>/dev/null)"
 }
-# boot.img as S99ad5x-booted saves it: 1 MiB, its sha256 file, Flashforge's
-# SPL by its .info and its own bytes, Flashforge's raw U-Boot at 0xA400.
-# FILE: another copy (default $STOCK/boot.img), with FILE.sha256, FILE.info
-boot_img_why() {
-	b=${1:-$STOCK/boot.img}
-	if [ ! -f "$b" ]; then echo "missing"
-	elif [ "$(fsize "$b")" != $BL_MIB ]; then echo "$(fsize "$b") bytes, not 1 MiB"
-	elif [ "$(sha "$b")" != "$(cut -d' ' -f1 "$b.sha256" 2>/dev/null)" ]; then echo "its sha256 differs from boot.img.sha256"
-	elif ! sed -n 1p "$b.info" 2>/dev/null | grep -q "^Flashforge's boot loader: U-Boot SPL 2013\.07"; then echo "boot.img.info doesn't name Flashforge's SPL"
-	elif [ "$(bl_loader "$b")" != flashforge ] || [ "$(head -c 4 "$b")" != INGE ] ||
-	     [ "$(tail -c +513 "$b" | head -c 8)" != "EFI PART" ] || [ "$(tail -c +$((BL_SPL_OFF + 1)) "$b" | head -c 4)" != LPSM ]; then
-		echo "no INGE block, GPT, LPSM or Flashforge's SPL banner in it"
-	elif [ "$(bl_ufield "$b" $BL_UB_OFF)" = 27051956 ]; then echo "a uImage at 0xA400: not Flashforge's raw U-Boot"
-	else return 0; fi
-	return 1
-}
+# boot.img as S99ad5x-booted saves it (lib/bootloader.sh's
+# bl_boot_img_why). FILE: another copy (default $STOCK/boot.img), with
+# FILE.sha256, FILE.info
+boot_img_why() { bl_boot_img_why "${1:-$STOCK/boot.img}"; }
 st_open() { echo "$1" > "$AD5X_RUN/bootloader.open" 2>/dev/null; }
 # usershare (read-only, while needed; cleanup unmounts it at any exit). The
 # read-only modes (--offer, --fingerprint) mount it at a folder of their
@@ -331,13 +330,9 @@ ro_boot() {
 }
 
 # built WHAT FILE OFF LEN: the build date in the version string WHAT
-# ("U-Boot SPL" or "U-Boot") within LEN bytes of FILE from OFF, as
-# "U-Boot SPL 2026.10 (Nov 15 2026 - 19:48:50 +0000)" has it: the part in
-# brackets; empty when there is none
-built() {
-	tail -c +$(($3 + 1)) "$2" 2>/dev/null | head -c "$4" | tr -c ' -~' '\n' |
-		grep -o "$1 20[0-9][0-9]\.[0-9][0-9]*[^ ]* ([^)]*)" | head -n 1 | sed 's/^[^(]*(\([^)]*\)).*/\1/'
-}
+# (lib/bootloader.sh's bl_built: the part in brackets of "U-Boot SPL
+# 2026.10 (Nov 15 2026 - 19:48:50 +0000)"); empty when there is none
+built() { bl_built "$@"; }
 # ver SPL-DATE UBOOT-DATE: one date when both are the same build
 ver() {
 	if [ "$1" = "$2" ]; then echo "built ${1:-?}"
@@ -357,6 +352,28 @@ mib_ver() {
 files_ver() {
 	ver "$(built "U-Boot SPL" "$BL_FILES/spl-mmc.img" 0 $((BL_SPL_END - BL_SPL_OFF)))" \
 		"$(built "U-Boot" "$BL_FILES/u-boot-emmc.img" 0 $BL_MIB)"
+}
+# mib_date FILE (a first MiB) / files_date: the build as the recovery
+# screen's boot loader line shows it, words left out (the screen's
+# language): one date, or "SPL date / U-Boot date" when they differ;
+# empty when there is none
+bdate() {
+	if [ -z "$2" ] || [ "$1" = "$2" ]; then echo "${1:-$2}"
+	else echo "${1:-?} / $2"; fi
+}
+mib_date() { bl_mib_dates "$1"; bdate "$BL_D_SPL" "$BL_D_UB"; }
+files_date() { bl_files_dates || return 0; bdate "$BL_D_SPL" "$BL_D_UB"; }
+# carried_vs FILE (a first MiB with Kiln's boot loader): the build this
+# recovery OS carries against the one in FILE, by their build times (the
+# later of SPL and U-Boot date each, lib/bootloader.sh's
+# bl_compare_builds): newer, older or unknown (a date missing, or the same
+# time); "same" when the images are the ones there (files_same)
+carried_vs() {
+	files_same "$1" && { echo same; return 0; }
+	bl_files_dates || { echo unknown; return 0; }
+	cvs=$BL_D_SPL cvu=$BL_D_UB
+	bl_mib_dates "$1"
+	bl_compare_builds "$cvs" "$cvu" "$BL_D_SPL" "$BL_D_UB"
 }
 # files_same FILE (a first MiB): its SPL and U-Boot are the images this
 # recovery OS carries (the SPL but its params block at 0x100-0x1FF, which
@@ -400,8 +417,12 @@ if [ "$mode" = status ]; then
 	if [ -f "$BL_FILES/spl-mmc.img" ] && [ -f "$BL_FILES/u-boot-emmc.img" ]; then
 		w=
 		if [ "$l" = kiln ]; then
-			if files_same "$T/cur.img"; then w=" (the same)"
-			else w=" (another build: ad5x-bootloader-install --check shows the upgrade)"; fi
+			case "$(carried_vs "$T/cur.img")" in
+			same) w=" (the same)" ;;
+			newer) w=" (another build, newer: ad5x-bootloader-install --check shows the upgrade)" ;;
+			older) w=" (another build, older: not offered on the screen; ad5x-bootloader-install --yes downgrades to it)" ;;
+			*) w=" (another build: ad5x-bootloader-install --check shows the upgrade)" ;;
+			esac
 		fi
 		echo "this recovery OS carries: Kiln boot loader $(files_ver)$w"
 	else
@@ -452,13 +473,31 @@ if [ "$mode" = offer ]; then
 		l=$(bl_loader "$T/cur.img") src=
 		if [ "$l" = kiln ] && kiln_ub_at "$T/cur.img"; then
 			echo "bootloader=kiln"
-			# an upgrade: another build, whole over this printer's boot.img
-			# (allowlisted), an X2600H, the images there (no opt-in file:
-			# the owner installed Kiln's boot loader already). A network
-			# rescue record: looked at as boot.img's sector (--yes clears
-			# it with an upgrade)
+			# the screen's boot loader line (Reboot / Power, always
+			# shown): the build on the disk, the one carried, the same?
+			echo "bootloader_build=$(mib_date "$T/cur.img")"
+			echo "bootloader_carries=$(files_date)"
+			vs=$(carried_vs "$T/cur.img")
+			[ "$vs" = same ] && echo "bootloader_same=yes" || echo "bootloader_same=no"
+			# newer: the carried build is later than the disk's (by
+			# the later of each build's SPL and U-Boot dates); no: the
+			# same or an older one; unknown: a date missing or the same
+			# time with other bytes (offered as before: no proof of a
+			# downgrade)
+			case "$vs" in
+			newer) echo "bootloader_carries_newer=yes" ;;
+			unknown) echo "bootloader_carries_newer=unknown" ;;
+			*) echo "bootloader_carries_newer=no" ;;
+			esac
+			# an upgrade: another build, newer (or of unknown age), whole
+			# over this printer's boot.img (allowlisted), an X2600H, the
+			# images there (no opt-in file: the owner installed Kiln's
+			# boot loader already). An older build is never offered on
+			# the screen (a downgrade stays possible over SSH with
+			# --yes). A network rescue record: looked at as boot.img's
+			# sector (--yes clears it with an upgrade)
 			if [ "$(rc_slot)" = A ] && ! sdnand && [ -f "$BL_FILES/spl-mmc.img" ] &&
-			   [ -f "$BL_FILES/u-boot-emmc.img" ] && ! files_same "$T/cur.img" &&
+			   [ -f "$BL_FILES/u-boot-emmc.img" ] && { [ "$vs" = newer ] || [ "$vs" = unknown ]; } &&
 			   ro_boot "$T/cur.img" && BOOT=$RB &&
 			   { ! bl_rescue_rec "$T/cur.img" ||
 			     dd if="$BOOT" of="$T/cur.img" bs=512 skip=$BL_RESCUE_LBA seek=$BL_RESCUE_LBA count=1 conv=notrunc 2>/dev/null; } &&
@@ -485,11 +524,6 @@ if [ "$mode" = offer ]; then
 	else
 		echo "bootloader=unknown"
 	fi
-	# for now the button is opt-in (until the install has been tested on
-	# more printers): only with $AD5X_DATA/ad5x/bootloader-offer.enable, or
-	# for an install that stopped part-way (it must stay offered to finish)
-	[ "$offer" = yes ] && [ ! -e "$AD5X_DATA/ad5x/bootloader-offer.enable" ] &&
-		[ "$(bl_stval state)" != started ] && offer=no
 	echo "bootloader_upgrade=$upgrade"
 	echo "bootloader_offer=$offer"
 	exit 0
@@ -791,7 +825,7 @@ if [ -n "$av" ] && [ "$av" -ge 2048 ]; then ok "/data: $av KiB free"
 else bad "/data: ${av:-?} KiB free, less than 2 MiB (the log, the stock first MiB)"; fi
 
 # where the disk stands
-SPLC= UBC= UPG= OLDV= NEWV= SAME= PREV=
+SPLC= UBC= UPG= OLDV= NEWV= SAME= PREV= DOWN=
 REC=$(bl_stval state)
 UB_WEND=$UB_END
 if [ -n "$FINAL" ]; then
@@ -814,6 +848,15 @@ if [ -n "$FINAL" ]; then
 		cp "$CUR_CMP" "$PREV"
 	fi
 	[ -n "$UPG" ] && say "upgrade: Kiln boot loader ${OLDV:-?} -> $NEWV"
+	# an older build carried (the build times: carried_vs): a downgrade.
+	# --yes over SSH does it as an upgrade (the same steps, the same
+	# checks); the screen never offers it (--offer), and its --upgrade
+	# refuses it below. A downgrade that stopped goes on (UPG=resume)
+	DOWN=
+	if [ "$UPG" = 1 ] && [ "$(carried_vs "$CUR_CMP")" = older ]; then
+		DOWN=1
+		note "this recovery OS carries an older build than the one on the disk: a downgrade"
+	fi
 	# U-Boot's range to write: up to this build's end, or further where the
 	# disk differs from FINAL past it (an older, longer U-Boot): past its end
 	# FINAL holds boot.img's bytes, so nothing of the old one stays
@@ -845,6 +888,9 @@ if [ -n "$FINAL" ]; then
 	# an install
 	if [ -n "$only_upgrade" ] && [ -z "$UPG" ] && [ -z "$SAME" ]; then
 		bad "--upgrade: no Kiln boot loader of another build here to update (installing Kiln's boot loader is a step of its own): refused"
+	fi
+	if [ -n "$only_upgrade" ] && [ -n "$DOWN" ]; then
+		bad "--upgrade: this recovery OS carries an older build than the one on the disk; the screen's Update doesn't downgrade (over SSH: ad5x-bootloader-install --yes): refused"
 	fi
 fi
 

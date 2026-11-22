@@ -50,6 +50,13 @@ home_trace	Main OS last start got to: %s
 home_no_trace	Main OS last start: no trace
 home_last_update	Last update: %s
 home_no_update	Last update: none recorded
+upd_ok	%s, installed in slot B: %s
+upd_ok_nofile	%s, installed in slot B
+upd_failed	%s, failed: %s
+upd_failed_nofile	%s, failed
+upd_started	%s, started, not finished: %s
+upd_skipped	%s, installed before, skipped: %s
+upd_other	%s, see Logs > Updates
 back_up	Back up
 install_update	Install update
 network_ssh	Network / SSH
@@ -129,9 +136,24 @@ rs_checking	Looking for Flashforge's files…
 rs_ready	Ready. Nothing is written before you tap Return to Flashforge.
 rs_resume	A return was stopped before it finished (for example by a power cut). Tap Continue to finish it.
 rs_refused	Not possible now: %s
+why_busy	another job is still running: wait for it to finish, then tap Check
+why_rs_unfinished	a Return to Flashforge firmware was started and not finished: finish it first
+why_no_stock	no Flashforge files found
+why_board	this printer's board is not on the list of known boards
+why_chip	Kiln's boot loader is not known to work on this printer's chip
+why_no_main	slot B holds no working Kiln OS: install Kiln OS first
+why_update_main	the Kiln OS in slot B is too old for this: update Kiln OS first
+why_recovery_old	this recovery is not the one the Kiln OS in slot B brings: start Kiln OS once (it brings this recovery up to date), then try again
+why_k66_failed	Kiln OS recorded its 6.6 kernel as failed: start Kiln OS on 6.6 first (ad5x-kernel retry)
+why_data_full	less than 2 MB free on the data partition (/data)
+why_no_upgrade	there is no Kiln boot loader of another release here to update
+why_ffspl	no saved copy of this printer's Flashforge boot loader (boot.img), so it can't be put back
+why_wipe	Kiln OS's settings and files can't be removed safely now
+why_other	a safety check failed (details: Logs > This session)
 rs_done_already	Done. Switch the printer off and on: Flashforge's firmware starts.
 rs_no_files	No Flashforge files found. Put Flashforge's update file (AD5X-….tgz, from Flashforge's website) on a USB stick, then tap Check.
 rs_spl_box	Also put back Flashforge's own boot loader
+rs_spl_missing	Flashforge's own boot loader can't be put back: this printer's saved copy of it (boot.img) wasn't found. Flashforge's firmware works all the same: Kiln's boot loader starts it.
 rs_go	Return to Flashforge
 rs_continue	Continue
 rs_save_usb	Save files to USB
@@ -186,6 +208,15 @@ bl_up_go	Update
 bl_up_q	Update Kiln's boot loader?
 bl_up_q_text	Writes this release's Kiln SPL and U-Boot over the older ones in the boot area of the printer's memory; a copy of the older ones is kept first. It takes under a minute. Experimental and at your own risk.
 bl_up_running	Updating Kiln's boot loader
+bl_line_reading	Kiln's boot loader: reading…
+bl_line_unknown	Kiln's boot loader: state unknown (couldn't be read)
+bl_line_current	Kiln's boot loader: installed, build %s, up to date
+bl_line_update	Kiln's boot loader: installed, build %s, update available
+bl_line_other	Kiln's boot loader: installed, build %s (this recovery carries build %s)
+bl_line_older	Kiln's boot loader: installed, build %s (this recovery carries an older build, %s)
+bl_line_installed	Kiln's boot loader: installed, build %s
+bl_line_spl	Kiln's boot loader: only Kiln's SPL is there, no U-Boot
+bl_line_flashforge	Kiln's boot loader: not installed, Flashforge's boot loader starts the printer
 address	Address
 name	Name
 upload	Upload

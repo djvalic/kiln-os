@@ -1,19 +1,28 @@
 # Russian translation: what is missing or untranslated
 
 Kiln OS's touch screen is HelixScreen v1.1.0-rc.1 with Kiln's patches. This list was made on 2026-11-11 and
-brought up to date on 2026-11-19 with Kiln's HelixScreen patches up to 0085. It was made from
+brought up to date on 2026-11-19 with Kiln's HelixScreen patches up to 0085, and on 2026-11-21 with the patches up
+to 0093 and all of the recovery screen's lines. It was made from
 [helixscreen-ru.yml](helixscreen-ru.yml) and [helixscreen-en.yml](helixscreen-en.yml) in this folder, and from
 the recovery screen's [en.txt](../../recovery-ui/i18n/en.txt) and [ru.txt](../../recovery-ui/i18n/ru.txt).
 
 ## Summary
 
-- `helixscreen-en.yml` has 5040 keys. `helixscreen-ru.yml` has the same 5040 keys: none is missing.
+- `helixscreen-en.yml` has 5046 keys. `helixscreen-ru.yml` has the same 5046 keys: none is missing.
 - 112 Russian values are the same as the English text. They are names, units and numbers that stay as they are, and `Pressure Advance`, which stays English on purpose (section 4).
 - 7 more values have no Cyrillic but differ from English on purpose (for example `AMS` reads `IFS`, `WiFi` reads `Wi-Fi`).
-- 365 keys belong to Kiln OS's own screens. I wrote their Russian myself, so they need a native speaker's check most (section 5). 14 of them are new since the last list: Boot into recovery, Log detail, the two Auto-Refill rows of the IFS settings, and SELECTOR and HUB on the IFS drawing. 5 more are new since then: the IFS messages that said AMS in English (section 5); their Russian is the one the AMS messages already had. 54 more are new with patches 0071 to 0077 (section 5): Reboot and Shutdown asking one action at a time, Return to Flashforge firmware, Extended memory, and the IFS firmware switch. 3 more are new with patches 0078 and 0079: the eMMC row of Settings > About, and 7 with patches 0081 and 0082: the Processor row next to it (section 5). 52 more are new with patches 0084 and 0085: the setup wizard's Filament step, what a running step is doing (action, temperatures, time), the Z offset test's slot and temperatures, "Remove the test print from the bed", and naming the slot in the toolhead when Kiln can't tell it (section 5), and one more step name for the logs, `Ad5xFilament`. Patch 0080 changed some Russian wording (section 2).
+- 371 keys belong to Kiln OS's own screens. I wrote their Russian myself, so they need a native speaker's check most (section 5). 14 of them are new since the last list: Boot into recovery, Log detail, the two Auto-Refill rows of the IFS settings, and SELECTOR and HUB on the IFS drawing. 5 more are new since then: the IFS messages that said AMS in English (section 5); their Russian is the one the AMS messages already had. 54 more are new with patches 0071 to 0077 (section 5): Reboot and Shutdown asking one action at a time, Return to Flashforge firmware, Extended memory, and the IFS firmware switch. 3 more are new with patches 0078 and 0079: the eMMC row of Settings > About, and 7 with patches 0081 and 0082: the Processor row next to it (section 5). 52 more are new with patches 0084 and 0085: the setup wizard's Filament step, what a running step is doing (action, temperatures, time), the Z offset test's slot and temperatures, "Remove the test print from the bed", and naming the slot in the toolhead when Kiln can't tell it (section 5), and one more step name for the logs, `Ad5xFilament`. 2 more are new with patch 0088: the question
+"Run the setup wizard?" at the first start after Kiln OS is installed again over Flashforge's firmware (section 5,
+Setup wizard). 4 more are new with patch 0094: the one-off notices that a boot loader update is ready, or that
+Kiln OS has its own boot loader for this printer (section 5, end). Patches 0086, 0087 and 0089 to 0093 add no text. Patch 0080 changed some Russian wording (section 2).
 - 41 keys are new in HelixScreen v1.1.0-rc.1, and the 41 that came with v1.1.0-beta.18 are still unchecked. HelixScreen ships Russian for all of them, so nothing shows in English, but nobody here has checked that Russian yet (section 7). rc.1 also removed 9 older keys whose texts it rewrote (the HelixPrint plugin reasons and the tour).
 - A few open questions and texts that are still English on the screen (section 1).
-- Recovery screen: all 155 lines of `ru.txt` have a first Russian version that needs checking (section 6), and 11 more for removing Kiln OS's settings and files at Return to Flashforge firmware (section 6, last group).
+- Recovery screen: all 306 lines of `ru.txt` have a first Russian version that needs checking (section 6). Section 6
+  now lists every line; new in this update are the Return to Flashforge firmware page, Kiln's boot loader pages, the
+  automatic update at start, the reasons why something is not possible now, and the home screen's last update. New on
+  2026-11-22: the boot loader line on Reboot / Power (9 lines, `bl_line_*`), with the line for an older build in the
+  recovery OS, and the Return to Flashforge page's note that Flashforge's own boot loader can't be put back
+  (`rs_spl_missing`).
 
 ## 1. Open items
 
@@ -35,6 +44,15 @@ the recovery screen's [en.txt](../../recovery-ui/i18n/en.txt) and [ru.txt](../..
 **Recovery screen:** a first Russian version to check (section 6).
 
 ## 2. Fixed so far
+
+### One language on the screen (2026-11-21)
+
+- Recovery screen: the reason after `Сейчас невозможно:` was the tool's English text (for example `busy:
+  start-up-actions (wait for it to finish)`), and the home screen's `Последнее обновление:` showed the English line of
+  the update log. Both are Russian now (section 6: "Why something is not possible now" and "Last update on the home
+  screen").
+- Touch screen: the question "Run the setup wizard?" (patch 0088) had Russian and English only, so in German and the
+  other languages its English text sat above translated buttons. Every language has it now.
 
 ### HelixScreen patch 0080 and the recovery screen
 
@@ -108,7 +126,7 @@ Different from English on purpose, no Cyrillic:
 
 ## 5. Kiln OS's own screens
 
-365 keys come from Kiln OS, not from HelixScreen. All but twelve are near the end of `helixscreen-ru.yml`: the
+367 keys come from Kiln OS, not from HelixScreen. All but twelve are near the end of `helixscreen-ru.yml`: the
 blocks that start with a `# ... (patch 00xx)` comment line, from `# Kiln's tour (patch 0058, tour_steps_kiln.cpp)`
 on, and the alphabetical list after `~{:.1f} Hz / turn`, starting with `, corners {:+.3f} to {:+.3f}` (in
 `helixscreen-en.yml` all of them come after the line `# Kiln OS (AD5X) strings from the Kiln HelixScreen
@@ -117,7 +135,7 @@ near the top (`Chamber light off when the screen sleeps` and the one after it) a
 strings of Settings > About, each at its alphabetical place (section 5 lists them). Keep IFS as IFS: it is the name of
 the filament unit. (The 13 `Ad5x...` step names there are only used in log files; leave them.)
 
-<details><summary>Setup wizard (64)</summary>
+<details><summary>Setup wizard (66)</summary>
 
 - `Applying {}... Klipper restarts.`
   = `Применение {}... Klipper перезапускается.`
@@ -918,6 +936,18 @@ The last block of `helixscreen-ru.yml` (`# Setup wizard: the filament step, ...`
   = `Kiln не может определить, филамент какого слота в печатающей головке. Посмотрите на трубки и нажмите слот, филамент которого идёт в печатающую головку. Пока вы не выберете, ничего не подаётся.`
 - `I pulled it out by hand`
   = `Филамент вытянут вручную`
+- `Run the setup wizard?`
+  = `Запустить мастер настройки?`
+- `Kiln OS is installed again and kept your settings. Flashforge's firmware ran in between and may have changed the filament, the Z offset or the boards. The setup wizard checks and tunes the printer again; every step can be skipped.`
+  = `Kiln OS установлена снова, ваши настройки сохранены. До этого работала прошивка Flashforge: она могла изменить филамент, смещение по Z или прошивку плат. Мастер настройки снова проверит и настроит принтер, любой шаг можно пропустить.`
+- `Boot loader update ready`
+  = `Готово обновление загрузчика`
+- `A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln's boot loader. Nothing is written until you start it there.`
+  = `Готово обновление загрузчика. Чтобы установить его: Настройки > Система > Загрузить систему восстановления > Питание > Обновить загрузчик Kiln. Пока вы не запустите обновление там, ничего не записывается.`
+- `Kiln's own boot loader`
+  = `Собственный загрузчик Kiln`
+- `Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln's boot loader (experimental). Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md`
+  = `У Kiln OS есть собственный загрузчик для этого принтера. Чтобы установить его: Настройки > Система > Загрузить систему восстановления > Питание > Установить загрузчик Kiln (экспериментально). Сначала прочитайте руководство по загрузчику, в нём описаны риск и флешка для восстановления: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md`
 
 </details>
 
@@ -925,7 +955,7 @@ The last block of `helixscreen-ru.yml` (`# Setup wizard: the filament step, ...`
 
 The recovery screen is Kiln OS's rescue system. It uses the touch screen's language setting. Its strings are in
 [recovery-ui/i18n/en.txt](../../recovery-ui/i18n/en.txt) (English) and [recovery-ui/i18n/ru.txt](../../recovery-ui/i18n/ru.txt)
-(Russian). I wrote a first Russian version of all 155 lines; please check it and correct `ru.txt` directly:
+(Russian). I wrote a first Russian version of all 305 lines; please check it and correct `ru.txt` directly:
 each line is the id, one TAB, then the text. The rules are at the top of `en.txt`:
 
 - keep the id; write the Russian after the TAB (keep the TAB, not spaces)
@@ -1391,6 +1421,263 @@ The two boxes on the Return to Flashforge page, the confirmation and the result.
   = `Часть файлов Kiln OS удалить не удалось; прошивка Flashforge всё равно возвращена. Они перечислены в журнале /data/ad5x/return-stock/log.`
 - `pg_rs_step9`: `Step 9: Kiln OS's settings and files removed`
   = `Шаг 9: удаление настроек и файлов Kiln OS`
+
+### Return to Flashforge firmware (unchecked)
+
+The page, its check and its two confirmations. `slot A` / `слот A` is the recovery's own slot. `rs_refused` is followed by one of the reasons in the next group.
+
+- `rs_title`: `Return to Flashforge firmware`
+  = `Вернуть прошивку Flashforge`
+- `rs_text`: `Puts Flashforge's own firmware back into the main slot and starts it. Kiln OS in the main slot is removed. This recovery stays as a safety net.`
+  = `Возвращает стоковую прошивку Flashforge в основной слот и запускает её. Kiln OS в основном слоте удаляется, система восстановления остаётся.`
+- `rs_files`: `Flashforge files: %s`
+  = `Источник: %s`
+- `rs_src_stock`: `the stock copy saved on this printer (/data/ad5x/stock)`
+  = `копия стоковой прошивки, сохранённая на принтере (/data/ad5x/stock)`
+- `rs_src_usershare`: `the stock copy on the usershare partition`
+  = `копия стоковой прошивки в разделе usershare`
+- `rs_src_copy`: `the stock copy in %s`
+  = `копия стоковой прошивки в %s`
+- `rs_src_backup`: `the install stick's backup %s`
+  = `резервная копия %s с установочного USB-накопителя`
+- `rs_src_package`: `Flashforge's update package %s`
+  = `пакет обновления Flashforge %s`
+- `rs_after`: `After it: %s`
+  = `После этого: %s`
+- `rs_after_kiln`: `Flashforge's firmware in the main slot, started by Kiln's boot loader as Flashforge's would (its second stage, U-Boot, removed); this recovery stays in slot A`
+  = `прошивка Flashforge в основном слоте, её запускает загрузчик Kiln (U-Boot из него удаляется). Система восстановления остаётся в слоте A`
+- `rs_after_ffspl`: `Flashforge's firmware in the main slot, and Flashforge's own boot loader back; this recovery stays in slot A`
+  = `прошивка Flashforge в основном слоте и снова стоковый загрузчик Flashforge. Система восстановления остаётся в слоте A`
+- `rs_after_ff`: `Flashforge's firmware in the main slot (Flashforge's boot loader stays); this recovery stays in slot A`
+  = `прошивка Flashforge в основном слоте (загрузчик Flashforge не меняется). Система восстановления остаётся в слоте A`
+- `rs_config`: `Flashforge's printer.cfg: %s`
+  = `printer.cfg стоковой прошивки: %s`
+- `rs_cfg_zmod`: `Flashforge's printer.cfg: %d zMod include line(s) to switch off (zMod is gone; the old file is kept)`
+  = `В printer.cfg стоковой прошивки будут отключены строки [include] от zMod: %d (zMod удалён; старый файл сохранится)`
+- `rs_cfg_missing`: `Flashforge's printer.cfg: %d include line(s) to switch off (their files are missing; the old file is kept)`
+  = `В printer.cfg стоковой прошивки будут отключены строки [include] на отсутствующие файлы: %d (старый файл сохранится)`
+- `rs_cfg_mixed`: `Flashforge's printer.cfg: %d include line(s) to switch off (zMod's, or their files are missing; the old file is kept)`
+  = `В printer.cfg стоковой прошивки будут отключены строки [include] от zMod или на отсутствующие файлы: %d (старый файл сохранится)`
+- `rs_cfg_failed`: `Flashforge's printer.cfg couldn't be changed and was left as it was. The return went on, but Flashforge's Klipper may not start until the [include] lines for missing files (zMod's) are removed.`
+  = `Не удалось изменить printer.cfg стоковой прошивки, он остался прежним. Возврат продолжен, но Klipper может не запуститься, пока из файла не удалены строки [include] от zMod.`
+- `rs_checking`: `Looking for Flashforge's files…`
+  = `Поиск файлов Flashforge…`
+- `rs_ready`: `Ready. Nothing is written before you tap Return to Flashforge.`
+  = `Готово. Ничего не записывается, пока вы не нажмёте «Вернуть Flashforge».`
+- `rs_resume`: `A return was stopped before it finished (for example by a power cut). Tap Continue to finish it.`
+  = `Возврат был прерван (например, при отключении питания). Нажмите «Продолжить», чтобы его завершить.`
+- `rs_refused`: `Not possible now: %s`
+  = `Сейчас невозможно: %s`
+- `rs_done_already`: `Done. Switch the printer off and on: Flashforge's firmware starts.`
+  = `Готово. Выключите и включите принтер: запустится прошивка Flashforge.`
+- `rs_no_files`: `No Flashforge files found. Put Flashforge's update file (AD5X-….tgz, from Flashforge's website) on a USB stick, then tap Check.`
+  = `Не найдены файлы Flashforge. Запишите файл обновления Flashforge (AD5X-….tgz с сайта Flashforge) на USB-флешку и нажмите «Проверить».`
+- `rs_spl_box`: `Also put back Flashforge's own boot loader`
+  = `Вернуть и стоковый загрузчик Flashforge`
+- `rs_spl_missing`: `Flashforge's own boot loader can't be put back: this printer's saved copy of it (boot.img) wasn't found. Flashforge's firmware works all the same: Kiln's boot loader starts it.`
+  = `Стоковый загрузчик Flashforge вернуть нельзя: сохранённая копия загрузчика этого принтера (boot.img) не найдена. Прошивка Flashforge всё равно будет работать: её запустит загрузчик Kiln.`
+- `rs_go`: `Return to Flashforge`
+  = `Вернуть Flashforge`
+- `rs_continue`: `Continue`
+  = `Продолжить`
+- `rs_save_usb`: `Save files to USB`
+  = `Сохранить на USB`
+- `rs_q`: `Return to Flashforge firmware?`
+  = `Вернуть прошивку Flashforge?`
+- `rs_q_text`: `Writes Flashforge's system into the main slot and makes it the one that starts. Kiln OS in the main slot is removed. It takes a few minutes.`
+  = `Записывает систему Flashforge в основной слот и делает её системой для запуска. Kiln OS в основном слоте удаляется. Это займёт несколько минут.`
+- `rs_q_text2`: `Kiln OS in the main slot will be gone. Don't switch the printer off until the screen says it is done.`
+  = `Kiln OS в основном слоте будет удалена. Не выключайте принтер, пока на экране не появится сообщение о завершении.`
+- `rs_running`: `Returning to Flashforge firmware`
+  = `Возврат прошивки Flashforge`
+- `rs_checking_title`: `Checking for Flashforge's files`
+  = `Поиск файлов Flashforge`
+- `rs_saving`: `Saving Flashforge files to USB`
+  = `Сохранение файлов Flashforge на USB`
+- `rs_locked_q`: `Return to Flashforge not finished`
+  = `Возврат прошивки Flashforge не завершён`
+- `rs_locked_text`: `A Return to Flashforge firmware was started and not finished, so the main slot may hold only part of a system. Finish it first.`
+  = `Возврат прошивки Flashforge был начат и не завершён, поэтому в основном слоте может быть только часть системы. Сначала завершите его.`
+- `rs_open`: `Open`
+  = `Открыть`
+
+### Why something is not possible now (new 2026-11-21, unchecked)
+
+The reason after `rs_refused` (`Сейчас невозможно: %s`) on the Return to Flashforge and boot loader pages. Until now the screen showed the tool's English text here; it now shows these lines, and `why_other` for any reason without a line of its own (the English details stay in Logs > This session). They start with a small letter because they follow the colon.
+
+- `why_busy`: `another job is still running: wait for it to finish, then tap Check`
+  = `ещё выполняется другая задача: дождитесь её завершения и нажмите «Проверить»`
+- `why_rs_unfinished`: `a Return to Flashforge firmware was started and not finished: finish it first`
+  = `возврат прошивки Flashforge был начат и не завершён: сначала завершите его`
+- `why_no_stock`: `no Flashforge files found`
+  = `не найдены файлы Flashforge`
+- `why_board`: `this printer's board is not on the list of known boards`
+  = `платы этого принтера нет в списке известных плат`
+- `why_chip`: `Kiln's boot loader is not known to work on this printer's chip`
+  = `неизвестно, работает ли загрузчик Kiln на чипе этого принтера`
+- `why_no_main`: `slot B holds no working Kiln OS: install Kiln OS first`
+  = `в слоте B нет рабочей Kiln OS: сначала установите Kiln OS`
+- `why_update_main`: `the Kiln OS in slot B is too old for this: update Kiln OS first`
+  = `Kiln OS в слоте B слишком старая для этого: сначала обновите Kiln OS`
+- `why_recovery_old`: `this recovery is not the one the Kiln OS in slot B brings: start Kiln OS once (it brings this recovery up to date), then try again`
+  = `эта система восстановления не та, что поставляется с Kiln OS в слоте B: запустите Kiln OS один раз (она обновит систему восстановления) и повторите`
+- `why_k66_failed`: `Kiln OS recorded its 6.6 kernel as failed: start Kiln OS on 6.6 first (ad5x-kernel retry)`
+  = `Kiln OS отметила ядро 6.6 как неудачное: сначала запустите Kiln OS на ядре 6.6 (ad5x-kernel retry)`
+- `why_data_full`: `less than 2 MB free on the data partition (/data)`
+  = `в разделе данных (/data) свободно меньше 2 МБ`
+- `why_no_upgrade`: `there is no Kiln boot loader of another release here to update`
+  = `здесь нет загрузчика Kiln из другого выпуска, который можно обновить`
+- `why_ffspl`: `no saved copy of this printer's Flashforge boot loader (boot.img), so it can't be put back`
+  = `нет сохранённой копии загрузчика Flashforge этого принтера (boot.img), поэтому его нельзя вернуть`
+- `why_wipe`: `Kiln OS's settings and files can't be removed safely now`
+  = `настройки и файлы Kiln OS сейчас нельзя безопасно удалить`
+- `why_other`: `a safety check failed (details: Logs > This session)`
+  = `не пройдена одна из проверок безопасности (подробности: Журналы > Этот сеанс)`
+
+### Kiln's boot loader (unchecked)
+
+The experimental install and update of Kiln's own boot loader. `J28` is the board's USB connector; `SPL`, `U-Boot`, `6.6` and `7.3` stay as they are.
+
+- `bl_entry`: `Install Kiln's boot loader (experimental)…`
+  = `Установить загрузчик Kiln (экспериментально)…`
+- `bl_title`: `Kiln's boot loader (experimental)`
+  = `Загрузчик Kiln (экспериментально)`
+- `bl_text`: `Replaces Flashforge's boot loader with Kiln's own (SPL and U-Boot): no Flashforge code starts the printer any more, and a Kiln OS kernel that fails to start falls back by itself (7.3, then 6.6, then this recovery). Experimental and at your own risk: proven on one printer so far (one more board is known to match). If the printer doesn't start after it, the only proven way back needs the printer opened (its J28 USB connector). Return to Flashforge firmware puts Flashforge's boot loader back.`
+  = `Ставит загрузчик Kiln (SPL и U-Boot) вместо Flashforge: код Flashforge больше не запускает принтер, а если ядро Kiln OS не запустится, загрузка сама откатывается (7.3, затем 6.6, затем восстановление). Экспериментально, на свой риск: пока проверено на одном принтере (известна ещё одна такая же плата). Если затем принтер не запустится, проверенный способ вернуть его один: вскрыть принтер (USB-порт J28). «Вернуть прошивку Flashforge» вернёт загрузчик Flashforge.`
+- `bl_board_known`: `This printer's board: on the list of known boards.`
+  = `Плата этого принтера: есть в списке известных плат.`
+- `bl_board_unknown`: `This printer's board is not on the list of known boards, so it isn't offered here.`
+  = `Платы этого принтера нет в списке известных, поэтому установка не предлагается.`
+- `bl_checking`: `Checking…`
+  = `Проверка…`
+- `bl_ready`: `Ready. Nothing is written before you tap Install and confirm twice.`
+  = `Готово. Ничего не записывается, пока вы не нажмёте «Установить» и не подтвердите дважды.`
+- `bl_resume`: `An install was stopped before it finished (for example by a power cut). Tap Continue to finish it.`
+  = `Установка была прервана (например, при отключении питания). Нажмите «Продолжить», чтобы её завершить.`
+- `bl_installed`: `Installed. Restart the printer: Kiln's boot loader then starts this recovery screen, which shows the result.`
+  = `Установлено. Перезапустите принтер: загрузчик Kiln запустит этот экран восстановления, где будет виден результат.`
+- `bl_verified`: `Done: Kiln's boot loader is installed and started this recovery. Boot main OS starts Kiln OS through it.`
+  = `Готово: загрузчик Kiln установлен и запустил это восстановление. «Запустить ОС» загружает Kiln OS через него.`
+- `bl_unverified`: `Installed, but this start didn't come through Kiln's U-Boot (Kiln's SPL started the system itself). The printer works: Boot main OS starts Kiln OS. Please post this, with what Check shows, in issue #68 (github.com/djvalic/kiln-os).`
+  = `Установлено, но этот запуск прошёл без U-Boot Kiln (систему запустил сам SPL Kiln). Принтер работает: «Запустить ОС» загружает Kiln OS. Пожалуйста, сообщите об этом в теме #68 на GitHub (github.com/djvalic/kiln-os) и приложите то, что показывает «Проверить».`
+- `bl_wait_auto`: `Waiting for the start-up actions to finish, then checking…`
+  = `Ожидание завершения автоматических действий при запуске, затем проверка…`
+- `bl_up_to_date`: `Kiln's boot loader is installed and up to date: nothing to install.`
+  = `Загрузчик Kiln установлен и актуален: устанавливать нечего.`
+- `bl_go`: `Install`
+  = `Установить`
+- `bl_q`: `Install Kiln's boot loader?`
+  = `Установить загрузчик Kiln?`
+- `bl_q_text`: `Writes Kiln's SPL and U-Boot into the boot area of the printer's memory, and Kiln's 6.6 kernel into both kernel slots. It takes under a minute. Experimental: proven on one printer so far.`
+  = `Записывает SPL и U-Boot Kiln в загрузочную область памяти принтера, а ядро Kiln 6.6 — в оба слота ядра. Это займёт меньше минуты. Экспериментально: пока проверено на одном принтере.`
+- `bl_q_text2`: `If the printer doesn't start afterwards, bringing it back needs the printer opened and a USB cable (J28). Don't switch the printer off until the screen says it is done.`
+  = `Если после этого принтер не запустится, для возврата к работе нужно вскрыть принтер и подключить USB-кабель (J28). Не выключайте принтер, пока на экране не появится сообщение о завершении.`
+- `bl_running`: `Installing Kiln's boot loader`
+  = `Установка загрузчика Kiln`
+- `bl_checking_title`: `Checking Kiln's boot loader`
+  = `Проверка загрузчика Kiln`
+- `bl_up_entry`: `Update Kiln's boot loader…`
+  = `Обновить загрузчик Kiln…`
+- `bl_up_title`: `Update Kiln's boot loader (experimental)`
+  = `Обновление загрузчика Kiln`
+- `bl_up_text`: `This printer already starts through Kiln's own boot loader (SPL and U-Boot), but one from another Kiln OS release. This replaces it with the boot loader this release carries, and its fixes. Your settings and files stay as they are. Experimental and at your own risk: if the printer doesn't start after it, the only proven way back needs the printer opened (its J28 USB connector).`
+  = `Принтер уже запускается через загрузчик Kiln (SPL и U-Boot), но из другого выпуска Kiln OS. Обновление заменит его загрузчиком этого выпуска, с его исправлениями. Настройки и файлы не меняются. Экспериментально, на свой риск: если затем принтер не запустится, проверенный способ вернуть его один: вскрыть принтер (USB-порт J28).`
+- `bl_up_builds`: `Now: %s. After the update: %s`
+  = `Сейчас: %s. После обновления: %s`
+- `bl_up_ready`: `Ready. Nothing is written before you tap Update and confirm twice.`
+  = `Готово. Ничего не записывается, пока вы не нажмёте «Обновить» и не подтвердите дважды.`
+- `bl_up_resume`: `An update was stopped before it finished (for example by a power cut). Tap Continue to finish it.`
+  = `Обновление было прервано (например, при отключении питания). Нажмите «Продолжить», чтобы его завершить.`
+- `bl_up_done`: `Updated. Restart the printer: Kiln's boot loader then starts this recovery screen, which shows the result.`
+  = `Обновлено. Перезапустите принтер: загрузчик Kiln запустит этот экран восстановления, где будет виден результат.`
+- `bl_up_verified`: `Done: Kiln's boot loader is updated and started this recovery. Boot main OS starts Kiln OS through it.`
+  = `Готово: загрузчик Kiln обновлён и запустил это восстановление. «Запустить ОС» загружает Kiln OS через него.`
+- `bl_up_unverified`: `Updated, but this start didn't come through Kiln's U-Boot (Kiln's SPL started the system itself). The printer works: Boot main OS starts Kiln OS. Please post this, with what Check shows, in issue #68 (github.com/djvalic/kiln-os).`
+  = `Обновлено, но этот запуск прошёл без U-Boot Kiln (систему запустил сам SPL Kiln). Принтер работает: «Запустить ОС» загружает Kiln OS. Пожалуйста, сообщите об этом в теме #68 на GitHub (github.com/djvalic/kiln-os) и приложите то, что показывает «Проверить».`
+- `bl_up_go`: `Update`
+  = `Обновить`
+- `bl_up_q`: `Update Kiln's boot loader?`
+  = `Обновить загрузчик Kiln?`
+- `bl_up_q_text`: `Writes this release's Kiln SPL and U-Boot over the older ones in the boot area of the printer's memory; a copy of the older ones is kept first. It takes under a minute. Experimental and at your own risk.`
+  = `Записывает SPL и U-Boot Kiln из этого выпуска поверх прежних в загрузочную область памяти принтера; копия прежних сохраняется заранее. Это займёт меньше минуты. Экспериментально, на свой риск.`
+- `bl_up_running`: `Updating Kiln's boot loader`
+  = `Обновление загрузчика Kiln`
+
+### Kiln's boot loader line on Reboot / Power (new 2026-11-22, unchecked)
+
+One line of 16 px above the buttons, always there (issue #97). `%s` is a build date ("Nov 19 2026 - 08:31:00"); the line should stay on one line where a button is below it (`bl_line_update`), so keep it short.
+
+- `bl_line_reading`: `Kiln's boot loader: reading…`
+  = `Загрузчик Kiln: чтение…`
+- `bl_line_unknown`: `Kiln's boot loader: state unknown (couldn't be read)`
+  = `Загрузчик Kiln: состояние неизвестно (не удалось прочитать)`
+- `bl_line_current`: `Kiln's boot loader: installed, build %s, up to date`
+  = `Загрузчик Kiln: установлен, сборка %s, актуален`
+- `bl_line_update`: `Kiln's boot loader: installed, build %s, update available`
+  = `Загрузчик Kiln: установлен, сборка %s, есть обновление`
+- `bl_line_other`: `Kiln's boot loader: installed, build %s (this recovery carries build %s)`
+  = `Загрузчик Kiln: установлен, сборка %s (в этой системе восстановления сборка %s)`
+- `bl_line_older`: `Kiln's boot loader: installed, build %s (this recovery carries an older build, %s)`
+  = `Загрузчик Kiln: установлен, сборка %s (в этой системе восстановления более старая сборка, %s)`
+- `bl_line_installed`: `Kiln's boot loader: installed, build %s`
+  = `Загрузчик Kiln: установлен, сборка %s`
+- `bl_line_spl`: `Kiln's boot loader: only Kiln's SPL is there, no U-Boot`
+  = `Загрузчик Kiln: есть только SPL Kiln, без U-Boot`
+- `bl_line_flashforge`: `Kiln's boot loader: not installed, Flashforge's boot loader starts the printer`
+  = `Загрузчик Kiln: не установлен, принтер запускает загрузчик Flashforge`
+
+### Automatic update at start (unchecked)
+
+The full-screen page while an update from the update folder or a USB stick installs at start.
+
+- `auto_title`: `Installing Kiln OS`
+  = `Установка Kiln OS`
+- `auto_step_fmt`: `Step %u of %u: %s`
+  = `Шаг %u из %u: %s`
+- `auto_step_check`: `Unpacking and checking the update`
+  = `Распаковка и проверка обновления`
+- `auto_step_write`: `Writing Kiln OS`
+  = `Запись Kiln OS`
+- `auto_step_restart`: `Restarting into Kiln OS`
+  = `Перезапуск в Kiln OS`
+- `auto_dont_off`: `Don't switch the printer off`
+  = `Не выключайте принтер`
+- `auto_dont_off_text`: `This takes a few minutes. The printer restarts by itself when it is done.`
+  = `Это займёт несколько минут. Когда всё будет готово, принтер перезапустится сам.`
+- `auto_restart_text`: `Kiln OS starts next. Its first start takes a few minutes more.`
+  = `Сейчас запустится Kiln OS. Первый запуск займёт ещё несколько минут.`
+- `auto_failed`: `Kiln OS was not installed`
+  = `Kiln OS не установлена`
+- `auto_failed_text`: `The update failed. The printer stays in the recovery OS. Logs > Updates says why.`
+  = `Обновление не удалось. Принтер остаётся в системе восстановления. Причина указана в разделе Журналы > Обновления.`
+
+### Last update on the home screen (new 2026-11-21, unchecked)
+
+The text after `home_last_update` (`Последнее обновление: %s`). The first `%s` is the date and time (`2026-10-15 21:04`), the second the update's file name. Until now the screen showed the English line of the update log here. The line is cut at the right edge, so the time and the outcome come first.
+
+- `upd_ok`: `%s, installed in slot B: %s`
+  = `%s — установлено в слот B: %s`
+- `upd_ok_nofile`: `%s, installed in slot B`
+  = `%s — установлено в слот B`
+- `upd_failed`: `%s, failed: %s`
+  = `%s, ошибка установки: %s`
+- `upd_failed_nofile`: `%s, failed`
+  = `%s, ошибка установки`
+- `upd_started`: `%s, started, not finished: %s`
+  = `%s, начато, но не завершено: %s`
+- `upd_skipped`: `%s, installed before, skipped: %s`
+  = `%s, уже устанавливалось, пропущено: %s`
+- `upd_other`: `%s, see Logs > Updates`
+  = `%s, см. Журналы > Обновления`
+
+### Two short words (unchecked)
+
+`swu_staged` marks an update file already in the update folder; `n_partitions` is the count on the Restore page.
+
+- `swu_staged`: `staged`
+  = `на принтере`
+- `n_partitions`: `%d partitions`
+  = `разделов: %d`
 
 ## 7. New in HelixScreen v1.1.0-rc.1 and beta.18
 

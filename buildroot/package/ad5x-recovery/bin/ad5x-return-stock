@@ -7,8 +7,8 @@
 # OS first, which then waits for a tap). docs/install.md, "Going back to
 # stock".
 #
-# usage: ad5x-return-stock [--check] [--source SRC] [--flashforge-spl] [WIPE]
-#        ad5x-return-stock --yes [--source SRC] [--flashforge-spl] [WIPE]
+# usage: ad5x-return-stock [--check] [--source SRC] [SPL] [WIPE]
+#        ad5x-return-stock --yes [--source SRC] [SPL] [WIPE]
 #        ad5x-return-stock --status
 #        ad5x-return-stock --forget
 #   --check      (the default) every check, the stock files found, what
@@ -21,9 +21,20 @@
 #                on the usershare partition), a folder (a stock copy saved
 #                to USB, kiln-stock-backup, or an installer backup
 #                ad5x-backup-install-N), or a Flashforge AD5X-*.tgz
-#   --flashforge-spl  also put Flashforge's own boot loader (its SPL) back,
-#                from this printer's saved first MiB (boot.img); offered
-#                only when that file checks and matches this disk
+#   (SPL) Flashforge's own boot loader (its SPL) goes back by default
+#                whenever this printer's saved first MiB (boot.img) is
+#                found, checks and matches this disk; without one Kiln's
+#                SPL stays (it starts stock as Flashforge's does), said in
+#                the check and the log ("spl_missing: yes")
+#   --keep-kiln-spl  keep Kiln's SPL even when boot.img is there (only
+#                Kiln's U-Boot goes)
+#   --flashforge-spl  require Flashforge's boot loader back: refused when
+#                no matching boot.img is found
+#                An unfinished return goes on with the choice it started
+#                with (the record's spl=, also one an older recovery OS
+#                started: its default kept Kiln's SPL); either option
+#                given then changes it, except in the middle of a write
+#                of Flashforge's SPL (finished from boot.img)
 #   --remove-kiln-data  (WIPE) also delete Kiln OS's settings and files
 #                in /data/ad5x once the return is done and checked (the
 #                last step, 9; below: what goes and what stays)
@@ -59,7 +70,8 @@
 #       on Flashforge's kernel for the screen, touch and Ethernet
 #   recovery/touch-cal  that safety net's touch range
 #   bootloader/  the record and log of Kiln's boot loader writes (Kiln's
-#       SPL stays in the first MiB unless --flashforge-spl):
+#       SPL stays in the first MiB without a boot.img, or with
+#       --keep-kiln-spl):
 #       ad5x-bootloader-install reads it
 #   return-stock/  this return's log and record (ad5x-status, a later
 #       return; with a .tgz source its unpacked stock files in work/)
@@ -88,7 +100,9 @@
 # stock squashfs (/etc/ota_bin in it, no Kiln OS release file).
 #
 # Under Kiln's boot loader (Kiln's SPL in the first MiB) the printer ends
-# with stock started by Kiln's SPL: Kiln's U-Boot is removed, so the SPL
+# with Flashforge's own boot loader back when this printer's boot.img is
+# found (steps 5 and 6; --keep-kiln-spl leaves them out), else with stock
+# started by Kiln's SPL: Kiln's U-Boot is removed either way, so Kiln's SPL
 # starts the flagged slot as Flashforge's did. Flashforge's 5.10 in a slot
 # is allowed then because Kiln's U-Boot is gone. Steps, in this order, each
 # read back, the boot flag on slot A (this recovery OS) until the last:
@@ -99,8 +113,8 @@
 #      zeroed; the boot traces stay
 #   3. rootfs2 (p4) <- the stock root
 #   4. kernel2 (p3) <- the stock 5.10 kernel, its header last
-#   5. (--flashforge-spl) kernel (p1) <- the stock kernel, header last
-#   6. (--flashforge-spl) Flashforge's SPL from boot.img: the SPL's header
+#   5. (Flashforge's SPL back) kernel (p1) <- the stock kernel, header last
+#   6. (Flashforge's SPL back) Flashforge's SPL from boot.img: the SPL's header
 #      sector (34) zeroed, sectors 35-81, the boot ROM's length field, then
 #      sector 34 last (lib/bootloader.sh's bl_put_spl: a power cut leaves
 #      a whole SPL or none, never a header in front of half an SPL; the
@@ -132,7 +146,10 @@
 # Flashforge's SPL and its unused U-Boot bytes, the first that matches:
 # /data/ad5x/stock, the chosen source's, usershare's kiln-stock-backup/, a
 # USB stick's kiln-stock-backup/. One from outside /data is copied to /tmp
-# first (a stick may be pulled).
+# first (a stick may be pulled). The one found decides the default: with
+# it Flashforge's SPL goes back, without it Kiln's SPL stays; the same for
+# every caller (the screen, the main OS's request, a stick's
+# kiln-return-to-stock, SSH, ad5x-restore-stock).
 #
 # Stock's printer.cfg: stock's Klipper reads /usr/data/config/printer.cfg
 # (config/printer.cfg on this data partition) and stops at start-up
@@ -169,6 +186,9 @@
 # "source_kind: stock|usershare|copy|backup|package" and "source_file:"
 # (the folder, backup or package name; none for stock and usershare),
 # "target:" with "target_kind: kiln-spl|flashforge-spl|flashforge",
+# "spl_option: yes|no" (the box: yes when a new return can put
+# Flashforge's SPL back, ticked by default), "spl_missing: yes" (it can't:
+# no matching boot.img; Kiln's SPL stays and starts stock),
 # "config:" with "config_kind: zmod|missing|mixed" and "config_lines: N";
 # Kiln's data for the two boxes, at every --check: "wipe_option: yes|no",
 # "kiln_data_kb: N" (what --remove-kiln-data deletes, print files apart),
@@ -217,7 +237,7 @@ LOG=$RS/log
 WORK=$RS/work
 MARK=kiln-stock-backup					# a stock copy's folder name
 
-mode=check src_arg= ffspl= stop_after= dry= wipe= wprints=
+mode=check src_arg= ffspl= keepspl= stop_after= dry= wipe= wprints=
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--check) mode=check ;;
@@ -227,15 +247,19 @@ while [ $# -gt 0 ]; do
 	--dry-run) dry=1 ;;
 	--source) src_arg=$2; shift ;;
 	--flashforge-spl) ffspl=1 ;;
+	--keep-kiln-spl) keepspl=1 ;;
 	--remove-kiln-data) wipe=1 ;;
 	--remove-prints) wprints=1 ;;
 	--stop-after) stop_after=$2; shift ;;
 	-h|--help) sed -n '2,/^# AD5X_RECOVERY_LIB/p' "$0"; exit 0 ;;
-	*) sed -n '2,38p' "$0" >&2; exit 1 ;;
+	*) sed -n '2,/^#   --stop-after/p' "$0" >&2; exit 1 ;;
 	esac
 	shift
 done
 [ -n "$wprints" ] && [ -z "$wipe" ] && { echo "$ME: --remove-prints only with --remove-kiln-data" >&2; exit 1; }
+[ -n "$ffspl" ] && [ -n "$keepspl" ] && { echo "$ME: --flashforge-spl or --keep-kiln-spl, not both" >&2; exit 1; }
+# the options as given (ffspl, below, is the plan: Flashforge's SPL back)
+ask_ff=$ffspl ask_keep=$keepspl
 [ -n "$dry" ] && [ "$mode" = yes ] && mode=check
 
 mkdir -p "$RS" 2>/dev/null
@@ -387,7 +411,7 @@ if [ "$mode" = forget ]; then
 fi
 
 # ------------------------------------------------------------- checks
-say "== $ME $(date '+%Y-%m-%d %H:%M:%S') ($mode${src_arg:+, source $src_arg}${ffspl:+, Flashforge's boot loader too})"
+say "== $ME $(date '+%Y-%m-%d %H:%M:%S') ($mode${src_arg:+, source $src_arg}${ask_ff:+, Flashforge's boot loader required}${ask_keep:+, Kiln's SPL kept})"
 say "checks:"
 prog 2 checking "Checking"
 if [ "$(id -u)" = 0 ]; then ok "root"; else bad "not root"; fi
@@ -465,7 +489,8 @@ case "$LOADER" in
 kiln) ok "boot loader: Kiln's SPL" ;;
 flashforge) ok "boot loader: Flashforge's SPL ($(banner "$T/cur.img" 2>/dev/null))"
 	[ -n "$ffspl" ] && note "Flashforge's boot loader is there already: --flashforge-spl has nothing to do"
-	ffspl= ;;
+	[ -n "$keepspl" ] && note "Kiln's boot loader isn't in the first MiB: --keep-kiln-spl has nothing to do"
+	ffspl= keepspl= ;;
 *) bad "the first MiB holds neither Kiln's nor Flashforge's boot loader" ;;
 esac
 # The safety net: slot A starts this recovery OS whatever happens to slot B
@@ -1002,15 +1027,57 @@ if [ "$LOADER" = kiln ] && [ -n "$disk_ok" ]; then
 		{ [ ! -f "$BOOT.sha256" ] || cp "$BOOT.sha256" "$T/boot/boot.img.sha256"; } &&
 		cmp -s "$BOOT" "$T/boot/boot.img" && BOOT=$T/boot/boot.img || BOOT= ;;
 	esac
+	# The choice (PLAN_SPL): Flashforge's SPL back whenever this boot.img
+	# is there, Kiln's SPL kept with --keep-kiln-spl, Flashforge's
+	# required with --flashforge-spl. An unfinished return (state started)
+	# goes on with its record's spl= unless an option is given: the
+	# choice it started with, also one an older recovery OS started (its
+	# default was Kiln's SPL; no spl= at all counts as that too). A write
+	# of Flashforge's SPL cut short (SPL_PARTIAL) is always finished.
+	rec=
+	[ "$(stval state)" = started ] && { rec=$(stval spl); [ "$rec" = flashforge ] || rec=kiln; }
+	if [ -n "$SPL_PARTIAL" ] && [ -n "$keepspl" ]; then
+		bad "the write of Flashforge's boot loader was cut short: it is finished from boot.img, Kiln's SPL can't be kept now (run it without --keep-kiln-spl)"
+		keepspl=
+	fi
+	if [ -n "$SPL_PARTIAL" ]; then want=flashforge
+	elif [ -n "$ffspl" ]; then want=flashforge
+	elif [ -n "$keepspl" ]; then want=kiln
+	elif [ -n "$rec" ]; then want=$rec
+	else want=flashforge; fi
+	if [ -n "$rec" ] && [ -z "$SPL_PARTIAL" ] && [ "$want" != "$rec" ]; then
+		note "the unfinished return started with $([ "$rec" = flashforge ] && echo "Flashforge's boot loader back" || echo "Kiln's SPL kept"); $([ "$want" = flashforge ] && echo "--flashforge-spl" || echo "--keep-kiln-spl") changes that"
+	fi
 	if [ -n "$BOOT" ]; then
-		ok "this printer's Flashforge boot loader ($BOOT_SHOWN): matches the disk; offered (--flashforge-spl)"
-		say "spl_option: yes"
+		ok "this printer's Flashforge boot loader ($BOOT_SHOWN): matches the disk"
+		if [ -n "$rec" ]; then
+			say "spl_option: no"
+			if [ -z "$ffspl$keepspl" ] && [ -z "$SPL_PARTIAL" ]; then
+				[ "$rec" = flashforge ] && note "the unfinished return chose Flashforge's boot loader too: going on with it" ||
+					note "the unfinished return kept Kiln's SPL: going on with it (Flashforge's boot loader isn't put back)"
+			fi
+		else
+			say "spl_option: yes"
+		fi
+		if [ "$want" = flashforge ]; then
+			ffspl=1
+			note "Flashforge's own boot loader goes back$([ -z "$ask_ff$rec" ] && echo " (the default; --keep-kiln-spl keeps Kiln's SPL)")"
+		else
+			ffspl=
+			note "Kiln's SPL stays (it starts stock as Flashforge's does); only Kiln's U-Boot goes"
+		fi
 	else
 		note "no saved Flashforge first MiB that matches this disk: Kiln's SPL stays (it starts stock as Flashforge's does)"
 		say "spl_option: no"
+		if [ "$want" = flashforge ] && [ -z "$SPL_PARTIAL" ]; then
+			# plainly, for the log and the screen ("spl_missing")
+			note "Flashforge's own boot loader can't be put back: this printer's saved copy (boot.img) wasn't found; Flashforge's firmware works all the same"
+			say "spl_missing: yes"
+		fi
 		[ -n "$ffspl" ] && bad "--flashforge-spl: no matching boot.img (this printer's first MiB, saved before Kiln's boot loader)"
 		[ -n "$SPL_PARTIAL" ] && loud "The boot loader area holds a write cut short and no boot.img to finish it." \
 			"Don't switch the printer off. Put this printer's boot.img back in /data/ad5x/stock and run it again."
+		ffspl=
 	fi
 fi
 [ -n "$ffspl" ] && [ -z "$BOOT" ] && ffspl=
@@ -1027,13 +1094,6 @@ if [ "$LOADER" = kiln ]; then
 else
 	say "target: Flashforge's firmware in the main slot (Flashforge's boot loader stays); this recovery stays in slot A"
 	say "target_kind: flashforge"
-fi
-# An unfinished return with Flashforge's SPL chosen goes on with it
-if [ "$(stval state)" = started ] && [ "$(stval spl)" = flashforge ] && [ -z "$ffspl" ] && [ "$LOADER" = kiln ]; then
-	if [ -n "$BOOT" ]; then
-		ffspl=1 PLAN_SPL=flashforge
-		note "the unfinished return chose Flashforge's boot loader too: going on with it"
-	fi
 fi
 
 # boot.img into usershare's kiln-stock-backup/ at step 7: Kiln's SPL stays
@@ -1214,6 +1274,9 @@ todo_ret=$(for n in $todo; do [ "$n" = 9 ] || echo $n; done | tr '\n' ' ')
 if [ "$mode" != yes ]; then
 	if [ -z "$todo_ret" ]; then
 		say "result: ready: Flashforge's firmware is back already; only Kiln OS's settings and files to remove (--yes removes them)"
+	elif [ "$(stval state)" = done ] && [ -z "$(echo $todo_ret | tr ' ' '\n' | grep -vx '[56]')" ]; then
+		# a return that kept Kiln's SPL: only Flashforge's boot loader left
+		say "result: ready: Flashforge's firmware is back already; only Flashforge's own boot loader to put back (--yes puts it back, --keep-kiln-spl leaves Kiln's SPL)"
 	elif [ "$(stval state)" = started ]; then
 		say "result: ready to go on: an earlier return stopped after part of the work (--yes finishes it)"
 	else
@@ -1227,10 +1290,13 @@ mkdir "$LOCK" 2>/dev/null || { say "result: refused: another $ME runs ($LOCK)"; 
 locked=1
 trap '' HUP INT TERM PIPE
 if [ -n "$todo_ret" ]; then
+	was=$(stval state)
 	stset state started
 	stset date "$(date '+%Y-%m-%d %H:%M:%S')"
 	stset source "$SSPEC"
-	stset spl "$PLAN_SPL"
+	# the boot loader choice, for a resume; one going on under
+	# Flashforge's SPL (this return put it back already) keeps its record
+	if [ "$LOADER" = kiln ] || [ "$was" != started ]; then stset spl "$PLAN_SPL"; fi
 fi
 # step 9 asked (the screen ticks its boxes again for an unfinished return)
 if [ -n "$wipe" ]; then
@@ -1294,6 +1360,14 @@ step_1() {
 		fi
 		e=$(stval uboot_end)
 		case "$e" in ''|*[!0-9]*) return 0 ;; esac
+		# an earlier run of this return put boot.img's bytes there and
+		# boot.img is gone since: its header sector zeroed too (no uImage
+		# there either way; done_1 then reads the whole range zero)
+		if [ -z "$UB_HAVE" ] && read_range "$DISK" $UB_LBA 1 "$T/h" && ! is_zero "$T/h"; then
+			say "  0xA400: the header sector zeroed (boot.img's bytes from an earlier run; boot.img isn't found now)"
+			dd if=/dev/zero of="$DISK" bs=512 seek=$UB_LBA count=1 conv=notrunc,fsync 2>/dev/null || return 1
+			read_range "$DISK" $UB_LBA 1 "$T/h" && is_zero "$T/h" || return 1
+		fi
 		ns=$(((e - UB_OFF) / 512 - 1))
 		if [ "$ns" -gt 0 ]; then
 			say "  0xA400: the rest of U-Boot zeroed (sectors $((UB_LBA + 1))-$((UB_LBA + ns)))"
@@ -1330,7 +1404,7 @@ step_6() {
 	for k in 1 2; do
 		if put_spl "$b"; then
 			loud "writing Flashforge's boot loader failed; Kiln's is back and reads back right." \
-				"The boot flag is still on slot A. Run it again, or without --flashforge-spl."
+				"The boot flag is still on slot A. Run it again, or with --keep-kiln-spl (Kiln's SPL stays)."
 			say "result: failed: Flashforge's boot loader didn't take; Kiln's is back"
 			exit 3
 		fi

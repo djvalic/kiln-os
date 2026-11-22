@@ -25,10 +25,15 @@
 # page to open at start, ad5x-bootloader-install --verify-start). With
 # --slots also bootloader (flashforge|kiln|kiln-spl|unknown),
 # bootloader_upgrade (yes|no: "Update Kiln's boot loader" offered, Kiln's
-# boot loader of another build there to upgrade) and bootloader_offer
+# boot loader of an older build there to upgrade; never for a newer one on
+# the disk) and bootloader_offer
 # (yes|no: "Install Kiln's boot loader" offered, the board on the allowlist
-# and, for now, /data/ad5x/bootloader-offer.enable there, or an install
-# stopped part-way; ad5x-bootloader-install --offer).
+# without Kiln's boot loader, or an install stopped part-way;
+# ad5x-bootloader-install --offer); with Kiln's boot
+# loader there also bootloader_build, bootloader_carries (the build this
+# recovery OS carries), bootloader_same (yes|no) and
+# bootloader_carries_newer (yes|no|unknown: the carried build later than
+# the disk's, by build time), for the screen's boot loader line.
 . /usr/lib/ad5x-recovery/recovery.sh
 running() { pidof "$1" >/dev/null && echo running || echo stopped; }
 echo "release=$(cat /etc/ad5x-release 2>/dev/null)"

@@ -22,6 +22,11 @@
 # so no Flashforge kernel is left in either slot and Kiln's SPL boots 6.6
 # directly when U-Boot proper is missing or fails. At most 3 tries per
 # kernel, the same log.
+# Then, once per complete start, the touch screen's boot loader notice
+# (ad5x-bootloader-notice --start, read only: counts the start, compares
+# the boot loader on the disk with the one slot A carries); after slot A's
+# write when one is due, so it reads the recovery OS slot A holds now. Its
+# line in /data/ad5x/bootloader-notice/last.
 # AD5X_LIB overrides /usr/lib/ad5x, AD5X_RECOVERY_IMG /usr/share/ad5x/recovery
 # (tools/test_kernel_fallback.sh).
 
@@ -110,6 +115,14 @@ kernel2_due() {
 	return 0
 }
 
+# the boot loader notice for the touch screen (above)
+bl_notice() {
+	command -v ad5x-bootloader-notice >/dev/null 2>&1 || return 0
+	mkdir -p /data/ad5x/bootloader-notice &&
+		ad5x-bootloader-notice --start > /data/ad5x/bootloader-notice/last 2>&1
+	return 0
+}
+
 case "$1" in
 start)
 	[ "$SLOT" = B ] || exit 0
@@ -119,7 +132,7 @@ start)
 	doa= dok2=
 	slot_a_due && doa=1
 	kernel2_due && dok2=1
-	[ -n "$doa$dok2" ] || exit 0
+	[ -n "$doa$dok2" ] || { bl_notice & exit 0; }
 	(
 		if [ -n "$doa" ]; then
 			echo "=== $(date) recovery OS ${have:-(no ID)} -> $want${kwhy:+ (slot A: $kwhy)} (try $atry)"
@@ -139,6 +152,7 @@ start)
 				echo "update-recovery: kernel2 FAILED (tried again at the next start)"
 			fi
 		fi
+		bl_notice
 	) >> $D/update.log 2>&1 &
 	[ -n "$doa" ] && echo "update-recovery: writing recovery OS $want into slot A in the background${kwhy:+ (slot A: $kwhy)} ($D/update.log)"
 	[ -n "$dok2" ] && echo "update-recovery: writing Kiln's 6.6 into kernel2 in the background ($D/update.log)"

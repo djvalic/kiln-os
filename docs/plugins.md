@@ -22,8 +22,9 @@ The interface plugins may rely on is in `docs/plugin-api.md`.
 `printer_data/config/plugins` is a link to `/data/ad5x/plugins`, so
 Fluidd's file manager (**Configuration**) shows the plugins as the
 `plugins` folder: upload a plugin folder there (**Upload Folder**), and
-open and edit its files like config files. Moonraker's `kiln_os` component
-makes the link when it starts and nothing has that name; your own
+open and edit your own plugins' files like config files (some are
+read-only, see below). Moonraker's `kiln_os` component makes the link
+when it starts and nothing has that name; your own
 `plugins` file, folder or link in the config folder is left alone (the
 plugins are then not shown). Moonraker keeps `.git` folders out of reach.
 The plugin files are left out of Moonraker's flat file list of the config
@@ -32,6 +33,22 @@ Fluidd ask for at each page load: with big plugins it took a minute on
 the AD5X. Browsing the folder, editing and uploading work as before.
 Uploading runs nothing: `root/` scripts need `ENABLE_PLUGIN ... ROOT=1`
 (`docs/plugin-root-hooks.md`).
+
+Some plugin files are shown read-only in Fluidd, with a lock. Fluidd
+then doesn't offer to save them.
+
+- Plugins that Moonraker's update manager keeps up to date (a
+  `type: git_repo` section in their `moonraker.conf`). All the catalog
+  plugins are like this: `notify`, `timelapse`, `spoolman` and
+  `happy-hare`. This is by design: Moonraker doesn't let anyone change a
+  repository it updates. It applies while the plugin is enabled.
+- Files that Moonraker can't write (Moonraker patch 0010). Moonraker runs
+  as user `klipper`. A plugin folder copied in as root over SSH belongs to
+  root, so Moonraker can't save its files. This fixes it:
+
+  ```
+  chown -R klipper:klipper /data/ad5x/plugins/<name>
+  ```
 
 A plugin of yours with the same name as a shipped one replaces it (its
 directory is the one used).

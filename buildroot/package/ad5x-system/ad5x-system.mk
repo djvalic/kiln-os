@@ -87,6 +87,10 @@ define AD5X_SYSTEM_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/usr/bin/ad5x-update
 	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-boot-recovery \
 		$(TARGET_DIR)/usr/bin/ad5x-boot-recovery
+	# the touch screen's boot loader notice (S99ad5x-update-recovery,
+	# HelixScreen patch 0094); main image only
+	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-bootloader-notice \
+		$(TARGET_DIR)/usr/bin/ad5x-bootloader-notice
 	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-restore-stock \
 		$(TARGET_DIR)/usr/bin/ad5x-restore-stock
 	# the stock files' copy on usershare (S99ad5x-stock-copy); the recovery

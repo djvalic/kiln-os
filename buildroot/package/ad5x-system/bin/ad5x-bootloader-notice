@@ -1,0 +1,228 @@
+#!/bin/sh
+# The touch screen's notice about Kiln's own boot loader, in the main OS
+# (docs/own-boot-loader.md, "Upgrading the boot loader"). Kiln's boot
+# loader (SPL + U-Boot in the eMMC's first MiB) is installed and updated
+# only by hand, from the recovery screen's Reboot / Power page; most people
+# rarely start the recovery OS, so the main OS tells them when there is
+# something to do there. Read only: nothing here ever writes the boot
+# loader, the disk or slot A.
+#
+# Two notices, never both (the update wins):
+#   update   the printer has Kiln's boot loader (Kiln's SPL and Kiln's
+#            U-Boot at 0xA400) and the recovery OS in slot A carries a
+#            NEWER build of it (by build time: each build's later date of
+#            its SPL and U-Boot, lib/bootloader.sh's bl_compare_builds; an
+#            unknown or older one gives none), on a board on the allowlist
+#            (the saved stock first MiB's fingerprint: /data's boot.img, or
+#            after a wiped /data its copy in usershare's or a mounted USB
+#            stick's kiln-stock-backup/, as the recovery's --offer finds
+#            it), an X2600H, eMMC.
+#            The screen shows it once per carried build
+#   install  the printer still has Flashforge's boot loader, its board is on
+#            the allowlist (the same read-only fingerprint check as the
+#            recovery's --offer, lib/bootloader.sh), an X2600H, eMMC (not
+#            SD-NAND), slot A carries Kiln's boot loader images, and the main
+#            OS has had at least 3 complete starts. Once per printer: the
+#            screen's dismissal is kept in $DIR/install-dismissed
+#
+# Which build slot A carries: slot A itself, mounted read-only for a moment
+# (its /usr/share/ad5x/bootloader images), not the image this main OS
+# brings for it (S99ad5x-update-recovery writes that one only after the
+# first complete start) and not a file the recovery OS writes (one written
+# by the recovery OS before an update would still name the old build until
+# the recovery OS next started). The build on the disk: the first MiB's
+# version strings (a plain read of 1 MiB).
+#
+# The result goes to $NOTICE (in /run: made new at each start), which
+# HelixScreen reads (HELIX_KILN_BL_NOTICE_FILE, patch 0094): no file, no
+# notice. Its lines:
+#   kind=update|install
+#   key=update <carried build time>|install   (what "seen" refers to)
+#   installed=<the disk's build date(s)>      (update only)
+#   carries=<slot A's build date(s)>
+# HelixScreen keeps what was shown in $DIR (update-seen: the key;
+# install-dismissed); this script leaves a notice out that was seen, too.
+#
+# usage: ad5x-bootloader-notice [--start] [--print]
+#   --start  S99ad5x-update-recovery, once per complete start of the main
+#            OS (the boot flag on slot B): counts it in $DIR/starts, then
+#            checks as below
+#   (none)   check and write or remove $NOTICE (after slot A was written)
+#   --print  check and print what it found; writes nothing
+# Exit 0 always (nothing here may stop a start).
+# AD5X_LIB, AD5X_DISK (the eMMC, default the disk of rootfs2),
+# AD5X_USERSHARE_DEV (default the usershare partition), AD5X_MOUNTS,
+# AD5X_RUN (where usershare is mounted when it isn't yet: /run),
+# AD5X_SLOT_A_DIR (slot A's root, already there: no mount), AD5X_DATA,
+# AD5X_RUN_NOTICE, AD5X_SYS, AD5X_CMDLINE, AD5X_MEMINFO (tests:
+# tools/test_bootloader_notice.sh).
+umask 022
+LIB=${AD5X_LIB:-/usr/lib/ad5x}
+. "$LIB/slot.sh" 2>/dev/null || exit 0
+. "$LIB/bootloader.sh" 2>/dev/null || exit 0
+DIR=${AD5X_DATA:-/data}/ad5x/bootloader-notice
+NOTICE=${AD5X_RUN_NOTICE:-/run/ad5x-bootloader-notice}
+STOCK=${AD5X_DATA:-/data}/ad5x/stock
+MARK=kiln-stock-backup
+MOUNTS=${AD5X_MOUNTS:-/proc/mounts}
+MIN_STARTS=3
+
+mode=check
+for a in "$@"; do
+	case "$a" in
+	--start) mode=start ;;
+	--print) mode=print ;;
+	*) echo "usage: ad5x-bootloader-notice [--start] [--print]" >&2; exit 0 ;;
+	esac
+done
+
+T=$(mktemp -d "${TMPDIR:-/tmp}/ad5x-bl-notice.XXXXXX") || exit 0
+mnt= usmnt=
+cleanup() {
+	[ -n "$mnt" ] && umount "$mnt" 2>/dev/null && rmdir "$mnt" 2>/dev/null
+	[ -n "$usmnt" ] && umount "$usmnt" 2>/dev/null && rmdir "$usmnt" 2>/dev/null
+	rm -rf "$T"
+}
+trap cleanup EXIT
+trap 'exit 0' HUP INT TERM
+
+# starts: complete starts of the main OS so far (capped)
+starts=$(cat "$DIR/starts" 2>/dev/null)
+case "$starts" in ''|*[!0-9]*) starts=0 ;; esac
+if [ "$mode" = start ] && [ "$starts" -lt 1000 ]; then
+	starts=$((starts + 1))
+	mkdir -p "$DIR" && echo "$starts" > "$DIR/starts.new" && mv -f "$DIR/starts.new" "$DIR/starts"
+fi
+
+why=	# why there is no notice (--print, the log line)
+kind= key= installed= carries=
+result() {
+	if [ "$mode" = print ]; then
+		if [ -n "$kind" ]; then
+			echo "kind=$kind"; echo "key=$key"
+			[ -n "$installed" ] && echo "installed=$installed"
+			echo "carries=$carries"
+		else
+			echo "none: $why"
+		fi
+		echo "starts=$starts"
+		exit 0
+	fi
+	if [ -n "$kind" ]; then
+		{ echo "kind=$kind"; echo "key=$key"
+		  [ -n "$installed" ] && echo "installed=$installed"
+		  echo "carries=$carries"; } > "$NOTICE.new" && mv -f "$NOTICE.new" "$NOTICE"
+		echo "bootloader-notice: $kind ($key)"
+	else
+		rm -f "$NOTICE"
+		echo "bootloader-notice: none ($why)"
+	fi
+	exit 0
+}
+# stock_boot CUR (the disk's first MiB): the stock first MiB saved before
+# Kiln's boot loader, in --offer's order (ad5x-bootloader-install's
+# ro_boot): /data's boot.img when it checks (bl_boot_img_why), else (a
+# wiped /data) the copy in usershare's kiln-stock-backup/, else in a
+# kiln-stock-backup/ on a USB stick mounted already; a copy from
+# elsewhere only when it is this printer's (the disk's bytes outside
+# Kiln's ranges, its GPT: bl_spl_class). usershare is read where it is
+# mounted already, else mounted read-only at a folder of its own for the
+# moment; nothing is written to it. SB=, SB_FROM=
+SB= SB_FROM=
+alt_ok() {	# FILE CUR: checks, copied to $T/alt, this printer's
+	bl_boot_img_why "$1" >/dev/null || return 1
+	mkdir -p "$T/alt" && cp "$1" "$T/alt/boot.img" && cp "$1.sha256" "$T/alt/boot.img.sha256" &&
+		cp "$1.info" "$T/alt/boot.img.info" && bl_boot_img_why "$T/alt/boot.img" >/dev/null || return 1
+	case "$(bl_spl_class "$2" "$T/alt/boot.img" "$T/alt/boot.img")" in other*) return 1 ;; esac
+	SB=$T/alt/boot.img
+}
+mounted_at() {	# DEV: where DEV is mounted already (the first), else nothing
+	awk -v d="$1" '$1 == d { print $2; exit }' "$MOUNTS" 2>/dev/null
+}
+stock_boot() {
+	if bl_boot_img_why "$STOCK/boot.img" >/dev/null; then
+		SB=$STOCK/boot.img SB_FROM=$STOCK/boot.img; return 0
+	fi
+	usd=${AD5X_USERSHARE_DEV:-$(part usershare 2>/dev/null)}
+	if [ -n "$usd" ]; then
+		usm=$(mounted_at "$usd")
+		if [ -z "$usm" ]; then
+			usm=${AD5X_RUN:-/run}/ad5x-bl-notice-us.$$
+			mkdir -p "$usm" && mount -t ext4 -o ro "$usd" "$usm" 2>/dev/null && usmnt=$usm ||
+				{ rmdir "$usm" 2>/dev/null; usm=; }
+		fi
+		if [ -n "$usm" ] && alt_ok "$usm/$MARK/boot.img" "$1"; then SB_FROM="usershare's $MARK/"; fi
+		[ -n "$usmnt" ] && umount "$usmnt" 2>/dev/null && rmdir "$usmnt" 2>/dev/null
+		usmnt=
+		[ -n "$SB" ] && return 0
+	fi
+	for sm in $(awk '$1 ~ /^\/dev\/sd[a-z][0-9]*$/ { print $2 }' "$MOUNTS" 2>/dev/null); do
+		alt_ok "$sm/$MARK/boot.img" "$1" && { SB_FROM="a USB stick's $MARK/ ($sm)"; return 0; }
+	done
+	return 1
+}
+bdate() {
+	if [ -z "$2" ] || [ "$1" = "$2" ]; then echo "${1:-$2}"
+	else echo "${1:-?} / $2"; fi
+}
+
+# the eMMC and its first MiB
+DISK=${AD5X_DISK:-}
+if [ -z "$DISK" ]; then
+	r=$(part rootfs2) || { why="no rootfs2"; result; }
+	DISK=${r%p[0-9]*}
+fi
+dd if="$DISK" of="$T/mib" bs=65536 count=16 2>/dev/null
+[ "$(bl_fsize "$T/mib" 2>/dev/null)" = $BL_MIB ] || { why="can't read the first MiB of $DISK"; result; }
+if bl_sdnand "${DISK##*/}"; then why="SD-NAND, not eMMC"; result; fi
+loader=$(bl_loader "$T/mib")
+if [ "$loader" = kiln ] && bl_kiln_ub "$T/mib"; then loader=kiln
+elif [ "$loader" = kiln ]; then why="only Kiln's SPL, no Kiln U-Boot"; result
+elif [ "$loader" != flashforge ]; then why="boot loader not known"; result; fi
+
+# the board: Flashforge's SPL on the disk, or under Kiln's boot loader the
+# stock first MiB saved before it, found as the recovery's --offer finds it
+# (stock_boot below)
+if [ "$loader" = flashforge ]; then src=$T/mib
+else
+	stock_boot "$T/mib" || { why="no saved stock first MiB of this printer ($STOCK/boot.img, usershare's or a mounted USB stick's $MARK/)"; result; }
+	src=$SB
+fi
+bl_fingerprint "$src" >/dev/null
+bl_allowed "$BL_FP_SPL" "$BL_FP_DDR" || { why="board not on the allowlist ($BL_FP_SPL $BL_FP_DDR)"; result; }
+[ "$BL_VARIANT" = H ] || { why="not an X2600H ($BL_VARIANT)"; result; }
+
+# what slot A carries: its root mounted read-only (or AD5X_SLOT_A_DIR)
+A=${AD5X_SLOT_A_DIR:-}
+if [ -z "$A" ]; then
+	dev=$(rootfs_of A) || { why="no slot A"; result; }
+	[ "$(head -c 4 "$dev" 2>/dev/null)" = hsqs ] || { why="slot A holds no system"; result; }
+	mnt=/run/ad5x-bl-notice.$$
+	mkdir -p "$mnt" && mount -t squashfs -o ro "$dev" "$mnt" 2>/dev/null ||
+		{ rmdir "$mnt" 2>/dev/null; mnt=; why="slot A can't be mounted"; result; }
+	A=$mnt
+fi
+[ -f "$A/etc/ad5x-recovery" ] || { why="slot A holds no recovery OS"; result; }
+bl_files_dates "$A/usr/share/ad5x/bootloader" || { why="the recovery OS in slot A carries no boot loader images"; result; }
+cs=$BL_D_SPL cu=$BL_D_UB
+carries=$(bdate "$cs" "$cu")
+ctime=$(bl_build_time "$cs" "$cu")
+
+if [ "$loader" = kiln ]; then
+	bl_mib_dates "$T/mib"
+	installed=$(bdate "$BL_D_SPL" "$BL_D_UB")
+	vs=$(bl_compare_builds "$cs" "$cu" "$BL_D_SPL" "$BL_D_UB")
+	[ "$vs" = newer ] || { why="slot A's build ($carries) is not newer than the disk's ($installed): $vs"; installed=; result; }
+	key="update $ctime"
+	if [ "$(cat "$DIR/update-seen" 2>/dev/null)" = "$key" ]; then
+		why="update to $carries shown already"; installed=; result
+	fi
+	kind=update
+	result
+fi
+
+# Flashforge's boot loader: the install notice
+if [ -e "$DIR/install-dismissed" ]; then why="install notice dismissed"; result; fi
+[ "$starts" -ge $MIN_STARTS ] || { why="$starts complete start(s), the install notice after $MIN_STARTS"; result; }
+kind=install key=install
+result

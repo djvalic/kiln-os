@@ -130,6 +130,12 @@ is kept in the run's log folder (`update-<version>.zip`). It is never published,
   The update carries the release's recovery OS too: after the first
   complete start the main OS writes it into slot A if slot A holds
   another one (docs/recovery-os.md, "Updates of the recovery OS itself").
+  That recovery OS carries the release's boot loader images, but Kiln's
+  own boot loader is never written by an update: when the printer has it
+  and slot A's build is newer, the touch screen says once that a boot
+  loader update is ready and where to start it (Settings > System > Boot
+  into recovery > Reboot / Power > Update Kiln's boot loader;
+  docs/own-boot-loader.md, "The main OS tells you").
 - Releases are public on GitHub (github.com/djvalic/kiln-os): no token
   needed. For a private repository, put a read token in
   `/data/ad5x/kiln-os.token`. A failed check shows an error in Fluidd and
