@@ -20,9 +20,11 @@ Words like "slot", "chainload" and "try once" are in the
    `ota:kernel2` boots slot B (`kernel2` p3, root `rootfs2` p4). Anything
    else boots slot A (`kernel` p1, root `rootfs` p2). It has no fallback
    of its own.
-3. Both kernel partitions hold the printer's own **stock 5.10 kernel**.
-   Kiln OS never writes a kernel there. The main OS is in slot B. The
-   recovery OS is in slot A.
+3. With Flashforge's boot loader both kernel partitions hold the
+   printer's own **stock 5.10 kernel**, and Kiln OS never writes a kernel
+   there; with Kiln's own boot loader ([own-boot-loader.md](own-boot-loader.md))
+   both hold Kiln's 6.6 (`S99ad5x-update-recovery` writes it). The main OS
+   is in slot B. The recovery OS is in slot A.
 4. The kernel mounts the squashfs root read-only and runs `/linuxrc`
    (BusyBox init). `/etc/inittab` (Buildroot's BusyBox default) mounts
    `/proc`, runs `mount -a` (`/run`, `/tmp` and `/dev/shm` are tmpfs) and
@@ -60,8 +62,8 @@ failed, no `xImage`, the staging failed), it exits and the first pass goes
 on as the only pass, on the stock kernel. So every script except `S00`
 runs exactly once per boot, on whichever kernel ends up running.
 
-A boot loader of Kiln's own (not in use yet) would start Kiln's kernel
-directly, with no stock pass. `S00ad5x-kernel` tells this by the missing
+Kiln's own boot loader (opt-in, [own-boot-loader.md](own-boot-loader.md))
+starts Kiln's kernel directly, with no stock pass. `S00ad5x-kernel` tells this by the missing
 `pending` marker on Kiln's kernel (with or without `ad5x.kernel=own`): it
 does not chainload, writes `started` with the word `direct` at the end, and
 `S99ad5x-booted` turns it into `last-ok` as usual. Such a start never counts
@@ -70,10 +72,10 @@ it. `rcS` then runs once.
 Scripts check which kernel they are on with `/usr/lib/ad5x/kernel.sh`
 (`KERNEL=stock` for `uname -r` 5.10.*, else `own`).
 
-The recovery OS has no `S00ad5x-kernel`, and `rcS` runs once. It boots
-the stock kernel from p1. Its scripts also work on Kiln's 6.6 (started
-some other way, e.g. a chainload test: [recovery-os.md](recovery-os.md),
-"Our kernel"); they check the kernel with the same `kernel.sh`.
+The recovery OS has no `S00ad5x-kernel`, and `rcS` runs once. On
+Flashforge's boot loader it boots the stock kernel from p1; with Kiln's
+own boot loader U-Boot starts it on Kiln's 6.6. Its scripts work on both;
+they check the kernel with the same `kernel.sh`.
 
 ## Main OS (slot B)
 
@@ -122,11 +124,11 @@ Kiln schedules nothing with cron, so its BusyBox has no `crond` or
 | `S66ad5x-fluidd-defaults` | Kiln | Writes Fluidd's macro categories into Moonraker's database once, only while Fluidd has no macro settings yet. In the background. | `/usr/share/ad5x/fluidd-macros.json` | Moonraker database (`fluidd` / `macros`) |
 | `S68ad5x-update-agent` | Kiln | Root loop (every 3 s) that carries out what Moonraker (user `klipper`) can't: installs a downloaded Kiln OS update or daily package, restarts Moonraker, retries Kiln's kernel, boots the recovery OS, starts, stops or restarts a service for Moonraker's `kiln_agent` provider (Fluidd's service buttons), reboots or powers off for the same provider (Moonraker's `/machine/reboot`, `/machine/shutdown`; not while printing, during a recovery OS write or in the first 10 minutes while start-up hasn't finished), and runs a plugin's root scripts when Klipper asks ([plugin-root-hooks.md](plugin-root-hooks.md)). Refuses while a print may run. | `/data/ad5x/kiln-update/{install,restart-moonraker,kernel-retry,boot-recovery,service,reboot,shutdown,plugin-request,plugin-<name>.tar}`, `/run/ad5x-booted` and the downloaded file, `/data/ad5x/kiln-os.token` | `/data/ad5x/kiln-update/{status,plugin-status}`, `/data/ad5x/kiln-stage/` (root-only), `/data/ad5x/plugins-root/`, `/data/ad5x/kiln-log/{agent.log,plugins-root.log}`, `/data/ad5x/apps/`, `/data/ad5x/update/` (through `ad5x-update`), `/run/ad5x-update-agent.pid` |
 | `S69ad5x-plugin-boot` | Kiln | Plugins' root boot scripts ([plugin-root-hooks.md](plugin-root-hooks.md)): in the background, waits until `S99ad5x-booted` marked the start good (at most 5 min) and while the recovery OS is written, then runs each `S<NN><plugin>` script with `start`, 30 s each; at shutdown with `stop`, in reverse. Only root-owned scripts whose plugin root has a copy of. | `/data/ad5x/plugins-root/{init.d,.off}`, `/data/ad5x/plugins-root/<plugin>/` | `/data/ad5x/kiln-log/plugins-root.log`, `/run/ad5x-plugin-boot.pid` |
-| `S70helixscreen` | Kiln | HelixScreen on `/dev/fb0` (through DRM with `helixscreen.drm` where `/dev/dri/card0` exists, the opt-in 7.3) as root at nice 10, against Moonraker at 127.0.0.1:7125. On unless `helixscreen.disable` exists. Seeds `settings.json` on the first start (so the setup wizard runs once). Writes the touch calibration for the recovery OS. Two glibc malloc arenas (`MALLOC_ARENA_MAX=2`). | `/data/ad5x/helixscreen.disable`, `/data/ad5x/helixscreen.drm`, `/data/ad5x/helixscreen/config/settings.json`, `/data/ad5x/helixscreen/offer-setup-wizard` (the screen asks once whether to run the setup wizard after a reinstall over stock, then deletes it), `/run/ad5x-sound.conf`, `printer_data/comms/{log-mode,run-setup-wizard}` | `/data/ad5x/helixscreen/{config,cache,.helixscreen}`, `/data/ad5x/recovery/touch-cal`, `printer_data/logs/helixscreen.log`, `/var/run/helixscreen.pid` |
-| `S99ad5x-booted` | Kiln | Start-up finished: renames updates still staged for the recovery OS `*.stale` (staged before this start, never installed; first run of the boot only), then, if `dropbear` runs, points the boot flag back at this slot, marks a start of Kiln's kernel as good and makes `/run/ad5x-booted` (the flag read back first): the agent, `ad5x-update` and `ad5x-boot-recovery` go ahead only with both. Without SSH the flag stays on recovery. In slot B, saves the first MiB of the eMMC once (read only). | `/data/ad5x/kernel/{started,pending,unfinished,extended-memory-pending}`, `/data/ad5x/update/`, the first MiB of `mmcblk0` | `ota` (boot flag), `/run/ad5x-booted`, `/data/ad5x/update/*.stale`, `/data/ad5x/kernel/last-ok`, `/data/ad5x/kernel/extended-memory-failed` (U-Boot's `failed-mem`, when not copied yet), `/data/ad5x/stock/boot.img{,.sha256,.info}` (once, only Flashforge's boot loader; again after a save cut short); removes `started`, `pending`, `unfinished`, `extended-memory-pending` |
+| `S70helixscreen` | Kiln | HelixScreen on `/dev/fb0` (through DRM with `helixscreen.drm` where `/dev/dri/card0` exists, the opt-in 7.3) as root at nice 10, against Moonraker at 127.0.0.1:7125. On unless `helixscreen.disable` exists. Seeds `settings.json` on the first start (so the setup wizard runs once). Writes the touch calibration for the recovery OS. Two glibc malloc arenas (`MALLOC_ARENA_MAX=2`). | `/data/ad5x/helixscreen.disable`, `/data/ad5x/helixscreen.drm`, `/data/ad5x/helixscreen/config/settings.json`, `/data/ad5x/helixscreen/offer-setup-wizard` (the screen asks once whether to run the setup wizard after a reinstall over stock, then deletes it), `/run/ad5x-sound.conf`, `printer_data/comms/{log-mode,run-setup-wizard}`, `/run/ad5x-bootloader-notice` and `/data/ad5x/bootloader-notice/` (the boot loader notices, patch 0094) | `/data/ad5x/helixscreen/{config,cache,.helixscreen}`, `/data/ad5x/recovery/touch-cal`, `printer_data/logs/helixscreen.log`, `/var/run/helixscreen.pid` |
+| `S99ad5x-booted` | Kiln | Start-up finished: renames updates still staged for the recovery OS `*.stale` (staged before this start, never installed; first run of the boot only), then, if `dropbear` runs, points the boot flag back at this slot, marks a start of Kiln's kernel as good and makes `/run/ad5x-booted` (the flag read back first): the agent, `ad5x-update` and `ad5x-boot-recovery` go ahead only with both. Without SSH the flag stays on recovery. In slot B, saves the first MiB of the eMMC once (read only). | `/data/ad5x/kernel/{started,pending,unfinished,extended-memory-pending}`, `/data/ad5x/update/`, the first MiB of `mmcblk0`, U-Boot's start confirmation (`ota` 0x90000, with Kiln's own boot loader) | `ota` (boot flag), `/run/ad5x-booted`, `/data/ad5x/update/*.stale`, `/data/ad5x/kernel/last-ok`, `/data/ad5x/kernel/extended-memory-failed` (U-Boot's `failed-mem`, when not copied yet), `/data/ad5x/stock/boot.img{,.sha256,.info}` (once, only Flashforge's boot loader; again after a save cut short); removes `started`, `pending`, `unfinished`, `extended-memory-pending` |
 | `S99ad5x-install-recovery` | Kiln | Last step of a first install from stock: writes the recovery OS into slot A (`ad5x-update --install-recovery --replace-stock`), in the background, at most 3 tries; then the install state is `done`. When the installer wrote slot A itself (no `recovery.squashfs`), it sets the install state from `flag-set` to `done` at this first finished start (`start_done`). Only in slot B, after `S99ad5x-booted`. | `/data/ad5x/install/{recovery.squashfs,recovery.sha256,recovery.tries}`, boot flag | slot A (p1/p2), `/data/ad5x/stock/` (saved stock system), `/data/ad5x/install/{state,install.log,recovery.tries}` |
 | `S99ad5x-stock-copy` | Kiln | A second copy of the stock files on usershare (`ad5x-stock-copy usershare --if-changed`: `kiln-stock-backup/` there, only with 64 MiB left free), a minute after start-up in the background at low priority; nothing when the copy has the same files. Return to Flashforge firmware takes them from there after a wipe of the data partition. Only in slot B. | `/data/ad5x/stock/`, `/data/ad5x/stock-copy.disable` | usershare (p6) `kiln-stock-backup/`, `/data/ad5x/stock/.usershare-copy`, `/data/ad5x/kiln-log/stock-copy.log` |
-| `S99ad5x-update-recovery` | Kiln | Writes the recovery OS this image carries into slot A when slot A holds a recovery OS with another content ID or a kernel other than the one it is to hold (slot B's; with Kiln's SPL in the first MiB this system's own 6.6, never 5.10), or an empty slot from a write cut short. Never over stock. With Kiln's SPL also its 6.6 into kernel2 (`ad5x-update --kernel2`). At most 3 tries per image or kernel. | `/usr/share/ad5x/recovery/{rootfs.squashfs,rootfs.sha256,rootfs.id}`, slot A's `/etc/ad5x-recovery-id`, `/data/ad5x/recovery-update.disable`, boot flag | slot A, `/data/ad5x/recovery/{update.log,update.tries}`, `/run/ad5x-recovery-check` (mount point) |
+| `S99ad5x-update-recovery` | Kiln | Writes the recovery OS this image carries into slot A when slot A holds a recovery OS with another content ID or a kernel other than the one it is to hold (slot B's; with Kiln's SPL in the first MiB this system's own 6.6, never 5.10), or an empty slot from a write cut short. Never over stock. With Kiln's SPL also its 6.6 into kernel2 (`ad5x-update --kernel2`). At most 3 tries per image or kernel. | `/usr/share/ad5x/recovery/{rootfs.squashfs,rootfs.sha256,rootfs.id}`, slot A's `/etc/ad5x-recovery-id`, `/data/ad5x/recovery-update.disable`, boot flag; then `ad5x-bootloader-notice --start` (`/data/ad5x/bootloader-notice/`) | slot A, `/data/ad5x/recovery/{update.log,update.tries}`, `/run/ad5x-recovery-check` (mount point) |
 
 Notes:
 

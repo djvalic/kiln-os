@@ -212,7 +212,17 @@ if [ "$loader" = kiln ]; then
 	bl_mib_dates "$T/mib"
 	installed=$(bdate "$BL_D_SPL" "$BL_D_UB")
 	vs=$(bl_compare_builds "$cs" "$cu" "$BL_D_SPL" "$BL_D_UB")
-	[ "$vs" = newer ] || { why="slot A's build ($carries) is not newer than the disk's ($installed): $vs"; installed=; result; }
+	case $vs in
+	newer) ;;
+	older) why="slot A's build ($carries) is not newer than the disk's ($installed): older"; installed=; result ;;
+	*)	# unknown: the same build time, or a date missing or unreadable
+		if [ -n "$ctime" ] && [ "$ctime" = "$(bl_build_time "$BL_D_SPL" "$BL_D_UB")" ]; then
+			why="slot A carries the same build as the disk ($installed): up to date"
+		else
+			why="slot A's build ($carries) and the disk's ($installed) can't be compared: a build date is missing or unreadable"
+		fi
+		installed=; result ;;
+	esac
 	key="update $ctime"
 	if [ "$(cat "$DIR/update-seen" 2>/dev/null)" = "$key" ]; then
 		why="update to $carries shown already"; installed=; result

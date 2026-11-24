@@ -5,14 +5,17 @@ how to go back to stock, and what the installer does to the printer. Two
 ways in: a USB stick (no tools needed) or SSH (with root access, for example
 after zMod).
 
-**Status (2026-10-20):** installed on one AD5X over SSH on 2026-10-19
+**Status (2026-11-23):** installed on one AD5X over SSH on 2026-10-19
 (installer v0.0.3; stock firmware with zMod, stock running from slot B):
 all six steps, the first start of the main OS and its writing of the
-recovery OS, and the updates since (v0.0.4 to v0.0.8, from Fluidd). The
-USB-stick route (stock's USB hook, the install screens) has run under qemu
-only (`tools/test_install.sh`, every release, with and without zMod). The
-other slot layout (stock in slot A) is **not yet tested on hardware**: it
-has run under qemu only.
+recovery OS, and every update since, from Fluidd. The USB-stick route
+(stock's USB hook, the install screens) ran on the same printer on
+2026-11-18, after a return to the stock firmware that removed Kiln OS's
+data: all six steps and the screens worked; the restart at the end didn't
+come by itself then, which v1.0.0-rc5 fixed (that fix has run under qemu
+only so far, below). `tools/test_install.sh` runs both routes under qemu
+every release, with and without zMod. The other slot layout (stock in
+slot A) is **not yet tested on hardware**: it has run under qemu only.
 For a printer that already runs the main OS from slot A, see
 `docs/recovery-os.md`, "Main OS in slot A".
 
@@ -313,8 +316,13 @@ ad5x-vendor populate [SRC]
 
 ## Kernel
 
-Releases carry no kernel. Kiln OS runs on the printer's own stock Linux
-5.10 kernel (the drivers above are built for it):
+Releases carry no Flashforge kernel. Kiln OS runs its own 6.6 from the
+image (`/usr/lib/ad5x/kernel66`). With Flashforge's boot loader every start
+begins on the printer's own 5.10 in the kernel partition, which
+`S00ad5x-kernel` hands over to 6.6 and which stays as the fallback (the
+drivers above are built for it). With Kiln's own boot loader both kernel
+partitions hold Kiln's 6.6 and the recovery OS runs on it too
+([own-boot-loader.md](own-boot-loader.md)). With Flashforge's boot loader:
 
 - the installer copies the running slot's kernel into the other slot's kernel
   partition (and saves it in `/data/ad5x/stock/kernel.img`);
@@ -485,7 +493,7 @@ on a release with this check.
 
 ### Older releases
 
-Before v1.0 the recovery screen's Restore stock wrote only the stock copy in
+Before v1.0.0-rc3 the recovery screen's Restore stock wrote only the stock copy in
 `/data/ad5x/stock` back into slot B (`ad5x-restore-stock --reboot` over SSH
 in the recovery OS), and refused on printers with Kiln's own boot loader.
 Before v0.0.45 the main OS had no `ad5x-restore-stock` ("not found", issue
@@ -562,8 +570,9 @@ Not done yet:
 - `ad5x-vendor ensure` at the first start (`unsquashfs` of the saved stock
   root before any driver is loaded: a few seconds longer start-up, once).
 - The eMMC copy to a FAT stick (time, 1 GB `usershare.img`).
-- Return to Flashforge firmware on a printer (laptop only so far:
-  `tools/test_return_stock.sh`): each source, the decryption time of a
-  Flashforge `.tgz` on the printer, stock 5.10 and its programs started by
-  Kiln's SPL, stock's own board update at the first start, stock's next
-  update writing slot A, and a Kiln OS install afterwards.
+- Return to Flashforge firmware: it ran on the developer's printer on
+  2026-11-18 (Kiln OS's data removed, then the USB-stick install above).
+  Laptop only so far (`tools/test_return_stock.sh`): the other sources,
+  the decryption time of a Flashforge `.tgz` on the printer, stock 5.10
+  and its programs started by Kiln's SPL, stock's own board update at the
+  first start, and stock's next update writing slot A.

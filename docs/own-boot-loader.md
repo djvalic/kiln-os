@@ -1,8 +1,8 @@
-# Kiln's own boot loader (experimental, opt-in)
+# Kiln's own boot loader (opt-in)
 
 Every Kiln OS printer starts the way Flashforge built it: Flashforge's
-boot loader (a small first stage, the SPL, and a second stage, U-Boot)
-starts Flashforge's Linux kernel, which then hands over to Kiln OS's own
+boot loader (its SPL, a small first stage; Flashforge's U-Boot is on the
+eMMC but never runs) starts Flashforge's Linux kernel, which then hands over to Kiln OS's own
 kernel. That keeps working and nothing changes it by itself.
 
 Kiln OS also carries a boot loader of its own: **Kiln's SPL** and
@@ -17,7 +17,7 @@ printer starts:
   the recovery OS (which then runs on Kiln's 6.6 too);
 - if U-Boot itself fails, Kiln's SPL starts Kiln's 6.6 on its own.
 
-**This is experimental and at your own risk.** It is installed only when
+**Read the risk below before you install it.** It is installed only when
 you ask for it, from the recovery OS, and only on printers whose stock
 boot loader is known to be the one Kiln's SPL was made for. The same Kiln
 OS update goes to every printer either way.
@@ -128,6 +128,11 @@ only eMMC.
   (`boot.img`) and Flashforge's system, which is what going back needs if
   the printer's own copies are ever lost. A full eMMC backup
   (`docs/emmc-backup.md`) is better still.
+- The rescue stick: each release has `kiln-os-VERSION-rescue.zip`, a
+  computer's tools to check, back up and repair the eMMC when nothing
+  starts, with the files that start Kiln's U-Boot over USB
+  ([emmc-repair.md](emmc-repair.md)). Download it and keep it with the
+  stick above.
 
 ## Install from the recovery screen
 
@@ -141,7 +146,7 @@ work too.
 The main OS's touch screen says once that this exists, from the third
 complete start of Kiln OS on: "Kiln OS has its own boot loader for this
 printer. To install it: Settings > System > Boot into recovery > Reboot /
-Power > Install Kiln's boot loader (experimental). Read the boot loader
+Power > Install Kiln's boot loader. Read the boot loader
 guide first; it explains the risk and the rescue stick", with this page's
 address. Only on a printer the recovery screen would offer it on (a known
 board, an X2600H, eMMC, Kiln's boot loader images in the recovery OS),
@@ -152,7 +157,7 @@ the same script as the update notice below, "The main OS tells you").
 1. Boot into recovery (touch screen: Settings > System > Boot into
    recovery).
 2. Tap **Reboot / Power**. On a known board without Kiln's boot loader
-   there is a button **Install Kiln's boot loader (experimental)**. It
+   there is a button **Install Kiln's boot loader**. It
    isn't there on other boards.
 3. The page checks everything first and shows the result. Nothing is
    written yet.

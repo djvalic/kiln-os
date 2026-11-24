@@ -21,18 +21,20 @@ install). Our AD5X steps are added by a HelixScreen patch:
 | 2 | Language | HelixScreen |
 | 3 | Wi-Fi (optional) | HelixScreen |
 | 4 | Connection (auto, local Moonraker) | HelixScreen |
-| 5 | **Self-check** | AD5X step, `STEP=selfcheck` |
-| 6 | **PID tune** (nozzle 220, bed 60) | AD5X step, `STEP=pid` |
-| 7 | **Bed mesh** (bed at 60; cleans the nozzle on the bed edge first) | AD5X step, `STEP=mesh` |
-| 8 | **Vibration compensation** | AD5X step, `STEP=shaper` |
-| 9 | **Filament** (the material in each slot; which slot is in the toolhead, found by itself when Kiln doesn't know) | AD5X step, `STEP=filament` |
-| 10 | **IFS tuning** (load filament in slots first) | AD5X step, `STEP=ifs` |
-| 11 | **Purge box check** (is the nozzle over the trash bin? `TRASH_OFFSET X= Y=` moves it) | AD5X step, `STEP=trash` |
-| 12 | **Z offset: first layer** (test patch; optional load cell estimate first, `ESTIMATE=1`, when `zoffset_estimate: 1`; then "remove the test print") | AD5X step, `STEP=zoffset` (+ live adjust) |
-| 13 | **Bed soak calibration** (optional, about 15 min; starts from a cold bed) | AD5X step, `STEP=soak` |
-| 14 | **Summary** (the results, before Save) | AD5X step, `STEP=summary` |
-| 15 | **Save** (SAVE_CONFIG, Klipper restarts) | AD5X step, `STEP=finish` |
-| 16 | Preferences | HelixScreen (telemetry stays off) |
+| 5 | **Time zone** | HelixScreen (patch 0006) |
+| 6 | **Nozzle size** (`SET_NOZZLE_SIZE`) | HelixScreen (patch 0008) |
+| 7 | **Self-check** | AD5X step, `STEP=selfcheck` |
+| 8 | **PID tune** (nozzle 220, bed 60) | AD5X step, `STEP=pid` |
+| 9 | **Bed mesh** (bed at 60; cleans the nozzle on the bed edge first) | AD5X step, `STEP=mesh` |
+| 10 | **Vibration compensation** | AD5X step, `STEP=shaper` |
+| 11 | **Filament** (the material in each slot; which slot is in the toolhead, found by itself when Kiln doesn't know) | AD5X step, `STEP=filament` |
+| 12 | **IFS tuning** (load filament in slots first) | AD5X step, `STEP=ifs` |
+| 13 | **Purge box check** (is the nozzle over the trash bin? `TRASH_OFFSET X= Y=` moves it) | AD5X step, `STEP=trash` |
+| 14 | **Z offset: first layer** (test patch; optional load cell estimate first, `ESTIMATE=1`, when `zoffset_estimate: 1`; then "remove the test print") | AD5X step, `STEP=zoffset` (+ live adjust) |
+| 15 | **Bed soak calibration** (optional, about 15 min; starts from a cold bed) | AD5X step, `STEP=soak` |
+| 16 | **Summary** (the results, before Save) | AD5X step, `STEP=summary` |
+| 17 | **Save** (SAVE_CONFIG, Klipper restarts) | AD5X step, `STEP=finish` |
+| 18 | Preferences | HelixScreen (telemetry stays off) |
 
 Every AD5X step has Start, Skip and (while running) Abort. A failed step
 shows the message and offers Retry / Skip.
@@ -135,7 +137,7 @@ Status object `ad5x_setup` (Moonraker `printer.objects.subscribe`):
 | `state` | str | `idle`, `running`, `waiting_user`, `done`, `failed`, `aborted` |
 | `message` | str | one human line for the screen ("Heating: bed 45/60 C, nozzle 120/140 C") |
 | `progress` | float | 0.0–1.0, best effort (PID: from the tuning cycles; IFS: from the IFS module) |
-| `results` | dict | per step: short result strings, e.g. `{"pid": "nozzle Kp=… Ki=… Kd=…, bed Kp=…", "shaper": "X mzv 58.2 Hz, Y ei 47.0 Hz"}`; keys `selfcheck`, `pid`, `mesh`, `shaper`, `ifs`, `trash`, `soak`, `zoffset`, `estimate`, `summary`, `finish`. Kept in `variables.cfg` (`ad5x_setup`), so they survive restarts |
+| `results` | dict | per step: short result strings, e.g. `{"pid": "nozzle Kp=… Ki=… Kd=…, bed Kp=…", "shaper": "X mzv 58.2 Hz, Y ei 47.0 Hz"}`; keys `selfcheck`, `pid`, `mesh`, `shaper`, `filament`, `ifs`, `trash`, `soak`, `zoffset`, `estimate`, `summary`, `finish`. Kept in `variables.cfg` (`ad5x_setup`), so they survive restarts |
 | `checks` | list | self-check items `[{"name": "...", "ok": true, "detail": "...", "required": true}]` |
 | `pending_save` | bool | results waiting for `STEP=finish` |
 | `zoffset` | float | live G-code Z offset during the Z offset step, else the saved print Z offset (`zoffset.z` in variables.cfg) |
@@ -262,10 +264,10 @@ The steps:
   centre probe that saves `ad5x_center_z`. The nozzle goes off. The bed
   goes off too unless `KEEP_BED=1`; send that when the Z offset step
   comes next.
-- **shaper**: needs Python numpy, **which the image doesn't have yet**.
-  Without it the step fails with a message saying so. Otherwise: home,
-  `SHAPER_CALIBRATE AXIS=X`, then `AXIS=Y`; results from the pending
-  SAVE_CONFIG values.
+- **shaper**: needs Python numpy (in the image: `BR2_PACKAGE_PYTHON_NUMPY`,
+  selected by the Klipper package). Without it the step fails with a
+  message saying so. Home, `SHAPER_CALIBRATE AXIS=X`, then `AXIS=Y`;
+  results from the pending SAVE_CONFIG values.
 - **filament** `[MATERIAL_<n>=<type>] [HEAD=<n>|0|KEEP|AUTO]`: the screen
   shows `filament` (live, also before the step) and passes the user's
   choices:
@@ -305,7 +307,13 @@ The steps:
   unloaded first (`IFS_FIND_HEAD_SLOT`, as in the filament step); a slot
   Kiln loaded or the user named stays for `IFS_TUNE` to measure its
   unload. Then `IFS_TUNE` (see below).
-  Progress and message come from the IFS module.
+  Progress and message come from the IFS module. The toolhead runout
+  check is off while it runs, so a lane parked off the sensor doesn't
+  pause the idle printer. When a slot's filament comes out mid-run, the
+  step fails with "slot N: no filament at the IFS (did it come out?):
+  put it back, then Retry" and saves nothing; putting it back pre-feeds
+  it and clears the IFS error, and running the step again (Retry) tunes
+  from the start.
 - **zoffset** `[MATERIAL=PLA] [EXTRUDER=] [BED=] [HEAD=KEEP]`:
   - The toolhead is read with the IFS module's sensor, the one
     `IFS_FIND_HEAD_SLOT` uses (the `adc_filament_sensor` only without
@@ -322,13 +330,14 @@ The steps:
     the IFS step cut out, else T0's, else the first with filament;
     refused only when no slot has filament.
   - Temperatures come from `MATERIAL`; the default is that slot's
-    material, else PLA (a guess). PLA 220/60, PETG 240/70, ABS/ASA
-    250/90, TPU 230/50. `zoffset_plan` says which slot, material and
+    material, else PLA (a guess). PLA and PLA-CF 220/60, SILK 230/60,
+    PETG 240/70, PETG-CF 250/70, ABS/ASA 250/90, TPU 230/50. `zoffset_plan` says which slot, material and
     temperatures it uses, and whether they are a guess, before anything
     heats (with a find first: `slot` 0 and the material from `MATERIAL=`
     or guessed, then again with the slot found).
   - Runs `PRINT_START BED= EXTRUDER= LEVEL=0`: home, heat, purge, brush,
-    then the centre Z check only, with no new mesh and no prime line. The
+    the centre Z check only (no new mesh), then the prime line at the
+    saved start offset. The
     patch starts from the same first-layer reference as a print's centre.
   - Starts fresh every run at `patch_start_z` (0.1 mm, a little high),
     not at the saved offset: that may be stock's or zMod's, carried over
@@ -423,7 +432,7 @@ SETUP_WIZARD_STEP STEP=selfcheck            ; ~1 min, watch the console
 SETUP_WIZARD_STEP STEP=pid                  ; ~10-20 min (bed is slow)
 SETUP_WIZARD_STEP STEP=pid HEATERS=extruder ; the nozzle only (after a nozzle change)
 SETUP_WIZARD_STEP STEP=mesh KEEP_BED=1
-SETUP_WIZARD_STEP STEP=shaper               ; needs numpy (not in the image)
+SETUP_WIZARD_STEP STEP=shaper               ; X, then Y
 SETUP_WIZARD_STEP STEP=filament MATERIAL_2=PETG   ; HEAD=AUTO finds the slot in the toolhead
 SETUP_WIZARD_STEP STEP=ifs                  ; slots loaded in the IFS first
 SETUP_WIZARD_STEP STEP=zoffset MATERIAL=PLA
@@ -450,7 +459,7 @@ IFS tuning alone:
 - `IFS_TUNE_LOAD [CHANNEL=]`
 - `IFS_TUNE_UNLOAD [CHANNEL=] [TUBE=1]`
 - `IFS_TUNE_RESET`
-- `IFS_FIND_HEAD_SLOT [TEMP=]`: filament in the toolhead from a slot
+- `IFS_FIND_HEAD_SLOT [TEMP=] [SLOT=n] [HOME=1]`: filament in the toolhead from a slot
   Kiln doesn't know (below)
 
 The tuned values are in `printer.ifs.tune` and in the `ifs_*` lines of
@@ -508,8 +517,6 @@ Klipper starts.
 - finish: the SAVE_CONFIG restart; `ad5x-tuning.cfg` is loaded (PID
   values in `printer.configfile.settings`); results show after
   reconnecting.
-- numpy for the vibration step: add `python-numpy` to the image, or skip
-  the step.
 - IFS tuning: see below.
 - After a reinstall over stock (Return to Flashforge firmware, then the
   install stick): "Run the setup wizard?" over the home screen at the first
@@ -522,7 +529,7 @@ Klipper starts.
 Ideas from QuickSwap for zMod (MIT, ninjamida/quickswap-5x), reimplemented
 in `klipper/extras/ifs.py`, no code copied:
 
-- **Speed**: per slot, feed/retract at rising speeds (300…3000 mm/min) and
+- **Speed**: per slot, feed/retract at rising speeds (from the stock 1200 up to 3000 mm/min) and
   keep the fastest that reaches the toolhead sensor reliably (2 runs, with
   margin). Saved as `ifs_speed`.
 - **Load distance**: measure IFS-to-toolhead-sensor distance per slot from
@@ -754,7 +761,7 @@ an update.
 
 ## HelixScreen side (`buildroot/package/helixscreen/000*.patch`)
 
-Patches on HelixScreen v1.1.0-rc.1 (86 files, `0001` to `0094`; the missing
+Patches on HelixScreen v1.1.0-rc.1 (88 files, `0001` to `0096`; the missing
 numbers were dropped because upstream has them), applied by Buildroot after
 extract (after the `GIT_INIT` hook has committed the pristine tree, so
 upstream's own submodule patching is unaffected; they touch `src/`,
@@ -766,7 +773,7 @@ from a clean clone of the build dir's `import` commit with `git format-patch`.
 
 | Patch | What |
 |---|---|
-| `0001-wizard-ad5x-setup-steps` | The seven AD5X steps, the `ad5x_setup` subscription, telemetry step skipped on AD5X |
+| `0001-wizard-ad5x-setup-steps` | The AD5X steps (the first seven; 0012 and 0084 add the purge box, bed soak, summary and filament steps), the `ad5x_setup` subscription, telemetry step skipped on AD5X |
 | `0002-settings-run-setup-wizard` | Settings > Printer > **Run Setup Wizard** |
 | `0003-application-wizard-rerun-flag-file` | `HELIX_WIZARD_FLAG_FILE` at start; `action:ad5x_setup_wizard` while running |
 | `0004-ams-ad5x-ifs-ports-are-prep-sensors` | The IFS's port sensors shown as prep sensors |
@@ -793,7 +800,7 @@ name, XML component, explanation). New `StepId`s `Ad5xSelfcheck` ...
 `Ad5xFinish` sit between `FilamentSensor` and `InputShaper`, so the order
 is: touch calibration (skipped once a valid one is saved; the seed has none),
 language, Wi-Fi, connection (auto, local Moonraker), [hardware pickers,
-collapsed by the preset], **self-check, PID, bed mesh, vibration, filament,
+collapsed by the preset], time zone, nozzle size, **self-check, PID, bed mesh, vibration, filament,
 IFS, purge box, Z offset, bed soak, summary, save** (`Ad5xFilament`, patch
 0084, sits between `Ad5xShaper` and `Ad5xIfs`), [HelixScreen's own input
 shaper step: skipped, the preset keeps it off], preferences, [summary: skipped in preset first-run], [telemetry:
@@ -918,10 +925,13 @@ changes it later (confirm: Klipper restarts).
 ### Running it again
 
 - **Settings > Printer > Run Setup Wizard** (only where the steps exist):
-  confirm, then the time zone, the nozzle size and the seven AD5X steps run as a targeted wizard session over
+  confirm, then the time zone, the nozzle size and the eleven AD5X steps run as a targeted wizard session over
   the current screen. `wizard_completed`, the preset and the hardware
   selections are not touched; Back on the first step or Finish on the last
-  returns to Settings.
+  returns to Settings. While a wizard is open, filament put into an IFS
+  port opens no slot editor (the wizard's steps ask for it), nothing
+  closing over the wizard hides it, and Run Setup Wizard brings a running
+  wizard back to the front (patch 0096).
 - **`SETUP_WIZARD` while the screen runs**: HelixScreen watches
   `notify_gcode_response` for `action:ad5x_setup_wizard` and opens the same
   targeted session at once (unless a wizard is already open), deleting the
@@ -976,11 +986,11 @@ offer the wizard.
   | | English | Russian |
   |---|---|---|
   | Title | Run the setup wizard? | Запустить мастер настройки? |
-  | Text | Kiln OS is installed again and kept your settings. Flashforge's firmware ran in between and may have changed the filament, the Z offset or the boards. The setup wizard checks and tunes the printer again; every step can be skipped. | Kiln OS установлена снова, ваши настройки сохранены. До этого работала прошивка Flashforge: она могла изменить филамент, смещение по Z или платы. Мастер настройки снова проверит и настроит принтер, любой шаг можно пропустить. |
+  | Text | Kiln OS is installed again and kept your settings. Flashforge's firmware ran in between and may have changed the filament, the Z offset or the boards. The setup wizard checks and tunes the printer again; every step can be skipped. | Kiln OS установлена снова, ваши настройки сохранены. До этого работала прошивка Flashforge: она могла изменить филамент, смещение по Z или прошивку плат. Мастер настройки снова проверит и настроит принтер, любой шаг можно пропустить. |
   | Buttons | Run, Skip | Запуск, Пропустить |
 
-  The screen shows the question in its selected language only (en.yml,
-  ru.yml; other languages show the English text, as for every Kiln key).
+  The screen shows the question in its selected language only; it is in
+  every language of the touch screen.
 
 - **Run** deletes the file and starts the same session as Settings >
   Printer > Run Setup Wizard (time zone, nozzle size, the AD5X steps).
@@ -999,11 +1009,11 @@ offer the wizard.
   `tools/test_install.sh` part B (the file written after Return to
   Flashforge firmware with the settings kept, none on a fresh install).
 
-### Not verified
+### On hardware
 
-Compiled for the AD5X with Buildroot only; never run (no mock printer has
-`ad5x_setup`, and nothing here has been on the screen). What to check on the
-screen: `docs/helixscreen-integration.md`, section "Setup wizard".
+First run on the developer's printer: 2026-10-16 (below); every release
+since has run it. Screen checks still open:
+`docs/helixscreen-integration.md`, section "Setup wizard".
 
 ## First run on hardware (the developer's printer, 2026-10-16)
 

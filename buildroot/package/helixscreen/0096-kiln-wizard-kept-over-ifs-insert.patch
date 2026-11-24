@@ -1,0 +1,566 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Mon, 23 Nov 2026 12:37:35 -0500
+Subject: [PATCH] wizard: filament put into the IFS no longer hides the setup
+ wizard
+
+Found on Kiln OS v1.0.0-rc7: a filament came out of the IFS during the
+setup wizard's IFS tuning, and the user put it back. The port's sensor
+went from empty to present, so FilamentInsertWatcher opened the slot
+editor (filament/auto_open_editor; each IFS port is a prep sensor since
+patch 0004) over the wizard: should_open_editor_on_insert() had no
+wizard guard. Closing the editor called nav::go_back(), whose
+stale-overlay sweep hides every screen child that is not the app
+layout, a backdrop, chrome or a panel in the stack. The wizard's
+container is none of those, so it was hidden, and Home showed. The
+wizard stayed active (is_wizard_active()), so Settings > Printer > Run
+Setup Wizard returned without doing anything, and only a restart got
+the wizard back. A panel switch (a navbar tap with an overlay open) has
+the same sweep.
+
+Three changes:
+- FilamentInsertContext gets wizard_active, and the policy opens no
+  editor while it is set. The watcher fills it with the gate the boot
+  loader notice uses: Config::is_wizard_required() || is_wizard_active().
+  The lane baselines still move, so a spool put in under the wizard is
+  what is loaded afterwards, not a late insert. The wizard's own steps
+  ask for filament (the AD5X filament step sets the materials).
+- ui_effects gets one "kept screen layer" (set_kept_screen_layer(),
+  is_kept_screen_layer(), cleared when the object is deleted), and both
+  sweeps in ui_nav_manager.cpp leave it alone. The wizard registers its
+  container when it creates it and clears it when it goes. Unlike chrome
+  it is not raised over overlays: an overlay opened over the wizard
+  still covers it until it closes.
+- ui_wizard_reshow() shows a hidden wizard container again and puts it
+  in front. Settings' Run Setup Wizard and purge box rows call it while
+  a wizard is active, instead of returning silently.
+
+Tests: the insert policy's "every guard suppresses" gets a "setup wizard
+open" section; a watcher test (an untagged insert with wizard_active
+opens nothing and claims no prompt, and is no insert afterwards);
+nav tests with a screen child standing in for the wizard (kept after
+push_overlay + go_back and after a navbar switch, hidden as before when
+not kept, no longer kept once deleted); the wizard's container is kept,
+and ui_wizard_reshow() shows and raises it.
+---
+ include/filament_insert_policy.h            |   4 +-
+ include/filament_insert_watcher.h           |   4 +-
+ include/ui_effects.h                        |   8 +
+ include/ui_wizard.h                         |   9 ++
+ src/application/filament_insert_watcher.cpp |  11 ++
+ src/ui/ui_effects.cpp                       |  25 +++
+ src/ui/ui_nav_manager.cpp                   |   3 +-
+ src/ui/ui_panel_settings.cpp                |  17 +-
+ src/ui/ui_wizard.cpp                        |  22 +++
+ tests/unit/test_ams_backend_snapmaker.cpp   |  25 +++
+ tests/unit/test_filament_insert_policy.cpp  |   4 +
+ tests/unit/test_kiln_wizard_kept_layer.cpp  | 164 ++++++++++++++++++++
+ 12 files changed, 291 insertions(+), 5 deletions(-)
+ create mode 100644 tests/unit/test_kiln_wizard_kept_layer.cpp
+
+diff --git a/include/filament_insert_policy.h b/include/filament_insert_policy.h
+index ee5edce..26c5648 100644
+--- a/include/filament_insert_policy.h
++++ b/include/filament_insert_policy.h
+@@ -20,6 +20,8 @@ struct FilamentInsertContext {
+     bool operation_busy = false;     ///< A load/unload/tool change is running or just finished
+     bool setting_enabled = false;    ///< The user opted in
+     bool editor_open = false;        ///< The slot editor is already on screen
++    bool wizard_active = false;      ///< The setup wizard is open (or still required): an
++                                     ///< editor over it would close into a hidden wizard
+ };
+ 
+ /// Presence the ENTRY and TOOLHEAD sensors state together, from their detected
+@@ -39,7 +41,7 @@ struct FilamentInsertContext {
+ /// an insertion.
+ [[nodiscard]] constexpr bool should_open_editor_on_insert(const FilamentInsertContext& c) {
+     return c.setting_enabled && c.was_present == false && c.is_present == true && !c.print_active &&
+-           !c.operation_busy && !c.editor_open;
++           !c.operation_busy && !c.editor_open && !c.wizard_active;
+ }
+ 
+ /// What a lane's insert does to the slot editor once its presence edge passed
+diff --git a/include/filament_insert_watcher.h b/include/filament_insert_watcher.h
+index b2cbb66..6fb8bcb 100644
+--- a/include/filament_insert_watcher.h
++++ b/include/filament_insert_watcher.h
+@@ -33,7 +33,8 @@ class FilamentInsertWatcher {
+     /// One judging pass over the lanes: updates each lane's baseline and held
+     /// insert, claims the insert prompt for a lane it asks or waits on, and
+     /// returns the lane whose editor to open, or -1. @p ctx carries the guards
+-    /// (setting, print, operation, editor); its presence fields are per lane.
++    /// (setting, print, operation, editor, wizard); its presence fields are per
++    /// lane.
+     int judge_lanes(const AmsBackend& backend, FilamentInsertContext ctx);
+ 
+     /// Forget every baseline, held insert and prompt claim: a reconnect, Klipper
+@@ -44,6 +45,7 @@ class FilamentInsertWatcher {
+     void on_ams_changed();
+     void on_sensor_changed();
+     [[nodiscard]] bool operation_busy() const;
++    [[nodiscard]] bool wizard_active() const;
+     void open_lane(int slot_index);
+     void open_external();
+ 
+diff --git a/include/ui_effects.h b/include/ui_effects.h
+index 4e2e388..79a75bb 100644
+--- a/include/ui_effects.h
++++ b/include/ui_effects.h
+@@ -127,6 +127,14 @@ void bring_to_front(lv_obj_t* obj);
+ /// (stale-overlay hiding, the keyboard's page shift) must leave alone.
+ bool is_screen_chrome(const lv_obj_t* child);
+ 
++/// Kiln OS: a full-screen layer that is not a navigation panel or overlay and
++/// that the stale-overlay sweeps (nav::go_back, a panel switch) must not hide:
++/// the setup wizard's container. One at a time; nullptr clears it. Cleared by
++/// itself when the object is deleted. Unlike chrome it is not raised above
++/// overlays: an overlay opened over it still covers it until it closes.
++void set_kept_screen_layer(lv_obj_t* obj);
++bool is_kept_screen_layer(const lv_obj_t* child);
++
+ /**
+  * @brief Flash an object with a brief opacity pulse for touch feedback
+  *
+diff --git a/include/ui_wizard.h b/include/ui_wizard.h
+index 8a5e0af..c957250 100644
+--- a/include/ui_wizard.h
++++ b/include/ui_wizard.h
+@@ -138,6 +138,15 @@ bool ui_wizard_request_step(helix::wizard::StepId step);
+  */
+ bool ui_wizard_cancel_session();
+ 
++/**
++ * Kiln OS: show the open wizard again if something hid its container, and put
++ * it in front of the screen's other children. True when there is a wizard
++ * (shown now), false without one. Settings' wizard rows call it instead of
++ * doing nothing while a wizard is active, so a wizard hidden by a closing
++ * overlay is never out of reach.
++ */
++bool ui_wizard_reshow();
++
+ /**
+  * Set wizard title
+  *
+diff --git a/src/application/filament_insert_watcher.cpp b/src/application/filament_insert_watcher.cpp
+index 9aaedcf..9a1c6d5 100644
+--- a/src/application/filament_insert_watcher.cpp
++++ b/src/application/filament_insert_watcher.cpp
+@@ -12,6 +12,7 @@
+ #include "ams_backend.h"
+ #include "ams_state.h"
+ #include "app_globals.h"
++#include "config.h"
+ #include "connection_state.h"
+ #include "filament_insert_policy.h"
+ #include "filament_sensor_manager.h"
+@@ -73,6 +74,14 @@ bool FilamentInsertWatcher::operation_busy() const {
+     return ams_action_is_busy(action) || get_printer_state().app_macro_activity().recently_active();
+ }
+ 
++bool FilamentInsertWatcher::wizard_active() const {
++    // The setup wizard's steps ask for filament themselves (the AD5X filament
++    // and IFS steps). An editor opened over it would close with nav::go_back(),
++    // which hides the wizard's container, so no editor opens while it is up.
++    auto* config = Config::get_instance();
++    return (config && config->is_wizard_required()) || is_wizard_active();
++}
++
+ void FilamentInsertWatcher::reseed() {
+     // A reconnect, a Klipper restart or a sensor reconfiguration moves readings
+     // without anyone inserting filament; whatever arrives next is a snapshot.
+@@ -94,6 +103,7 @@ void FilamentInsertWatcher::on_ams_changed() {
+     ctx.operation_busy = operation_busy();
+     ctx.setting_enabled = SettingsManager::instance().get_filament_auto_open_editor();
+     ctx.editor_open = editor_open();
++    ctx.wizard_active = wizard_active();
+ 
+     const int open_slot = judge_lanes(*backend, ctx);
+     if (open_slot >= 0) {
+@@ -161,6 +171,7 @@ void FilamentInsertWatcher::on_sensor_changed() {
+     ctx.operation_busy = operation_busy();
+     ctx.setting_enabled = SettingsManager::instance().get_filament_auto_open_editor();
+     ctx.editor_open = editor_open();
++    ctx.wizard_active = wizard_active();
+     if (should_open_editor_on_insert(ctx)) {
+         open_external();
+     }
+diff --git a/src/ui/ui_effects.cpp b/src/ui/ui_effects.cpp
+index 2d0dffb..b4760a4 100644
+--- a/src/ui/ui_effects.cpp
++++ b/src/ui/ui_effects.cpp
+@@ -271,6 +271,31 @@ bool is_screen_chrome(const lv_obj_t* child) {
+     return child && find_chrome(child) != s_always_on_top.end();
+ }
+ 
++namespace {
++lv_obj_t* s_kept_screen_layer = nullptr;
++
++void kept_layer_deleted_cb(lv_event_t* e) {
++    if (lv_event_get_target(e) == s_kept_screen_layer) {
++        s_kept_screen_layer = nullptr;
++    }
++}
++} // namespace
++
++void set_kept_screen_layer(lv_obj_t* obj) {
++    if (s_kept_screen_layer && s_kept_screen_layer != obj && lv_obj_is_valid(s_kept_screen_layer)) {
++        lv_obj_remove_event_cb(s_kept_screen_layer, kept_layer_deleted_cb);
++    }
++    s_kept_screen_layer = obj;
++    if (obj) {
++        lv_obj_remove_event_cb(obj, kept_layer_deleted_cb);
++        lv_obj_add_event_cb(obj, kept_layer_deleted_cb, LV_EVENT_DELETE, nullptr);
++    }
++}
++
++bool is_kept_screen_layer(const lv_obj_t* child) {
++    return child && child == s_kept_screen_layer;
++}
++
+ lv_obj_t* create_fullscreen_backdrop(lv_obj_t* parent, lv_opa_t opacity) {
+     if (!parent) {
+         spdlog::error("[UI Effects] Cannot create backdrop: parent is null");
+diff --git a/src/ui/ui_nav_manager.cpp b/src/ui/ui_nav_manager.cpp
+index f2ec8cd..35a0b0e 100644
+--- a/src/ui/ui_nav_manager.cpp
++++ b/src/ui/ui_nav_manager.cpp
+@@ -896,6 +896,7 @@ void NavigationManager::switch_to_panel_impl(int panel_id) {
+ 
+             // Screen chrome (the navbar E-stop) and open modals are not overlays.
+             if (child == app_layout_widget_ || helix::ui::is_screen_chrome(child) ||
++                helix::ui::is_kept_screen_layer(child) ||
+                 ModalStack::instance().backdrop_for_backdrop(child)) {
+                 continue;
+             }
+@@ -2008,7 +2009,7 @@ void NavigationManager::go_back_now() {
+                 lv_obj_t* child = lv_obj_get_child(screen, static_cast<int32_t>(i));
+                 if (child == mgr.app_layout_widget_ || child == mgr.backdrop_.primary() ||
+                     child == current_top || child == previous_panel ||
+-                    helix::ui::is_screen_chrome(child) ||
++                    helix::ui::is_screen_chrome(child) || helix::ui::is_kept_screen_layer(child) ||
+                     ModalStack::instance().backdrop_for_backdrop(child)) {
+                     continue;
+                 }
+diff --git a/src/ui/ui_panel_settings.cpp b/src/ui/ui_panel_settings.cpp
+index cdccd0b..d985442 100644
+--- a/src/ui/ui_panel_settings.cpp
++++ b/src/ui/ui_panel_settings.cpp
+@@ -36,6 +36,7 @@
+ #include "ui_toast_manager.h"
+ #include "ui_update_queue.h"
+ #include "ui_utils.h"
++#include "ui_wizard.h"
+ #include "ui_wizard_ad5x_setup.h"
+ #include "ui_wizard_hardware_selector.h"
+ 
+@@ -381,14 +382,26 @@ static bool ad5x_setup_refused_now() {
+ }
+ 
+ void SettingsPanel::handle_ad5x_purge_clicked() {
+-    if (is_wizard_active() || ad5x_setup_refused_now()) {
++    // Kiln OS: a wizard that is still running comes back to the front (its
++    // container may have been hidden) instead of the tap doing nothing.
++    if (is_wizard_active()) {
++        ui_wizard_reshow();
++        return;
++    }
++    if (ad5x_setup_refused_now()) {
+         return;
+     }
+     helix::ad5x_setup::launch_purge_box(parent_screen_);
+ }
+ 
+ void SettingsPanel::handle_ad5x_setup_clicked() {
+-    if (is_wizard_active() || ad5x_setup_refused_now()) {
++    // Kiln OS: a wizard that is still running comes back to the front (its
++    // container may have been hidden) instead of the tap doing nothing.
++    if (is_wizard_active()) {
++        ui_wizard_reshow();
++        return;
++    }
++    if (ad5x_setup_refused_now()) {
+         return;
+     }
+     helix::ui::ConfirmOptions opts;
+diff --git a/src/ui/ui_wizard.cpp b/src/ui/ui_wizard.cpp
+index e2f46bf..eca30f2 100644
+--- a/src/ui/ui_wizard.cpp
++++ b/src/ui/ui_wizard.cpp
+@@ -3,6 +3,7 @@
+ 
+ #include "ui_wizard.h"
+ 
++#include "ui_effects.h"
+ #include "ui_error_reporting.h"
+ #include "ui_keyboard_manager.h"
+ #include "ui_nav.h"
+@@ -447,6 +448,7 @@ void ui_wizard_deinit_subjects() {
+     // in lv_deinit() when those widgets are deleted.
+     if (wizard_container && lv_is_initialized()) {
+         spdlog::debug("[Wizard] Deleting wizard container during deinit");
++        helix::ui::set_kept_screen_layer(nullptr);
+         helix::ui::safe_delete(wizard_container);
+         current_screen_step.reset();
+     }
+@@ -585,6 +587,11 @@ lv_obj_t* ui_wizard_create(lv_obj_t* parent) {
+     // Update layout to ensure SIZE_CONTENT calculates correctly
+     lv_obj_update_layout(wizard_container);
+ 
++    // Kiln OS: an overlay opened over the wizard (a slot editor, a keyboard
++    // page) closes through nav::go_back(), whose stale-overlay sweep hid every
++    // other screen child, the wizard included, with no way back to it.
++    helix::ui::set_kept_screen_layer(wizard_container);
++
+     spdlog::debug("[Wizard] Wizard container created successfully");
+     return wizard_container;
+ }
+@@ -992,6 +999,20 @@ static void ui_wizard_load_screen(helix::wizard::StepId step) {
+ // It deliberately does NOT touch config flags, expected-hardware, the
+ // post-wizard re-discovery, or the deferred Home navigation — those are
+ // completion-mode specific and remain in ui_wizard_complete().
++bool ui_wizard_reshow() {
++    if (!wizard_container || !lv_obj_is_valid(wizard_container)) {
++        return false;
++    }
++    if (lv_obj_has_flag(wizard_container, LV_OBJ_FLAG_HIDDEN)) {
++        spdlog::info("[Wizard] Wizard container was hidden; showing it again");
++        lv_obj_remove_flag(wizard_container, LV_OBJ_FLAG_HIDDEN);
++    }
++    // Front of the screen, where it was created: the wizard covers the main
++    // UI (and its E-stop chrome) until it ends.
++    lv_obj_move_foreground(wizard_container);
++    return true;
++}
++
+ static void dismiss_wizard_container() {
+     // Cleanup current wizard screen
+     ui_wizard_cleanup_current_screen();
+@@ -1008,6 +1029,7 @@ static void dismiss_wizard_container() {
+     // Hide immediately so user sees the app layout underneath without waiting for async delete.
+     if (wizard_container) {
+         spdlog::debug("[Wizard] Hiding and deleting wizard container (async)");
++        helix::ui::set_kept_screen_layer(nullptr);
+         lv_obj_add_flag(wizard_container, LV_OBJ_FLAG_HIDDEN);
+         lv_obj_del_async(wizard_container);
+         wizard_container = nullptr;
+diff --git a/tests/unit/test_ams_backend_snapmaker.cpp b/tests/unit/test_ams_backend_snapmaker.cpp
+index 6b7cca0..9ab13c6 100644
+--- a/tests/unit/test_ams_backend_snapmaker.cpp
++++ b/tests/unit/test_ams_backend_snapmaker.cpp
+@@ -4226,6 +4226,31 @@ TEST_CASE_METHOD(SnapmakerInsertFixture,
+     CHECK(toasts.empty());
+ }
+ 
++TEST_CASE_METHOD(SnapmakerInsertFixture,
++                 "Kiln: an insert while the setup wizard is open opens nothing",
++                 "[ams][snapmaker][insert_watcher][kiln][wizard]") {
++    helix::ui::reset_insert_offers_for_test();
++    FilamentInsertWatcher watcher(nullptr);
++    SnapmakerTestAccess::handle_status(backend, make_feed_status(0, "wait_insert", false));
++    REQUIRE(judge(watcher, backend) == -1);
++
++    // The spool goes in (no tag) while a wizard step is on screen.
++    SnapmakerTestAccess::handle_status(backend, make_feed_status(0, "wait_insert", true));
++    SnapmakerTestAccess::handle_status(
++        backend, make_filament_detect_status(0, "NONE", 0u, "NONE", json::array()));
++    drain();
++    FilamentInsertContext ctx;
++    ctx.setting_enabled = true;
++    ctx.wizard_active = true;
++    CHECK(watcher.judge_lanes(backend, ctx) == -1);
++    CHECK_FALSE(helix::ui::insert_prompt_claimed(0));
++
++    // The baseline still moved: once the wizard is gone, the spool that went in
++    // under it is what is loaded, not a new insert. (An insert no prompt claims
++    // gets the backend's own notice, a toast that hides nothing.)
++    CHECK(judge(watcher, backend) == -1);
++}
++
+ TEST_CASE_METHOD(SnapmakerInsertFixture, "Snapmaker a tag-identified insert opens nothing",
+                  "[ams][snapmaker][insert_watcher][1710]") {
+     helix::ui::reset_insert_offers_for_test();
+diff --git a/tests/unit/test_filament_insert_policy.cpp b/tests/unit/test_filament_insert_policy.cpp
+index 6f3c879..dc016c6 100644
+--- a/tests/unit/test_filament_insert_policy.cpp
++++ b/tests/unit/test_filament_insert_policy.cpp
+@@ -37,6 +37,10 @@ TEST_CASE("insert policy: every guard suppresses", "[filament][insert_policy]")
+     SECTION("editor already open") {
+         c.editor_open = true;
+     }
++    SECTION("setup wizard open") {
++        // Kiln OS: an editor over the wizard would close into a hidden wizard
++        c.wizard_active = true;
++    }
+     REQUIRE_FALSE(should_open_editor_on_insert(c));
+ }
+ 
+diff --git a/tests/unit/test_kiln_wizard_kept_layer.cpp b/tests/unit/test_kiln_wizard_kept_layer.cpp
+new file mode 100644
+index 0000000..b656edb
+--- /dev/null
++++ b/tests/unit/test_kiln_wizard_kept_layer.cpp
+@@ -0,0 +1,164 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++/**
++ * @file test_kiln_wizard_kept_layer.cpp
++ * @brief Kiln OS: the setup wizard survives overlays that close over it
++ *
++ * An overlay opened over the wizard (the slot editor a filament insert opens)
++ * closed through nav::go_back(), whose stale-overlay sweep hid every other
++ * screen child, the wizard's container included. The wizard was then out of
++ * reach: still active, so Settings' Run Setup Wizard did nothing. The wizard's
++ * container is now a kept screen layer the sweeps skip, and
++ * ui_wizard_reshow() brings a hidden one back.
++ */
++
++#include "ui_effects.h"
++#include "ui_nav.h"
++#include "ui_nav_manager.h"
++#include "ui_update_queue.h"
++#include "ui_wizard.h"
++
++#include "../lvgl_ui_test_fixture.h"
++#include "../test_helpers/update_queue_test_access.h"
++#include "app_globals.h"
++#include "panel_lifecycle.h"
++
++#include "../catch_amalgamated.hpp"
++
++using namespace helix;
++
++namespace {
++
++class NullLifecycle : public IPanelLifecycle {
++  public:
++    void on_activate() override {}
++    void on_deactivate(DeactivateReason) override {}
++    const char* get_name() const override {
++        return "NullLifecycle";
++    }
++};
++
++class KeptLayerFixture : public LVGLUITestFixture {
++  public:
++    KeptLayerFixture() {
++        home_ = lv_obj_create(test_screen());
++        controls_ = lv_obj_create(test_screen());
++        lv_obj_t* panels[kUiPanelCount] = {nullptr};
++        panels[static_cast<int>(PanelId::Home)] = home_;
++        panels[static_cast<int>(PanelId::Controls)] = controls_;
++        NavigationManager::instance().set_panels(panels);
++
++        overlay_ = lv_obj_create(test_screen());
++        lv_obj_add_flag(overlay_, LV_OBJ_FLAG_HIDDEN);
++        // Stands in for the wizard's container: a full-screen child of the
++        // screen that is neither a panel nor an overlay.
++        wizard_ = lv_obj_create(test_screen());
++        // Any other visible child: the sweeps still hide it.
++        stale_ = lv_obj_create(test_screen());
++    }
++
++    ~KeptLayerFixture() override {
++        ui::set_kept_screen_layer(nullptr);
++        nav::unregister_overlay(overlay_);
++        drain();
++    }
++
++    static void drain() {
++        ui::UpdateQueueTestAccess::drain_all(ui::UpdateQueue::instance());
++    }
++
++    static bool visible(lv_obj_t* obj) {
++        return !lv_obj_has_flag(obj, LV_OBJ_FLAG_HIDDEN);
++    }
++
++    lv_obj_t* home_ = nullptr;
++    lv_obj_t* controls_ = nullptr;
++    lv_obj_t* overlay_ = nullptr;
++    lv_obj_t* wizard_ = nullptr;
++    lv_obj_t* stale_ = nullptr;
++    NullLifecycle lifecycle_;
++};
++
++} // namespace
++
++TEST_CASE_METHOD(KeptLayerFixture, "Kiln: go_back's sweep leaves the kept layer visible",
++                 "[navigation][kiln][wizard]") {
++    ui::set_kept_screen_layer(wizard_);
++    nav::register_overlay(overlay_, &lifecycle_);
++
++    nav::push_overlay(overlay_);
++    drain();
++    REQUIRE(nav::is_on_top(overlay_));
++
++    REQUIRE(nav::go_back());
++    drain();
++    CHECK(visible(wizard_));
++    CHECK_FALSE(visible(stale_));
++}
++
++TEST_CASE_METHOD(KeptLayerFixture, "Kiln: a panel switch leaves the kept layer visible",
++                 "[navigation][kiln][wizard]") {
++    ui::set_kept_screen_layer(wizard_);
++    nav::register_overlay(overlay_, &lifecycle_);
++    nav::push_overlay(overlay_);
++    drain();
++    REQUIRE(nav::is_on_top(overlay_));
++
++    // A navbar tap with an overlay open: the switch clears the stack and sweeps
++    // the screen's other children (Home needs no printer connection).
++    REQUIRE(NavigationManager::instance().request_panel(
++                PanelId::Home, NavigationManager::SwitchDispatch::Inline) ==
++            NavigationManager::PanelRequest::Switched);
++    drain();
++    CHECK_FALSE(nav::is_in_stack(overlay_));
++    CHECK(visible(wizard_));
++    CHECK_FALSE(visible(stale_));
++}
++
++TEST_CASE_METHOD(KeptLayerFixture, "Kiln: without the kept layer the sweep hides it, as before",
++                 "[navigation][kiln][wizard]") {
++    nav::register_overlay(overlay_, &lifecycle_);
++    nav::push_overlay(overlay_);
++    drain();
++    REQUIRE(nav::go_back());
++    drain();
++    CHECK_FALSE(visible(wizard_));
++}
++
++TEST_CASE_METHOD(KeptLayerFixture, "Kiln: a deleted kept layer is no longer kept",
++                 "[navigation][kiln][wizard]") {
++    lv_obj_t* layer = lv_obj_create(test_screen());
++    ui::set_kept_screen_layer(layer);
++    REQUIRE(ui::is_kept_screen_layer(layer));
++    lv_obj_delete(layer);
++    CHECK_FALSE(ui::is_kept_screen_layer(layer));
++    CHECK_FALSE(ui::is_kept_screen_layer(nullptr));
++}
++
++TEST_CASE_METHOD(LVGLUITestFixture,
++                 "Kiln: the wizard's container is kept and reshow brings it back",
++                 "[wizard][kiln]") {
++    CHECK_FALSE(ui_wizard_reshow()); // no wizard yet
++
++    lv_obj_t* root =
++        ui_wizard_create_targeted(test_screen(), {helix::wizard::StepId::FanSelect}, [] {});
++    if (root == nullptr) {
++        ui_wizard_complete_targeted();
++        SKIP("wizard container not created (XML infra unavailable)");
++    }
++    REQUIRE(is_wizard_active());
++    CHECK(ui::is_kept_screen_layer(root));
++
++    // Something hid it anyway (any path the sweeps don't cover).
++    lv_obj_t* above = lv_obj_create(test_screen());
++    lv_obj_add_flag(root, LV_OBJ_FLAG_HIDDEN);
++    CHECK(ui_wizard_reshow());
++    CHECK_FALSE(lv_obj_has_flag(root, LV_OBJ_FLAG_HIDDEN));
++    // In front of the screen's other children again.
++    CHECK(lv_obj_get_index(root) > lv_obj_get_index(above));
++
++    ui_wizard_complete_targeted();
++    CHECK_FALSE(is_wizard_active());
++    CHECK_FALSE(ui::is_kept_screen_layer(root));
++    CHECK_FALSE(ui_wizard_reshow());
++}

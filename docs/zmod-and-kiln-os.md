@@ -70,7 +70,7 @@ do, and Kiln OS set out to keep that.
 | Updates | zMod updates itself on the running stock system | Each update replaces the whole system image, installed through a recovery OS, with a fallback if a start fails |
 | Going back to stock | Remove zMod | A guided return to stock firmware |
 | Printers | AD5M, AD5M Pro, AD5X, Creator 5, Creator 5 Pro | AD5X only |
-| Maturity | Long-established, widely used, a large wiki in Russian and English, a help bot | Young: v1.0 is still in release candidates, with a small group of testers |
+| Maturity | Long-established, widely used, a large wiki in Russian and English, a help bot | Young: v1.0 is its first stable release, with a small group of testers |
 
 ## Where zMod is the better fit
 
@@ -81,8 +81,8 @@ do, and Kiln OS set out to keep that.
   AD5X and Creator 5 series.
 - **You want its ecosystem.** That includes remote access through
   zmod.link, Telegram and other notifications, nozzle collision detection
-  with the load cells, power-loss recovery, input shaping and belt
-  analysis, and many plugins.
+  with the load cells, belt analysis, and many plugins (Kiln OS has
+  power-loss recovery and input shaping too).
 - **You want something proven.** zMod has years of use behind it, broad
   documentation and an active community.
 - **You want to keep the board firmware.** Klipper v0.13 is optional in

@@ -10,7 +10,7 @@ in the [glossary](glossary.md).
 ```
  Flashforge AD5X
  ┌───────────────────────────────────────────────────────────────────────┐
- │ Ingenic X2600 SoC (MIPS32r5, ~480 MB RAM, 7.6 GB eMMC)                │
+ │ Ingenic X2600 SoC (MIPS32r5, 256 or 512 MiB RAM, 8 GB+ eMMC)          │
  │                                                                       │
  │  boot ROM ─► U-Boot SPL (eMMC) ─► reads boot flag (ota, p5)           │
  │                 │                                                     │
@@ -52,9 +52,13 @@ in the [glossary](glossary.md).
 
 The boot ROM loads U-Boot's SPL from the eMMC. The SPL reads the boot
 flag in the `ota` partition and boots slot A or slot B. There is no
-fallback in the SPL. Kiln OS uses the printer's own A/B layout and never
-writes the boot loader or the kernel partitions. The main OS lives in
-slot B, the recovery OS in slot A.
+fallback in Flashforge's SPL. Kiln OS uses the printer's own A/B layout;
+with Flashforge's boot loader (the default) it never writes the boot
+loader or the kernel partitions. Kiln's own boot loader (opt-in,
+[own-boot-loader.md](own-boot-loader.md)) replaces the SPL, adds U-Boot
+with its own fallbacks, and puts Kiln's 6.6 in both kernel partitions.
+The main OS lives in slot B, the recovery OS in slot A. The diagram shows
+the default.
 
 "Try once" gives the fallback the SPL lacks: the main OS's first script
 points the flag at recovery, its last script (once SSH is up) points it
@@ -65,15 +69,18 @@ Details: [boot-slots.md](boot-slots.md), [recovery-os.md](recovery-os.md).
 
 ### 2. Kernels
 
-Both slots boot the printer's stock **Linux 5.10** first: it is what the
-SPL can start, and it stays in the kernel partitions. On the main OS the
+With Flashforge's boot loader (the default) both slots boot the
+printer's stock **Linux 5.10** first: it is what that SPL can start, and
+it stays in the kernel partitions. On the main OS the
 first boot script, `S00ad5x-kernel`, loads **Kiln's 6.6** kernel from the
 image into RAM and jumps to it with `chainload.ko` (the stock kernel has
 no kexec). With the switch `/data/ad5x/kernel/mainline` it starts the
 **mainline 7.3** kernel instead. Markers in `/data/ad5x/kernel/` record
 each start. A start that fails sends the next boots back to 6.6 (from 7.3)
 or to the stock kernel (from 6.6) until you run `ad5x-kernel retry`. The
-recovery OS always runs on the stock kernel.
+recovery OS runs on the stock kernel there. With Kiln's own boot loader
+U-Boot starts Kiln's kernel directly (7.3, then 6.6, then the recovery OS,
+which runs on Kiln's 6.6 too) and there is no 5.10 pass.
 
 On the stock kernel the drivers are Flashforge's out-of-tree modules,
 copied from the printer itself into `/data/ad5x/vendor` (never shipped in

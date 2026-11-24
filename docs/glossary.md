@@ -73,7 +73,8 @@ patches in `buildroot/package/helixscreen/`). It talks to Moonraker. See
 **IFS** — Flashforge's Intelligent Filament System: the AD5X's 4-slot
 filament changer. Its controller (an N32G455) is on `/dev/ttyS4` over
 RS-485. Kiln OS drives it with `klipper/extras/ifs.py`, on Flashforge's
-firmware by default, or as a Klipper MCU with `ifs-klipper.enable`. See
+firmware by default, or as a Klipper MCU (Settings > Devices > IFS
+firmware, an owner opt-in; [mcu-flashing.md](mcu-flashing.md)). See
 [ifs-protocol.md](ifs-protocol.md).
 
 **Kiln OS** — The product name. Use it in anything people read.
@@ -137,12 +138,14 @@ by `S69ad5x-plugin-boot`. See [plugin-root-hooks.md](plugin-root-hooks.md).
 
 **SPL** — U-Boot's small first-stage loader in the eMMC. On the AD5X it
 loads the Linux kernel itself (U-Boot proper never runs), reads the boot
-flag, and has no fallback.
+flag, and has no fallback. With Kiln's own boot loader
+([own-boot-loader.md](own-boot-loader.md)) Kiln's SPL starts Kiln's
+U-Boot, which retries and falls back.
 
 **Soak** — The bed heat soak: after the bed reaches temperature, the plate
 keeps moving for a while as it heats through. The print start waits for
-it, for a time measured on your printer with the load cells
-(`BED_SOAK_CALIBRATE`, `klipper/extras/ad5x_soak.py`). See
+it, for the time `BED_SOAK_CALIBRATE` measured on your printer with the
+load cells, else 3 s per degree the bed rose (`klipper/extras/ad5x_soak.py`). See
 [print-start.md](print-start.md).
 
 **Stock** — Flashforge's own firmware for the AD5X (software 3.1.0,

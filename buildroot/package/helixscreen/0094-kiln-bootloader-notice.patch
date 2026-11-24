@@ -17,7 +17,7 @@ slot A carries a newer build, kind=install when the printer still has
 Flashforge's boot loader on a board Kiln's supports (after 3 complete
 starts). The screen shows it once as a dialog with OK, with the real
 menu path (Settings > System > Boot into recovery > Reboot / Power >
-Update Kiln's boot loader, or Install Kiln's boot loader (experimental)
+Update Kiln's boot loader, or Install Kiln's boot loader
 with the guide's address). Only at idle: not while the setup wizard
 runs or is required, not while a re-run is requested or 0088's "Run the
 setup wizard?" waits, not while a print holds the printer (motion
@@ -37,7 +37,7 @@ it, ja, ko, pt, tr and zh, each with its file's own word for recovery
 (Wiederherstellung, recuperación, récupération, ripristino, 復旧, 복구,
 recuperação, kurtarma, 恢复), so every notice names the row as the screen
 shows it. Only the recovery screen's entries (Reboot / Power, Update
-Kiln's boot loader, Install Kiln's boot loader (experimental)) and its
+Kiln's boot loader, Install Kiln's boot loader) and its
 Boot main OS stay English in those languages: the recovery screen shows
 them in English there. The Russian names the menus as the Russian
 screens show them (Настройки > Система > Загрузить систему
@@ -380,8 +380,8 @@ index 0000000..35f0ba0
 +                     "until you start it there.");
 +    }
 +    return lv_tr("Kiln OS has its own boot loader for this printer. To install it: Settings > "
-+                 "System > Boot into recovery > Reboot / Power > Install Kiln's boot loader "
-+                 "(experimental). Read the boot loader guide first; it explains the risk and the "
++                 "System > Boot into recovery > Reboot / Power > Install Kiln's boot loader. "
++                 "Read the boot loader guide first; it explains the risk and the "
 +                 "rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md");
 +}
 +
@@ -792,7 +792,7 @@ index 0000000..7468a97
 +    REQUIRE(dialog());
 +    text = test::top_modal_text();
 +    CHECK_THAT(text, ContainsSubstring("собственный загрузчик"));
-+    CHECK_THAT(text, ContainsSubstring("Установить загрузчик Kiln (экспериментально)"));
++    CHECK_THAT(text, ContainsSubstring("Установить загрузчик Kiln"));
 +    CHECK_THAT(text, ContainsSubstring("флешка для восстановления"));
 +    CHECK_THAT(text, !ContainsSubstring("boot loader"));
 +    CHECK_THAT(text, !ContainsSubstring("Read the"));
@@ -832,7 +832,7 @@ index 0000000..7468a97
 +    REQUIRE(dialog());
 +    text = test::top_modal_text();
 +    CHECK_THAT(text, ContainsSubstring("Einstellungen > System > Wiederherstellungssystem starten > "
-+                                       "Reboot / Power > Install Kiln's boot loader (experimental)"));
++                                       "Reboot / Power > Install Kiln's boot loader"));
 +    CHECK_THAT(text, !ContainsSubstring("Boot into recovery"));
 +}
 +
@@ -872,7 +872,7 @@ index a0396b2..d5f756d 100644
 +  'Boot loader update ready': 'Bootloader-Update bereit'
 +  'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.': 'Ein Bootloader-Update ist bereit. So installierst du es: Einstellungen > System > Wiederherstellungssystem starten > Reboot / Power > Update Kiln''s boot loader. Es wird nichts geschrieben, bevor du es dort startest.'
 +  'Kiln''s own boot loader': 'Kilns eigener Bootloader'
-+  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader (experimental). Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS hat einen eigenen Bootloader für diesen Drucker. So installierst du ihn: Einstellungen > System > Wiederherstellungssystem starten > Reboot / Power > Install Kiln''s boot loader (experimental). Lies vorher die Bootloader-Anleitung; sie erklärt das Risiko und den Rettungs-USB-Stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
++  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader. Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS hat einen eigenen Bootloader für diesen Drucker. So installierst du ihn: Einstellungen > System > Wiederherstellungssystem starten > Reboot / Power > Install Kiln''s boot loader. Lies vorher die Bootloader-Anleitung; sie erklärt das Risiko und den Rettungs-USB-Stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
 +  # Kiln OS: Settings > System > Boot into recovery (patch 0055) in this language too (patch 0094)
 +  'Boot into recovery': 'Wiederherstellungssystem starten'
 +  'Boot into recovery?': 'Wiederherstellungssystem starten?'
@@ -892,7 +892,7 @@ index 6639f2a..9d300c9 100644
 +  'Boot loader update ready': 'Boot loader update ready'
 +  'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.': 'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.'
 +  'Kiln''s own boot loader': 'Kiln''s own boot loader'
-+  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader (experimental). Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader (experimental). Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
++  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader. Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader. Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
 diff --git a/translations/es.yml b/translations/es.yml
 index 7b956d7..0cb6d42 100644
 --- a/translations/es.yml
@@ -905,7 +905,7 @@ index 7b956d7..0cb6d42 100644
 +  'Boot loader update ready': 'Actualización del cargador de arranque lista'
 +  'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.': 'Hay una actualización del cargador de arranque lista. Para instalarla: Ajustes > Sistema > Iniciar el sistema de recuperación > Reboot / Power > Update Kiln''s boot loader. No se escribe nada hasta que la inicies allí.'
 +  'Kiln''s own boot loader': 'El cargador de arranque propio de Kiln'
-+  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader (experimental). Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS tiene su propio cargador de arranque para esta impresora. Para instalarlo: Ajustes > Sistema > Iniciar el sistema de recuperación > Reboot / Power > Install Kiln''s boot loader (experimental). Lee antes la guía del cargador de arranque; explica el riesgo y la memoria USB de rescate: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
++  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader. Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS tiene su propio cargador de arranque para esta impresora. Para instalarlo: Ajustes > Sistema > Iniciar el sistema de recuperación > Reboot / Power > Install Kiln''s boot loader. Lee antes la guía del cargador de arranque; explica el riesgo y la memoria USB de rescate: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
 +  # Kiln OS: Settings > System > Boot into recovery (patch 0055) in this language too (patch 0094)
 +  'Boot into recovery': 'Iniciar el sistema de recuperación'
 +  'Boot into recovery?': '¿Iniciar el sistema de recuperación?'
@@ -925,7 +925,7 @@ index 110e76c..94b5aa7 100644
 +  'Boot loader update ready': 'Mise à jour du chargeur d''amorçage prête'
 +  'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.': 'Une mise à jour du chargeur d''amorçage est prête. Pour l''installer : Paramètres > Système > Démarrer le système de récupération > Reboot / Power > Update Kiln''s boot loader. Rien n''est écrit tant que vous ne la lancez pas là-bas.'
 +  'Kiln''s own boot loader': 'Le chargeur d''amorçage de Kiln'
-+  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader (experimental). Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS a son propre chargeur d''amorçage pour cette imprimante. Pour l''installer : Paramètres > Système > Démarrer le système de récupération > Reboot / Power > Install Kiln''s boot loader (experimental). Lisez d''abord le guide du chargeur d''amorçage ; il explique le risque et la clé USB de secours : github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
++  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader. Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS a son propre chargeur d''amorçage pour cette imprimante. Pour l''installer : Paramètres > Système > Démarrer le système de récupération > Reboot / Power > Install Kiln''s boot loader. Lisez d''abord le guide du chargeur d''amorçage ; il explique le risque et la clé USB de secours : github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
 +  # Kiln OS: Settings > System > Boot into recovery (patch 0055) in this language too (patch 0094)
 +  'Boot into recovery': 'Démarrer le système de récupération'
 +  'Boot into recovery?': 'Démarrer le système de récupération ?'
@@ -945,7 +945,7 @@ index 34ee5da..302d594 100644
 +  'Boot loader update ready': 'Aggiornamento del bootloader pronto'
 +  'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.': 'È pronto un aggiornamento del bootloader. Per installarlo: Impostazioni > Sistema > Avvia il sistema di ripristino > Reboot / Power > Update Kiln''s boot loader. Non viene scritto nulla finché non lo avvii lì.'
 +  'Kiln''s own boot loader': 'Il bootloader di Kiln'
-+  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader (experimental). Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS ha un proprio bootloader per questa stampante. Per installarlo: Impostazioni > Sistema > Avvia il sistema di ripristino > Reboot / Power > Install Kiln''s boot loader (experimental). Leggi prima la guida al bootloader; spiega il rischio e la chiavetta USB di ripristino: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
++  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader. Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS ha un proprio bootloader per questa stampante. Per installarlo: Impostazioni > Sistema > Avvia il sistema di ripristino > Reboot / Power > Install Kiln''s boot loader. Leggi prima la guida al bootloader; spiega il rischio e la chiavetta USB di ripristino: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
 +  # Kiln OS: Settings > System > Boot into recovery (patch 0055) in this language too (patch 0094)
 +  'Boot into recovery': 'Avvia il sistema di ripristino'
 +  'Boot into recovery?': 'Avviare il sistema di ripristino?'
@@ -965,7 +965,7 @@ index 58efee5..54474d1 100644
 +  'Boot loader update ready': 'ブートローダーの更新があります'
 +  'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.': 'ブートローダーの更新を利用できます。インストールするには: 設定 > システム > 復旧システムで起動 > Reboot / Power > Update Kiln''s boot loader。そこで開始するまで何も書き込まれません。'
 +  'Kiln''s own boot loader': 'Kiln 独自のブートローダー'
-+  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader (experimental). Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS にはこのプリンター用の独自ブートローダーがあります。インストールするには: 設定 > システム > 復旧システムで起動 > Reboot / Power > Install Kiln''s boot loader (experimental)。先にブートローダーのガイドをお読みください。リスクとレスキュー用 USB メモリについて説明しています: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
++  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader. Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS にはこのプリンター用の独自ブートローダーがあります。インストールするには: 設定 > システム > 復旧システムで起動 > Reboot / Power > Install Kiln''s boot loader。先にブートローダーのガイドをお読みください。リスクとレスキュー用 USB メモリについて説明しています: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
 +  # Kiln OS: Settings > System > Boot into recovery (patch 0055) in this language too (patch 0094)
 +  'Boot into recovery': '復旧システムで起動'
 +  'Boot into recovery?': '復旧システムで起動しますか？'
@@ -985,7 +985,7 @@ index 28a85e7..a2be084 100644
 +  'Boot loader update ready': '부트로더 업데이트 준비됨'
 +  'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.': '부트로더 업데이트가 준비되었습니다. 설치하려면: 설정 > 시스템 > 복구 시스템으로 부팅 > Reboot / Power > Update Kiln''s boot loader. 그곳에서 시작하기 전에는 아무것도 기록되지 않습니다.'
 +  'Kiln''s own boot loader': 'Kiln 자체 부트로더'
-+  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader (experimental). Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS에는 이 프린터용 자체 부트로더가 있습니다. 설치하려면: 설정 > 시스템 > 복구 시스템으로 부팅 > Reboot / Power > Install Kiln''s boot loader (experimental). 먼저 부트로더 안내서를 읽어 주세요. 위험과 복구용 USB 메모리에 대해 설명합니다: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
++  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader. Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS에는 이 프린터용 자체 부트로더가 있습니다. 설치하려면: 설정 > 시스템 > 복구 시스템으로 부팅 > Reboot / Power > Install Kiln''s boot loader. 먼저 부트로더 안내서를 읽어 주세요. 위험과 복구용 USB 메모리에 대해 설명합니다: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
 +  # Kiln OS: Settings > System > Boot into recovery (patch 0055) in this language too (patch 0094)
 +  'Boot into recovery': '복구 시스템으로 부팅'
 +  'Boot into recovery?': '복구 시스템으로 부팅할까요?'
@@ -1005,7 +1005,7 @@ index 28c8cb0..c75369d 100644
 +  'Boot loader update ready': 'Atualização do carregador de inicialização pronta'
 +  'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.': 'Há uma atualização do carregador de inicialização pronta. Para instalá-la: Configurações > Sistema > Iniciar o sistema de recuperação > Reboot / Power > Update Kiln''s boot loader. Nada é gravado até que você a inicie lá.'
 +  'Kiln''s own boot loader': 'O carregador de inicialização próprio do Kiln'
-+  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader (experimental). Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'O Kiln OS tem um carregador de inicialização próprio para esta impressora. Para instalá-lo: Configurações > Sistema > Iniciar o sistema de recuperação > Reboot / Power > Install Kiln''s boot loader (experimental). Leia antes o guia do carregador de inicialização; ele explica o risco e o pendrive de resgate: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
++  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader. Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'O Kiln OS tem um carregador de inicialização próprio para esta impressora. Para instalá-lo: Configurações > Sistema > Iniciar o sistema de recuperação > Reboot / Power > Install Kiln''s boot loader. Leia antes o guia do carregador de inicialização; ele explica o risco e o pendrive de resgate: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
 +  # Kiln OS: Settings > System > Boot into recovery (patch 0055) in this language too (patch 0094)
 +  'Boot into recovery': 'Iniciar o sistema de recuperação'
 +  'Boot into recovery?': 'Iniciar o sistema de recuperação?'
@@ -1025,7 +1025,7 @@ index e902639..b7ce9a2 100644
 +  'Boot loader update ready': 'Готово обновление загрузчика'
 +  'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.': 'Готово обновление загрузчика. Чтобы установить его: Настройки > Система > Загрузить систему восстановления > Питание > Обновить загрузчик Kiln. Пока вы не запустите обновление там, ничего не записывается.'
 +  'Kiln''s own boot loader': 'Собственный загрузчик Kiln'
-+  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader (experimental). Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'У Kiln OS есть собственный загрузчик для этого принтера. Чтобы установить его: Настройки > Система > Загрузить систему восстановления > Питание > Установить загрузчик Kiln (экспериментально). Сначала прочитайте руководство по загрузчику, в нём описаны риск и флешка для восстановления: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
++  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader. Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'У Kiln OS есть собственный загрузчик для этого принтера. Чтобы установить его: Настройки > Система > Загрузить систему восстановления > Питание > Установить загрузчик Kiln. Сначала прочитайте руководство по загрузчику, в нём описаны риск и флешка для восстановления: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
 diff --git a/translations/tr.yml b/translations/tr.yml
 index 09136f8..de315e5 100644
 --- a/translations/tr.yml
@@ -1038,7 +1038,7 @@ index 09136f8..de315e5 100644
 +  'Boot loader update ready': 'Önyükleyici güncellemesi hazır'
 +  'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.': 'Bir önyükleyici güncellemesi hazır. Yüklemek için: Ayarlar > Sistem > Kurtarma sistemini başlat > Reboot / Power > Update Kiln''s boot loader. Orada başlatana kadar hiçbir şey yazılmaz.'
 +  'Kiln''s own boot loader': 'Kiln''in kendi önyükleyicisi'
-+  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader (experimental). Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS''un bu yazıcı için kendi önyükleyicisi var. Yüklemek için: Ayarlar > Sistem > Kurtarma sistemini başlat > Reboot / Power > Install Kiln''s boot loader (experimental). Önce önyükleyici kılavuzunu okuyun; riski ve kurtarma USB belleğini anlatır: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
++  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader. Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS''un bu yazıcı için kendi önyükleyicisi var. Yüklemek için: Ayarlar > Sistem > Kurtarma sistemini başlat > Reboot / Power > Install Kiln''s boot loader. Önce önyükleyici kılavuzunu okuyun; riski ve kurtarma USB belleğini anlatır: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
 +  # Kiln OS: Settings > System > Boot into recovery (patch 0055) in this language too (patch 0094)
 +  'Boot into recovery': 'Kurtarma sistemini başlat'
 +  'Boot into recovery?': 'Kurtarma sistemi başlatılsın mı?'
@@ -1058,7 +1058,7 @@ index b86a84f..0a97287 100644
 +  'Boot loader update ready': '引导加载程序更新已就绪'
 +  'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.': '引导加载程序更新已就绪。安装方法：设置 > 系统 > 启动到恢复系统 > Reboot / Power > Update Kiln''s boot loader。开始更新之前不会写入任何内容。'
 +  'Kiln''s own boot loader': 'Kiln 自有的引导加载程序'
-+  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader (experimental). Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS 为这台打印机提供了自有的引导加载程序。安装方法：设置 > 系统 > 启动到恢复系统 > Reboot / Power > Install Kiln''s boot loader (experimental)。请先查看引导加载程序指南，其中说明了风险和恢复用 U 盘：github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
++  'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader. Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS 为这台打印机提供了自有的引导加载程序。安装方法：设置 > 系统 > 启动到恢复系统 > Reboot / Power > Install Kiln''s boot loader。请先查看引导加载程序指南，其中说明了风险和恢复用 U 盘：github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
 +  # Kiln OS: Settings > System > Boot into recovery (patch 0055) in this language too (patch 0094)
 +  'Boot into recovery': '启动到恢复系统'
 +  'Boot into recovery?': '启动到恢复系统？'

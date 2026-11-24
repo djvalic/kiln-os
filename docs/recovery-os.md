@@ -151,8 +151,9 @@ tools/make_swu.sh -k path/xImage ...  # PRIVATE only: also write this kernel to 
 ```
 
 The default rootfs is `buildroot/output/images/rootfs.squashfs`. Updates
-carry **no kernel** by default: slot B keeps the printer's own stock kernel
-(the only kernel there is belongs to Flashforge and must not be published).
+carry **no kernel** by default: slot B keeps the kernel it has (with
+Flashforge's boot loader the printer's own stock kernel, which belongs to
+Flashforge and must not be published).
 `-k` adds one for private use (`xImage-stock` of a private build). The
 script refuses a rootfs without `/etc/ad5x-release` or `/linuxrc`, or one
 that is the recovery OS. Check a file before publishing it with
@@ -296,8 +297,7 @@ refuses every mode there with: "this printer runs the main OS from slot A
 (root=/dev/mmcblk0p2). Updates don't support that layout: see docs/recovery-os.md,
 section 'Main OS in slot A'." It writes nothing.
 
-A code step to move the main OS to slot B is planned, not released. Until it
-ships, a printer in this layout can't take a Fluidd update. Recovering it
+A code step to move the main OS to slot B is not supported in 1.0, so a printer in this layout can't take a Fluidd update. Recovering it
 means a manual write, so do that only with the backup from step 2 in hand.
 
 Nothing is written blind. The steps below read first, make a backup, and
@@ -319,7 +319,7 @@ installer's stick backup covers only the first MiB and partitions p1 to p6,
 so take the full image when you can.
 
 **3. Stock rollback is not available from this layout.** `ad5x-restore-stock`
-ships only in the recovery image, and this layout can't boot recovery. The
+refuses to run in slot A, and this layout can't boot recovery. The
 USB rescue route also needs the recovery OS in slot A, so it can't be reached
 either. Do not try a manual `dd` into slot B from memory. If you need stock
 back, the only recovery is the eMMC backup from step 2, written by hand and
@@ -332,8 +332,8 @@ ls -l /data/ad5x/stock
 ```
 
 If it exists, `ad5x-restore-stock` would write slot B and arm stock's board
-update, which needs a power-off and power-on after it runs. Don't run it from
-the main OS: it is not installed there, and this section does not cover it.
+update, which needs a power-off and power-on after it runs. From the main OS
+in slot A it refuses, and this section does not cover it.
 
 Don't run `ad5x-update --install-recovery` or `--replace-stock` from slot A.
 The script refuses there.
@@ -609,7 +609,7 @@ Dark theme in the brand's Nord colours (`docs/brand`, as the boot logos and
 install screens),
 Noto Sans (subset embedded, `recovery-ui/fonts/`, OFL: Latin-1, the whole
 Russian alphabet and every other character of the string table), buttons at least
-60 px high. Not tried on the printer yet.
+60 px high.
 
 ### Screens
 
@@ -622,7 +622,7 @@ Russian alphabet and every other character of the string table), buttons at leas
 | Restore stock (Return to Flashforge firmware) | Runs `ad5x-return-stock --check` when it opens and shows the files it found (`source:`), what the printer ends with (`target:`), the `printer.cfg` lines it switches off (`config:`, zMod leftovers), each in the screen's language from the codes next to them (`source_kind:`, `target_kind:`, `config_kind:`) and the result (ready, a stopped return to finish, done, or why not). A box "Also put back Flashforge's own boot loader" shows, ticked, when this printer's saved first MiB matches for a new return (`spl_option: yes`): ticked passes `--flashforge-spl`, unticked `--keep-kiln-spl`; without a match (`spl_missing: yes`) there is no box and a note says Flashforge's own boot loader can't be put back because the printer's saved copy wasn't found, and that stock works anyway; a stopped return shows no box and goes on with its own choice. Two more boxes, both off: "Also remove Kiln OS's settings and files (size)" (`--remove-kiln-data`, shown when `wipe_option: yes`) and, indented under it and usable only with it ticked, "...and the uploaded print files too (N files, size)" (`--remove-prints`); with the first ticked a note says what goes and what stays, both confirmation steps say what is deleted with its size and that it can't be undone, and the result says what was removed (or warns when not all of it could be). **Check** shows the whole check; **Save files to USB** runs `ad5x-stock-copy usb`; **Return to Flashforge** (two confirmations; **Continue** without asking again after a stop) runs `ad5x-return-stock --yes`, then a Shut down button. It opens by itself at start when the main OS asked for it, a stick has `kiln-return-to-stock`, or a return was left unfinished (`return_stock_open`, `return_stock`); while one is unfinished Boot main OS and Install lead to it |
 | Network / SSH | Address, name, `ssh root@<ip>`, upload URL with a QR code, recovery `release`, and what `ad5x-usb list` reports (updates on the stick, rescue system/markers) |
 | Logs | Scrollable, monospace: this session (every command and its output), `/data/ad5x/update/last.log`, `/run/ad5x/swupdate.log`, the system log (`logread`) |
-| Reboot / Power | Boot main OS (`ad5x-boot-main`), Reboot, Shut down (one confirmation each); **Install Kiln's boot loader (experimental)** only when `bootloader_offer=yes` (a board on the allowlist without Kiln's U-Boot) or an install stopped (`bootloader_install=started`); **Update Kiln's boot loader** instead when `bootloader_upgrade=yes` (Kiln's boot loader of an older build, or one of unknown age, on a board on the allowlist) or an update stopped (`bootloader_install=started`, `bootloader_kind=upgrade`); never for an older build than the disk's (`bootloader_carries_newer=no`: a downgrade only over SSH with `--yes`). Above them a read-only line, always there (issue #97): Kiln's boot loader installed with its build and "up to date" (`bootloader_same=yes`), "update available" (the Update entry shown), "this recovery carries an older build, Y" (`bootloader_carries_newer=no`, no entry), another build in this recovery that isn't offered, only Kiln's SPL (`kiln-spl`), or not installed with Flashforge's boot loader starting the printer; "reading" until the first `--slots` run has finished (and while the start-up actions run, after which the screen reads the slots once more), and only then, in yellow, "state unknown" when `bootloader` is missing or `unknown`. The line and the entry follow each new read while the page is open |
+| Reboot / Power | Boot main OS (`ad5x-boot-main`), Reboot, Shut down (one confirmation each); **Install Kiln's boot loader** only when `bootloader_offer=yes` (a board on the allowlist without Kiln's U-Boot) or an install stopped (`bootloader_install=started`); **Update Kiln's boot loader** instead when `bootloader_upgrade=yes` (Kiln's boot loader of an older build, or one of unknown age, on a board on the allowlist) or an update stopped (`bootloader_install=started`, `bootloader_kind=upgrade`); never for an older build than the disk's (`bootloader_carries_newer=no`: a downgrade only over SSH with `--yes`). Above them a read-only line, always there (issue #97): Kiln's boot loader installed with its build and "up to date" (`bootloader_same=yes`), "update available" (the Update entry shown), "this recovery carries an older build, Y" (`bootloader_carries_newer=no`, no entry), another build in this recovery that isn't offered, only Kiln's SPL (`kiln-spl`), or not installed with Flashforge's boot loader starting the printer; "reading" until the first `--slots` run has finished (and while the start-up actions run, after which the screen reads the slots once more), and only then, in yellow, "state unknown" when `bootloader` is missing or `unknown`. The line and the entry follow each new read while the page is open |
 | Kiln's boot loader | Runs `ad5x-bootloader-install --check` when it opens: the board (`board:`), the result (ready, an install to finish, done, or why not). **Check** shows the whole check; **Install** (two confirmations with the risk; **Continue** after a stop) runs `ad5x-bootloader-install --yes`, then a Reboot button. Opens by itself at the first start after an install (the result: started by Kiln's U-Boot or not) and when an install stopped (`bootloader_open`). The result page (`bootloader_open=result`, or the record `verified` or `unverified`) leads with the outcome from the record: installed and this start came through it, or installed but this start didn't, with what to do; the check's line goes under it ("installed and up to date", Install hidden, when the tool says `already installed (this build)`), never a refusal as the headline. On every boot loader page the check waits for the start-up actions (`auto=running`, polled) before it runs, instead of saying "busy: start-up-actions". **Update Kiln's boot loader** is the same page and flow with its own words: it runs `ad5x-bootloader-install --check --upgrade` and shows both builds (`upgrade:` line: now on the printer, after the update), **Update** (two confirmations with the same risk note; **Continue** after a stop) runs `ad5x-bootloader-install --yes --upgrade`, then Reboot, and the page opens with the result at the next start (`bootloader_kind=upgrade`). `--upgrade` makes the tool refuse an install, so this page can only ever upgrade |
 | Job | Every command runs here: title, spinner, elapsed time ("2:14", it stays when the command ends), step text, progress bar, live output, Stop (backups and checks only), then a green or red result with the command's last line ("backup: OK ...", "swu-apply: FAILED ..."), and Boot main OS or Reboot where it fits. Back is disabled while it runs |
 | Installing Kiln OS | Opens by itself while `ad5x-recovery-auto` installs an update at start-up: the first start after the install stick, or an update the main OS staged (drop folder, USB autoupdate). "Step n of 3": 1 unpacking and checking the update, 2 writing Kiln OS (with SWUpdate's percentage), 3 restarting into Kiln OS, with a spinner and the elapsed time. A large "Don't switch the printer off". No buttons while it runs. If the install fails: "Kiln OS was not installed" and a Done button (the reason is in Logs > Updates); when `ad5x-recovery-auto` then goes on with the next file (the drop folder's next one, a USB autoupdate stick), its progress and "Don't switch the printer off" replace the failure. It follows `/run/ad5x/auto-install` (below) |
@@ -781,7 +781,7 @@ and `chainload.ko`). For the recovery image to carry its own copy:
    rewritten after every update. The recovery image has no
    `S00ad5x-kernel`: on Flashforge's SPL it stays on the stock kernel.
 
-**Printer test (not done yet).** Start the recovery root on 6.6 from the
+**Printer test (the chainload way; on printers with Kiln's own boot loader U-Boot starts the recovery OS on 6.6 at every recovery start).** Start the recovery root on 6.6 from the
 main OS with the chainload tool (`kernel-ingenic66/chainload/README.md`)
 and the command line `root=/dev/mmcblk0p2 ... ad5x.noslot` (recovery's own
 slot check reads `root=` and sees slot A; `root=PARTLABEL=rootfs` works as
@@ -817,9 +817,6 @@ different set of screens than English. The builder runs it in each run
 
 ### Open items (UI)
 
-- Not run on the panel yet: colour order of the 32 bpp framebuffer, the
-  touch mapping from HelixScreen's calibration (issue #47) and the speed
-  of a full redraw on the X2600 are unchecked.
 - No percentage for backups/restores until the tools print `@progress`.
 - USB rescue (`ad5x-usb-rescue boot|flash`) is shown, not offered as a
   button.

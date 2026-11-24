@@ -23,8 +23,8 @@ for `LW` `https://github.com/Hrybmo/lesswaste/blob/3d42421a6ed020baaa7563c94a56a
 
 ## Our patches
 
-`buildroot/package/helixscreen/*.patch` on HelixScreen v1.1.0-rc.1: 86
-files, `0001` to `0094` (the missing numbers were dropped because upstream
+`buildroot/package/helixscreen/*.patch` on HelixScreen v1.1.0-rc.1: 88
+files, `0001` to `0096` (the missing numbers were dropped because upstream
 has them). `docs/setup-wizard.md` ("HelixScreen side") lists `0001` to
 `0019` with what each does: among them the AD5X setup steps (0001, 0002,
 0003, 0006 time zone), the IFS port sensors (0004), Settings > Plugins
@@ -407,31 +407,26 @@ Separately the printer DB gives the AD5X entry
 - Print tune "save": does nothing, firmware assumed to persist
   (`H z_offset_utils.cpp:159-163`).
 
-**On our config:** no provider matches (no `SAVE_ZMOD_DATA`, `SET_MOD` or
-`SET_GCODE_OFFSET` wrapper), so HelixScreen reads the live
-`gcode_move.homing_origin`. Strategy is `firmware_managed` because the model
-is AD5X. Every offset HelixScreen sets is live only: `PRINT_START` resets it
-(`SET_GCODE_OFFSET Z=0`, then `_CHECK_Z_APPLY` sets `_AD5X_UNIT.z_offset`,
-`klipper/ad5x.cfg:382-402`, `unit.cfg:8`), so calibration and baby-steps
-are lost at the next print while the UI says they were saved. The panel's
-`G1 Z0.1` also probes nothing and does not tare the load cell; HelixScreen's
-tare prep only runs for a `LOAD_CELL_TARE` macro (`H printer_database.json:84`,
-ours is `WEIGHT_TARE`). If detection ever falls through to the generic
-`probe_calibrate` strategy instead, "save" runs `Z_OFFSET_APPLY_PROBE` +
-`SAVE_CONFIG`, which folds the live offset (including `_AD5X_UNIT.z_offset`)
-into `[probe] z_offset`, and `PRINT_START` then adds `_AD5X_UNIT.z_offset`
-again: double-counted whenever it is non-zero.
+**On our config:** the `SET_GCODE_OFFSET` wrapper in `klipper/ad5x.cfg`
+saves every Z change (`Z=` or `Z_ADJUST=`: the Z calibration panel,
+baby-steps from any UI or the console) as `save_variables.zoffset =
+{'z': ..}`, so HelixScreen picks the Helper-Script provider and reads the
+saved value back. `PRINT_START` applies it (`_APPLY_Z_OFFSET`); its own
+resets use `_SET_GCODE_OFFSET`, so they are not saved. The first start
+copies `unit.cfg`'s `z_offset` into `zoffset` (`_SEED_ZOFFSET`). With the
+zmod-compat plugin on, its `SAVE_ZMOD_DATA` would select the zMod row;
+HelixScreen patch 0069 makes that row need zMod's `_TEST_POINT` too, so
+Kiln stays on Helper-Script (issue #57). Calibration and baby-steps
+therefore survive the next print. `LOAD_CELL_TARE` is a macro that runs
+`WEIGHT_TARE`, so HelixScreen's tare before probing runs too. The
+`firmware_managed` strategy stays (the model is AD5X): accept sends
+`SET_GCODE_OFFSET Z=`, which the wrapper saves.
 
-Fix (our side, small): persist the unit Z offset in `save_variables` and
-expose it as one of the provider schemas. Simplest match: wrap
-`SET_GCODE_OFFSET` (`rename_existing`) to mirror Z into
-`save_variables.zoffset = {'z': ..}` (Helper-Script schema) and make
-`_CHECK_Z_APPLY` use that value instead of the static `unit.cfg` one; the
-Helper-Script row is refuted unless that variable is present, so it must be
-written. Alternatively mirror zMod's `gcode_offsets` + `load_zoffset` +
-`SAVE_ZMOD_DATA`, but that macro name also flips other zMod assumptions
-(`_TEST_POINT` clear). Either way, alias `LOAD_CELL_TARE` -> `WEIGHT_TARE` so
-HelixScreen tares before probe accuracy / Z calibration / mesh.
+Before this (kept for the record): no provider matched, every offset
+HelixScreen set was live only and lost at the next print while the UI
+said it was saved, and the generic `probe_calibrate` strategy would have
+double-counted `unit.cfg`'s offset through `Z_OFFSET_APPLY_PROBE` +
+`SAVE_CONFIG`.
 
 ### Print-start checks
 
@@ -458,11 +453,12 @@ With (a2) these start working; the remap ones additionally need `T0`-`T3` and
 
 HelixScreen's `ad5x` preset (`assets/config/presets/ad5x.json`) names zMod's
 fans: part `fan_generic fanM106`, aux `fan_generic chamber_fan`, board
-`fan_generic pcb_fan`. Ours are `fan`, `heater_fan heat_fan` and
+`fan_generic pcb_fan`. Kiln's were then `fan`, `heater_fan heat_fan` and
 `fan_generic pcb_fan` (kept on by `[pcb_fan_watch]`); there is no chamber fan. At every start the
 preset seeded `fans/aux` with the missing chamber fan (config.cpp seeds
 empty role keys), the missing fan cleared it again, and a one-step "Printer
-Setup: Fans" wizard opened. The wizard has no field for aux. Fix: set
+Setup: Fans" wizard opened (the part fan is `fan_generic fanM106` now,
+as stock, `klipper/ad5x.cfg`). The wizard has no field for aux. Fix: set
 `printers.<id>.fans.aux` to an existing fan (`fan_generic pcb_fan`) in
 `/data/ad5x/helixscreen/config/settings.json` with HelixScreen stopped;
 the preset then leaves it alone. A cleaner fix for new installs: a

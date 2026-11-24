@@ -23,7 +23,7 @@ Rules for system updates:
 
 - **Minor** (1.4 -> 1.5): additions only (new commands, parameters,
   status fields, macros). Nothing listed here changes meaning or goes
-  away. From 1.6 on, every addition raises the minor version.
+  away. From 1.6 on, every addition raises the minor version (one exception, 1.9\*, below).
 - **Major** (1.x -> 2.0): something listed here changed or was removed;
   "Changes" below lists what. Plugins built for 1.x are refused until
   updated.
@@ -61,7 +61,7 @@ they are loaded".
 | 1.6 | 2026-11-13 | v0.1.0-rc1 | Root scripts like zMod's plugins have (`root/install.sh`, `update.sh`, `uninstall.sh`, `docs/plugin-root-hooks.md`), `ENABLE_PLUGIN ROOT=1`, `INSTALL_PLUGIN ROOT=1`, `printer.ad5x_plugins` `available.<name>.root` and `root_installed`, the job actions `root install`/`root update`/`root uninstall`; warnings when two plugins bring the same Moonraker component, `python/` package or Klipper section ("Names"); `kiln_` and `ad5x_` module, component, section and macro names refused for plugins that are not Kiln's own ("Names"); Moonraker's `[machine] provider: kiln_agent` (service restarts, "Moonraker"). The named root actions are removed ("Changes") |
 | 1.7 | 2026-11-16 | v1.0.0-rc3 | Klipper module names with capitals (`extras/AFC_lane.py`; names that differ only in case count as one, also for the `kiln_`/`ad5x_` rule); `plugin.json` `module_dirs`: more Klipper module folders inside the plugin (a checkout of another project), imported when needed as Klipper imports its own ("Plugin layout", "Module folders"); `INSTALL_PLUGIN` and `UPDATE_PLUGIN` fetch the plugin's git submodules, https only ("Submodules"); `BED_MESH_CALIBRATE`, `LINE_PURGE` and `VORON_PURGE` skipped after `PRINT_START`'s mesh / prime line (or the same step already run) in the same print, `FORCE=1` (issue #73) |
 | 1.8 | 2026-11-18 | v1.0.0-rc4 | Extended memory mode on printers with 512 MiB (`docs/memory.md`): the macro `KILN_MEMORY_MODE [ENABLE=0\|1]` (macros/ `system.cfg`), Moonraker's `GET`/`POST /machine/kiln_os/memory` and `POST /machine/kiln_os/memory_notice_seen` and the feature name `memory_mode` (`docs/api.md`); the IFS firmware switch: Moonraker's `GET`/`POST /machine/kiln_os/ifs_firmware`, the feature name `ifs_firmware` and the owner's opt-in `/data/ad5x/ifs-switch.enable` ("A plugin that drives the IFS"); bed screws: `[screws_tilt_adjust]`, `SCREWS_TILT_CALCULATE` with tare and the macro `BED_LEVEL_SCREWS_TUNE` (macros/ `quick_actions.cfg`, issue #69) |
-| 1.9 | 2026-11-18 | (next release) | The setup wizard's filament step (`SETUP_WIZARD_STEP STEP=filament`, `MATERIAL_<n>=`, `HEAD=`), `printer.ad5x_setup` `action`, `action_arg`, `step_started`, `prompt`, `filament`, `zoffset_plan`; `IFS_FIND_HEAD_SLOT`, `printer.ifs` `find_result`, `head_found`, `tube_blocked`, `loaded_source` (a slot only adopted at startup is a guess: `IFS_SWAP` to it loads it again, its unload is checked, the find and the wizard don't trust it). A Z offset step ends after a second `accept` (the test print is off the bed). `HOME=1` on `IFS_LOAD`, `IFS_UNLOAD`, `IFS_SWAP`, `IFS_EJECT`, `IFS_FIND_HEAD_SLOT`, `IFS_TUNE`: an idle printer that isn't homed homes first instead of the error, `printer.ifs` `phase` `homing_printer` meanwhile |
+| 1.9 | 2026-11-18 | v1.0.0-rc5 | The setup wizard's filament step (`SETUP_WIZARD_STEP STEP=filament`, `MATERIAL_<n>=`, `HEAD=`), `printer.ad5x_setup` `action`, `action_arg`, `step_started`, `prompt`, `filament`, `zoffset_plan`; `IFS_FIND_HEAD_SLOT`, `printer.ifs` `find_result`, `head_found`, `tube_blocked`, `loaded_source` (a slot only adopted at startup is a guess: `IFS_SWAP` to it loads it again, its unload is checked, the find and the wizard don't trust it). A Z offset step ends after a second `accept` (the test print is off the bed). `HOME=1` on `IFS_LOAD`, `IFS_UNLOAD`, `IFS_SWAP`, `IFS_EJECT`, `IFS_FIND_HEAD_SLOT`, `IFS_TUNE`: an idle printer that isn't homed homes first instead of the error, `printer.ifs` `phase` `homing_printer` meanwhile |
 
 **1.5\*** marks the few items that came with a later 1.5 release:
 `LOG_MODE` and `printer.ad5x_log` (v0.0.53), `printer.ad5x_soak.cancel`
@@ -70,6 +70,11 @@ IFS macros stopping with a message while a plugin drives the IFS. A
 plugin that uses them and must also run on an early 1.5 release checks
 first (`'ad5x_log' in printer`, `'cancel' in printer.ad5x_soak`,
 `'gcode_macro _PURGE_BOX_POS' in printer`).
+
+**1.9\***: `HOME=1` on the IFS commands and `printer.ifs` `phase`
+`homing_printer` came with v1.0.0-rc6, after 1.9 first shipped in rc5. A
+plugin that uses them and must also run on rc5 checks first that the
+printer knows the phase (v1.0.0 and later all do).
 
 ### Changes
 
@@ -197,7 +202,7 @@ Plugins on the touch screen). Plugins with submodules need
 
 | Field | Required | Meaning | Since |
 |---|---|---|---|
-| `name` | yes | Same as the directory name | 1.0 |
+| `name` | yes (`tools/check_plugin.py` requires it; the printer uses the folder name when it is missing) | Same as the directory name | 1.0 |
 | `description` | no | Shown by `LIST_PLUGINS` | 1.0 |
 | `version` | no | Free text, shown by `LIST_PLUGINS` | 1.0 |
 | `author`, `url` | no | Shown / available in `printer.ad5x_plugins` | 1.0 |
@@ -410,7 +415,7 @@ printer` before calling one.
 | Path | | Since |
 |---|---|---|
 | `/usr/share/ad5x/plugins/<name>` | Shipped plugins (read-only) | 1.0 |
-| `/data/ad5x/plugins/<name>` | Installed plugins (user `klipper` owns the directory) | 1.0 |
+| `/data/ad5x/plugins/<name>` | Installed plugins (user `klipper` owns the directory). Files user `klipper` can't write show read-only in Fluidd (`chown -R klipper:klipper` makes them editable), as does a plugin with a `type: git_repo` update entry while it is enabled (`docs/plugins.md`) | 1.0 |
 | `/home/klipper/printer_data/config` | Config directory (= `/data/ad5x/printer_data/config`) | 1.0 |
 | `.../config/plugins.cfg` | Enabled plugins | 1.0 |
 | `.../config/plugins-active.cfg` | What Klipper reads: `plugins.cfg` with the skipped plugins left out (generated) | 1.5 |

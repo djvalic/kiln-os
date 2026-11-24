@@ -1,8 +1,8 @@
 #!/bin/sh
 # Install Kiln's own boot loader (Kiln's SPL and U-Boot proper, u-boot/)
-# into this printer's first MiB, from the recovery OS (slot A). Opt-in and
-# experimental, at the user's own risk: docs/own-boot-loader.md. The
-# recovery screen's "Install Kiln's boot loader (experimental)" runs it,
+# into this printer's first MiB, from the recovery OS (slot A). Opt-in:
+# docs/own-boot-loader.md. The
+# recovery screen's "Install Kiln's boot loader" runs it,
 # offered only on a board on the allowlist (lib/bootloader.sh), and its
 # "Update Kiln's boot loader" (--upgrade) when the printer has Kiln's boot
 # loader of another build; over SSH it runs on its own. Without it the printer keeps starting as it does

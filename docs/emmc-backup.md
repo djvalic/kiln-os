@@ -29,7 +29,9 @@ Findings:
 
 ## Restoring
 
-Nothing here has been tried.
+This section is from 2026-10. For a restore today, use
+[emmc-repair.md](emmc-repair.md) (over USB, with the rescue kit) or
+`ad5x-backup` and the recovery OS's restore ([recovery-os.md](recovery-os.md)).
 
 - `kernel`/`kernel2`/`ota` (p1, p3, p5) and `rootfs2` (p4) are not
   mounted while the printer runs and can be written back with `dd` from

@@ -946,8 +946,8 @@ The last block of `helixscreen-ru.yml` (`# Setup wizard: the filament step, ...`
   = `Готово обновление загрузчика. Чтобы установить его: Настройки > Система > Загрузить систему восстановления > Питание > Обновить загрузчик Kiln. Пока вы не запустите обновление там, ничего не записывается.`
 - `Kiln's own boot loader`
   = `Собственный загрузчик Kiln`
-- `Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln's boot loader (experimental). Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md`
-  = `У Kiln OS есть собственный загрузчик для этого принтера. Чтобы установить его: Настройки > Система > Загрузить систему восстановления > Питание > Установить загрузчик Kiln (экспериментально). Сначала прочитайте руководство по загрузчику, в нём описаны риск и флешка для восстановления: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md`
+- `Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln's boot loader. Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md`
+  = `У Kiln OS есть собственный загрузчик для этого принтера. Чтобы установить его: Настройки > Система > Загрузить систему восстановления > Питание > Установить загрузчик Kiln. Сначала прочитайте руководство по загрузчику, в нём описаны риск и флешка для восстановления: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md`
 
 </details>
 
@@ -1536,18 +1536,18 @@ The reason after `rs_refused` (`Сейчас невозможно: %s`) on the R
 
 ### Kiln's boot loader (unchecked)
 
-The experimental install and update of Kiln's own boot loader. `J28` is the board's USB connector; `SPL`, `U-Boot`, `6.6` and `7.3` stay as they are.
+The install and update of Kiln's own boot loader. `J28` is the board's USB connector; `SPL`, `U-Boot`, `6.6` and `7.3` stay as they are.
 
-- `bl_entry`: `Install Kiln's boot loader (experimental)…`
-  = `Установить загрузчик Kiln (экспериментально)…`
-- `bl_title`: `Kiln's boot loader (experimental)`
-  = `Загрузчик Kiln (экспериментально)`
-- `bl_text`: `Replaces Flashforge's boot loader with Kiln's own (SPL and U-Boot): no Flashforge code starts the printer any more, and a Kiln OS kernel that fails to start falls back by itself (7.3, then 6.6, then this recovery). Experimental and at your own risk: proven on one printer so far (one more board is known to match). If the printer doesn't start after it, the only proven way back needs the printer opened (its J28 USB connector). Return to Flashforge firmware puts Flashforge's boot loader back.`
-  = `Ставит загрузчик Kiln (SPL и U-Boot) вместо Flashforge: код Flashforge больше не запускает принтер, а если ядро Kiln OS не запустится, загрузка сама откатывается (7.3, затем 6.6, затем восстановление). Экспериментально, на свой риск: пока проверено на одном принтере (известна ещё одна такая же плата). Если затем принтер не запустится, проверенный способ вернуть его один: вскрыть принтер (USB-порт J28). «Вернуть прошивку Flashforge» вернёт загрузчик Flashforge.`
+- `bl_entry`: `Install Kiln's boot loader…`
+  = `Установить загрузчик Kiln…`
+- `bl_title`: `Kiln's boot loader`
+  = `Загрузчик Kiln`
+- `bl_text`: `Replaces Flashforge's boot loader with Kiln's own (SPL and U-Boot): no Flashforge code starts the printer any more, and a Kiln OS kernel that fails to start falls back by itself (7.3, then 6.6, then this recovery). Proven on one printer so far (one more board is known to match). If the printer doesn't start after it, the only proven way back needs the printer opened (its J28 USB connector). Return to Flashforge firmware puts Flashforge's boot loader back.`
+  = `Ставит загрузчик Kiln (SPL и U-Boot) вместо Flashforge: код Flashforge больше не запускает принтер, а если ядро Kiln OS не запустится, загрузка сама откатывается (7.3, затем 6.6, затем восстановление). Пока проверено на одном принтере (известна ещё одна такая же плата). Если затем принтер не запустится, проверенный способ вернуть его один: вскрыть принтер (USB-порт J28). «Вернуть прошивку Flashforge» вернёт загрузчик Flashforge.`
 - `bl_board_known`: `This printer's board: on the list of known boards.`
   = `Плата этого принтера: есть в списке известных плат.`
-- `bl_board_unknown`: `This printer's board is not on the list of known boards, so it isn't offered here.`
-  = `Платы этого принтера нет в списке известных, поэтому установка не предлагается.`
+- `bl_board_unknown`: `This printer's board is not on the list of known boards, so it isn't offered here. To help get it added, see the boot loader guide: "Is my printer one of the known boards?"`
+  = `Платы этого принтера нет в списке известных, поэтому установка не предлагается. Как помочь её добавить, сказано в руководстве по загрузчику, раздел «Is my printer one of the known boards?».`
 - `bl_checking`: `Checking…`
   = `Проверка…`
 - `bl_ready`: `Ready. Nothing is written before you tap Install and confirm twice.`
@@ -1568,8 +1568,8 @@ The experimental install and update of Kiln's own boot loader. `J28` is the boar
   = `Установить`
 - `bl_q`: `Install Kiln's boot loader?`
   = `Установить загрузчик Kiln?`
-- `bl_q_text`: `Writes Kiln's SPL and U-Boot into the boot area of the printer's memory, and Kiln's 6.6 kernel into both kernel slots. It takes under a minute. Experimental: proven on one printer so far.`
-  = `Записывает SPL и U-Boot Kiln в загрузочную область памяти принтера, а ядро Kiln 6.6 — в оба слота ядра. Это займёт меньше минуты. Экспериментально: пока проверено на одном принтере.`
+- `bl_q_text`: `Writes Kiln's SPL and U-Boot into the boot area of the printer's memory, and Kiln's 6.6 kernel into both kernel slots. It takes under a minute. Proven on one printer so far.`
+  = `Записывает SPL и U-Boot Kiln в загрузочную область памяти принтера, а ядро Kiln 6.6 — в оба слота ядра. Это займёт меньше минуты. Пока проверено на одном принтере.`
 - `bl_q_text2`: `If the printer doesn't start afterwards, bringing it back needs the printer opened and a USB cable (J28). Don't switch the printer off until the screen says it is done.`
   = `Если после этого принтер не запустится, для возврата к работе нужно вскрыть принтер и подключить USB-кабель (J28). Не выключайте принтер, пока на экране не появится сообщение о завершении.`
 - `bl_running`: `Installing Kiln's boot loader`
@@ -1578,10 +1578,10 @@ The experimental install and update of Kiln's own boot loader. `J28` is the boar
   = `Проверка загрузчика Kiln`
 - `bl_up_entry`: `Update Kiln's boot loader…`
   = `Обновить загрузчик Kiln…`
-- `bl_up_title`: `Update Kiln's boot loader (experimental)`
+- `bl_up_title`: `Update Kiln's boot loader`
   = `Обновление загрузчика Kiln`
-- `bl_up_text`: `This printer already starts through Kiln's own boot loader (SPL and U-Boot), but one from another Kiln OS release. This replaces it with the boot loader this release carries, and its fixes. Your settings and files stay as they are. Experimental and at your own risk: if the printer doesn't start after it, the only proven way back needs the printer opened (its J28 USB connector).`
-  = `Принтер уже запускается через загрузчик Kiln (SPL и U-Boot), но из другого выпуска Kiln OS. Обновление заменит его загрузчиком этого выпуска, с его исправлениями. Настройки и файлы не меняются. Экспериментально, на свой риск: если затем принтер не запустится, проверенный способ вернуть его один: вскрыть принтер (USB-порт J28).`
+- `bl_up_text`: `This printer already starts through Kiln's own boot loader (SPL and U-Boot), but one from another Kiln OS release. This replaces it with the boot loader this release carries, and its fixes. Your settings and files stay as they are. If the printer doesn't start after it, the only proven way back needs the printer opened (its J28 USB connector).`
+  = `Принтер уже запускается через загрузчик Kiln (SPL и U-Boot), но из другого выпуска Kiln OS. Обновление заменит его загрузчиком этого выпуска, с его исправлениями. Настройки и файлы не меняются. Если затем принтер не запустится, проверенный способ вернуть его один: вскрыть принтер (USB-порт J28).`
 - `bl_up_builds`: `Now: %s. After the update: %s`
   = `Сейчас: %s. После обновления: %s`
 - `bl_up_ready`: `Ready. Nothing is written before you tap Update and confirm twice.`
@@ -1598,8 +1598,8 @@ The experimental install and update of Kiln's own boot loader. `J28` is the boar
   = `Обновить`
 - `bl_up_q`: `Update Kiln's boot loader?`
   = `Обновить загрузчик Kiln?`
-- `bl_up_q_text`: `Writes this release's Kiln SPL and U-Boot over the older ones in the boot area of the printer's memory; a copy of the older ones is kept first. It takes under a minute. Experimental and at your own risk.`
-  = `Записывает SPL и U-Boot Kiln из этого выпуска поверх прежних в загрузочную область памяти принтера; копия прежних сохраняется заранее. Это займёт меньше минуты. Экспериментально, на свой риск.`
+- `bl_up_q_text`: `Writes this release's Kiln SPL and U-Boot over the older ones in the boot area of the printer's memory; a copy of the older ones is kept first. It takes under a minute.`
+  = `Записывает SPL и U-Boot Kiln из этого выпуска поверх прежних в загрузочную область памяти принтера; копия прежних сохраняется заранее. Это займёт меньше минуты.`
 - `bl_up_running`: `Updating Kiln's boot loader`
   = `Обновление загрузчика Kiln`
 

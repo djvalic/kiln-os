@@ -13,7 +13,7 @@ not yet in the public copy on GitHub.
 - [updates.md](updates.md): how releases are made and how the printer installs them.
 - [sponsoring.md](sponsoring.md): sponsoring Kiln OS, and what it does and doesn't mean.
 - [recovery-os.md](recovery-os.md): the recovery system in slot A: updates, backup, restore, USB rescue.
-- [own-boot-loader.md](own-boot-loader.md): Kiln's own boot loader (experimental, opt-in): known boards, the risk, installing it from the recovery OS, building it yourself, going back.
+- [own-boot-loader.md](own-boot-loader.md): Kiln's own boot loader (opt-in): known boards, the risk, installing it from the recovery OS, building it yourself, going back.
 - [deviations-from-stock.md](deviations-from-stock.md): every behaviour that differs from stock, what to watch for, how to go back.
 - [config-layout.md](config-layout.md): which Klipper config file holds what, and which ones you edit.
 - [print-start.md](print-start.md): what happens at the start of a print (mesh, prime line, heat soak).
@@ -33,6 +33,7 @@ not yet in the public copy on GitHub.
 ## Writing plugins
 
 - [plugins.md](plugins.md): what a plugin is, where it lives, how it is loaded.
+- [plugin-first.md](plugin-first.md): your first plugin step by step, with the template and `tools/check_plugin.py`.
 - [plugin-api.md](plugin-api.md): the interface a plugin may rely on, by API version.
 - [stability.md](stability.md): what stays the same in every 1.x release, and what can change.
 - [plugin-root-hooks.md](plugin-root-hooks.md): root scripts a plugin can bring (`root/install.sh`, `update.sh`, `uninstall.sh`, boot scripts), as zMod has them.

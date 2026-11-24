@@ -131,6 +131,16 @@ class IfsError(Exception):
         Exception.__init__(self, msg)
         self.fault = fault
 
+class SlotEmpty(IfsError):
+    """A tuning feed failed because the slot's filament is gone from the
+    IFS (it came out mid-run): reported as such, never read as a speed or
+    tube limit. Not a fault: nothing to reset, put it back and retry."""
+    def __init__(self, chan):
+        IfsError.__init__(self, "slot %d: no filament at the IFS (did it "
+                          "come out?): put it back, then Retry" % (chan,),
+                          fault=False)
+        self.chan = chan
+
 class HeadNotClear(IfsError):
     """A lane pulled back its whole unload length and the toolhead sensor
     still sees filament (_retract_until_clear)."""
@@ -998,13 +1008,19 @@ class IFS:
             return      # a command runs: the flags stay, the next poll tries
         with gcode_mutex:
             self._prefeed_channels(chans)
-    def _runout_off(self):
+    def _runout_off(self, always=False):
         """MCU mode: the feeder moves are toolhead moves, so idle_timeout
         says "Printing" and a strand leaving the toolhead sensor outside a
         swap (a pre-feed's back off, a tuning park) paused the idle printer
-        as a runout (2026-11-05). Switches the toolhead runout off; returns
-        the function that puts it back on, or None if nothing changed."""
-        if not self.is_mcu_mode:
+        as a runout (2026-11-05). always: in both modes, for commands that
+        hold the G-code mutex across a homing, cut or find before their
+        lane moves (IFS_TUNE, IFS_FIND_HEAD_SLOT): idle_timeout says
+        "Printing" there too, and the first park off the sensor left the
+        idle printer paused, under the setup wizard's IFS step as well
+        (2026-11-23). Only outside a print: both refuse during one.
+        Switches the toolhead runout off; returns the function that puts
+        it back on, or None if nothing changed."""
+        if not self.is_mcu_mode and not always:
             return None
         sensor = self.printer.lookup_object(
             'filament_switch_sensor toolhead', None)
@@ -1036,6 +1052,15 @@ class IFS:
                             self._clear_inserted(chan)
                         else:
                             self._prefeed_channel(chan)
+                            if self.error and self.error_channel in (0,
+                                                                     chan):
+                                # The slot an operation failed on (a strand
+                                # that came out during tuning) feeds again:
+                                # no stale error or driver_error on screen
+                                logging.info("ifs: pre-feed channel %d "
+                                             "worked: error cleared (%s)",
+                                             chan, self.error)
+                                self._clear_error()
                     except (IfsError, self.gcode.error) as e:
                         logging.info("ifs: pre-feed channel %d failed: %s",
                                      chan, e)
@@ -3245,6 +3270,7 @@ class IFS:
             self.find_open = True
             self._save_variable('ifs_find_open', True)
         restore = self._heat(gcmd, chans, fallback=self.find_temp)
+        runout_on = self._runout_off(always=True)
         try:
             # keep_stop: an abort during the slot query above counts
             found = self._run(self._find_head_slot, chans, op="unload",
@@ -3257,6 +3283,8 @@ class IFS:
                 raise gcmd.error("%s; %s" % (e, note))
             raise
         finally:
+            if runout_on is not None:
+                runout_on()
             self.find_strand = None
             self._restore_heat(restore)
         self.head_found = found
@@ -3304,12 +3332,34 @@ class IFS:
         """Feed a lane from where it rests up to the head sensor, then park
         it again. Returns the distance fed (mm)."""
         what = "channel %d at %g mm/min" % (chan, speed)
-        if not self._feed_until_head(chan, self.load_length, speed, what):
+        try:
+            reached = self._feed_until_head(chan, self.load_length, speed,
+                                            what)
+        except IfsError:
+            if not self.stop_requested:
+                self._tune_check_present(chan)
+            raise
+        if not reached:
+            self._tune_check_present(chan)
             raise IfsError("%s: filament did not reach the toolhead"
                            % (what,))
         dist = self.last_feed
         self._tune_park(chan, speed)
         return dist
+    def _tune_check_present(self, chan):
+        """After a failed tuning feed: raises SlotEmpty if the slot has no
+        filament at the IFS any more (fresh status), so the failure isn't
+        read as a speed or tube limit. Keeps the feed's own error when the
+        status can't be read."""
+        try:
+            st = self._query_status()
+        except IfsError as e:
+            logging.info("ifs: tune: status after a failed feed: %s", e)
+            return
+        if chan not in mask_channels(st.get('silk_state')):
+            logging.info("ifs: tune: slot %d has no filament at the IFS",
+                         chan)
+            raise SlotEmpty(chan)
     def _tune_recover(self, chan):
         """After a failed tuning feed: clear the fault and pull back what
         was fed (best effort)."""
@@ -3347,6 +3397,9 @@ class IFS:
                     raise
                 logging.info("ifs: tune: %g mm/min failed: %s", speed, e)
                 self._tune_recover(chan)
+                if isinstance(e, SlotEmpty):
+                    # Not a speed limit: nothing is saved
+                    raise
                 break
             if ref is None:
                 ref = min(dists)
@@ -3398,6 +3451,7 @@ class IFS:
             self._tune_note(self.tune_progress or 0., what)
             self._select(chan)
             if not self._feed_until_head(chan, self.load_length, speed, what):
+                self._tune_check_present(chan)
                 raise IfsError("%s: filament did not reach the toolhead"
                                % (what,))
             self._retract_until_clear(chan, self.load_length, speed, what)
@@ -3406,8 +3460,15 @@ class IFS:
             last = t
             self._select(other)
             try:
-                if not self._feed_until_head(other, self.load_length, speed,
-                                             what):
+                try:
+                    reached = self._feed_until_head(other, self.load_length,
+                                                    speed, what)
+                except IfsError:
+                    if not self.stop_requested:
+                        self._tune_check_present(other)
+                    raise
+                if not reached:
+                    self._tune_check_present(other)
                     raise IfsError("slot %d did not reach the toolhead"
                                    % (other,))
                 if expect is None:
@@ -3419,6 +3480,9 @@ class IFS:
                     raise
                 logging.info("ifs: tune: %s: %s", what, e)
                 self._tune_recover(other)
+                if isinstance(e, SlotEmpty):
+                    # Not a blocked merge: nothing is saved
+                    raise
                 break
             self._tune_park(other, speed)
             best = t
@@ -3533,7 +3597,7 @@ class IFS:
             do_tube = False
         unload = do_unload and self.channel \
             and self._head_has_filament() is not False
-        restore = self._runout_off()
+        restore = self._runout_off(always=True)
         try:
             if unload:
                 # A real unload: cut and extruder move, so homed and hot.

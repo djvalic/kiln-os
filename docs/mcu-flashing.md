@@ -1,6 +1,6 @@
-# MCU flashing: stock mechanism, mainline plan, way back
+# MCU flashing: stock mechanism, Kiln's flashing, way back
 
-Plan for putting mainline Klipper on the two motion MCUs (mainboard, eboard) and getting back to
+How Kiln OS puts mainline Klipper on the two motion MCUs (mainboard, eboard) and how to get back to
 stock. Both boards of the developer's printer were flashed this way and run mainline Klipper
 (v0.13.0-803-g4cd711119, `klipper/mcu-dicts/FLASHED`). Evidence is from the stock 3.1.0 update
 (`firmware/stock-3.1.0/unpacked/`, git-ignored), the stock rootfs mirror
@@ -510,7 +510,7 @@ the reset path writes 0x1234 to the backup registers (`movw r1, #0x1234`, BKP ba
 - Mainline `mainboard.bin` has no bootloader-request code at all (no bootloader); not needed,
   since ISP uses GPIOs.
 
-## Proposed procedure
+## History (2026-10): the procedure used
 
 **Phase 0: laptop only, no printer**
 
@@ -573,7 +573,7 @@ The UID pin: after the first verified mainboard flash, `ad5x-mcu` writes the chi
 
 Checked read-only on the developer's printer (2026-11-02, `flash_n32.py --check`, Klipper stopped and restarted): BOOT V22, SubVersion V24, UCID `3601113309504e473533383030052c71`, UID `360111504e47353338052c71`. The check resets the chip without writing.
 
-## Open questions (need the printer)
+## Open questions (2026-10)
 
 1. Which dir(s) are in `/usr/prog/PROGRAM/control/` and do their images match 1.1.1?
 2. GPIO 49/50 are really the N32's NRST/BOOT0 (PB17/PB18)? Is sysfs GPIO usable alongside zMod?

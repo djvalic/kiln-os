@@ -176,11 +176,11 @@ rs_q2_wipe_prints	Kiln OS in the main slot will be gone, and its settings and fi
 rs_wiped	Kiln OS's settings and files were removed (%s). The print files were kept.
 rs_wiped_prints	Kiln OS's settings and files and the print files were removed (%s).
 rs_wipe_failed	Some of Kiln OS's files couldn't be removed; Flashforge's firmware is back all the same. The log /data/ad5x/return-stock/log lists them.
-bl_entry	Install Kiln's boot loader (experimental)…
-bl_title	Kiln's boot loader (experimental)
-bl_text	Replaces Flashforge's boot loader with Kiln's own (SPL and U-Boot): no Flashforge code starts the printer any more, and a Kiln OS kernel that fails to start falls back by itself (7.3, then 6.6, then this recovery). Experimental and at your own risk: proven on one printer so far (one more board is known to match). If the printer doesn't start after it, the only proven way back needs the printer opened (its J28 USB connector). Return to Flashforge firmware puts Flashforge's boot loader back.
+bl_entry	Install Kiln's boot loader…
+bl_title	Kiln's boot loader
+bl_text	Replaces Flashforge's boot loader with Kiln's own (SPL and U-Boot): no Flashforge code starts the printer any more, and a Kiln OS kernel that fails to start falls back by itself (7.3, then 6.6, then this recovery). Proven on one printer so far (one more board is known to match). If the printer doesn't start after it, the only proven way back needs the printer opened (its J28 USB connector). Return to Flashforge firmware puts Flashforge's boot loader back.
 bl_board_known	This printer's board: on the list of known boards.
-bl_board_unknown	This printer's board is not on the list of known boards, so it isn't offered here.
+bl_board_unknown	This printer's board is not on the list of known boards, so it isn't offered here. To help get it added, see the boot loader guide: "Is my printer one of the known boards?"
 bl_checking	Checking…
 bl_ready	Ready. Nothing is written before you tap Install and confirm twice.
 bl_resume	An install was stopped before it finished (for example by a power cut). Tap Continue to finish it.
@@ -191,13 +191,13 @@ bl_wait_auto	Waiting for the start-up actions to finish, then checking…
 bl_up_to_date	Kiln's boot loader is installed and up to date: nothing to install.
 bl_go	Install
 bl_q	Install Kiln's boot loader?
-bl_q_text	Writes Kiln's SPL and U-Boot into the boot area of the printer's memory, and Kiln's 6.6 kernel into both kernel slots. It takes under a minute. Experimental: proven on one printer so far.
+bl_q_text	Writes Kiln's SPL and U-Boot into the boot area of the printer's memory, and Kiln's 6.6 kernel into both kernel slots. It takes under a minute. Proven on one printer so far.
 bl_q_text2	If the printer doesn't start afterwards, bringing it back needs the printer opened and a USB cable (J28). Don't switch the printer off until the screen says it is done.
 bl_running	Installing Kiln's boot loader
 bl_checking_title	Checking Kiln's boot loader
 bl_up_entry	Update Kiln's boot loader…
-bl_up_title	Update Kiln's boot loader (experimental)
-bl_up_text	This printer already starts through Kiln's own boot loader (SPL and U-Boot), but one from another Kiln OS release. This replaces it with the boot loader this release carries, and its fixes. Your settings and files stay as they are. Experimental and at your own risk: if the printer doesn't start after it, the only proven way back needs the printer opened (its J28 USB connector).
+bl_up_title	Update Kiln's boot loader
+bl_up_text	This printer already starts through Kiln's own boot loader (SPL and U-Boot), but one from another Kiln OS release. This replaces it with the boot loader this release carries, and its fixes. Your settings and files stay as they are. If the printer doesn't start after it, the only proven way back needs the printer opened (its J28 USB connector).
 bl_up_builds	Now: %s. After the update: %s
 bl_up_ready	Ready. Nothing is written before you tap Update and confirm twice.
 bl_up_resume	An update was stopped before it finished (for example by a power cut). Tap Continue to finish it.
@@ -206,7 +206,7 @@ bl_up_verified	Done: Kiln's boot loader is updated and started this recovery. Bo
 bl_up_unverified	Updated, but this start didn't come through Kiln's U-Boot (Kiln's SPL started the system itself). The printer works: Boot main OS starts Kiln OS. Please post this, with what Check shows, in issue #68 (github.com/djvalic/kiln-os).
 bl_up_go	Update
 bl_up_q	Update Kiln's boot loader?
-bl_up_q_text	Writes this release's Kiln SPL and U-Boot over the older ones in the boot area of the printer's memory; a copy of the older ones is kept first. It takes under a minute. Experimental and at your own risk.
+bl_up_q_text	Writes this release's Kiln SPL and U-Boot over the older ones in the boot area of the printer's memory; a copy of the older ones is kept first. It takes under a minute.
 bl_up_running	Updating Kiln's boot loader
 bl_line_reading	Kiln's boot loader: reading…
 bl_line_unknown	Kiln's boot loader: state unknown (couldn't be read)

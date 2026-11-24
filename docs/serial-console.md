@@ -6,8 +6,11 @@ root shell that works without any network, for example when Wi-Fi is down.
 
 ## Wiring
 
-- **3.3 V logic.** A USB-to-serial adapter must be a 3.3 V one (or set to
-  3.3 V). A 5 V adapter can damage the SoC.
+- **Logic level: measure first.** Before you connect an adapter,
+  measure TX at idle on the DEBUG header (against GND). Kiln's U-Boot
+  sets GPIO port E, which holds the UART pins, to 1.8 V, so use a
+  1.8 V-capable adapter unless you measured 3.3 V. A 5 V adapter can
+  damage the SoC.
 - Cross TX and RX: header `TX` to the adapter's `RX`, header `RX` to the
   adapter's `TX`, `GND` to `GND`.
 - Leave the header's `3.3V` pin unconnected when the adapter is powered
@@ -59,6 +62,11 @@ SPL loads the kernel itself, so U-Boot proper, with its prompt and its
 "Hit any key to stop autoboot", never runs ([boot-slots.md](boot-slots.md)).
 The SPL reads no input (its serial input routine is never called), so its
 console gives a log but no way to stop the boot.
+
+With Kiln's own boot loader ([own-boot-loader.md](own-boot-loader.md))
+the header shows Kiln's SPL and U-Boot at every start (Kiln's patches
+don't read PC6), and Ctrl-C or `kiln` within 2 s stops at U-Boot's prompt
+(`u-boot/README.md`).
 
 On `FFP0302_Main_Board_V3.0.1 2025-5-16`, PC6 is the middle of a divider
 (traced by alexshev86 on a board with the SoC removed, #66; measured in circuit, so

@@ -4,8 +4,8 @@ How the AD5X boot loader picks between the two kernel/rootfs slots, how
 stock's updater switches them, and how to put our OS in the spare slot
 and get back. Worked out on the laptop (2026-10-16) from the developer's eMMC
 backup (see `docs/emmc-backup.md`)
-and the stock 3.1.0 updater scripts. Nothing here has been tried on the
-printer.
+and the stock 3.1.0 updater scripts; since then run on the printer (the
+install log below).
 
 ## Summary
 
@@ -471,8 +471,9 @@ is the last write and is read back.
 
 ## Kernel partitions
 
-Kiln OS releases contain no kernel. Both kernel partitions hold the
-printer's own stock kernel:
+Kiln OS releases contain no Flashforge kernel. With Flashforge's boot
+loader both kernel partitions hold the printer's own stock kernel (with
+Kiln's SPL they hold Kiln's 6.6, below):
 
 - the installer copies the running slot's kernel to the other kernel
   partition (skipped when equal) and saves it in `/data/ad5x/stock/kernel.img`;
@@ -524,7 +525,8 @@ look for `boot.img` in `/data/ad5x/stock`, then usershare's
 
 ## Kiln's U-Boot: confirmed starts
 
-Kiln's own U-Boot (`u-boot/`, v1.0 work; not installed by anything yet)
+Kiln's own U-Boot (`u-boot/`; installed only when the owner asks, with
+`ad5x-bootloader-install`, [own-boot-loader.md](own-boot-loader.md))
 counts each start of the main OS in the `ota` partition before it starts
 it (state, `ota` 0x90000) and takes the next kernel down when starts stay
 unconfirmed: 7.3 after one, 6.6 after two, then the recovery OS; it never
@@ -575,11 +577,13 @@ With `ad5x.uboot=1` the rest of the start follows U-Boot too:
 - Going back to stock is the recovery OS's Return to Flashforge firmware
   (`ad5x-return-stock`, `docs/recovery-os.md`): Kiln's U-Boot out of
   0xA400 first, then stock's root and 5.10 into slot B, the flag last.
-  Kiln's SPL stays and starts stock from slot B like Flashforge's SPL;
-  with this printer's saved `boot.img` Flashforge's SPL can go back too.
+  Flashforge's own SPL goes back too whenever this printer's saved
+  `boot.img` is found and matches (the default; `--keep-kiln-spl` keeps
+  Kiln's SPL). Without one, Kiln's SPL stays and starts stock from slot B
+  like Flashforge's SPL.
   `ad5x-restore-stock` (both systems) leads there.
 
-## Stock on Kiln's SPL (after Return to Flashforge firmware)
+## Stock on Kiln's SPL (a return that kept it, or found no boot.img)
 
 Kiln's SPL in the first MiB, no U-Boot at 0xA400 (zeros, or Flashforge's
 unused U-Boot bytes from `boot.img`), U-Boot's `ota` sectors zeroed, slot B

@@ -1871,7 +1871,7 @@ static void page_return(void)
 
 /* ------------------------------------------------- Kiln's boot loader */
 
-/* "Install Kiln's boot loader (experimental)": ad5x-bootloader-install
+/* "Install Kiln's boot loader": ad5x-bootloader-install
  * --check runs in the background when the page opens (and after Check):
  * its "board:" and "result:" lines and its first FAIL line fill the page.
  * Install is enabled only when the result is "ready" (Continue after a

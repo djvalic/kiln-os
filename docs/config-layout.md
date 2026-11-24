@@ -31,6 +31,7 @@ changes that file replaces it (your version is kept next to it as
 printer.cfg                          user, never replaced
   /usr/share/ad5x/config/ad5x.cfg    factory: hardware, stock macros
     ifs.cfg                          factory: IFS link, stock swap templates, T0-T3
+      /run/ad5x/ifs-mcu/*.cfg        generated: IFS pins on Klipper firmware (optional)
     setup.cfg                        factory: [ad5x_setup] (setup wizard module)
       ad5x-tuning.cfg                user (wizard results; optional)
     [ad5x_config]                    factory: update notices, CONFIG_BACKUPS,
@@ -39,6 +40,7 @@ printer.cfg                          user, never replaced
     [ad5x_plugins]
     plugins-active.cfg               generated from plugins.cfg (user: enabled plugins,
                                      in file order; optional), skipped plugins left out
+    nozzle.cfg                       user: nozzle size (SET_NOZZLE_SIZE; optional)
   unit.cfg                           user: per-printer calibration
   local.cfg                          user: overrides, read last
   SAVE_CONFIG block
@@ -90,9 +92,10 @@ that file: a `local.cfg` with only `variable_*` lines for it and no
 | `ad5x-tuning.cfg` | config dir | RW, written by the wizard | PID and input shaper results | Per printer |
 | `variables.cfg` | config dir | RW, Klipper | Saved state: `zoffset`, `ad5x_center_z`, `ifs_loaded`, slot materials, tuning | Per printer |
 | `macros/print_start.cfg` | config dir | RW, refreshed by updates | `PRINT_START` (this system's: mesh of the print area every print `variable_mesh_every_print: 1`, `variable_adaptive_mesh: 1`, `variable_retract: 3`, status line per step, prime line or first tool), `_PRINT_START_TOOL` (first tool already loaded: one purge at the box instead of cut and reload) | Choices beyond stock |
-| `macros/prime_line.cfg` | config dir | RW, refreshed | `_PRIME_LINE` (un-retract, prime, slow wide line in front of the objects, wipe; variables `prime_line`, `length`, `height`, `width`, `flow`, `speed`, `unretract`, `prime`, `prime_speed`, `gap`, `margin`, `wipe`, `retract`) | Not stock (zMod's `LINE_PURGE`) |
+| `macros/prime_line.cfg` | config dir | RW, refreshed | `_PRIME_LINE` (un-retract, prime, slow wide line in front of the objects, wipe; variables `prime_line`, `length`, `height`, `width`, `flow`, `speed`, `prime`, `prime_speed`, `gap`, `margin`, `wipe`, `retract`; `owed` is the retraction the start left, set by `PRINT_START`, not a setting) | Not stock (zMod's `LINE_PURGE`) |
 | `macros/quick_actions.cfg` | config dir | RW, refreshed | `LOAD_FILAMENT`, `UNLOAD_FILAMENT`, `CLEAR_NOZZLE`, `AUTO_FULL_BED_LEVEL` (HelixScreen's AD5X buttons, zMod names), `BED_LEVEL_SCREWS_TUNE` (zMod's bed screw levelling: heat, home, `SCREWS_TILT_CALCULATE`, park), `_HEAT_FOR_FILAMENT`, `SETUP_WIZARD` | Conveniences, not stock |
 | `macros/ifs_templates.cfg` | config dir | RW, refreshed | `[ifs] prime_gcode` (wipe after a prime-only swap: nopoop modes, `_NOPOOP`, `IFS_SWAP PURGE=0`), `prime_at_print_gcode` (flatten the bead after a prime on the prime tower: nopoop mode 0 from layer 2) | Swap behaviour beyond stock |
+| `macros/system.cfg` | config dir | RW, refreshed | Buttons for system commands in Fluidd's macro panel (category "System"): `PLUGINS_LIST`, `PLUGIN_ENABLE`, `PLUGIN_DISABLE`, `IFS_TUNE_RUN`, `IFS_TUNE_CLEAR`, `IFS_INFO`, `CONFIG_BACKUPS_SHOW`, `KILN_MEMORY_MODE`; each runs one command (`KILN_MEMORY_MODE` exists only here) | Conveniences, not stock |
 | `macros/*.cfg.bak-<date>` | config dir | RW | Your edited version of a file an update replaced | Not read by Klipper (doesn't match `*.cfg`) |
 | `config-updates.txt` | config dir | RW | One line per replaced edited file: which file, where the backup is | Notice; `CONFIG_BACKUPS ACK=1` deletes it |
 | `.ad5x-templates.json` | config dir | written at boot | sha256 of the template each `macros/` file was copied from | Tells an unedited file from an edited one |
@@ -186,8 +189,8 @@ mesh plus the "not applied" centre check that movement had to be tuned
 away by hand: the developer's offset went -0.36 -> -0.02 -> +0.085 over three
 prints. The current 0.085 partly compensates the old mesh's error, so
 **one small Z re-tune may be needed after this change** (baby-step in the
-first print, or the setup wizard's Z offset step, which now also meshes
-first). An adaptive mesh isn't saved as a profile (Klipper's rule), so the
+first print, or the setup wizard's Z offset step; that step starts with
+`LEVEL=0`, the centre Z check only, since the test patch needs no mesh). An adaptive mesh isn't saved as a profile (Klipper's rule), so the
 full `default` mesh and its saved centre stay as they were; the saved
 centre is only written by a full mesh into `default`.
 

@@ -27,11 +27,18 @@ that printer builds and tests every release.
 
 ## Status
 
+v1.0.0 is the first stable release: from it on, every 1.x release keeps
+the interfaces listed in [docs/stability.md](docs/stability.md) (plugins,
+the web API, your config files and data, updates and recovery).
+
 Runs daily on one AD5X (0.6 mm nozzle). It was installed on that printer
 from the stock firmware (with zMod) over SSH, and every release since has
 been installed from Fluidd, through the recovery OS. Installing from a USB
-stick has been tested under emulation only
-([docs/install.md](docs/install.md)). Expect rough edges, and read
+stick was done on that printer too (2026-11-18: back to the stock firmware,
+Kiln OS's data removed, then a fresh install from the stick); the
+restart at its end, fixed after that run, has been tested under emulation
+so far ([docs/install.md](docs/install.md)). It is still a young project
+run by one person, so read
 [docs/deviations-from-stock.md](docs/deviations-from-stock.md) before
 installing: it lists every behaviour that differs from stock, what to look
 for if it goes wrong, and how to go back.
@@ -61,21 +68,30 @@ for if it goes wrong, and how to go back.
   tested packages. Every release is built and tested against the boards'
   flashed firmware first ([docs/updates.md](docs/updates.md)).
 - **Print start.** Every print probes a mesh of the print area, then draws
-  a prime line in front of the objects. Both can be turned off per printer.
-  From a cold bed it first waits for the plate to stop moving, measured
-  on your printer with the load cells (`BED_SOAK_CALIBRATE`)
+  a prime line in front of the objects (a first colour that has to be
+  loaded is purged at the box instead). Both can be turned off per printer.
+  From a cold bed it first waits for the plate to stop moving: the time
+  measured on your printer with the load cells (`BED_SOAK_CALIBRATE`), or
+  a default per degree the bed rose until then
   ([docs/print-start.md](docs/print-start.md)).
-- **Setup wizard** on the touch screen at first boot: time zone,
-  self-check, PID, bed mesh, input shaper, IFS tuning and a first-layer Z
-  offset test ([docs/setup-wizard.md](docs/setup-wizard.md)).
+- **Setup wizard** on the touch screen at first boot: touch calibration,
+  time zone, nozzle size, self-check, PID, bed mesh, input shaper, the
+  filament in each IFS slot, IFS tuning, the purge box, a first-layer Z
+  offset test and an optional bed soak calibration
+  ([docs/setup-wizard.md](docs/setup-wizard.md)).
 - **Plugins.** Optional bundles of config and Klipper extras, switched on
   the touch screen (Settings > Plugins) or with `ENABLE_PLUGIN` /
   `DISABLE_PLUGIN`, with a documented API for your own. The screen also
   installs the tested ones from their own repositories: notifications
   with a camera photo ([kiln-notify](https://github.com/djvalic/kiln-notify)),
   timelapse ([kiln-timelapse](https://github.com/djvalic/kiln-timelapse)),
-  Spoolman ([kiln-spoolman](https://github.com/djvalic/kiln-spoolman))
-  ([docs/plugins.md](docs/plugins.md), [docs/plugin-api.md](docs/plugin-api.md)).
+  Spoolman ([kiln-spoolman](https://github.com/djvalic/kiln-spoolman)),
+  and Happy Hare for the IFS
+  ([kiln-happy-hare](https://github.com/KilnOS-Plugins/kiln-happy-hare), by
+  its author) ([docs/plugins.md](docs/plugins.md),
+  [docs/plugin-api.md](docs/plugin-api.md)). What stays the same in 1.x:
+  [docs/stability.md](docs/stability.md); the web API:
+  [docs/api.md](docs/api.md).
 - **Sound.** The speaker plays chimes on print events, `M300` and your own
   MIDI files (zMod's `PLAY_MIDI`), set on the screen
   ([docs/sound.md](docs/sound.md)).
@@ -118,7 +134,7 @@ start-up, next to Flashforge's system. Kiln OS replaces that system:
 
 ## The kernel
 
-Kiln OS runs **our own Linux 6.6**, built from Ingenic's X2600 SDK kernel
+Kiln OS runs **its own Linux 6.6**, built from Ingenic's X2600 SDK kernel
 with AD5X patches ([kernel-ingenic66/](kernel-ingenic66/)). Its drivers are
 built in from source instead of Flashforge's out-of-tree modules:
 
@@ -139,24 +155,31 @@ boot, `ad5x-kernel mainline off` goes back to 6.6. A start of 7.3 that
 fails falls back to 6.6 in the same boot, and 6.6 is used until
 `ad5x-kernel retry`.
 
-The printer's stock 5.10 kernel stays in its boot slot, and every boot
-still begins with it: the first boot script (`S00ad5x-kernel`) loads our
-kernel (6.6, or 7.3 when it is on) from the release image and starts it
-from RAM (`chainload.ko`; the stock kernel has no kexec). Nothing is
-written to the boot slots or the boot flag.
+On Flashforge's boot loader (the default), the printer's stock 5.10
+kernel stays in its boot slot, and every boot still begins with it: the
+first boot script (`S00ad5x-kernel`) loads Kiln's kernel (6.6, or 7.3 when
+it is on) from the release image and starts it from RAM (`chainload.ko`;
+the stock kernel has no kexec). Nothing is written to the boot slots or
+the boot flag.
 
-The stock kernel is only the safety net: if a start of ours doesn't
+**Kiln's own boot loader** (opt-in): Kiln's SPL and mainline
+U-Boot start Kiln's kernel directly, with no Flashforge code in the start,
+and fall back by themselves (7.3, then 6.6, then the recovery OS). It is
+installed only when you ask for it on the recovery screen
+([docs/own-boot-loader.md](docs/own-boot-loader.md)).
+
+On Flashforge's boot loader the stock kernel is the safety net: if a start of Kiln's doesn't
 complete (a hang, then a power cycle; or a panic, which reboots by itself),
 the printer comes up on the stock kernel instead, with Flashforge's drivers
 (Klipper, the screen and the network still run; no speaker), and stays on
-it until our kernel is tried again by hand (an update doesn't clear it:
+it until Kiln's kernel is tried again by hand (an update doesn't clear it:
 the kernel's release string is the same in every build). A start that
-reached our kernel but was cut off later in start-up (a power cut while
-the splash shows) ends in the recovery OS; after "Boot main OS" our kernel
+reached Kiln's kernel but was cut off later in start-up (a power cut while
+the splash shows) ends in the recovery OS; after "Boot main OS" Kiln's kernel
 is tried again, and only a second such start in a row falls back. `ad5x-kernel` shows the running kernel and any failure
-(stage and time); `ad5x-kernel retry` tries ours again from the next boot.
+(stage and time); `ad5x-kernel retry` tries Kiln's again from the next boot.
 While the printer stays on the stock kernel for this reason, Fluidd shows
-a warning, and `POST /machine/kiln_os/kernel_retry` tries ours again and
+a warning, and `POST /machine/kiln_os/kernel_retry` tries Kiln's again and
 reboots ([docs/updates.md](docs/updates.md)). Details:
 [docs/deviations-from-stock.md](docs/deviations-from-stock.md) (last
 section).
@@ -177,7 +200,7 @@ come back in line, see [docs/ifs-troubleshooting.md](docs/ifs-troubleshooting.md
 
 > **Before installing:** your stock or zMod settings and configs are not
 > used by Kiln OS (only the Z offset, cutter and purge-box positions and
-> zMod's plugin choices carry over). Back up your `config` folder and your
+> zMod's plugin choices carry over, and saved Wi-Fi networks). Back up your `config` folder and your
 > calibration first. At its first start Kiln OS writes mainline Klipper
 > firmware to both boards by itself; going back to stock writes Flashforge's
 > back ([docs/mcu-flashing.md](docs/mcu-flashing.md)). Details:
@@ -194,13 +217,16 @@ come back in line, see [docs/ifs-troubleshooting.md](docs/ifs-troubleshooting.md
 - **Recover**: [docs/recovery-os.md](docs/recovery-os.md). A failed start
   lands in the recovery OS, which has SSH, an update page on port 8080,
   backup and restore, and USB rescue.
-- **Serial console**: the mainboard's DEBUG header (3.3 V) gives a root
-  shell without a network, once our kernel runs
+- **Serial console**: the mainboard's DEBUG header gives a root shell
+  without a network, once Kiln's kernel runs (measure the pins' voltage
+  first)
   ([docs/serial-console.md](docs/serial-console.md)).
-- **Back to stock**: `ad5x-restore-stock` on the main OS checks the saved
-  stock system and reboots into the recovery OS, whose "Restore stock" puts
-  it back into its slot ([docs/install.md](docs/install.md), "Going back to
-  stock").
+- **Back to stock**: Settings > System > Return to Flashforge firmware on
+  the touch screen (or the recovery screen's Restore stock tile, a stick
+  with `kiln-return-to-stock`, or `ad5x-restore-stock` over SSH) restarts
+  into the recovery OS. There, Return to Flashforge puts Flashforge's
+  firmware back, and its boot loader too when the printer's saved copy is
+  found ([docs/install.md](docs/install.md), "Going back to stock").
 
 ## Getting help
 
@@ -240,9 +266,10 @@ This builds on the work of many projects:
 - [Klipper](https://www.klipper3d.org/) (GPL-3.0) and
   [Moonraker](https://github.com/Arksine/moonraker) (GPL-3.0)
 - [Fluidd](https://github.com/fluidd-core/fluidd) (GPL-3.0)
-- [HelixScreen](https://github.com/prestonbrown/helixscreen) (GPL-3.0); our
+- [HelixScreen](https://github.com/prestonbrown/helixscreen) (GPL-3.0); Kiln's
   patches are in `buildroot/package/helixscreen/`
-- [zMod](https://github.com/ghzserg/zmod) by ghzserg (GPL-3.0): macro names
+- [zMod](https://github.com/ghzserg/zmod) by ghzserg (Apache-2.0; its Klipper
+  fork zmod_klipper is GPL-3.0): macro names
   and behaviour, for compatibility
 - [xblax's AD5M Klipper mod](https://github.com/xblax/flashforge_ad5m_klipper_mod):
   the MCU bootloader patches in `klipper/mcu-patches/` (GPL-3.0)
@@ -254,7 +281,16 @@ This builds on the work of many projects:
   reads the job file once), #32 (Kiln OS's own board flashing tools), #39
   (toolhead board updates without a power-cycle), #41 (the Klipper IFS
   found more reliably), #50 (the public source builds again) and #52
-  (plugins can't steer the update agent)
+  (plugins can't steer the update agent); and for 1.0 the port of
+  mainline U-Boot and an SPL to the AD5X that is Kiln's own boot loader
+  (issue #68, PRs #74, #75, #77-#81), NetworkManager (PR #53), the
+  10-second touch calibration hold (PR #91), Happy Hare in the catalog
+  (PR #62) and PRs #56, #64, #65, #84, #85, #86 and #93
+- alexshev86: PR #49, the main board pinout (PR #92) and the boot loader
+  tests on their printer (issue #68)
+- DIEHARDave: Moonraker no longer freezing with big plugins installed (PR
+  #70), and plugins that bring another project's Klipper modules (PR #71)
+- [U-Boot](https://u-boot.org/) (GPL-2.0), the base of Kiln's own boot loader
 - Ingenic's Linux 6.6 SDK kernel for the X2000/X2600 (GPL-2.0)
 - [Buildroot](https://buildroot.org/), BusyBox, [SWUpdate](https://sbabic.github.io/swupdate/),
   [LVGL](https://lvgl.io/) (MIT), Noto fonts (OFL-1.1)
@@ -263,7 +299,7 @@ This builds on the work of many projects:
 
 GPL-3.0-or-later, see [LICENSE](LICENSE). Third-party components keep their
 own licences: Klipper, Moonraker, Fluidd and HelixScreen are GPL-3.0, and the
-Linux kernel is GPL-2.0. The images contain no Flashforge files. The parts
+Linux kernel and U-Boot are GPL-2.0. The images contain no Flashforge files. The parts
 that only Flashforge can provide (drivers, board tools, the stock kernel)
 come from your own printer at install time and are never in this
 repository or its releases.

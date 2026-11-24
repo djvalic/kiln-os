@@ -4,7 +4,7 @@ Mainline U-Boot (v2026.10) and an SPL for the Ingenic X2600 and the
 Flashforge Adventurer 5X. The recovery OS carries the built images
 (`buildroot/package/ad5x-bootloader`: `spl-mmc.img` and `u-boot-emmc.img`
 in `/usr/share/ad5x/bootloader`) for its opt-in installer,
-`ad5x-bootloader-install` ("Install Kiln's boot loader (experimental)",
+`ad5x-bootloader-install` ("Install Kiln's boot loader",
 `docs/own-boot-loader.md`); nothing writes them unless the user runs it.
 Phases 0a/0b of the v1.0 boot plan began here: a correct, size- and
 memory-checked build for the bench and printer tests.

@@ -22,8 +22,7 @@ the touch screen and Fluidd.
   laptop. Measure `5V` first: if the printer powers it, leave the
   laptop's 5 V unconnected (never two supplies on one line).
 - **The console** on the DEBUG header: UART0, PE9 TX / PE10 RX, 115200
-  8N1, 1.8 V levels per `kernel-ingenic66/usb-boot.md` (measure TX idle
-  before connecting a 3.3 V adapter). Log it to a file (`tio -L`,
+  8N1, wired as in `docs/serial-console.md`: measure TX at idle on the DEBUG header first (against GND); Kiln's U-Boot sets GPIO port E, which holds the UART pins, to 1.8 V, so use a 1.8 V-capable adapter unless you measured 3.3 V. A 5 V adapter can damage the SoC. Log it to a file (`tio -L`,
   `picocom --logfile`).
 - **The laptop**: Python 3 with pyusb and libusb-1.0 (a venv:
   `python3 -m venv ~/.venv/usb && ~/.venv/usb/bin/pip install pyusb`), and

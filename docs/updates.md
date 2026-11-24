@@ -33,10 +33,10 @@ and the installer), and released only if every test passes. Daily Klipper
 and Moonraker packages go through the same tests inside the newest
 release. Versions: `vMAJOR.MINOR.PATCH`; release candidates
 `vMAJOR.MINOR.PATCH-rcN` come before their release
-(v0.0.61 < v0.1.0-rc1 < v1.0.0-rc2 < v1.0.0). The release candidates
-lead to v1.0.0, the first stable release (docs/stability.md: what stays
-the same in 1.x); they started as v0.1.0-rc1 and kept counting, so the
-next is v1.0.0-rc2. A release candidate is published as a pre-release
+(v0.0.61 < v0.1.0-rc1 < v1.0.0-rc2 < v1.0.0). The 1.0 candidates ran
+from v0.1.0-rc1 to v1.0.0-rc7; v1.0.0 is the first stable release
+(docs/stability.md: what stays the same in 1.x). A release candidate is
+published as a pre-release
 and offered only to printers on the test channel (below, "Test channel:
 how to join and leave").
 
@@ -230,9 +230,8 @@ or the next automatic install in the recovery OS, deletes `*.stale` files
 
 Release candidates (`v0.1.0-rc1`, then `v1.0.0-rc2`, `-rc3`, ...) are
 published as pre-releases. A printer on the **stable** channel (the
-default) is never offered one: it stays on the last `vX.Y.Z` release until
-the next final release (now: on v0.0.61 until v1.0.0 is out, then it is
-offered v1.0.0 directly). A printer on the
+default) is never offered one, only the next final `vX.Y.Z` (a printer
+that stayed on v0.0.61 is offered v1.0.0 directly). A printer on the
 **test** channel is offered the newest release, pre-releases included,
 so each release candidate and then the final release.
 

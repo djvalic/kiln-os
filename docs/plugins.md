@@ -257,8 +257,11 @@ twice).
   config directory (an edited file is kept as `<name>.cfg.bak-<date>`
   first; `docs/config-layout.md`).
 - Never changed once they exist: `plugins.cfg`, `printer.cfg`,
-  `unit.cfg`, `local.cfg`, `moonraker.conf`, `variables.cfg`,
-  `ad5x-tuning.cfg`, and everything in `/data/ad5x/plugins`.
+  `unit.cfg`, `local.cfg`, `variables.cfg`, `ad5x-tuning.cfg`, and
+  everything in `/data/ad5x/plugins`.
+- `moonraker.conf`: only lines exactly as an earlier image shipped them
+  are brought up to date (`ad5x-moonraker-migrate`); your copy is kept as
+  `moonraker.conf.bak-<date>` and `config-updates.txt` says what changed.
 - Regenerated (not yours to edit): `moonraker-plugins.conf`,
   `/run/moonraker/moonraker.conf`.
 

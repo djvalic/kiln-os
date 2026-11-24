@@ -72,7 +72,7 @@ BR2_PACKAGE_AD5X_RECOVERY=y
 # as ad5x_defconfig):
 # BR2_PACKAGE_AD5X_KERNEL66 is not set
 # Kiln's own boot loader (u-boot/: Kiln's SPL and U-Boot proper), built
-# here, for the opt-in "Install Kiln's boot loader (experimental)"
+# here, for the opt-in "Install Kiln's boot loader"
 # (ad5x-bootloader-install, docs/own-boot-loader.md). Only its images go
 # in; nothing writes them unless the user runs the installer.
 BR2_PACKAGE_AD5X_BOOTLOADER=y

@@ -5,9 +5,9 @@ so plugins, slicer profiles, scripts and forks made for 1.0 keep working.
 A change that would break one of them waits for 2.0 and is announced
 before it lands.
 
-Until v1.0.0, release candidates can still change them. That is what the
-"Road to v1.0" issue on GitHub is for: ask there for anything you need
-changed before it is fixed for 1.x.
+The release candidates before v1.0.0 could still change them; the
+"Road to v1.0" issue on GitHub collected the last requests. From v1.0.0
+on, ask for additions in a new issue (below).
 
 ## Kept for all of 1.x
 
@@ -20,14 +20,17 @@ changed before it is fixed for 1.x.
 - **Kiln's web API** ([api.md](api.md)): the `/machine/kiln_os/*`
   endpoints, the reply and error format and its reasons, Kiln's changes
   to Moonraker endpoints, the update manager entries and the Klipper
-  status objects. Same rule, with its own `api_version` (api.md,
-  "Versions").
+  status objects. Same rule and the same version number: `api_version` in
+  `/machine/kiln_os/info` is the plugin API version (api.md, "Versions").
+  v1.0.0 has plugin API 1.9; every 1.x has 1.9 or a later 1.y.
 - **Your config files** ([config-layout.md](config-layout.md)):
   `printer.cfg`, `unit.cfg`, `local.cfg`, `plugins.cfg`,
-  `ad5x-tuning.cfg`, `variables.cfg` and `moonraker.conf` are never
-  changed by an update, and the include order stays. Files in `macros/`
-  follow the rule in that page: an update that changes one keeps your
-  edited copy as a backup and tells you.
+  `ad5x-tuning.cfg` and `variables.cfg` are never changed by an update,
+  and the include order stays. In `moonraker.conf` an update changes only
+  lines exactly as an earlier image shipped them, keeps your copy as
+  `moonraker.conf.bak-<date>` and says so in `config-updates.txt`. Files
+  in `macros/` follow the rule in that page: an update that changes one
+  keeps your edited copy as a backup and tells you.
 - **Your data** ([data-layout.md](data-layout.md)): what lives where in
   `/data/ad5x`. An update keeps it and reads it the same way.
 - **Updates and recovery** ([updates.md](updates.md),
@@ -42,8 +45,9 @@ changed before it is fixed for 1.x.
   `plugin.json` keys and catalog plugins.
 - **Anything internal:** names starting with `_` that plugin-api.md
   doesn't list as public, the bench tools it lists as internal, private
-  Python functions, and files in the read-only image (`/usr/share/ad5x`,
-  init scripts) and in `/run`.
+  Python functions, files in the read-only image (`/usr/share/ad5x`,
+  init scripts) other than the paths plugin-api.md lists under "Paths",
+  and `/run`.
 - **Bundled software:** Klipper, Moonraker, Fluidd, HelixScreen and the
   kernel move to newer versions when that keeps the list above working.
   Their own changes are named in the CHANGELOG.
@@ -56,6 +60,8 @@ changed before it is fixed for 1.x.
   release is one commit on top of the previous one, so a fork can merge
   each new release.
 - **Plugins:** set `requires_os` to the plugin API version you wrote it
-  for, and keep to the public names. `tools/check_plugin.py` checks both.
+  for, and keep to the public names. `tools/check_plugin.py` checks
+  `requires_os` and the reserved names; check the commands and fields you
+  use against plugin-api.md yourself.
 - **Something missing in the interfaces?** Open an issue. An addition can
   come in any 1.x; a change to what is listed above waits for 2.0.

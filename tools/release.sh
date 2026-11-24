@@ -262,10 +262,41 @@ BODY=$(python3 -c 'import json,sys; print(json.dumps({"tag_name": sys.argv[1],
 	"name": "Kiln OS " + sys.argv[1], "body": open(sys.argv[2]).read(),
 	"draft": sys.argv[3] == "true", "prerelease": sys.argv[4] == "true"}))' \
 	"$VERSION" "$DIST/RELEASE_NOTES.md" "$DRAFT" "$PRE")
-REL=$(curl -sf -m 60 "${AUTH[@]}" -H "Content-Type: application/json" \
-	-X POST "$API/releases" -d "$BODY") || die "creating the Gitea release failed"
+# Gitea's create call can fail right after the tag push (HTTP 500, "UNIQUE
+# constraint failed: release.repo_id, release.tag_name", v1.0.0-rc7): Gitea
+# is still adding its own row for the new tag. Wait and try again. When a
+# release for the tag is there by then (an earlier try that Gitea finished
+# after the time-out), it is set to this release's settings and used.
+gitea_release() {
+	local try rel rid
+	for try in 1 2 3 4; do
+		rel=$(curl -sf -m 60 "${AUTH[@]}" -H "Content-Type: application/json" \
+			-X POST "$API/releases" -d "$BODY") && { echo "$rel"; return 0; }
+		if rel=$(curl -sf -m 60 "${AUTH[@]}" "$API/releases/tags/$VERSION") &&
+			rid=$(echo "$rel" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])') &&
+			rel=$(curl -sf -m 60 "${AUTH[@]}" -H "Content-Type: application/json" \
+				-X PATCH "$API/releases/$rid" -d "$BODY"); then
+			echo "release: using the Gitea release already there for $VERSION" >&2
+			echo "$rel"
+			return 0
+		fi
+		[ "$try" -lt 4 ] || break
+		echo "release: creating the Gitea release failed (try $try of 4), again in ${RETRY_WAIT}s" >&2
+		sleep "$RETRY_WAIT"
+	done
+	return 1
+}
+RETRY_WAIT=${KILN_RELEASE_RETRY_WAIT:-10}
+REL=$(gitea_release) || die "creating the Gitea release failed"
 RID=$(echo "$REL" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+# Files a release found already there has (from that earlier try) are kept
+HAVE=$(echo "$REL" | python3 -c 'import json,sys
+for a in json.load(sys.stdin).get("assets") or []: print(a["name"])')
 for f in "$DIST/$NAME"-* "$DIST/SHA256SUMS"; do
+	if printf '%s\n' "$HAVE" | grep -qxF "$(basename "$f")"; then
+		echo "release: $(basename "$f") is there already"
+		continue
+	fi
 	curl -sf -m 1800 "${AUTH[@]}" -X POST \
 		"$API/releases/$RID/assets?name=$(basename "$f")" \
 		-F "attachment=@$f" >/dev/null || die "uploading $(basename "$f") failed"
