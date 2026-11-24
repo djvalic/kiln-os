@@ -3,7 +3,7 @@
 # release with the artifacts attached (docs/releasing.md).
 #
 # usage: tools/release.sh VERSION [--public] [--draft] [--pre] [--no-build]
-#                         [--notes FILE] [--dry-run] [--no-push]
+#                         [--notes FILE] [--dry-run] [--no-push] [--staged DIR]
 #   VERSION     vMAJOR.MINOR.PATCH (e.g. v1.0.0). Any suffix, a release
 #               candidate v1.0.0-rc2..9 too, makes a pre-release on Gitea and
 #               GitHub: only printers on the test update channel are
@@ -19,6 +19,12 @@
 #   --notes F   use F as the release notes instead of the generated ones
 #   --dry-run   build artifacts and notes into dist/VERSION, no tag, no upload
 #   --no-push   tag and build, but don't push or upload
+#   --staged D  publish the files a stage run made (tools/autobuild.sh
+#               --stage, D: /work/staged/VERSION with manifest.txt) as they
+#               are, nothing built or made again: tags the staged commit,
+#               the notes are D's RELEASE_NOTES.md. Needs --public. When a
+#               publish of D tried before (D/publish.state) already tagged
+#               the staged commit, the tag is used, not made again
 #
 # Gitea: ~/.config/ad5x/gitea.env (GITEA_URL, GITEA_REPO, GITEA_TOKEN;
 # mode 600, never in the repository). Remote "origin" must point at it.
@@ -42,9 +48,9 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 cd "$REPO"
 
 die() { echo "release: $*" >&2; exit 1; }
-usage() { sed -n '2,24p' "$0"; exit "${1:-2}"; }
+usage() { sed -n '2,30p' "$0"; exit "${1:-2}"; }
 
-VERSION= PUBLIC= DRAFT=false PRE=false BUILD=1 NOTES= DRY= PUSH=1
+VERSION= PUBLIC= DRAFT=false PRE=false BUILD=1 NOTES= DRY= PUSH=1 STAGED= TAGGED=
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--public) PUBLIC=1 ;;
@@ -54,6 +60,7 @@ while [ $# -gt 0 ]; do
 	--notes) shift; NOTES=${1:?--notes needs a file} ;;
 	--dry-run) DRY=1 ;;
 	--no-push) PUSH= ;;
+	--staged) shift; STAGED=${1:?--staged needs a folder} ;;
 	-h|--help) usage 0 ;;
 	-*) die "unknown option $1" ;;
 	*) [ -z "$VERSION" ] || die "one VERSION only"; VERSION=$1 ;;
@@ -79,10 +86,38 @@ if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
 	[ -n "$DRY" ] || die "uncommitted changes; commit or stash them first"
 	echo "release: dry run on a tree with uncommitted changes"
 fi
-if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
-	die "tag $VERSION exists already"
+# A staged build (--staged): its manifest names the version and the commit
+# that was built and tested; the tags on origin count too
+staged() { sed -n "s/^$1=//p" "$STAGED/manifest.txt"; }
+if [ -n "$STAGED" ]; then
+	[ -f "$STAGED/manifest.txt" ] || die "--staged: no $STAGED/manifest.txt"
+	[ "$(staged version)" = "$VERSION" ] || die "--staged: $STAGED holds $(staged version), not $VERSION"
+	[ -n "$PUBLIC" ] || die "--staged: only with --public (the stage checked its images vendor-free)"
+	BUILD=
+	git fetch -q --tags origin || die "git fetch --tags origin"
 fi
-COMMIT=$(git rev-parse HEAD)
+if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
+	# A publish of this staged build tried before and tagged the staged
+	# commit: it goes on from there (Gitea and GitHub reuse what is there)
+	if [ -n "$STAGED" ] && [ -f "$STAGED/publish.state" ] &&
+		[ "$(git rev-parse "$VERSION^{commit}")" = "$(staged commit)" ]; then
+		TAGGED=1
+		echo "release: tag $VERSION is there from an earlier try of this publish: not tagged again"
+	else
+		die "tag $VERSION exists already"
+	fi
+fi
+if [ -n "$STAGED" ]; then
+	COMMIT=$(staged commit)
+	# HEAD is the staged commit, or the CHANGELOG commit an earlier try of
+	# this publish put on it (nothing else changed)
+	[ "$(git rev-parse HEAD)" = "$COMMIT" ] || {
+		[ -n "$TAGGED" ] && [ "$(git rev-parse -q --verify HEAD^)" = "$COMMIT" ] &&
+			git diff --quiet "$COMMIT" HEAD -- . ':(exclude)CHANGELOG.md'
+	} || die "--staged: HEAD $(git rev-parse --short HEAD) is not the staged commit ${COMMIT:0:12}"
+else
+	COMMIT=$(git rev-parse HEAD)
+fi
 PREV=$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)	# not the daily klipper-/moonraker- tags
 if [ -z "$DRY" ] && [ -n "$PUSH" ]; then
 	[ -f ~/.config/ad5x/gitea.env ] || die "no ~/.config/ad5x/gitea.env"
@@ -107,8 +142,27 @@ build() {	# OUTDIR DEFCONFIG
 		die "build in $1 failed, see $DIST/build-${1##*/}.log"
 }
 DIST=$REPO/dist/$VERSION
+NAME=kiln-os-$VERSION
 rm -rf "$DIST"
 mkdir -p "$DIST"
+if [ -n "$STAGED" ]; then
+	# The staged files exactly as they were tested, checked against the
+	# stage's SHA256SUMS (it lists the licences file too: GitHub's own
+	# SHA256SUMS); the source archives GitHub lacks are in D/sources
+	cp -a "$STAGED/$NAME"-* "$STAGED/SHA256SUMS" "$STAGED/RELEASE_NOTES.md" "$DIST/" ||
+		die "--staged: copying the files from $STAGED failed"
+	( cd "$DIST" && sha256sum -c --quiet SHA256SUMS ) || die "--staged: the files don't match the staged SHA256SUMS"
+	for f in "$DIST/$NAME"-*; do
+		grep -q "  $(basename "$f")\$" "$DIST/SHA256SUMS" ||
+			die "--staged: $(basename "$f") is not in the staged SHA256SUMS"
+	done
+	[ -n "$NOTES" ] || NOTES=$STAGED/RELEASE_NOTES.md
+	cp "$NOTES" "$DIST/RELEASE_NOTES.md"
+	export KILN_STAGED_SOURCES=$STAGED/sources
+	echo "release: the staged $VERSION (commit ${COMMIT:0:12}), nothing built or made again"
+fi
+# Not for a staged build: the images, the artifacts and the notes are made here
+if [ -z "$STAGED" ]; then
 if [ -n "$BUILD" ]; then
 	echo "release: building the main OS and the recovery OS (logs in $DIST)"
 	[ -n "$PUBLIC" ] && export AD5X_VENDOR_FREE=1
@@ -143,7 +197,6 @@ for f in spl-usb2.bin u-boot.bin; do
 done
 
 # --- Artifacts -------------------------------------------------------------
-NAME=kiln-os-$VERSION
 KOPT=()
 [ -n "$PUBLIC" ] && KOPT=(-K)	# no stock kernel in public update files
 tools/make_swu.sh -r "$MAIN" "${KOPT[@]}" -V "$VERSION" --both \
@@ -217,14 +270,17 @@ else
 	} > "$DIST/RELEASE_NOTES.md"
 fi
 ( cd "$DIST" && sha256sum "$NAME"-* > SHA256SUMS )
+fi	# not a staged build
 echo "release: artifacts in $DIST:"
 ( cd "$DIST" && ls -l "$NAME"-* SHA256SUMS RELEASE_NOTES.md | awk '{print "  " $5 "\t" $9}' )
 
 [ -n "$DRY" ] && { echo "release: dry run, no tag, nothing uploaded"; exit 0; }
 
 # --- Tag, push, Gitea release ------------------------------------------------
-git tag -a "$VERSION" -F "$DIST/RELEASE_NOTES.md" "$COMMIT"
-echo "release: tagged $VERSION at $COMMIT"
+if [ -z "$TAGGED" ]; then
+	git tag -a "$VERSION" -F "$DIST/RELEASE_NOTES.md" "$COMMIT"
+	echo "release: tagged $VERSION at $COMMIT"
+fi
 # CHANGELOG.md: the released entries move under "## VERSION (date)" and a
 # new empty "## Unreleased" starts, so the next release's notes don't
 # repeat them. A commit of its own after the tagged one: the tag stays on

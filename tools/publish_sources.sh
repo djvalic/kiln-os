@@ -30,13 +30,18 @@
 #                                        built web files)
 #   src-buildroot-<version>.tar.gz       Buildroot itself
 # Our own packages (ad5x-*, local source) are this repository at TAG.
-# SOURCES_DRY=DIR: nothing on GitHub; the archives are written to DIR.
+# SOURCES_DRY=DIR: nothing on GitHub; the archives are written to DIR
+# (SOURCES_HAVE=FILE: names already on GitHub, one per line, not written;
+# tools/autobuild.sh --stage reads them from the "sources" release).
+# SOURCES_FROM=DIR: only uploads the archives in DIR (a staged build's) that
+# the "sources" release lacks; no legal-info, DIST's licences file is kept.
 set -euo pipefail
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 cd "$REPO"
 die() { echo "publish_sources: $*" >&2; exit 1; }
 TAG=${1:?TAG} DIST=${2:?DIST}
-DRY=${SOURCES_DRY:-}
+DRY=${SOURCES_DRY:-} FROM=${SOURCES_FROM:-}
+[ -z "$FROM" ] || [ -d "$FROM" ] || die "no $FROM"
 [ -n "$DRY" ] || : "${GITHUB_REPO:?}" "${GH_TOKEN:?}"
 GITHUB_REPO=${GITHUB_REPO:-OWNER/REPO}
 SRC_TAG=sources
@@ -45,7 +50,7 @@ work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 TARX=(tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner)
 
 # --- legal-info of both images ----------------------------------------------
-for o in output output-recovery; do
+[ -n "$FROM" ] || for o in output output-recovery; do
 	[ -d "buildroot/$o" ] || die "no buildroot/$o (build first)"
 	make -C buildroot/src O="$REPO/buildroot/$o" BR2_EXTERNAL="$REPO/buildroot" \
 		legal-info > "$work/legal-$o.log" 2>&1 || die "legal-info in buildroot/$o failed"
@@ -54,6 +59,7 @@ done
 # --- the "sources" release -----------------------------------------------------
 if [ -n "$DRY" ]; then
 	mkdir -p "$DRY"; ls "$DRY" > "$work/have"
+	[ -z "${SOURCES_HAVE:-}" ] || cat "$SOURCES_HAVE" >> "$work/have"
 elif ! gh release view "$SRC_TAG" --repo "$GITHUB_REPO" >/dev/null 2>&1; then
 	gh release create "$SRC_TAG" --repo "$GITHUB_REPO" --target main --prerelease \
 		--latest=false --title "Source code of Kiln OS releases" --notes \
@@ -75,7 +81,16 @@ upload() {	# FILE: attach to the sources release
 	up=$((up + 1))
 	echo "publish_sources: uploaded $(basename "$1") ($(du -h "$1" | cut -f1))"
 }
-have() { grep -qx "$1" "$work/have"; }
+have() { grep -qxF "$1" "$work/have"; }
+# A staged build's archives: the ones the release lacks, nothing else
+if [ -n "$FROM" ]; then
+	for f in "$FROM"/src-*; do
+		[ -f "$f" ] || continue
+		have "$(basename "$f")" || upload "$f"
+	done
+	echo "publish_sources: $up new source archive(s) from $FROM; $DIST/kiln-os-$TAG-licenses.tar.gz as staged"
+	exit 0
+fi
 LIST=$work/list	# PACKAGE VERSION LICENCE -> archive, for README.txt
 : > "$LIST"
 
@@ -166,8 +181,11 @@ fi
 rev=$(sed -n 's/^[[:space:]]*KLIPPER_REV=\([0-9a-f]*\).*/\1/p' tools/build_mcu.sh | head -1)
 [ -n "$rev" ] || die "no KLIPPER_REV in tools/build_mcu.sh"
 full=$(git ls-remote https://github.com/Klipper3d/klipper.git 2>/dev/null | awk -v r="$rev" 'index($1, r) == 1 { print $1; exit }')
-[ -n "$full" ] || full=$(gh api "repos/Klipper3d/klipper/commits/$rev" -q .sha) ||
+[ -n "$full" ] || full=$(gh api "repos/Klipper3d/klipper/commits/$rev" -q .sha 2>/dev/null) ||
+	full=$(curl -fsSL "https://api.github.com/repos/Klipper3d/klipper/commits/$rev" |
+		python3 -c 'import json, sys; print(json.load(sys.stdin)["sha"])') ||
 	die "resolving Klipper $rev"
+[[ $full =~ ^[0-9a-f]{40}$ ]] || die "resolving Klipper $rev: got '$full'"
 a=src-klipper-mcu-${full:0:12}.tar.gz
 if ! have "$a"; then
 	curl -fsSL -o "$work/$a" "https://github.com/Klipper3d/klipper/archive/$full.tar.gz" ||

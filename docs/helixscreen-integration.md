@@ -23,8 +23,8 @@ for `LW` `https://github.com/Hrybmo/lesswaste/blob/3d42421a6ed020baaa7563c94a56a
 
 ## Our patches
 
-`buildroot/package/helixscreen/*.patch` on HelixScreen v1.1.0-rc.1: 88
-files, `0001` to `0096` (the missing numbers were dropped because upstream
+`buildroot/package/helixscreen/*.patch` on HelixScreen v1.1.0-rc.1: 89
+files, `0001` to `0097` (the missing numbers were dropped because upstream
 has them). `docs/setup-wizard.md` ("HelixScreen side") lists `0001` to
 `0019` with what each does: among them the AD5X setup steps (0001, 0002,
 0003, 0006 time zone), the IFS port sensors (0004), Settings > Plugins

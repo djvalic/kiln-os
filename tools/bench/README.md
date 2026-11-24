@@ -3,8 +3,8 @@
 Scripts for the boot loader tests of the v1.0 plan on our own printer.
 **Not in any image, not in the update or install path, not in HelixScreen,
 Fluidd or the recovery UI.** For everyone else the recovery OS has the
-opt-in installer, `ad5x-bootloader-install` ("Install Kiln's boot loader
-(experimental)", `docs/own-boot-loader.md`), which writes the same ranges
+opt-in installer, `ad5x-bootloader-install` ("Install Kiln's boot loader",
+`docs/own-boot-loader.md`), which writes the same ranges
 in the same order from the images it carries, on boards on its allowlist. They are copied over SSH when a step needs
 them and run by hand as root, one step at a time. Each one checks first,
 says exactly what it would do, and does it only with `--yes`.

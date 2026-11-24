@@ -1269,8 +1269,8 @@ def boot_rules(a, disk, plan, cur, stock):
         if not a.install_boot_loader:
             raise RepairError(
                 "the disk holds %s: writing this first MiB installs Kiln's "
-                "own boot loader (Kiln's SPL and U-Boot, opt-in and "
-                "experimental, docs/own-boot-loader.md). Give "
+                "own boot loader (Kiln's SPL and U-Boot, opt-in, "
+                "docs/own-boot-loader.md). Give "
                 "--install-boot-loader for that, or leave the first MiB and "
                 "the kernels out (--parts p2,p4,p5: the system only, under "
                 "the boot loader that is there). Nothing written" %

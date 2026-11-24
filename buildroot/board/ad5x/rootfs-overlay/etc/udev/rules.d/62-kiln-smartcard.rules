@@ -1,0 +1,8 @@
+# USB smart-card readers (CCID, interface class 0x0b: ACR122U, ACR1552U,
+# ACR1252U, Identiv and every other PC/SC reader) for the klipper user, so
+# an NFC plugin (FF_NFC, for spool tags) can drive them through usbfs
+# without root. eudev's 50-udev-default.rules makes every USB device node
+# root:root 0664 (readable, not writable) and imports ID_USB_INTERFACES;
+# this comes after it, so its values win. Only devices with a CCID
+# interface: other USB devices keep eudev's defaults.
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ENV{ID_USB_INTERFACES}=="*:0b????:*", GROUP="klipper", MODE="0660"

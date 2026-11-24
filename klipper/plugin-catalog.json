@@ -20,10 +20,18 @@
     {
       "name": "spoolman",
       "title": "Spoolman",
-      "description": "A Spoolman spool per IFS slot: the loaded slot's spool is the active one (needs a Spoolman server)",
+      "description": "A Spoolman spool per IFS slot: the loaded slot's spool is the active one (needs a Spoolman server: Spool inventory below, or Spoolman on another computer)",
       "url": "https://github.com/djvalic/kiln-spoolman.git",
       "requires_os": "1.3",
       "components": ["spoolman_slots"]
+    },
+    {
+      "name": "microspool",
+      "title": "Spool inventory",
+      "description": "Spools on the printer itself: microspool, a small Spoolman-compatible server with a web page on port 7912 (with the IFS, also install Spoolman)",
+      "url": "https://github.com/djvalic/kiln-microspool.git",
+      "requires_os": "1.4",
+      "components": ["microspool"]
     },
     {
       "name": "happy-hare",

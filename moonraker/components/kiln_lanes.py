@@ -8,19 +8,37 @@
 #                                     IFS_MAP_TOOL's default map)
 #                  "material": "PLA" ("" = no filament or no type set)
 #                  "color": "#RRGGBB", "nozzle_temp": 220, "bed_temp": 0,
+#                  "filament_id": "PKLNPLA" (only for the IFS types below),
 #                  "spool_id", "scan_time" (UTC, "%Y-%m-%dT%H:%M:%SZ", set
 #                  when the slot's content changes after the first write)}
+# filament_id is the OrcaSlicer filament id of Kiln's profile for the slot's
+# type (kiln-orca, profiles/tools/gen.py FILAMENT_IDS: keep both the same).
+# OrcaSlicer then picks that exact profile, a user preset too; without the
+# key (a custom type, an empty slot) it matches "material" against its
+# system presets only.
 # Kept up to date from Klipper's ifs_materials (IFS_SET_MATERIAL, the touch
 # screen) and ifs.loaded_channels (a slot without filament is empty).
 # No "vendor" or "name" key: HelixScreen reads "vendor" and "spool_name" as
 # its own spellings and would not take an outside edit, and Kiln has no
 # vendor or spool name to write under "vendor_name" or "name".
 #
+# HelixScreen (the touch screen) writes the same records, each time the
+# whole record, with keys of its own ("writer": "helixscreen", spool_id,
+# vendor_name, filament_type, helix_*, its own filament_id). So Kiln merges:
+# it reads the records, changes only its own keys (merge_lane) and writes
+# only the lanes that then differ. Every other key stays, spool_id too.
+# "writer" is never set: HelixScreen won't write a record another program
+# signed, which would stop the screen's own slot edits. A HelixScreen write
+# drops Kiln's keys in turn, so a cheap check (a read; a write only when a
+# Kiln key is missing or wrong) runs a few seconds after each slot change
+# and once a minute.
+#
 # [kiln_lanes]
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
 from __future__ import annotations
+import asyncio
 import logging
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -30,43 +48,132 @@ if TYPE_CHECKING:
 
 NAMESPACE = "lane_data"
 SLOTS = (1, 2, 3, 4)
+KEYS = [f"lane{s}" for s in SLOTS]
+# IFS slot type -> OrcaSlicer filament_id of Kiln's filament profile
+FILAMENT_IDS = {
+    "PLA": "PKLNPLA", "SILK": "PKLNSLK", "PLA-CF": "PKLNPCF",
+    "PETG": "PKLNPET", "PETG-CF": "PKLNPGC", "ABS": "PKLNABS",
+    "TPU": "PKLNTPU",
+}
+KILN_IDS = frozenset(FILAMENT_IDS.values())
+# seconds: re-check after a slot change (HelixScreen writes for the same
+# change land within it), and between the checks otherwise
+RECHECK_DELAY = 5.
+CHECK_PERIOD = 60.
 
 
-def build_lanes(materials: Dict[str, Any], ifs: Dict[str, Any],
-                prev: Optional[Dict[str, Dict[str, Any]]] = None,
-                now: str = "") -> Dict[str, Dict[str, Any]]:
-    """lane_data records from printer.ifs_materials and printer.ifs.
+def filament_id(material: Any) -> Optional[str]:
+    """Kiln's OrcaSlicer filament id for a slot type (any case, spaces
+    around ignored), None for a custom type or an empty slot."""
+    if not isinstance(material, str):
+        return None
+    return FILAMENT_IDS.get(material.strip().upper())
 
-    prev is the last lanes written (None before the first write). A lane
-    whose content is unchanged keeps its scan_time; a changed lane gets now.
-    """
+
+def slot_content(materials: Dict[str, Any],
+                 ifs: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Kiln's own content per lane, from printer.ifs_materials and
+    printer.ifs: lane, material, color, nozzle_temp, filament_id (None for
+    a custom type or an empty slot)."""
     slots = materials.get("slots") or {}
     present: Optional[List[int]] = None
     if ifs.get("connected") and ifs.get("loaded_channels") is not None:
         present = list(ifs["loaded_channels"])
-    lanes = {}
+    content = {}
     for s in SLOTS:
         m = slots.get(str(s)) or {}
         mtype = m.get("type") or ""
         if present is not None and s not in present:
             mtype = ""
         temp = m.get("temp") if mtype else None
-        lane = {
+        content[f"lane{s}"] = {
             "lane": str(s - 1),
             "material": mtype,
             "color": (m.get("color") or "") if mtype else "",
             "nozzle_temp": int(round(temp)) if temp else 0,
-            "bed_temp": 0,
-            "spool_id": None,
+            "filament_id": filament_id(mtype),
         }
-        old = (prev or {}).get(f"lane{s}")
-        if old is not None and {k: v for k, v in old.items()
-                                if k != "scan_time"} == lane:
-            lane["scan_time"] = old.get("scan_time", "")
-        else:
-            lane["scan_time"] = now if prev is not None else ""
-        lanes[f"lane{s}"] = lane
-    return lanes
+    return content
+
+
+def helix_filament_id(rec: Dict[str, Any]) -> bool:
+    """True when the record's filament_id is HelixScreen's: a string id
+    that isn't one of Kiln's, marked with helix_filament_id_source (the
+    linked Spoolman spool's extra.orca_filament_id, "spoolman") or written
+    with a catalog pick (helix_catalog_id: HelixScreen sets no marker then).
+    """
+    fid = rec.get("filament_id")
+    if not isinstance(fid, str) or not fid.strip() or fid in KILN_IDS:
+        return False
+    for marker in ("helix_filament_id_source", "helix_catalog_id"):
+        v = rec.get(marker)
+        if isinstance(v, str) and v:
+            return True
+    return False
+
+
+def merge_lane(old: Optional[Dict[str, Any]], content: Dict[str, Any],
+               changed: bool, now: str) -> Dict[str, Any]:
+    """The record Kiln stores: old (another writer's keys kept) with Kiln's
+    keys from content. changed: the slot's content moved since Kiln's last
+    pass (new scan_time, another writer's bed_temp is stale)."""
+    rec = dict(old) if isinstance(old, dict) else {}
+    mtype = content["material"]
+    rec["lane"] = content["lane"]
+    rec["material"] = mtype
+    rec["color"] = content["color"]
+    rec["nozzle_temp"] = content["nozzle_temp"]
+    # Kiln has no bed temperature (0). Another writer's (HelixScreen's,
+    # for its material) is kept while the slot holds the same filament.
+    bed = rec.get("bed_temp")
+    if not (mtype and not changed and isinstance(bed, int)
+            and not isinstance(bed, bool) and bed > 0):
+        rec["bed_temp"] = 0
+    # A HelixScreen brand id is kept, an empty slot and another material
+    # too: HelixScreen keeps the spool link and its id over both (it
+    # writes it again at its next write), and OrcaSlicer reads a slot
+    # with material "" as empty whatever its filament_id.
+    if not helix_filament_id(rec):
+        fid = content["filament_id"]
+        if fid is not None:
+            rec["filament_id"] = fid
+            rec.pop("helix_filament_id_source", None)
+        elif isinstance(rec.get("filament_id"), str):
+            # Kiln's id (or an unmarked one) for a type it has none for
+            del rec["filament_id"]
+            rec.pop("helix_filament_id_source", None)
+    rec.setdefault("spool_id", None)
+    if changed:
+        rec["scan_time"] = now
+    elif not isinstance(rec.get("scan_time"), str):
+        rec["scan_time"] = ""
+    return rec
+
+
+def merge_lanes(records: Dict[str, Any], content: Dict[str, Dict[str, Any]],
+                prev: Optional[Dict[str, Dict[str, Any]]],
+                now: str) -> Dict[str, Dict[str, Any]]:
+    """The lanes to write: records (as read from the database) merged with
+    content, only those that differ from what's stored. prev is Kiln's
+    content at its last pass (None before the first)."""
+    out = {}
+    for key, c in content.items():
+        old = records.get(key)
+        changed = prev is not None and prev.get(key) != c
+        rec = merge_lane(old, c, changed, now)
+        if rec != old:
+            out[key] = rec
+    return out
+
+
+def build_lanes(materials: Dict[str, Any], ifs: Dict[str, Any],
+                prev: Optional[Dict[str, Dict[str, Any]]] = None,
+                now: str = "") -> Dict[str, Dict[str, Any]]:
+    """The four records Kiln writes into an empty namespace."""
+    content = slot_content(materials, ifs)
+    return {key: merge_lane(None, c, prev is not None
+                            and prev.get(key) != c, now)
+            for key, c in content.items()}
 
 
 class KilnLanes:
@@ -75,7 +182,11 @@ class KilnLanes:
         self.db = self.server.load_component(config, "database")
         self.materials: Dict[str, Any] = {}
         self.ifs: Dict[str, Any] = {}
-        self.written: Optional[Dict[str, Any]] = None
+        # Kiln's content at the last pass, None before the first
+        self.content: Optional[Dict[str, Dict[str, Any]]] = None
+        self.lock = asyncio.Lock()
+        self.timer = self.server.get_event_loop().register_timer(
+            self._on_timer)
         self.server.register_event_handler(
             "server:klippy_ready", self._on_ready)
 
@@ -93,7 +204,8 @@ class KilnLanes:
             return
         self.materials = status.get("ifs_materials") or {}
         self.ifs = status.get("ifs") or {}
-        await self._write()
+        await self._sync()
+        self.timer.start(CHECK_PERIOD)
 
     async def _on_status(self, status: Dict[str, Any],
                          eventtime: float) -> None:
@@ -104,17 +216,40 @@ class KilnLanes:
         if "ifs" in status:
             self.ifs.update(status["ifs"])
             changed = True
-        if changed and self.materials:
-            await self._write()
-
-    async def _write(self) -> None:
-        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        lanes = build_lanes(self.materials, self.ifs, self.written, now)
-        if lanes == self.written:
+        if not changed or not self.materials:
             return
-        await self.db.insert_batch(NAMESPACE, lanes)
-        self.written = lanes
-        logging.debug(f"kiln_lanes: {lanes}")
+        if slot_content(self.materials, self.ifs) == self.content:
+            return
+        await self._sync()
+        # HelixScreen writes for the same change after Kiln: check again
+        self.timer.stop()
+        self.timer.start(RECHECK_DELAY)
+
+    async def _on_timer(self, eventtime: float) -> float:
+        if self.materials:
+            await self._sync()
+        return eventtime + CHECK_PERIOD
+
+    async def _sync(self) -> None:
+        """Read the records, merge Kiln's keys in, write the lanes that
+        differ (none: no write)."""
+        async with self.lock:
+            content = slot_content(self.materials, self.ifs)
+            try:
+                records = await self.db.get_batch(NAMESPACE, KEYS)
+            except Exception:
+                logging.exception("kiln_lanes: lane_data not readable")
+                return
+            now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            lanes = merge_lanes(records or {}, content, self.content, now)
+            if lanes:
+                try:
+                    await self.db.insert_batch(NAMESPACE, lanes)
+                except Exception:
+                    logging.exception("kiln_lanes: lane_data not written")
+                    return
+                logging.debug(f"kiln_lanes: {lanes}")
+            self.content = content
 
 
 def load_component(config: ConfigHelper) -> KilnLanes:

@@ -115,7 +115,8 @@ From the stock kernel image and root filesystem (3.1.0 updater):
   -mfp64 -mnan=2008` (stock userspace is r2 code; the CPU is r5).
 - BusyBox init (as stock) and eudev, read-only squashfs root.
   eudev's standard rules set up `/dev` (`ttyS*`, `ttyACM*`, `ttyUSB*` to
-  group `dialout`, kept by `etc/udev/rules.d/61-kiln-serial.rules`;
+  group `dialout`, kept by `etc/udev/rules.d/61-kiln-serial.rules`; USB card
+  readers (CCID) group `klipper` 0660 by `62-kiln-smartcard.rules`;
   `/dev/serial/by-id`, `/dev/v4l/by-id`). `S10udevd`
   copies the owner's rules from `/data/ad5x/udev/rules.d` to
   `/run/udev/rules.d` before udevd starts, only when the folders and the

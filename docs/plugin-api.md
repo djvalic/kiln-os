@@ -504,7 +504,7 @@ later definition replaces a whole template. Templates must not call
 | `purge_gcode` | `OLD`, `NEW`, `ROUND`, `ROUNDS`, `FLUSH`, `FLUSH_SPEED` | Each purge round | 1.0 |
 | `prime_gcode` | `OLD`, `NEW` | After a prime-only swap at the box (macros/ `ifs_templates.cfg`) | 1.0 |
 | `prime_at_print_gcode` | `OLD`, `NEW` | After a prime at the print position, instead of `prime_gcode` (macros/ `ifs_templates.cfg`) | 1.5 |
-| `after_gcode` | `OLD`, `NEW` | End of a swap | 1.0 |
+| `after_gcode` | `OLD`, `NEW` | End of a swap: back to the print as stock, still lifted, Y, then X, then Z (to the position `before_gcode` notes; a replaced `before_gcode` that doesn't note it gets one `RESTORE_GCODE_STATE MOVE=1`) | 1.0 |
 | `abort_gcode` | `OLD`, `NEW` | A swap failed or was stopped after `before_gcode` ran: put back the state without moving | 1.5 |
 
 Options a plugin may set: `purge_mode_variable`, `prime_length`,

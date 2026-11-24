@@ -116,6 +116,12 @@ the plugin's `root/` folder, then:
 ENABLE_PLUGIN NAME=myplugin ROOT=1
 ```
 
+On the touch screen, switching such a plugin on in Settings > Plugins asks
+first: it says the plugin runs some of its code as root and to turn it on
+only if you trust where it comes from. Turn On sends the command above
+(HelixScreen patch `0097`). A plugin installed from the catalog there stays
+off until you switch it on this way.
+
 `root/install.sh` runs as root first; the plugin is switched on only when it
 succeeded. After that, `root/update.sh` runs by itself when the plugin is
 updated with git (`UPDATE_PLUGIN`, Moonraker's update manager), and
@@ -343,6 +349,11 @@ REMOVE_PLUGIN NAME=notify             (switch it off and delete it)
 ```
 
 Spoolman is installed the same way, with `INSTALL_PLUGIN NAME=spoolman ENABLE=1`.
+It needs a Spoolman server: Spoolman on another computer (`[spoolman] server:`
+in your `moonraker.conf`), or the catalog's Spool inventory on the printer
+itself (`INSTALL_PLUGIN NAME=microspool ENABLE=1`: microspool, a small
+Spoolman-compatible server with a web page on port 7912; its `[spoolman]`
+replaces yours while it is on).
 Use `INSTALL_PLUGIN`, not `ENABLE_PLUGIN`: the image has no spoolman copy of
 its own (older images had an unusable one in `/usr/share/ad5x/plugins/spoolman`,
 which is removed at each build).
@@ -383,7 +394,9 @@ su klipper -s /bin/sh -c 'git clone https://github.com/someone/ad5x-myplugin.git
 ```
 
 then `ENABLE_PLUGIN NAME=myplugin` (Moonraker restarts and reads the new
-`[update_manager]`). Fluidd then shows it under updates.
+`[update_manager]`), or switch it on in Settings > Plugins on the touch
+screen: a plugin cloned by hand is listed there within a few seconds (from
+v1.0.1; before, only after `LIST_PLUGINS` or a Klipper restart). Fluidd then shows it under updates.
 After an update Moonraker restarts Klipper (`managed_services: klipper`).
 It asks the root update agent (`[machine] provider: kiln_agent`), the same
 way Fluidd's restart buttons do. The agent refuses while a print is running.

@@ -1,0 +1,445 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Tue, 24 Nov 2026 08:14:07 -0500
+Subject: [PATCH] settings: Plugins can switch on a plugin that runs code as
+ root
+
+Since plugin API 1.6 a plugin may ship root scripts (root/install.sh,
+update.sh, uninstall.sh; Kiln's docs/plugin-root-hooks.md). Klipper's
+ad5x_plugins refuses ENABLE_PLUGIN for such a plugin unless ROOT=1 is
+given, so Settings > Plugins (patch 0005) could not switch it on: the
+switch sent ENABLE_PLUGIN NAME=<name>, Klipper answered with an error
+and the switch went back. An install from the catalog with ENABLE=1
+leaves such a plugin installed but off; the status line already shows
+Klipper's message for that, and the plugin's row appears with its
+switch off.
+
+The status object's available[<name>].root is read into
+Ad5xInstalledPlugin::root. Switching on a plugin with root set asks
+first, in the panel's Warning confirmation: "This plugin runs some of
+its code as root, the system's administrator account, for example to
+set up USB devices. Turn it on only if you trust where it comes from.
+Klipper restarts." Turn On sends ENABLE_PLUGIN NAME=<name> ROOT=1.
+That starts a job (root/install.sh, shown on the status line as for an
+install), and Klipper restarts only after root answers, so the command
+is sent as one that does not restart right away (no "Firmware
+restarting..." toast while install.sh runs). A job that fails
+(install.sh refused, timed out) now also rebuilds the rows, so a switch
+turned on for it goes back to off.
+
+Plugins without root scripts, turning off, install, update and remove
+ask and send what they did. The question and its command come from one
+helper, ad5x_toggle_confirm(), so the tests can check them.
+
+The new sentence is in every language of the screen. "Turn on {}?" was
+only in English and Russian; it is added in the other nine, so the
+question is in one language.
+
+Tests: the installed rows carry root; switching a plugin without root
+scripts on and off asks and sends as before; a root plugin's question
+names root and the administrator account and sends ROOT=1 without an
+immediate restart, and turning it off is unchanged; in every language
+the root question and its title are translated (Russian checked word
+for word).
+---
+ include/ui_settings_ad5x_plugins.h        |  17 +++-
+ src/ui/ui_settings_ad5x_plugins.cpp       |  34 +++++--
+ tests/unit/test_settings_ad5x_plugins.cpp | 111 ++++++++++++++++++++--
+ translations/de.yml                       |   3 +
+ translations/en.yml                       |   2 +
+ translations/es.yml                       |   3 +
+ translations/fr.yml                       |   3 +
+ translations/it.yml                       |   3 +
+ translations/ja.yml                       |   3 +
+ translations/ko.yml                       |   3 +
+ translations/pt.yml                       |   3 +
+ translations/ru.yml                       |   2 +
+ translations/tr.yml                       |   3 +
+ translations/zh.yml                       |   3 +
+ 14 files changed, 177 insertions(+), 16 deletions(-)
+
+diff --git a/include/ui_settings_ad5x_plugins.h b/include/ui_settings_ad5x_plugins.h
+index cc80efa..4b59a12 100644
+--- a/include/ui_settings_ad5x_plugins.h
++++ b/include/ui_settings_ad5x_plugins.h
+@@ -42,6 +42,7 @@ struct Ad5xInstalledPlugin {
+     bool builtin = false;    ///< Shipped with the OS: can be switched, not removed
+     bool enabled = false;    ///< On at this Klipper start
+     bool compatible = true;  ///< Plugin API new enough
++    bool root = false;       ///< Has root scripts: ENABLE_PLUGIN needs ROOT=1
+ };
+ 
+ /// One catalog plugin that is not installed.
+@@ -61,6 +62,20 @@ std::vector<Ad5xCatalogPlugin> ad5x_catalog_plugins(const json& status);
+ /// Catalog title for @p name, else @p name itself.
+ std::string ad5x_plugin_title(const json& status, const std::string& name);
+ 
++/// What switching an installed plugin on or off asks first, and sends.
++struct Ad5xToggleConfirm {
++    std::string title;
++    std::string message;
++    std::string button;
++    std::string gcode;
++    bool restarts = true; ///< Klipper restarts as soon as the command is accepted
++};
++
++/// The confirmation for switching @p p on (@p on) or off. A plugin with root
++/// scripts says so before it goes on and is enabled with ROOT=1; Klipper
++/// restarts only after root's install.sh, so not right away.
++Ad5xToggleConfirm ad5x_toggle_confirm(const Ad5xInstalledPlugin& p, bool on);
++
+ /// What the status line says about the job.
+ enum class Ad5xJobLine {
+     None = 0,    ///< Nothing to report: the line is hidden
+@@ -127,7 +142,7 @@ class Ad5xPluginsOverlay : public OverlayBase {
+ 
+     json status_ = json::object();
+     std::vector<Ad5xInstalledPlugin> installed_;
+-    /// enabled + available + catalog as last rendered; rows rebuild when it changes
++    /// enabled + available + catalog + a failed job, as last rendered; a change rebuilds the rows
+     std::string rows_key_;
+     bool loaded_ = false;
+     bool klippy_ready_ = true;
+diff --git a/src/ui/ui_settings_ad5x_plugins.cpp b/src/ui/ui_settings_ad5x_plugins.cpp
+index 787788c..8f934de 100644
+--- a/src/ui/ui_settings_ad5x_plugins.cpp
++++ b/src/ui/ui_settings_ad5x_plugins.cpp
+@@ -102,6 +102,7 @@ std::vector<Ad5xInstalledPlugin> ad5x_installed_plugins(const json& status) {
+         p.version = json_util::safe_string(it.value(), "version");
+         p.builtin = json_util::safe_string(it.value(), "source") != "user";
+         p.compatible = json_util::safe_bool(it.value(), "compatible", true);
++        p.root = json_util::safe_bool(it.value(), "root", false);
+         p.enabled = std::find(enabled.begin(), enabled.end(), p.name) != enabled.end();
+         out.push_back(std::move(p));
+     }
+@@ -137,6 +138,24 @@ std::vector<Ad5xCatalogPlugin> ad5x_catalog_plugins(const json& status) {
+     return out;
+ }
+ 
++Ad5xToggleConfirm ad5x_toggle_confirm(const Ad5xInstalledPlugin& p, bool on) {
++    Ad5xToggleConfirm c;
++    c.title = fmt::format(on ? lv_tr("Turn on {}?") : lv_tr("Turn off {}?"), p.title);
++    c.button = on ? lv_tr("Turn On") : lv_tr("Turn Off");
++    if (on && p.root) {
++        c.message = lv_tr("This plugin runs some of its code as root, the system's administrator "
++                          "account, for example to set up USB devices. Turn it on only if you "
++                          "trust where it comes from. Klipper restarts.");
++        c.gcode = fmt::format("ENABLE_PLUGIN NAME={} ROOT=1", p.name);
++        // A job first (root/install.sh, the status line); the restart follows it
++        c.restarts = false;
++        return c;
++    }
++    c.message = lv_tr("Klipper restarts to apply this. Continue?");
++    c.gcode = fmt::format("{} NAME={}", on ? "ENABLE_PLUGIN" : "DISABLE_PLUGIN", p.name);
++    return c;
++}
++
+ // ============================================================================
+ // LIFECYCLE
+ // ============================================================================
+@@ -365,6 +384,12 @@ void Ad5xPluginsOverlay::render_rows(bool force) {
+             lists[key] = *v;
+         }
+     }
++    // A failed job rebuilds them too: a switch turned on for a job that
++    // failed (root/install.sh) goes back to off
++    if (const json* job = json_util::find_member(status_, "job");
++        job && json_util::safe_string(*job, "state") == "failed") {
++        lists["failed_job"] = *job;
++    }
+     const std::string key = json_util::safe_dump(lists);
+     installed_ = ad5x_installed_plugins(status_);
+     const std::vector<Ad5xCatalogPlugin> catalog = ad5x_catalog_plugins(status_);
+@@ -483,18 +508,15 @@ void Ad5xPluginsOverlay::handle_toggle(const std::string& name, bool on) {
+         render_rows(true);
+         return;
+     }
+-    const std::string title =
+-        fmt::format(on ? lv_tr("Turn on {}?") : lv_tr("Turn off {}?"), p->title);
+-    const std::string gcode =
+-        fmt::format("{} NAME={}", on ? "ENABLE_PLUGIN" : "DISABLE_PLUGIN", name);
++    const Ad5xToggleConfirm c = ad5x_toggle_confirm(*p, on);
+     helix::ui::ConfirmOptions opts;
+     opts.owner_token = object_lifetime_.token();
+     // Cancelling puts the switch back
+     opts.on_cancel = [this]() { render_rows(true); };
+     opts.on_dismiss = [this]() { render_rows(true); };
+     helix::ui::modal_confirm(
+-        title.c_str(), lv_tr("Klipper restarts to apply this. Continue?"), ModalSeverity::Warning,
+-        on ? lv_tr("Turn On") : lv_tr("Turn Off"), [this, gcode]() { send(gcode, true); }, opts);
++        c.title.c_str(), c.message.c_str(), ModalSeverity::Warning, c.button.c_str(),
++        [this, gcode = c.gcode, restarts = c.restarts]() { send(gcode, restarts); }, opts);
+ }
+ 
+ void Ad5xPluginsOverlay::handle_install(const std::string& name) {
+diff --git a/tests/unit/test_settings_ad5x_plugins.cpp b/tests/unit/test_settings_ad5x_plugins.cpp
+index 976830a..49480d8 100644
+--- a/tests/unit/test_settings_ad5x_plugins.cpp
++++ b/tests/unit/test_settings_ad5x_plugins.cpp
+@@ -2,10 +2,16 @@
+ 
+ #include "ui_settings_ad5x_plugins.h"
+ 
++#include "lvgl/src/others/translation/lv_translation.h"
++#include "translation_loader.h"
++
++#include <string>
++
+ #include "../catch_amalgamated.hpp"
+ #include "hv/json.hpp"
+ 
+ using namespace helix::settings;
++using Catch::Matchers::ContainsSubstring;
+ 
+ namespace {
+ 
+@@ -20,7 +26,9 @@ json sample_status() {
+             "notify": {"source": "user", "description": "Print notifications",
+                        "version": "0.3.0", "compatible": true},
+             "bambufy-compat": {"source": "shipped", "description": "", "version": "",
+-                               "compatible": false}
++                               "compatible": false},
++            "ff-nfc": {"source": "user", "description": "NFC spool tags", "version": "1.0.0",
++                       "compatible": true, "root": true, "root_installed": false}
+         },
+         "catalog": {
+             "notify": {"title": "Notifications", "description": "Telegram, ntfy, ...",
+@@ -40,22 +48,28 @@ json sample_status() {
+ TEST_CASE("installed plugins are sorted, titled from the catalog and carry their state",
+           "[ad5x_plugins]") {
+     const auto rows = ad5x_installed_plugins(sample_status());
+-    REQUIRE(rows.size() == 3);
++    REQUIRE(rows.size() == 4);
+     CHECK(rows[0].name == "bambufy-compat");
+-    CHECK(rows[1].name == "notify");
+-    CHECK(rows[2].name == "zmod-compat");
++    CHECK(rows[1].name == "ff-nfc");
++    CHECK(rows[2].name == "notify");
++    CHECK(rows[3].name == "zmod-compat");
+ 
+     CHECK(rows[0].title == "bambufy-compat");
+     CHECK_FALSE(rows[0].compatible);
+     CHECK_FALSE(rows[0].enabled);
+ 
+-    CHECK(rows[1].title == "Notifications");
+-    CHECK_FALSE(rows[1].builtin);
+-    CHECK(rows[1].enabled);
+-    CHECK(rows[1].version == "0.3.0");
++    CHECK(rows[1].root);
++    CHECK_FALSE(rows[1].enabled);
+ 
+-    CHECK(rows[2].builtin);
++    CHECK(rows[2].title == "Notifications");
++    CHECK_FALSE(rows[2].builtin);
+     CHECK(rows[2].enabled);
++    CHECK(rows[2].version == "0.3.0");
++    CHECK_FALSE(rows[2].root);
++
++    CHECK(rows[3].builtin);
++    CHECK(rows[3].enabled);
++    CHECK_FALSE(rows[3].root);
+ }
+ 
+ TEST_CASE("the catalog section lists only plugins not installed", "[ad5x_plugins]") {
+@@ -82,3 +96,82 @@ TEST_CASE("an object without lists yields no rows", "[ad5x_plugins]") {
+     CHECK(ad5x_catalog_plugins(status).empty());
+     CHECK(ad5x_plugin_title(status, "notify") == "notify");
+ }
++
++TEST_CASE("switching a plugin on or off asks and sends as before", "[ad5x_plugins]") {
++    Ad5xInstalledPlugin p;
++    p.name = "notify";
++    p.title = "Notifications";
++
++    const Ad5xToggleConfirm on = ad5x_toggle_confirm(p, true);
++    CHECK(on.title == "Turn on Notifications?");
++    CHECK(on.message == "Klipper restarts to apply this. Continue?");
++    CHECK(on.button == "Turn On");
++    CHECK(on.gcode == "ENABLE_PLUGIN NAME=notify");
++    CHECK(on.restarts);
++
++    const Ad5xToggleConfirm off = ad5x_toggle_confirm(p, false);
++    CHECK(off.title == "Turn off Notifications?");
++    CHECK(off.message == "Klipper restarts to apply this. Continue?");
++    CHECK(off.button == "Turn Off");
++    CHECK(off.gcode == "DISABLE_PLUGIN NAME=notify");
++    CHECK(off.restarts);
++}
++
++TEST_CASE("a plugin with root scripts says so and goes on with ROOT=1", "[ad5x_plugins]") {
++    const auto rows = ad5x_installed_plugins(sample_status());
++    REQUIRE(rows.size() == 4);
++    REQUIRE(rows[1].name == "ff-nfc");
++
++    const Ad5xToggleConfirm on = ad5x_toggle_confirm(rows[1], true);
++    CHECK(on.title == "Turn on ff-nfc?");
++    CHECK_THAT(on.message, ContainsSubstring("runs some of its code as root"));
++    CHECK_THAT(on.message, ContainsSubstring("administrator account"));
++    CHECK_THAT(on.message, ContainsSubstring("only if you trust where it comes from"));
++    CHECK_THAT(on.message, ContainsSubstring("Klipper restarts"));
++    CHECK(on.button == "Turn On");
++    CHECK(on.gcode == "ENABLE_PLUGIN NAME=ff-nfc ROOT=1");
++    // root/install.sh runs first; Klipper restarts after it
++    CHECK_FALSE(on.restarts);
++
++    // Turning it off is the same as for any plugin
++    Ad5xInstalledPlugin enabled = rows[1];
++    enabled.enabled = true;
++    const Ad5xToggleConfirm off = ad5x_toggle_confirm(enabled, false);
++    CHECK(off.gcode == "DISABLE_PLUGIN NAME=ff-nfc");
++    CHECK(off.message == "Klipper restarts to apply this. Continue?");
++    CHECK(off.restarts);
++}
++
++TEST_CASE("the root question is in every language, one language at a time",
++          "[ad5x_plugins][i18n]") {
++    struct RestoreLanguage {
++        ~RestoreLanguage() {
++            lv_translation_set_language(helix::ui::kIdentityLocale);
++        }
++    } restore;
++    Ad5xInstalledPlugin p;
++    p.name = "ff-nfc";
++    p.title = "NFC";
++    p.root = true;
++    for (const char* lang : {"de", "es", "fr", "it", "ja", "ko", "pt", "ru", "tr", "zh"}) {
++        CAPTURE(lang);
++        helix::ui::ensure_translation_loaded(lang);
++        lv_translation_set_language(lang);
++        const Ad5xToggleConfirm on = ad5x_toggle_confirm(p, true);
++        CHECK(on.title != "Turn on NFC?");
++        CHECK_THAT(on.title, ContainsSubstring("NFC"));
++        CHECK_THAT(on.message, ContainsSubstring("root"));
++        CHECK_THAT(on.message, ContainsSubstring("USB"));
++        CHECK_THAT(on.message, !ContainsSubstring("administrator"));
++        CHECK_THAT(on.message, !ContainsSubstring("Turn it on"));
++        CHECK(on.button != "Turn On");
++        CHECK(on.gcode == "ENABLE_PLUGIN NAME=ff-nfc ROOT=1");
++    }
++    helix::ui::ensure_translation_loaded("ru");
++    lv_translation_set_language("ru");
++    const Ad5xToggleConfirm ru = ad5x_toggle_confirm(p, true);
++    CHECK(ru.title == "Включить NFC?");
++    CHECK_THAT(ru.message, ContainsSubstring("от имени root"));
++    CHECK_THAT(ru.message, ContainsSubstring("Klipper перезапустится"));
++    CHECK(ru.button == "Включить");
++}
+diff --git a/translations/de.yml b/translations/de.yml
+index 2289c11..d7c39ca 100644
+--- a/translations/de.yml
++++ b/translations/de.yml
+@@ -5158,3 +5158,6 @@ translations:
+   'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': 'Neustart ins Wiederherstellungssystem (ein Update von einem USB-Stick oder über die Webseite auf Port 8080 installieren)'
+   'Restarting into the recovery OS...': 'Neustart ins Wiederherstellungssystem...'
+   'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'Der Drucker startet ins Wiederherstellungssystem neu, wo er nicht drucken kann. Zum Zurückkehren dort auf Boot main OS tippen.'
++  # Kiln OS: switching on a plugin that runs code as root (patch 0097)
++  'Turn on {}?': '{} einschalten?'
++  'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'Dieses Plugin führt einen Teil seines Codes als root aus, dem Administratorkonto des Systems, zum Beispiel um USB-Geräte einzurichten. Schalte es nur ein, wenn du seiner Herkunft vertraust. Klipper startet neu.'
+diff --git a/translations/en.yml b/translations/en.yml
+index 9239089..3ff02e3 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -5404,3 +5404,5 @@ translations:
+   'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.': 'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.'
+   'Kiln''s own boot loader': 'Kiln''s own boot loader'
+   'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader. Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader. Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
++  # Kiln OS: switching on a plugin that runs code as root (patch 0097)
++  'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.'
+diff --git a/translations/es.yml b/translations/es.yml
+index e705e3e..053c6e3 100644
+--- a/translations/es.yml
++++ b/translations/es.yml
+@@ -5148,3 +5148,6 @@ translations:
+   'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': 'Reiniciar en el sistema de recuperación (instalar una actualización desde una memoria USB o la página web del puerto 8080)'
+   'Restarting into the recovery OS...': 'Reiniciando en el sistema de recuperación...'
+   'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'La impresora se reinicia en el sistema de recuperación, donde no puede imprimir. Para volver, toca Boot main OS en su pantalla.'
++  # Kiln OS: switching on a plugin that runs code as root (patch 0097)
++  'Turn on {}?': '¿Encender {}?'
++  'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'Este plugin ejecuta parte de su código como root, la cuenta de administrador del sistema, por ejemplo para configurar dispositivos USB. Enciéndelo solo si confías en su origen. Klipper se reinicia.'
+diff --git a/translations/fr.yml b/translations/fr.yml
+index a230ec1..867f12e 100644
+--- a/translations/fr.yml
++++ b/translations/fr.yml
+@@ -5184,3 +5184,6 @@ translations:
+   'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': 'Redémarrer dans le système de récupération (installer une mise à jour depuis une clé USB ou la page web du port 8080)'
+   'Restarting into the recovery OS...': 'Redémarrage dans le système de récupération...'
+   'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'L''imprimante redémarre dans le système de récupération, où elle ne peut pas imprimer. Pour revenir, touchez Boot main OS sur son écran.'
++  # Kiln OS: switching on a plugin that runs code as root (patch 0097)
++  'Turn on {}?': 'Allumer {} ?'
++  'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'Ce plugin exécute une partie de son code en tant que root, le compte administrateur du système, par exemple pour configurer des périphériques USB. Ne l''activez que si vous faites confiance à sa provenance. Klipper redémarre.'
+diff --git a/translations/it.yml b/translations/it.yml
+index 2709027..9cb41f2 100644
+--- a/translations/it.yml
++++ b/translations/it.yml
+@@ -5149,3 +5149,6 @@ translations:
+   'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': 'Riavvia nel sistema di ripristino (installa un aggiornamento da una chiavetta USB o dalla pagina web sulla porta 8080)'
+   'Restarting into the recovery OS...': 'Riavvio nel sistema di ripristino...'
+   'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'La stampante si riavvia nel sistema di ripristino, dove non può stampare. Per tornare, tocca Boot main OS sulla sua schermata.'
++  # Kiln OS: switching on a plugin that runs code as root (patch 0097)
++  'Turn on {}?': 'Accendere {}?'
++  'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'Questo plugin esegue parte del suo codice come root, l''account amministratore del sistema, ad esempio per configurare dispositivi USB. Accendilo solo se ti fidi della sua provenienza. Klipper si riavvia.'
+diff --git a/translations/ja.yml b/translations/ja.yml
+index 7e86fad..820a926 100644
+--- a/translations/ja.yml
++++ b/translations/ja.yml
+@@ -4892,3 +4892,6 @@ translations:
+   'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': '復旧システムで再起動します (USB メモリまたはポート 8080 の Web ページから更新をインストール)'
+   'Restarting into the recovery OS...': '復旧システムで再起動しています...'
+   'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'プリンターは復旧システムで再起動し、そこでは印刷できません。戻るには、その画面で Boot main OS をタップしてください。'
++  # Kiln OS: switching on a plugin that runs code as root (patch 0097)
++  'Turn on {}?': '{} をオンにしますか？'
++  'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'このプラグインはコードの一部を root（システムの管理者アカウント）として実行します。たとえば USB デバイスの設定に使います。提供元を信頼できる場合にのみオンにしてください。Klipper が再起動します。'
+diff --git a/translations/ko.yml b/translations/ko.yml
+index 9aa1685..19ad384 100644
+--- a/translations/ko.yml
++++ b/translations/ko.yml
+@@ -4691,3 +4691,6 @@ translations:
+   'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': '복구 시스템으로 다시 시작 (USB 메모리 또는 포트 8080의 웹 페이지에서 업데이트 설치)'
+   'Restarting into the recovery OS...': '복구 시스템으로 다시 시작하는 중...'
+   'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': '프린터가 복구 시스템으로 다시 시작되며, 그곳에서는 인쇄할 수 없습니다. 돌아오려면 그 화면에서 Boot main OS를 누르세요.'
++  # Kiln OS: switching on a plugin that runs code as root (patch 0097)
++  'Turn on {}?': '{}을(를) 켤까요?'
++  'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': '이 플러그인은 USB 장치 설정 등을 위해 코드의 일부를 root(시스템 관리자 계정)로 실행합니다. 출처를 신뢰할 수 있을 때만 켜세요. Klipper가 재시작됩니다.'
+diff --git a/translations/pt.yml b/translations/pt.yml
+index 3cedd7a..25f7c10 100644
+--- a/translations/pt.yml
++++ b/translations/pt.yml
+@@ -5152,3 +5152,6 @@ translations:
+   'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': 'Reiniciar no sistema de recuperação (instalar uma atualização de um pendrive ou pela página web na porta 8080)'
+   'Restarting into the recovery OS...': 'Reiniciando no sistema de recuperação...'
+   'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'A impressora reinicia no sistema de recuperação, onde não pode imprimir. Para voltar, toque em Boot main OS na tela dele.'
++  # Kiln OS: switching on a plugin that runs code as root (patch 0097)
++  'Turn on {}?': 'Ligar {}?'
++  'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'Este plugin executa parte do seu código como root, a conta de administrador do sistema, por exemplo para configurar dispositivos USB. Ligue-o apenas se confiar na sua origem. O Klipper reinicia.'
+diff --git a/translations/ru.yml b/translations/ru.yml
+index 177cd41..c796cd7 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -5570,3 +5570,5 @@ translations:
+   'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.': 'Готово обновление загрузчика. Чтобы установить его: Настройки > Система > Загрузить систему восстановления > Питание > Обновить загрузчик Kiln. Пока вы не запустите обновление там, ничего не записывается.'
+   'Kiln''s own boot loader': 'Собственный загрузчик Kiln'
+   'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader. Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'У Kiln OS есть собственный загрузчик для этого принтера. Чтобы установить его: Настройки > Система > Загрузить систему восстановления > Питание > Установить загрузчик Kiln. Сначала прочитайте руководство по загрузчику, в нём описаны риск и флешка для восстановления: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
++  # Kiln OS: switching on a plugin that runs code as root (patch 0097)
++  'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'Часть кода этого плагина выполняется от имени root, учётной записи администратора системы, например для настройки USB-устройств. Включайте его, только если доверяете его источнику. Klipper перезапустится.'
+diff --git a/translations/tr.yml b/translations/tr.yml
+index 2366826..b5df9c1 100644
+--- a/translations/tr.yml
++++ b/translations/tr.yml
+@@ -4691,3 +4691,6 @@ translations:
+   'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': 'Kurtarma sisteminde yeniden başlat (USB bellekten veya 8080 numaralı bağlantı noktasındaki web sayfasından güncelleme yükleyin)'
+   'Restarting into the recovery OS...': 'Kurtarma sisteminde yeniden başlatılıyor...'
+   'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'Yazıcı kurtarma sisteminde yeniden başlar; orada yazdıramaz. Geri dönmek için oradaki ekranda Boot main OS''a dokunun.'
++  # Kiln OS: switching on a plugin that runs code as root (patch 0097)
++  'Turn on {}?': '{} açılsın mı?'
++  'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'Bu eklenti, örneğin USB aygıtlarını kurmak için kodunun bir kısmını sistemin yönetici hesabı olan root olarak çalıştırır. Yalnızca kaynağına güveniyorsanız açın. Klipper yeniden başlar.'
+diff --git a/translations/zh.yml b/translations/zh.yml
+index 5cba097..9072f06 100644
+--- a/translations/zh.yml
++++ b/translations/zh.yml
+@@ -4882,3 +4882,6 @@ translations:
+   'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': '重启到恢复系统（从 U 盘或端口 8080 的网页安装更新）'
+   'Restarting into the recovery OS...': '正在重启到恢复系统...'
+   'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': '打印机将重启到恢复系统，在恢复系统中无法打印。要返回，请在其屏幕上点按 Boot main OS。'
++  # Kiln OS: switching on a plugin that runs code as root (patch 0097)
++  'Turn on {}?': '开启 {}？'
++  'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': '此插件的部分代码以 root（系统管理员账户）身份运行，例如用于设置 USB 设备。仅在您信任其来源时才开启。Klipper 将重新启动。'

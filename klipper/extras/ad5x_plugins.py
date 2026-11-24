@@ -157,6 +157,15 @@ PLUGIN_API_VERSION = "1.9"
 CONFIG_DIR = "/home/klipper/printer_data/config"
 SHIPPED_DIR = "/usr/share/ad5x/plugins"
 USER_DIR = "/data/ad5x/plugins"
+# Seconds between checks of USER_DIR for plugins added or removed by hand
+DIR_CHECK = 2.
+
+def dir_mtime(path):
+    """The directory's change time, None when it isn't there."""
+    try:
+        return os.stat(path).st_mtime_ns
+    except OSError:
+        return None
 CATALOG_FILE = "/usr/share/ad5x/plugin-catalog.json"
 # Picked up by S68ad5x-update-agent (root), which restarts Moonraker
 MOONRAKER_RESTART_FILE = "/data/ad5x/kiln-update/restart-moonraker"
@@ -1132,6 +1141,11 @@ class AD5XPlugins:
             pass
         self.proc = None
         self.found = self._scan()
+        # A plugin cloned by hand shows up without a command: the status
+        # (the touch screen's Plugins page, Fluidd) rescans when the user
+        # plugin folder changed, checked at most every DIR_CHECK seconds
+        self.user_dir_mtime = dir_mtime(self.user_dir)
+        self.next_dir_check = 0.
         # Enabled at this start (plugins.cfg as Klipper read it)
         self.loaded = read_enabled(self.plugins_file)[0]
         # Of those, the ones that run and the ones skipped (plan)
@@ -2116,7 +2130,16 @@ class AD5XPlugins:
                 " [%s]" % ("; ".join(notes),) if notes else ""))
         lines.append("ENABLE_PLUGIN NAME=<name> / DISABLE_PLUGIN NAME=<name>")
         gcmd.respond_info("\n".join(lines))
+    def _rescan_if_changed(self, eventtime):
+        if eventtime < self.next_dir_check:
+            return
+        self.next_dir_check = eventtime + DIR_CHECK
+        mtime = dir_mtime(self.user_dir)
+        if mtime != self.user_dir_mtime:
+            self.user_dir_mtime = mtime
+            self.found = self._scan()
     def get_status(self, eventtime):
+        self._rescan_if_changed(eventtime)
         return {
             'api_version': PLUGIN_API_VERSION,
             'enabled': list(self.loaded),

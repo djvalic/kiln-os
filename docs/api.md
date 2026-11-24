@@ -918,8 +918,10 @@ Moonraker's database namespace `lane_data` holds the IFS slots in the
 shape AFC uses, for OrcaSlicer's Moonraker printer agent (filament list
 from what is loaded, `docs/orcaslicer.md`). Kiln writes it from
 `printer.ifs_materials` and `printer.ifs.loaded_channels` whenever they
-change; it isn't written when Klipper has no `ifs` object. Read it; what
-you write there is overwritten at the next change.
+change, only the records whose content changed; it isn't written when
+Klipper has no `ifs` object. Kiln changes only the fields in the table
+below and keeps any other key a client stored in a record; what you write
+into those fields is overwritten at the next change or check.
 
 ```sh
 curl 'http://PRINTER/server/database/item?namespace=lane_data'
@@ -928,8 +930,8 @@ curl 'http://PRINTER/server/database/item?namespace=lane_data'
 ```json
 {"result": {"namespace": "lane_data", "key": null, "value": {
   "lane1": {"lane": "0", "material": "PLA", "color": "#FF0000",
-            "nozzle_temp": 220, "bed_temp": 0, "spool_id": null,
-            "scan_time": "2026-11-13T09:12:44Z"},
+            "nozzle_temp": 220, "bed_temp": 0, "filament_id": "PKLNPLA",
+            "spool_id": null, "scan_time": "2026-11-13T09:12:44Z"},
   "lane2": {"lane": "1", "material": "", "color": "", "nozzle_temp": 0,
             "bed_temp": 0, "spool_id": null, "scan_time": ""},
   "lane3": {...}, "lane4": {...}}}}
@@ -942,11 +944,19 @@ curl 'http://PRINTER/server/database/item?namespace=lane_data'
 | `material` | string | Material type, "" when the slot has no filament or no type set |
 | `color` | string | `#RRGGBB`, "" with no material |
 | `nozzle_temp` | int | The slot's nozzle temperature (its own or the material's default), 0 none |
-| `bed_temp` | int | Always 0 (Kiln doesn't know it) |
-| `spool_id` | null | Always null (Spoolman is a plugin) |
-| `scan_time` | string | UTC `YYYY-MM-DDTHH:MM:SSZ` of the slot's last change since Moonraker started, "" before |
+| `bed_temp` | int | 0 (Kiln doesn't know it). A positive one HelixScreen stored stays until the slot's material changes or the slot empties. Since v1.0.1 |
+| `filament_id` | string | OrcaSlicer filament id of Kiln's profile for the type (kiln-orca): PLA `PKLNPLA`, SILK `PKLNSLK`, PLA-CF `PKLNPCF`, PETG `PKLNPET`, PETG-CF `PKLNPGC`, ABS `PKLNABS`, TPU `PKLNTPU` (type matched in any case). No key for any other type or an empty slot. HelixScreen's own string id (with `helix_filament_id_source` or `helix_catalog_id` in the record) is kept instead, also over an empty slot or a material change. Since v1.0.1 |
+| `spool_id` | int or null | Not Kiln's: kept as stored (HelixScreen's linked Spoolman spool, also over an empty slot); null in a record Kiln creates |
+| `scan_time` | string | UTC `YYYY-MM-DDTHH:MM:SSZ` of the slot's last change Kiln saw, or of the last HelixScreen write; "" in a record Kiln creates |
 
-No `vendor` or `name` keys. Since v0.0.5.
+No `vendor` or `name` keys from Kiln, and never `writer`. Since v0.0.5.
+HelixScreen writes records under the same keys too (`"writer":
+"helixscreen"` and more fields: `filament_type`, `vendor_name`, `name`,
+`spool_id`, `helix_*`, its `filament_id` a string or null), each time the
+whole record. Since v1.0.1 Kiln merges: it keeps HelixScreen's keys, and a
+check 5 s after each slot change and every 60 s (a read; a write only for
+a record that needs it) puts Kiln's fields back after a HelixScreen
+write. Before, the last write of a record won.
 
 Kiln also writes Fluidd's own namespace `fluidd` once (key `macros`: macro
 categories, internal macros hidden), only while Fluidd has no macro

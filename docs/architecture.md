@@ -183,7 +183,7 @@ an image carries; `klipper/mcu-dicts/` holds the data dictionaries that
 | `kernel-mainline/` | The opt-in 7.3 kernel |
 | `recovery-ui/` | The recovery OS's touch UI (C, LVGL) |
 | `translations/` | Translator kits |
-| `orca/` | OrcaSlicer profiles ([orcaslicer.md](orcaslicer.md)) |
+| `orca/` | Pointer to the OrcaSlicer profiles in [kiln-orca](https://github.com/djvalic/kiln-orca) ([orcaslicer.md](orcaslicer.md)) |
 | `tools/` | Build, release and install scripts, the runtime Python tools the image installs, and the tests (`tools/test_*`). [CONTRIBUTING.md](../CONTRIBUTING.md) says which are public. |
 | `tools/install/` | The first-install script from stock (USB stick or SSH) |
 | `docs/` | Documentation. [Index](README.md) |

@@ -50,7 +50,10 @@ myplugin/
 | `uninstall.sh` | `DISABLE_PLUGIN` and `REMOVE_PLUGIN`, before the plugin is switched off or removed | Stop what it started and remove what `install.sh` put in place. It may be called when nothing runs |
 
 - **Consent:** `ROOT=1` is how the owner says yes. Without it, enabling a
-  plugin with root scripts is refused with "runs code as root". Updates run
+  plugin with root scripts is refused with "runs code as root". The touch
+  screen's Settings > Plugins asks the owner first ("This plugin runs some
+  of its code as root ... Turn it on only if you trust where it comes
+  from.") and sends `ROOT=1` only after Turn On. Updates run
   `update.sh` by themselves after that, as zMod does: the owner already said
   yes to this plugin.
 - **Only what git checked out runs by itself:** a `root/` that changed any
@@ -154,6 +157,9 @@ start-stop-daemon -K -p /run/myplugin-watch.pid
   root scripts is refused.
 - `INSTALL_PLUGIN NAME=<name> ENABLE=1 ROOT=1`: clones it, then the same.
   `ENABLE=1` without `ROOT=1` installs it and leaves it off, with a message.
+  The touch screen's Install sends `ENABLE=1` without `ROOT=1`: its status
+  line shows that message, and the plugin's switch then asks and sends
+  `ENABLE_PLUGIN NAME=<name> ROOT=1`.
 - `DISABLE_PLUGIN NAME=<name>` and `REMOVE_PLUGIN NAME=<name>`: run
   `uninstall.sh` first.
 - Each request runs in the background like the git jobs:
@@ -249,7 +255,13 @@ run them.
 ### A device watcher at boot
 
 `root/S50mywatch` is the boot script; `install.sh` puts it in place and
-starts it, so it runs now and at every boot:
+starts it, so it runs now and at every boot.
+
+USB card readers don't need one from v1.0.1: `62-kiln-smartcard.rules`
+gives every USB device with a smart-card (CCID) interface to group
+`klipper` (0660), and USB serial adapters (CH340, CP210x, FTDI, PL2303,
+CDC-ACM) are `/dev/ttyUSB*`/`/dev/ttyACM*` in group `dialout`, which
+`klipper` is in. The example is for other USB devices:
 
 ```sh
 #!/bin/sh

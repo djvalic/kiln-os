@@ -12,7 +12,8 @@ macro names and parameters, mapped onto this system's own macros:
 | `_DISABLE_SENSOR`, `_ENABLE_SENSOR` | toolhead runout sensor off / back on |
 | `TIMELAPSE_TAKE_FRAME` | nothing (moonraker-timelapse replaces it) |
 | `SET_ACTIVE_SPOOL`, `CLEAR_ACTIVE_SPOOL` | Spoolman, once set up |
-| `SET_PAUSE_NEXT_LAYER`, `SET_PAUSE_AT_LAYER`, `M600` | pause at a layer, filament change |
+| `SET_PAUSE_NEXT_LAYER`, `SET_PAUSE_AT_LAYER` | pause at a layer |
+| `M600` | filament change: pause, lift 50 mm, wait at the purge box; `RESUME` comes back still lifted (Y, then X), then lowers over the print. The plugin's `PAUSE`/`RESUME` add only that; other pauses resume as without the plugin |
 | `LINE_PURGE` | prime line; during a print skipped once `PRINT_START` has drawn its prime line, `LINE_PURGE FORCE=1` draws anyway |
 | `LED_ON`, `LED_OFF`, `LED`, `M300` | chamber light, beep (none) |
 
