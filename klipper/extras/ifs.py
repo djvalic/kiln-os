@@ -2649,13 +2649,24 @@ class IFS:
         commanded distance, not a measurement of physical filament travel.
         The stock cut and unload choreography is left unchanged."""
         length = self.pre_cut_retract_length
-        if (not length or self.channel != old or self.channel_source != "kiln"
-                or self.refill_busy or not self._in_print()
-                or self._purge_mode() != 2 or self._head_has_filament() is not True
-                or any(self.materials[c - 1].get('type') != 'PLA'
-                       for c in (old, new))):
-            if length:
-                logging.info("ifs: pre-cut retract skipped: eligibility check")
+        if not length:
+            return 0.
+        reason = None
+        if self.channel != old or self.channel_source != "kiln":
+            reason = "loaded channel not confirmed by Kiln"
+        elif self.refill_busy:
+            reason = "auto-refill active"
+        elif not self._in_print():
+            reason = "not printing"
+        elif self._purge_mode() != 2:
+            reason = "not slicer-controlled box purge mode"
+        elif self._head_has_filament() is not True:
+            reason = "toolhead filament not confirmed"
+        elif any(self.materials[c - 1].get('type') != 'PLA'
+                 for c in (old, new)):
+            reason = "both materials must be PLA"
+        if reason:
+            logging.info("ifs: pre-cut retract skipped: %s", reason)
             return 0.
         move = self.printer.lookup_object('gcode_move').get_status(
             self.reactor.monotonic())
