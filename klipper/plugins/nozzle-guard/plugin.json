@@ -1,0 +1,10 @@
+{
+  "name": "nozzle-guard",
+  "description": "Pauses the print when the nozzle hits the print or the bed (the bed weighing board feels a push)",
+  "version": "1.0.0",
+  "author": "ad5x-open",
+  "url": "docs/nozzle-guard.md",
+  "requires_os": "1.10",
+  "requires": [],
+  "conflicts": []
+}

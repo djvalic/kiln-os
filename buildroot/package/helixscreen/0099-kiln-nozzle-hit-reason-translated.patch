@@ -1,0 +1,743 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Tue, 24 Nov 2026 15:28:33 -0500
+Subject: [PATCH] print: the nozzle guard's pause line in the screen's language
+
+Kiln's nozzle-guard plugin (patch 0098 has its setting) writes one
+English line before it pauses the print:
+
+  !! Nozzle hit detected: the bed felt 412 g (limit 300 g) at Z 1.20.
+  Print paused: check the print and the nozzle, then resume or cancel.
+
+(" at Z ..." left out when the position is unknown). That line was the
+pause reason on the print status screen and the error dialog's text, so
+it showed in English whatever the screen's language.
+
+kiln::nozzle_hit_reason() (kiln_nozzle_hit_reason.cpp) recognises the
+line, reads the force, the limit and Z as Klipper wrote them, and gives
+"Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and
+the nozzle, then resume or cancel." in the screen's language, without
+the Z part when the line has none. A line it can't read gives "Nozzle
+hit detected. Check the print and the nozzle, then resume or cancel.";
+so does a translation whose placeholders don't fit. Any other line is
+shown as before.
+
+It runs on the main thread where the text is shown: in
+PrintStopReasonTracker::publish() for the pause reason (also a reason
+read back from the gcode store), and in GcodeErrorRouter::process_line()
+for the error dialog, where raw_detail keeps Klipper's wording for the
+dedup. The reason is translated when the print pauses; a language change
+while paused shows the new language at the next publish.
+
+The three sentences are in all eleven catalogs (en and de, es, fr, it,
+ja, ko, pt, ru, tr, zh), with the words patch 0098's translations use
+for the guard; the ja and zh text uses only characters the built-in CJK
+fonts have.
+---
+ include/kiln_nozzle_hit_reason.h           |  47 ++++
+ src/application/gcode_error_router.cpp     |   9 +
+ src/print/kiln_nozzle_hit_reason.cpp       | 139 ++++++++++
+ src/print/print_stop_reason.cpp            |   5 +
+ tests/unit/test_kiln_nozzle_hit_reason.cpp | 297 +++++++++++++++++++++
+ translations/de.yml                        |   4 +
+ translations/en.yml                        |   4 +
+ translations/es.yml                        |   4 +
+ translations/fr.yml                        |   4 +
+ translations/it.yml                        |   4 +
+ translations/ja.yml                        |   4 +
+ translations/ko.yml                        |   4 +
+ translations/pt.yml                        |   4 +
+ translations/ru.yml                        |   4 +
+ translations/tr.yml                        |   4 +
+ translations/zh.yml                        |   4 +
+ 16 files changed, 541 insertions(+)
+ create mode 100644 include/kiln_nozzle_hit_reason.h
+ create mode 100644 src/print/kiln_nozzle_hit_reason.cpp
+ create mode 100644 tests/unit/test_kiln_nozzle_hit_reason.cpp
+
+diff --git a/include/kiln_nozzle_hit_reason.h b/include/kiln_nozzle_hit_reason.h
+new file mode 100644
+index 0000000..35d9feb
+--- /dev/null
++++ b/include/kiln_nozzle_hit_reason.h
+@@ -0,0 +1,47 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++/**
++ * @file kiln_nozzle_hit_reason.h
++ * @brief Kiln OS: the nozzle-hit guard's pause line in the screen's language
++ *
++ * Kiln's nozzle-guard plugin (klipper/plugins/nozzle-guard, ad5x_nozzle_guard.py
++ * `_trip`) writes one English `!!` line before it pauses:
++ *
++ *   Nozzle hit detected: the bed felt 412 g (limit 300 g) at Z 1.20. Print
++ *   paused: check the print and the nozzle, then resume or cancel.
++ *
++ * (" at Z ..." left out when the position is unknown). That line is the pause
++ * reason and the error dialog's text; shown as it is, it would be English on
++ * every screen language. This recognises it and gives the translated sentence
++ * with Klipper's numbers in it, or a translated generic one when the numbers
++ * can't be read.
++ *
++ * @threading lv_tr(): main thread only
++ */
++
++#pragma once
++
++#include <optional>
++#include <string>
++
++namespace helix::kiln {
++
++/// The numbers of a nozzle-hit line, as Klipper wrote them ("412", "300", "1.20").
++struct NozzleHit {
++    std::string force;
++    std::string limit;
++    std::string z; ///< Empty when the line has no " at Z ..."
++};
++
++/// Whether @p text (with or without the "!! " prefix) is the nozzle guard's line.
++bool is_nozzle_hit_line(const std::string& text);
++
++/// The numbers of the nozzle guard's line; nullopt when it isn't one or they
++/// can't be read.
++std::optional<NozzleHit> parse_nozzle_hit(const std::string& text);
++
++/// The sentence the screen shows for @p text in the current language, or
++/// nullopt when @p text isn't the nozzle guard's line (shown as it is then).
++std::optional<std::string> nozzle_hit_reason(const std::string& text);
++
++} // namespace helix::kiln
+diff --git a/src/application/gcode_error_router.cpp b/src/application/gcode_error_router.cpp
+index 4deb237..428c2c3 100644
+--- a/src/application/gcode_error_router.cpp
++++ b/src/application/gcode_error_router.cpp
+@@ -18,6 +18,7 @@
+ #include "gcode_response_lines.h"
+ #include "i_moonraker_api.h"
+ #include "i_moonraker_client.h"
++#include "kiln_nozzle_hit_reason.h"
+ #include "klipper_error_table.h"
+ #include "lvgl.h"
+ #include "moonraker_error.h"
+@@ -593,6 +594,14 @@ void GcodeErrorRouter::process_line(const std::string& line, bool firmware_repor
+         }
+         ev->detail = std::move(decoded);
+     }
++    // Kiln OS: the nozzle guard's English line in the screen's language
++    // (raw_detail keeps Klipper's wording for the dedup)
++    if (auto localized = kiln::nozzle_hit_reason(ev->detail)) {
++        if (ev->raw_detail.empty()) {
++            ev->raw_detail = ev->detail;
++        }
++        ev->detail = std::move(*localized);
++    }
+ 
+     // A fault the firmware itself reported -- standing in its list, or pushed
+     // as a raise -- is current by definition: the INFO suppression exists for
+diff --git a/src/print/kiln_nozzle_hit_reason.cpp b/src/print/kiln_nozzle_hit_reason.cpp
+new file mode 100644
+index 0000000..bc6889c
+--- /dev/null
++++ b/src/print/kiln_nozzle_hit_reason.cpp
+@@ -0,0 +1,139 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include "kiln_nozzle_hit_reason.h"
++
++#include "lvgl/src/others/translation/lv_translation.h"
++
++#include <spdlog/fmt/fmt.h>
++#include <spdlog/spdlog.h>
++
++#include <cctype>
++#include <cstdlib>
++#include <cstring>
++
++namespace helix::kiln {
++
++namespace {
++
++constexpr const char* kBang = "!!";
++constexpr const char* kHead = "Nozzle hit detected";
++constexpr const char* kFelt = "Nozzle hit detected: the bed felt ";
++constexpr const char* kLimit = " g (limit ";
++constexpr const char* kLimitEnd = " g)";
++constexpr const char* kAtZ = " at Z ";
++
++/// @p text without a leading "!!" and spaces
++std::string strip_bang(const std::string& text) {
++    size_t i = 0;
++    while (i < text.size() && std::isspace(static_cast<unsigned char>(text[i]))) {
++        ++i;
++    }
++    if (text.compare(i, std::strlen(kBang), kBang) == 0) {
++        i += std::strlen(kBang);
++        while (i < text.size() && std::isspace(static_cast<unsigned char>(text[i]))) {
++            ++i;
++        }
++    }
++    return text.substr(i);
++}
++
++bool starts_with_at(const std::string& s, size_t pos, const char* what) {
++    return s.compare(pos, std::strlen(what), what) == 0;
++}
++
++/// A number as Python's %.0f / %.2f writes it ("412", "-0.05") at @p pos;
++/// moves @p pos past it. Empty when there is none.
++std::string take_number(const std::string& s, size_t& pos) {
++    size_t i = pos;
++    if (i < s.size() && s[i] == '-') {
++        ++i;
++    }
++    const size_t digits = i;
++    while (i < s.size() && std::isdigit(static_cast<unsigned char>(s[i]))) {
++        ++i;
++    }
++    if (i == digits) {
++        return {};
++    }
++    if (i + 1 < s.size() && s[i] == '.' && std::isdigit(static_cast<unsigned char>(s[i + 1]))) {
++        ++i;
++        while (i < s.size() && std::isdigit(static_cast<unsigned char>(s[i]))) {
++            ++i;
++        }
++    }
++    std::string out = s.substr(pos, i - pos);
++    pos = i;
++    return out;
++}
++
++const char* generic_reason() {
++    return lv_tr("Nozzle hit detected. Check the print and the nozzle, then resume or cancel.");
++}
++
++/// fmt with a translated @p pattern; one whose placeholders don't fit gives
++/// the generic sentence instead
++template <typename... Args> std::string format_reason(const char* pattern, const Args&... args) {
++    try {
++        return fmt::format(fmt::runtime(pattern), args...);
++    } catch (const fmt::format_error& e) {
++        spdlog::warn("[Kiln] nozzle hit: bad translation '{}': {}", pattern, e.what());
++        return generic_reason();
++    }
++}
++
++} // namespace
++
++bool is_nozzle_hit_line(const std::string& text) {
++    return strip_bang(text).rfind(kHead, 0) == 0;
++}
++
++std::optional<NozzleHit> parse_nozzle_hit(const std::string& text) {
++    const std::string s = strip_bang(text);
++    if (!starts_with_at(s, 0, kFelt)) {
++        return std::nullopt;
++    }
++    NozzleHit hit;
++    size_t pos = std::strlen(kFelt);
++    hit.force = take_number(s, pos);
++    if (hit.force.empty() || !starts_with_at(s, pos, kLimit)) {
++        return std::nullopt;
++    }
++    pos += std::strlen(kLimit);
++    hit.limit = take_number(s, pos);
++    if (hit.limit.empty() || !starts_with_at(s, pos, kLimitEnd)) {
++        return std::nullopt;
++    }
++    pos += std::strlen(kLimitEnd);
++    if (starts_with_at(s, pos, kAtZ)) {
++        pos += std::strlen(kAtZ);
++        hit.z = take_number(s, pos);
++        if (hit.z.empty()) {
++            return std::nullopt;
++        }
++    }
++    // The sentence ends here; what follows is the advice the translation carries
++    if (pos >= s.size() || s[pos] != '.') {
++        return std::nullopt;
++    }
++    return hit;
++}
++
++std::optional<std::string> nozzle_hit_reason(const std::string& text) {
++    if (!is_nozzle_hit_line(text)) {
++        return std::nullopt;
++    }
++    const auto hit = parse_nozzle_hit(text);
++    if (!hit) {
++        return std::string(generic_reason());
++    }
++    if (hit->z.empty()) {
++        return format_reason(lv_tr("Nozzle hit: the bed felt {} g (limit {} g). Check the print "
++                                   "and the nozzle, then resume or cancel."),
++                             hit->force, hit->limit);
++    }
++    return format_reason(lv_tr("Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the "
++                               "print and the nozzle, then resume or cancel."),
++                         hit->force, hit->limit, hit->z);
++}
++
++} // namespace helix::kiln
+diff --git a/src/print/print_stop_reason.cpp b/src/print/print_stop_reason.cpp
+index 046f4f2..daf2497 100644
+--- a/src/print/print_stop_reason.cpp
++++ b/src/print/print_stop_reason.cpp
+@@ -5,6 +5,7 @@
+ #include "firmware_error_envelope.h"
+ #include "gcode_response_lines.h"
+ #include "i_moonraker_client.h"
++#include "kiln_nozzle_hit_reason.h"
+ #include "moonraker_error.h"
+ #include "observer_factory.h"
+ #include "printer_state.h"
+@@ -251,6 +252,10 @@ void PrintStopReasonTracker::publish() {
+     if (reason.empty()) {
+         reason = carried_reason_;
+     }
++    // Kiln OS: the nozzle guard's English line in the screen's language
++    if (auto localized = kiln::nozzle_hit_reason(reason)) {
++        reason = std::move(*localized);
++    }
+     if (!reason.empty()) {
+         spdlog::info("[PrintStopReason] {}", reason);
+     }
+diff --git a/tests/unit/test_kiln_nozzle_hit_reason.cpp b/tests/unit/test_kiln_nozzle_hit_reason.cpp
+new file mode 100644
+index 0000000..ca78324
+--- /dev/null
++++ b/tests/unit/test_kiln_nozzle_hit_reason.cpp
+@@ -0,0 +1,297 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++// Kiln OS: the nozzle guard's English pause line is shown in the screen's
++// language, with Klipper's numbers in it: as the pause reason and in the
++// error dialog. A line whose numbers can't be read gets the generic sentence.
++
++#include "ui_modal.h"
++#include "ui_update_queue.h"
++
++#include "../fake_moonraker_client.h"
++#include "../lvgl_test_fixture.h"
++#include "../lvgl_ui_test_fixture.h"
++#include "../test_helpers/gcode_error_router_test_access.h"
++#include "../test_helpers/print_state_test_drivers.h"
++#include "../test_helpers/update_queue_test_access.h"
++#include "app_globals.h"
++#include "data_root_resolver.h"
++#include "gcode_error_router.h"
++#include "kiln_nozzle_hit_reason.h"
++#include "lvgl/src/others/translation/lv_translation.h"
++#include "moonraker_api.h"
++#include "moonraker_client.h"
++#include "print_stop_reason.h"
++#include "printer_state.h"
++#include "recovery_modal_presenter.h"
++#include "test_helpers/printer_state_test_access.h"
++#include "translation_loader.h"
++
++#include <cstring>
++#include <filesystem>
++#include <fstream>
++#include <memory>
++#include <optional>
++#include <string>
++#include <vector>
++
++#include "../catch_amalgamated.hpp"
++#include "hv/json.hpp"
++
++using namespace helix;
++using json = nlohmann::json;
++namespace fs = std::filesystem;
++
++namespace {
++
++// What ad5x_nozzle_guard.py `_trip` writes, with and without the position
++constexpr const char* kWithZ =
++    "!! Nozzle hit detected: the bed felt 412 g (limit 300 g) at Z 1.20. Print paused: check "
++    "the print and the nozzle, then resume or cancel.";
++constexpr const char* kWithoutZ =
++    "!! Nozzle hit detected: the bed felt 650 g (limit 600 g). Print paused: check the print "
++    "and the nozzle, then resume or cancel.";
++constexpr const char* kGarbled =
++    "!! Nozzle hit detected: the bed felt a lot (limit 300 g). Print paused: check the print "
++    "and the nozzle, then resume or cancel.";
++
++constexpr const char* kKeyWithZ = "Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the "
++                                  "print and the nozzle, then resume or cancel.";
++constexpr const char* kKeyWithoutZ = "Nozzle hit: the bed felt {} g (limit {} g). Check the print "
++                                     "and the nozzle, then resume or cancel.";
++constexpr const char* kKeyGeneric =
++    "Nozzle hit detected. Check the print and the nozzle, then resume or cancel.";
++
++// Restores the identity locale (LVGL can't unregister a pack)
++class ScopedLanguage {
++  public:
++    explicit ScopedLanguage(const char* lang) {
++        helix::ui::ensure_translation_loaded(lang);
++        lv_translation_set_language(lang);
++    }
++    ~ScopedLanguage() {
++        lv_translation_set_language(helix::ui::kIdentityLocale);
++    }
++    ScopedLanguage(const ScopedLanguage&) = delete;
++    ScopedLanguage& operator=(const ScopedLanguage&) = delete;
++};
++
++/// The single-quoted YAML value of @p key in @p yml
++std::optional<std::string> yaml_value(const std::string& yml, const std::string& key) {
++    std::string quoted;
++    for (char c : key) {
++        quoted += c;
++        if (c == '\'') {
++            quoted += '\'';
++        }
++    }
++    const std::string head = "  '" + quoted + "': '";
++    const size_t at = yml.find(head);
++    if (at == std::string::npos) {
++        return std::nullopt;
++    }
++    std::string out;
++    for (size_t i = at + head.size(); i < yml.size(); ++i) {
++        if (yml[i] == '\'') {
++            if (i + 1 < yml.size() && yml[i + 1] == '\'') {
++                out += '\'';
++                ++i;
++                continue;
++            }
++            return out;
++        }
++        out += yml[i];
++    }
++    return std::nullopt;
++}
++
++size_t placeholders(const std::string& s) {
++    size_t n = 0;
++    for (size_t at = s.find("{}"); at != std::string::npos; at = s.find("{}", at + 2)) {
++        ++n;
++    }
++    return n;
++}
++
++class ReasonTrackerFixture : public LVGLTestFixture {
++  public:
++    ReasonTrackerFixture() {
++        auto& ps = get_printer_state();
++        PrinterStateTestAccess::reset(ps);
++        ps.init_subjects(false);
++        test::set_wire_state(ps, PrintJobState::PRINTING);
++        tracker_ = std::make_unique<PrintStopReasonTracker>(client_, ps, [this] { return now_; });
++        settle();
++    }
++    ~ReasonTrackerFixture() override {
++        tracker_.reset();
++        test::set_wire_state(get_printer_state(), PrintJobState::STANDBY);
++        settle();
++    }
++    static void settle() {
++        ui::UpdateQueueTestAccess::drain_all(ui::UpdateQueue::instance());
++    }
++    static std::string reason() {
++        return lv_subject_get_string(
++            get_printer_state().print_state().get_print_stop_reason_subject());
++    }
++    void pause_after(const char* line) {
++        now_ = kStop - 1;
++        REQUIRE(client_.fire_notification("notify_gcode_response",
++                                          json{{"params", json::array({line})}}));
++        settle();
++        now_ = kStop;
++        get_printer_state().update_from_status(json{{"print_stats", {{"state", "paused"}}}});
++        settle();
++    }
++
++    static constexpr double kStop = 1'700'000'000.0;
++    double now_ = kStop;
++    test::FakeMoonrakerClient client_;
++    std::unique_ptr<PrintStopReasonTracker> tracker_;
++};
++
++const char* find_text_containing(lv_obj_t* node, const char* needle) {
++    if (!node) {
++        return nullptr;
++    }
++    if (lv_obj_check_type(node, &lv_label_class)) {
++        const char* txt = lv_label_get_text(node);
++        if (txt && std::strstr(txt, needle)) {
++            return txt;
++        }
++    }
++    for (uint32_t i = 0; i < lv_obj_get_child_count(node); ++i) {
++        if (const char* hit = find_text_containing(lv_obj_get_child(node, i), needle)) {
++            return hit;
++        }
++    }
++    return nullptr;
++}
++
++} // namespace
++
++TEST_CASE("nozzle hit line: the numbers are read, with and without Z", "[kiln][nozzle_hit]") {
++    auto hit = kiln::parse_nozzle_hit(kWithZ);
++    REQUIRE(hit.has_value());
++    CHECK(hit->force == "412");
++    CHECK(hit->limit == "300");
++    CHECK(hit->z == "1.20");
++
++    hit = kiln::parse_nozzle_hit(kWithoutZ);
++    REQUIRE(hit.has_value());
++    CHECK(hit->force == "650");
++    CHECK(hit->limit == "600");
++    CHECK(hit->z.empty());
++
++    // Without the "!! " (the stop reason has it stripped), and a Z below 0
++    hit = kiln::parse_nozzle_hit("Nozzle hit detected: the bed felt 151 g (limit 150 g) at Z "
++                                 "-0.05. Print paused: check the print and the nozzle, then "
++                                 "resume or cancel.");
++    REQUIRE(hit.has_value());
++    CHECK(hit->z == "-0.05");
++
++    CHECK_FALSE(kiln::parse_nozzle_hit(kGarbled).has_value());
++    CHECK_FALSE(kiln::parse_nozzle_hit("!! Nozzle hit detected: the bed felt 412 g").has_value());
++    CHECK_FALSE(kiln::parse_nozzle_hit("!! Nozzle hit detected: the bed felt 412 g (limit 300 g) "
++                                       "at Z here. Print paused.")
++                    .has_value());
++    CHECK(kiln::is_nozzle_hit_line(kGarbled));
++    CHECK_FALSE(kiln::is_nozzle_hit_line("!! Move out of range: 1 2 3"));
++}
++
++TEST_CASE("nozzle hit line: the sentence shown in English", "[kiln][nozzle_hit][i18n]") {
++    ScopedLanguage lang(helix::ui::kIdentityLocale);
++    CHECK(kiln::nozzle_hit_reason(kWithZ) ==
++          "Nozzle hit: the bed felt 412 g (limit 300 g) at Z 1.20. Check the print and the "
++          "nozzle, then resume or cancel.");
++    CHECK(kiln::nozzle_hit_reason(kWithoutZ) ==
++          "Nozzle hit: the bed felt 650 g (limit 600 g). Check the print and the nozzle, then "
++          "resume or cancel.");
++    CHECK(kiln::nozzle_hit_reason(kGarbled) == std::string(kKeyGeneric));
++    CHECK_FALSE(kiln::nozzle_hit_reason("!! Move out of range: 1 2 3").has_value());
++    CHECK_FALSE(kiln::nozzle_hit_reason("").has_value());
++}
++
++TEST_CASE("nozzle hit line: the sentence shown in Russian", "[kiln][nozzle_hit][i18n]") {
++    ScopedLanguage lang("ru");
++    CHECK(kiln::nozzle_hit_reason(kWithZ) ==
++          "Удар сопла: стол почувствовал 412 г (предел 300 г) на Z 1.20. Проверьте модель и "
++          "сопло, затем продолжите или отмените печать.");
++    CHECK(kiln::nozzle_hit_reason(kWithoutZ) ==
++          "Удар сопла: стол почувствовал 650 г (предел 600 г). Проверьте модель и сопло, затем "
++          "продолжите или отмените печать.");
++    CHECK(kiln::nozzle_hit_reason(kGarbled) ==
++          "Обнаружен удар сопла. Проверьте модель и сопло, затем продолжите или отмените "
++          "печать.");
++}
++
++TEST_CASE("nozzle hit line: every language has the three sentences", "[kiln][nozzle_hit][i18n]") {
++    const std::vector<std::pair<const char*, size_t>> keys = {
++        {kKeyWithZ, 3}, {kKeyWithoutZ, 2}, {kKeyGeneric, 0}};
++    int catalogs = 0;
++    for (const auto& entry : fs::directory_iterator(helix::asset_path("translations"))) {
++        if (entry.path().extension() != ".yml") {
++            continue;
++        }
++        ++catalogs;
++        const std::string locale = entry.path().stem().string();
++        std::ifstream in(entry.path());
++        const std::string yml((std::istreambuf_iterator<char>(in)),
++                              std::istreambuf_iterator<char>());
++        for (const auto& [key, count] : keys) {
++            INFO(locale << ": " << key);
++            const auto value = yaml_value(yml, key);
++            REQUIRE(value.has_value());
++            CHECK(placeholders(*value) == count);
++            if (locale == "en") {
++                CHECK(*value == key);
++            } else {
++                CHECK(*value != key);
++            }
++        }
++    }
++    CHECK(catalogs >= 11); // de en es fr it ja ko pt ru tr zh
++}
++
++TEST_CASE_METHOD(ReasonTrackerFixture, "nozzle hit: the pause reason is the translated sentence",
++                 "[kiln][nozzle_hit][stop_reason]") {
++    ScopedLanguage lang("ru");
++    pause_after(kWithZ);
++    CHECK(reason() == "Удар сопла: стол почувствовал 412 г (предел 300 г) на Z 1.20. Проверьте "
++                      "модель и сопло, затем продолжите или отмените печать.");
++}
++
++TEST_CASE_METHOD(ReasonTrackerFixture, "nozzle hit: an unreadable line pauses with the generic one",
++                 "[kiln][nozzle_hit][stop_reason]") {
++    ScopedLanguage lang(helix::ui::kIdentityLocale);
++    pause_after(kGarbled);
++    CHECK(reason() == std::string(kKeyGeneric));
++}
++
++TEST_CASE_METHOD(ReasonTrackerFixture, "nozzle hit: other errors stay as Klipper wrote them",
++                 "[kiln][nozzle_hit][stop_reason]") {
++    ScopedLanguage lang("ru");
++    pause_after("!! Move out of range: 1 2 3");
++    CHECK(reason() == "Move out of range: 1 2 3");
++}
++
++TEST_CASE_METHOD(LVGLUITestFixture, "nozzle hit: the error dialog shows the translated sentence",
++                 "[kiln][nozzle_hit][error-center]") {
++    ScopedLanguage lang("ru");
++    get_printer_state().update_from_status(json{{"pause_resume", {{"is_paused", true}}}});
++    REQUIRE(get_printer_state().is_paused());
++
++    helix::ui::RecoveryModalPresenter presenter(api());
++    helix::GcodeErrorRouter router(api(), client(), presenter);
++    GcodeErrorRouterTestAccess::process_line(router, kWithZ);
++    helix::ui::UpdateQueue::instance().drain();
++    process_lvgl(50);
++
++    REQUIRE(Modal::any_visible());
++    lv_obj_t* screen = lv_screen_active();
++    CHECK(find_text_containing(screen, "Удар сопла: стол почувствовал 412 г") != nullptr);
++    CHECK(find_text_containing(screen, "Nozzle hit") == nullptr);
++
++    get_printer_state().update_from_status(json{{"pause_resume", {{"is_paused", false}}}});
++    process_lvgl(20);
++}
+diff --git a/translations/de.yml b/translations/de.yml
+index d058787..950d438 100644
+--- a/translations/de.yml
++++ b/translations/de.yml
+@@ -5174,3 +5174,7 @@ translations:
+   'the nozzle-hit guard': 'Düsen-Kollisionsschutz'
+   # The question before a Klipper restart (patches 0005, 0008, 0009 and this switch)
+   'Klipper restarts to apply this. Continue?': 'Klipper startet neu, um dies zu übernehmen. Fortfahren?'
++  # Kiln OS: the nozzle guard's pause line in the screen's language (patch 0099)
++  'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': 'Düsenkollision: Das Heizbett hat {} g erfasst (Grenzwert {} g) bei Z {}. Prüfen Sie den Druck und die Düse und setzen Sie dann fort oder brechen Sie ab.'
++  'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': 'Düsenkollision: Das Heizbett hat {} g erfasst (Grenzwert {} g). Prüfen Sie den Druck und die Düse und setzen Sie dann fort oder brechen Sie ab.'
++  'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': 'Düsenkollision erkannt. Prüfen Sie den Druck und die Düse und setzen Sie dann fort oder brechen Sie ab.'
+diff --git a/translations/en.yml b/translations/en.yml
+index c3520ab..063c8b3 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -5416,3 +5416,7 @@ translations:
+   'High': 'High'
+   'How hard a push pauses the print: Low 600 g, Medium 300 g, High 150 g': 'How hard a push pauses the print: Low 600 g, Medium 300 g, High 150 g'
+   'the nozzle-hit guard': 'the nozzle-hit guard'
++  # Kiln OS: the nozzle guard's pause line in the screen's language (patch 0099)
++  'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': 'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.'
++  'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': 'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.'
++  'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': 'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.'
+diff --git a/translations/es.yml b/translations/es.yml
+index fdb30b8..002899c 100644
+--- a/translations/es.yml
++++ b/translations/es.yml
+@@ -5164,3 +5164,7 @@ translations:
+   'the nozzle-hit guard': 'la protección contra choques de boquilla'
+   # The question before a Klipper restart (patches 0005, 0008, 0009 and this switch)
+   'Klipper restarts to apply this. Continue?': 'Klipper se reinicia para aplicarlo. ¿Continuar?'
++  # Kiln OS: the nozzle guard's pause line in the screen's language (patch 0099)
++  'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': 'Choque de boquilla: la cama detectó {} g (límite {} g) en Z {}. Revise la impresión y la boquilla y luego reanude o cancele.'
++  'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': 'Choque de boquilla: la cama detectó {} g (límite {} g). Revise la impresión y la boquilla y luego reanude o cancele.'
++  'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': 'Choque de boquilla detectado. Revise la impresión y la boquilla y luego reanude o cancele.'
+diff --git a/translations/fr.yml b/translations/fr.yml
+index 0b0e9d1..9d4442f 100644
+--- a/translations/fr.yml
++++ b/translations/fr.yml
+@@ -5200,3 +5200,7 @@ translations:
+   'the nozzle-hit guard': 'la protection anti-collision de la buse'
+   # The question before a Klipper restart (patches 0005, 0008, 0009 and this switch)
+   'Klipper restarts to apply this. Continue?': 'Klipper redémarre pour appliquer ce changement. Continuer ?'
++  # Kiln OS: the nozzle guard's pause line in the screen's language (patch 0099)
++  'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': 'Collision de la buse : le plateau a détecté {} g (limite {} g) à Z {}. Vérifiez l''impression et la buse, puis reprenez ou annulez.'
++  'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': 'Collision de la buse : le plateau a détecté {} g (limite {} g). Vérifiez l''impression et la buse, puis reprenez ou annulez.'
++  'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': 'Collision de la buse détectée. Vérifiez l''impression et la buse, puis reprenez ou annulez.'
+diff --git a/translations/it.yml b/translations/it.yml
+index f00d3fb..41b30d3 100644
+--- a/translations/it.yml
++++ b/translations/it.yml
+@@ -5165,3 +5165,7 @@ translations:
+   'the nozzle-hit guard': 'la protezione urti dell''ugello'
+   # The question before a Klipper restart (patches 0005, 0008, 0009 and this switch)
+   'Klipper restarts to apply this. Continue?': 'Klipper si riavvia per applicare la modifica. Continuare?'
++  # Kiln OS: the nozzle guard's pause line in the screen's language (patch 0099)
++  'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': 'Urto dell''ugello: il piano ha rilevato {} g (limite {} g) a Z {}. Controlla la stampa e l''ugello, poi riprendi o annulla.'
++  'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': 'Urto dell''ugello: il piano ha rilevato {} g (limite {} g). Controlla la stampa e l''ugello, poi riprendi o annulla.'
++  'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': 'Rilevato un urto dell''ugello. Controlla la stampa e l''ugello, poi riprendi o annulla.'
+diff --git a/translations/ja.yml b/translations/ja.yml
+index 6c905a3..dc3b2ec 100644
+--- a/translations/ja.yml
++++ b/translations/ja.yml
+@@ -4908,3 +4908,7 @@ translations:
+   'the nozzle-hit guard': 'ノズル接触ガード'
+   # The question before a Klipper restart (patches 0005, 0008, 0009 and this switch)
+   'Klipper restarts to apply this. Continue?': 'これを適用するため Klipper が再起動します。続行しますか？'
++  # Kiln OS: the nozzle guard's pause line in the screen's language (patch 0099)
++  'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': 'ノズル接触：ベッドが {} g を検知しました（上限 {} g、Z {}）。印刷物とノズルを確認してから、再開またはキャンセルしてください。'
++  'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': 'ノズル接触：ベッドが {} g を検知しました（上限 {} g）。印刷物とノズルを確認してから、再開またはキャンセルしてください。'
++  'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': 'ノズル接触を検知しました。印刷物とノズルを確認してから、再開またはキャンセルしてください。'
+diff --git a/translations/ko.yml b/translations/ko.yml
+index 5373b52..9cac6f3 100644
+--- a/translations/ko.yml
++++ b/translations/ko.yml
+@@ -4707,3 +4707,7 @@ translations:
+   'the nozzle-hit guard': '노즐 충돌 보호'
+   # The question before a Klipper restart (patches 0005, 0008, 0009 and this switch)
+   'Klipper restarts to apply this. Continue?': '적용하려면 Klipper가 재시작됩니다. 계속할까요?'
++  # Kiln OS: the nozzle guard's pause line in the screen's language (patch 0099)
++  'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': '노즐 충돌: 베드가 {} g을 감지했습니다(한도 {} g, Z {}). 출력물과 노즐을 확인한 후 재개하거나 취소하세요.'
++  'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': '노즐 충돌: 베드가 {} g을 감지했습니다(한도 {} g). 출력물과 노즐을 확인한 후 재개하거나 취소하세요.'
++  'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': '노즐 충돌이 감지되었습니다. 출력물과 노즐을 확인한 후 재개하거나 취소하세요.'
+diff --git a/translations/pt.yml b/translations/pt.yml
+index 287ace6..d8e70bd 100644
+--- a/translations/pt.yml
++++ b/translations/pt.yml
+@@ -5168,3 +5168,7 @@ translations:
+   'the nozzle-hit guard': 'a proteção contra batida do bico'
+   # The question before a Klipper restart (patches 0005, 0008, 0009 and this switch)
+   'Klipper restarts to apply this. Continue?': 'O Klipper reinicia para aplicar isto. Continuar?'
++  # Kiln OS: the nozzle guard's pause line in the screen's language (patch 0099)
++  'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': 'Batida do bico: a mesa detectou {} g (limite {} g) em Z {}. Verifique a impressão e o bico e depois retome ou cancele.'
++  'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': 'Batida do bico: a mesa detectou {} g (limite {} g). Verifique a impressão e o bico e depois retome ou cancele.'
++  'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': 'Batida do bico detectada. Verifique a impressão e o bico e depois retome ou cancele.'
+diff --git a/translations/ru.yml b/translations/ru.yml
+index cd3db7f..bd6b422 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -5583,3 +5583,7 @@ translations:
+   'How hard a push pauses the print: Low 600 g, Medium 300 g, High 150 g': 'Усилие, при котором печать встаёт на паузу: Низкая 600 г, Средняя 300 г, Высокая 150 г'
+   # Goes into 'Turn on {}?', the title of the confirmation before Klipper restarts
+   'the nozzle-hit guard': 'защиту от удара сопла'
++  # Kiln OS: the nozzle guard's pause line in the screen's language (patch 0099)
++  'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': 'Удар сопла: стол почувствовал {} г (предел {} г) на Z {}. Проверьте модель и сопло, затем продолжите или отмените печать.'
++  'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': 'Удар сопла: стол почувствовал {} г (предел {} г). Проверьте модель и сопло, затем продолжите или отмените печать.'
++  'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': 'Обнаружен удар сопла. Проверьте модель и сопло, затем продолжите или отмените печать.'
+diff --git a/translations/tr.yml b/translations/tr.yml
+index 5234291..434f03f 100644
+--- a/translations/tr.yml
++++ b/translations/tr.yml
+@@ -4707,3 +4707,7 @@ translations:
+   'the nozzle-hit guard': 'Nozul çarpma koruması'
+   # The question before a Klipper restart (patches 0005, 0008, 0009 and this switch)
+   'Klipper restarts to apply this. Continue?': 'Bunu uygulamak için Klipper yeniden başlar. Devam edilsin mi?'
++  # Kiln OS: the nozzle guard's pause line in the screen's language (patch 0099)
++  'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': 'Nozul çarpması: tabla {} g algıladı (sınır {} g), Z {}. Baskıyı ve nozulu kontrol edin, ardından devam edin veya iptal edin.'
++  'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': 'Nozul çarpması: tabla {} g algıladı (sınır {} g). Baskıyı ve nozulu kontrol edin, ardından devam edin veya iptal edin.'
++  'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': 'Nozul çarpması algılandı. Baskıyı ve nozulu kontrol edin, ardından devam edin veya iptal edin.'
+diff --git a/translations/zh.yml b/translations/zh.yml
+index 6685099..dba9414 100644
+--- a/translations/zh.yml
++++ b/translations/zh.yml
+@@ -4898,3 +4898,7 @@ translations:
+   'the nozzle-hit guard': '喷嘴冲击保护'
+   # The question before a Klipper restart (patches 0005, 0008, 0009 and this switch)
+   'Klipper restarts to apply this. Continue?': 'Klipper 将重启以应用此设置。是否继续？'
++  # Kiln OS: the nozzle guard's pause line in the screen's language (patch 0099)
++  'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': '喷嘴冲击：热床检测到 {} g（上限 {} g，Z {}）。请检查打印件和喷嘴，然后恢复或取消。'
++  'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': '喷嘴冲击：热床检测到 {} g（上限 {} g）。请检查打印件和喷嘴，然后恢复或取消。'
++  'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': '检测到喷嘴冲击。请检查打印件和喷嘴，然后恢复或取消。'
+-- 
+2.56.0
+

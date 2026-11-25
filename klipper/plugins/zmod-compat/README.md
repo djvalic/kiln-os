@@ -13,15 +13,21 @@ macro names and parameters, mapped onto this system's own macros:
 | `TIMELAPSE_TAKE_FRAME` | nothing (moonraker-timelapse replaces it) |
 | `SET_ACTIVE_SPOOL`, `CLEAR_ACTIVE_SPOOL` | Spoolman, once set up |
 | `SET_PAUSE_NEXT_LAYER`, `SET_PAUSE_AT_LAYER` | pause at a layer |
-| `M600` | filament change: pause, lift 50 mm, wait at the purge box; `RESUME` comes back still lifted (Y, then X), then lowers over the print. The plugin's `PAUSE`/`RESUME` add only that; other pauses resume as without the plugin |
+| `M600` | filament change: pause, Z +50 mm (the bed lowers), wait at the purge box; `RESUME` comes back with the bed still lowered (Y, then X), then raises the bed back over the print. The plugin's `PAUSE`/`RESUME` add only that; other pauses resume as without the plugin |
 | `LINE_PURGE` | prime line; during a print skipped once `PRINT_START` has drawn its prime line, `LINE_PURGE FORCE=1` draws anyway |
 | `LED_ON`, `LED_OFF`, `LED`, `M300` | chamber light, beep (none) |
+| `NOZZLE_CONTROL WEIGHT=<g>` | the `nozzle-guard` plugin's limit and the guard on (`NOZZLE_GUARD ENABLE=1 THRESHOLD=<g>`); `WEIGHT=0` turns it off; no restart |
+| `ZCONTROL_ON`, `ZCONTROL_PAUSE`, `ZCONTROL_AUTO`, `ZCONTROL_ABORT` / `ZCONTROL_OFF` / `ZCONTROL_STATUS` | `NOZZLE_GUARD ARM=1` / `ARM=0` / report; a hit always pauses (bed stays hot), Klipper is never stopped |
+| `ZCONTROL_Z`, `SAVE_ZMOD_DATA ZCONTROL_Z=` | accepted, a line, no effect |
 
 `TOOL=` (Bambufy's start G-code) must be a whole number or -1, as in
 `PRINT_START`. Anything else loads no tool and the console shows an error:
 an unexpanded `TOOL=[initial_tool]` (it used to load tool 0, issue #12), and
 an empty `TOOL=`, which used to load tool 0 and now loads none. No `TOOL=`
 loads none.
+
+The nozzle commands need the `nozzle-guard` plugin (off by default); with
+it off each shows one line and the file goes on printing.
 
 Enabled by default. Full table and settings: `docs/zmod-compat.md`.
 Pair with the `nopoop` plugin for zMod's prime-tower and slicer-purge

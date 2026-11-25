@@ -1,0 +1,1452 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 08:08:56 -0500
+Subject: [PATCH] settings: Plugins has a Kiln OS tab and a Community tab
+
+Kiln's plugin catalog now lists plugins made by other people next to
+Kiln's own, and printer.ad5x_plugins marks them: catalog[<name>] and
+available[<name>] carry "community" (true when the plugin is not from
+one of Kiln's own repositories, also for one installed by hand) and
+"author" (catalog: also the pinned "commit"). Settings > Plugins
+(patch 0005) showed them in one list with Kiln's, with nothing to tell
+them apart.
+
+Two tabs under the header, half the width each and as tall as it
+(400x56 at 800x480): Kiln OS, Kiln's own plugins as before, and
+Community, the plugins with community set. Each keeps the INSTALLED
+and AVAILABLE groups and the STATUS group above them. Community starts
+with a heading and the line "Made and supported by their authors. You
+can turn them off at any time."; its rows are at least 80 px tall and
+show "By {author}" under the title (plugin.json's author, else the
+catalog's; no line without one) and, for a plugin with root scripts, a
+key and the word Root (a key drawn from three boxes: the icon font has
+none). Kiln's rows are unchanged. An empty Community group says "No
+community plugins installed" or "No community plugins in the catalog".
+Each open starts on Kiln OS. Without the new fields (an older Kiln OS)
+every plugin is Kiln's and the Community tab is empty.
+
+The first tap on Community shows "About community plugins" ("These
+plugins are made by members of the Kiln OS community. Each author looks
+after their own plugin, and every update passes Kiln's automated checks
+before it's offered. Questions or problems? The author's page is the
+best place to ask. You can turn off or remove a plugin any time.") with
+Got it and Back. Got it opens
+the tab and keeps that in HelixScreen's settings
+(/ad5x_plugins/community_notice_seen), so it shows once; Back, or a tap
+beside the dialog, stays on Kiln OS and remembers nothing.
+
+Patch 0097's root confirmation gets one more paragraph for a community
+plugin: "This plugin needs root access, so it can change system files.
+Install it only if you trust the author." Kiln's own root plugins ask
+as before.
+
+The tab filter, the AVAILABLE state per tab, the author line, the
+notice's steps and the confirmation come from small helpers
+(ad5x_installed_plugins/ad5x_catalog_plugins with a tab,
+ad5x_catalog_state, ad5x_author_line, ad5x_tab_step,
+ad5x_community_notice_answer, ad5x_toggle_confirm), so the tests can
+check them.
+
+The new strings are in every language. The rest of the Plugins screen
+(the group headers, the status lines, the Built-in tag, the install,
+update and remove questions) was only in English and Russian; it is
+added in the other nine, so the tabs do not sit beside English text.
+Catalog titles and descriptions and Klipper's own messages stay as
+Klipper sends them.
+
+The overlay now has buttons of its own (the tabs), so the toolhead
+census (test_job_holds_machine.cpp) lists it among the files whose
+controls move nothing; the rows' switches and buttons are counted in
+their own files as before.
+
+Tests: each tab lists only its plugins, in the installed and the
+catalog groups, and a tab's AVAILABLE state counts only its catalog
+entries; an object without the fields puts everything on Kiln OS;
+"By {author}" is shown with an author (plugin.json's, else the
+catalog's) and left out without one; the notice is asked until Got it,
+Back keeps Kiln OS and asks again, and after Got it the tab opens
+straight away; the trust line is in the root confirmation of
+a community plugin only, not for Kiln's root plugins, not for a
+community plugin without root scripts and not when turning off; in
+every language the notice, its buttons, the author line, the trust
+line and the Plugins screen's sentences are translated (Russian
+checked word for word).
+---
+ include/ui_settings_ad5x_plugins.h        |  63 ++++-
+ src/ui/ui_settings_ad5x_plugins.cpp       | 173 ++++++++++++-
+ tests/unit/test_job_holds_machine.cpp     |   3 +
+ tests/unit/test_settings_ad5x_plugins.cpp | 289 ++++++++++++++++++++++
+ translations/de.yml                       |  31 +++
+ translations/en.yml                       |  11 +
+ translations/es.yml                       |  31 +++
+ translations/fr.yml                       |  31 +++
+ translations/it.yml                       |  31 +++
+ translations/ja.yml                       |  31 +++
+ translations/ko.yml                       |  31 +++
+ translations/pt.yml                       |  31 +++
+ translations/ru.yml                       |  11 +
+ translations/tr.yml                       |  31 +++
+ translations/zh.yml                       |  31 +++
+ ui_xml/components/ad5x_catalog_row.xml    |  11 +-
+ ui_xml/components/ad5x_plugin_row.xml     |  42 +++-
+ ui_xml/settings_ad5x_plugins_overlay.xml  |  57 +++++
+ 18 files changed, 927 insertions(+), 12 deletions(-)
+
+diff --git a/include/ui_settings_ad5x_plugins.h b/include/ui_settings_ad5x_plugins.h
+index 4b59a12..913805f 100644
+--- a/include/ui_settings_ad5x_plugins.h
++++ b/include/ui_settings_ad5x_plugins.h
+@@ -7,6 +7,9 @@
+  * Shows the `ad5x_plugins` Klipper status object: the installed plugins with
+  * an on/off switch (Update and Remove for user-installed ones), the catalog
+  * plugins not installed yet with Install, and the running install/update job.
++ * Two tabs split them: Kiln OS (Kiln's own repositories) and Community
++ * (`community` set: anyone else's), each with its INSTALLED and AVAILABLE
++ * groups; the first open of Community shows a notice about them once.
+  * Every change is a G-code command (ENABLE_PLUGIN, DISABLE_PLUGIN,
+  * INSTALL_PLUGIN, UPDATE_PLUGIN, REMOVE_PLUGIN); most of them restart Klipper,
+  * after which the object comes back and the rows are rebuilt from it.
+@@ -43,6 +46,8 @@ struct Ad5xInstalledPlugin {
+     bool enabled = false;    ///< On at this Klipper start
+     bool compatible = true;  ///< Plugin API new enough
+     bool root = false;       ///< Has root scripts: ENABLE_PLUGIN needs ROOT=1
++    bool community = false;  ///< Not from one of Kiln's own repositories
++    std::string author;      ///< plugin.json's, else the catalog's; may be empty
+ };
+ 
+ /// One catalog plugin that is not installed.
+@@ -51,13 +56,33 @@ struct Ad5xCatalogPlugin {
+     std::string title;
+     std::string description;
+     bool compatible = true;
++    bool community = false; ///< Not from one of Kiln's own repositories
++    std::string author;     ///< May be empty
++};
++
++/// The two tabs of the screen. Without `community` fields (an older Kiln
++/// OS) every plugin is Kiln's, as before the tabs.
++enum class Ad5xPluginTab {
++    Kiln = 0,      ///< Kiln's own plugins
++    Community = 1, ///< community=true: made and supported by their authors
+ };
+ 
+ /// Installed plugins from the status object, sorted by name.
+ std::vector<Ad5xInstalledPlugin> ad5x_installed_plugins(const json& status);
++/// The installed plugins one tab shows.
++std::vector<Ad5xInstalledPlugin> ad5x_installed_plugins(const json& status, Ad5xPluginTab tab);
+ 
+ /// Catalog plugins offered but not installed, sorted by name.
+ std::vector<Ad5xCatalogPlugin> ad5x_catalog_plugins(const json& status);
++/// The catalog plugins one tab offers.
++std::vector<Ad5xCatalogPlugin> ad5x_catalog_plugins(const json& status, Ad5xPluginTab tab);
++
++/// What a tab's AVAILABLE group shows: 0 the catalog has none of this tab's
++/// plugins, 1 some to install, 2 all of them installed.
++int ad5x_catalog_state(const json& status, Ad5xPluginTab tab);
++
++/// "By {author}" under a community plugin's title; empty without an author.
++std::string ad5x_author_line(const std::string& author);
+ 
+ /// Catalog title for @p name, else @p name itself.
+ std::string ad5x_plugin_title(const json& status, const std::string& name);
+@@ -74,8 +99,32 @@ struct Ad5xToggleConfirm {
+ /// The confirmation for switching @p p on (@p on) or off. A plugin with root
+ /// scripts says so before it goes on and is enabled with ROOT=1; Klipper
+ /// restarts only after root's install.sh, so not right away.
++/// A community plugin with root scripts adds a line about trusting its author.
+ Ad5xToggleConfirm ad5x_toggle_confirm(const Ad5xInstalledPlugin& p, bool on);
+ 
++/// The notice the first open of the Community tab shows.
++struct Ad5xCommunityNotice {
++    std::string title;
++    std::string message;
++    std::string button; ///< Shows the Community tab and marks the notice seen
++    std::string back;   ///< Back to the Kiln OS tab; the notice shows again next time
++};
++Ad5xCommunityNotice ad5x_community_notice();
++
++/// HelixScreen setting that remembers the notice was answered with Got it.
++inline constexpr const char* kAd5xCommunityNoticeSeen = "/ad5x_plugins/community_notice_seen";
++
++/// What a tap on a tab does first.
++enum class Ad5xTabStep {
++    Show = 0,   ///< Switch to it now
++    Notice = 1, ///< The Community notice first; the tab switches only on Got it
++};
++Ad5xTabStep ad5x_tab_step(Ad5xPluginTab wanted);
++
++/// The notice's answer: Got it (@p show) remembers it in the settings and
++/// opens Community; Back (or a tap beside it) keeps Kiln OS and remembers nothing.
++Ad5xPluginTab ad5x_community_notice_answer(bool show);
++
+ /// What the status line says about the job.
+ enum class Ad5xJobLine {
+     None = 0,    ///< Nothing to report: the line is hidden
+@@ -110,6 +159,12 @@ class Ad5xPluginsOverlay : public OverlayBase {
+     /// Whether the printer publishes the `ad5x_plugins` object.
+     static bool available();
+ 
++    /// A tap on a tab: the Community notice first while it was not seen.
++    void handle_tab(Ad5xPluginTab tab);
++    Ad5xPluginTab tab() const {
++        return tab_;
++    }
++
+     void handle_toggle(const std::string& name, bool on);
+     void handle_install(const std::string& name);
+     void handle_update(const std::string& name);
+@@ -129,6 +184,7 @@ class Ad5xPluginsOverlay : public OverlayBase {
+     /// Sends @p gcode; @p restarts says Klipper restarts right after it.
+     void send(const std::string& gcode, bool restarts);
+     const Ad5xInstalledPlugin* installed(const std::string& name) const;
++    void set_tab(Ad5xPluginTab tab);
+ 
+     SubjectManager subjects_;
+     lv_subject_t status_subject_{};
+@@ -137,12 +193,17 @@ class Ad5xPluginsOverlay : public OverlayBase {
+     lv_subject_t has_warnings_subject_{};
+     lv_subject_t busy_subject_{};
+     lv_subject_t catalog_state_subject_{};
++    lv_subject_t tab_subject_{};
++    lv_subject_t installed_none_subject_{};
++    lv_subject_t catalog_none_subject_{};
+     char status_buf_[256] = "";
+     char warnings_buf_[512] = "";
+ 
+     json status_ = json::object();
++    /// Every installed plugin, both tabs (the switches and buttons look names up here)
+     std::vector<Ad5xInstalledPlugin> installed_;
+-    /// enabled + available + catalog + a failed job, as last rendered; a change rebuilds the rows
++    Ad5xPluginTab tab_ = Ad5xPluginTab::Kiln;
++    /// enabled + available + catalog + a failed job + the tab, as last rendered; a change rebuilds the rows
+     std::string rows_key_;
+     bool loaded_ = false;
+     bool klippy_ready_ = true;
+diff --git a/src/ui/ui_settings_ad5x_plugins.cpp b/src/ui/ui_settings_ad5x_plugins.cpp
+index 8f934de..c9ab64d 100644
+--- a/src/ui/ui_settings_ad5x_plugins.cpp
++++ b/src/ui/ui_settings_ad5x_plugins.cpp
+@@ -10,6 +10,7 @@
+ #include "ui_utils.h"
+ 
+ #include "app_globals.h"
++#include "config.h"
+ #include "helix-xml/src/xml/lv_xml.h"
+ #include "i_moonraker_api.h"
+ #include "i_moonraker_client.h"
+@@ -40,7 +41,9 @@ void clear_group_rows(lv_obj_t* group) {
+         lv_obj_t* child = lv_obj_get_child(group, i);
+         const char* name = lv_obj_get_name(child);
+         if (name && (std::strcmp(name, "setting_group_header") == 0 ||
+-                     std::strcmp(name, "ad5x_catalog_all_installed") == 0)) {
++                     std::strcmp(name, "ad5x_catalog_all_installed") == 0 ||
++                     std::strcmp(name, "ad5x_installed_none") == 0 ||
++                     std::strcmp(name, "ad5x_catalog_none") == 0)) {
+             continue;
+         }
+         helix::ui::safe_delete_deferred(child);
+@@ -61,6 +64,16 @@ std::string event_plugin(lv_event_t* e) {
+     return s ? std::string(s) : std::string();
+ }
+ 
++bool in_tab(bool community, Ad5xPluginTab tab) {
++    return community == (tab == Ad5xPluginTab::Community);
++}
++
++/// The catalog entry for @p name, or nullptr.
++const json* catalog_entry(const json& status, const std::string& name) {
++    const json* catalog = json_util::find_member(status, "catalog");
++    return catalog ? json_util::find_member(*catalog, name.c_str()) : nullptr;
++}
++
+ } // namespace
+ 
+ // ============================================================================
+@@ -103,6 +116,13 @@ std::vector<Ad5xInstalledPlugin> ad5x_installed_plugins(const json& status) {
+         p.builtin = json_util::safe_string(it.value(), "source") != "user";
+         p.compatible = json_util::safe_bool(it.value(), "compatible", true);
+         p.root = json_util::safe_bool(it.value(), "root", false);
++        p.community = json_util::safe_bool(it.value(), "community", false);
++        p.author = json_util::safe_string(it.value(), "author");
++        if (p.author.empty()) {
++            if (const json* entry = catalog_entry(status, p.name); entry && entry->is_object()) {
++                p.author = json_util::safe_string(*entry, "author");
++            }
++        }
+         p.enabled = std::find(enabled.begin(), enabled.end(), p.name) != enabled.end();
+         out.push_back(std::move(p));
+     }
+@@ -130,6 +150,8 @@ std::vector<Ad5xCatalogPlugin> ad5x_catalog_plugins(const json& status) {
+         p.title = json_util::safe_string(it.value(), "title", p.name);
+         p.description = json_util::safe_string(it.value(), "description");
+         p.compatible = json_util::safe_bool(it.value(), "compatible", true);
++        p.community = json_util::safe_bool(it.value(), "community", false);
++        p.author = json_util::safe_string(it.value(), "author");
+         out.push_back(std::move(p));
+     }
+     std::sort(out.begin(), out.end(), [](const Ad5xCatalogPlugin& a, const Ad5xCatalogPlugin& b) {
+@@ -138,6 +160,43 @@ std::vector<Ad5xCatalogPlugin> ad5x_catalog_plugins(const json& status) {
+     return out;
+ }
+ 
++std::vector<Ad5xInstalledPlugin> ad5x_installed_plugins(const json& status, Ad5xPluginTab tab) {
++    std::vector<Ad5xInstalledPlugin> out = ad5x_installed_plugins(status);
++    out.erase(std::remove_if(out.begin(), out.end(),
++                             [tab](const Ad5xInstalledPlugin& p) { return !in_tab(p.community, tab); }),
++              out.end());
++    return out;
++}
++
++std::vector<Ad5xCatalogPlugin> ad5x_catalog_plugins(const json& status, Ad5xPluginTab tab) {
++    std::vector<Ad5xCatalogPlugin> out = ad5x_catalog_plugins(status);
++    out.erase(std::remove_if(out.begin(), out.end(),
++                             [tab](const Ad5xCatalogPlugin& p) { return !in_tab(p.community, tab); }),
++              out.end());
++    return out;
++}
++
++int ad5x_catalog_state(const json& status, Ad5xPluginTab tab) {
++    const json* catalog = json_util::find_member(status, "catalog");
++    if (!catalog || !catalog->is_object()) {
++        return 0;
++    }
++    const bool any = std::any_of(catalog->begin(), catalog->end(), [tab](const json& entry) {
++        return entry.is_object() && in_tab(json_util::safe_bool(entry, "community", false), tab);
++    });
++    if (!any) {
++        return 0;
++    }
++    return ad5x_catalog_plugins(status, tab).empty() ? 2 : 1;
++}
++
++std::string ad5x_author_line(const std::string& author) {
++    if (author.empty()) {
++        return {};
++    }
++    return fmt::format(lv_tr("By {}"), author);
++}
++
+ Ad5xToggleConfirm ad5x_toggle_confirm(const Ad5xInstalledPlugin& p, bool on) {
+     Ad5xToggleConfirm c;
+     c.title = fmt::format(on ? lv_tr("Turn on {}?") : lv_tr("Turn off {}?"), p.title);
+@@ -146,6 +205,11 @@ Ad5xToggleConfirm ad5x_toggle_confirm(const Ad5xInstalledPlugin& p, bool on) {
+         c.message = lv_tr("This plugin runs some of its code as root, the system's administrator "
+                           "account, for example to set up USB devices. Turn it on only if you "
+                           "trust where it comes from. Klipper restarts.");
++        if (p.community) {
++            c.message += "\n\n";
++            c.message += lv_tr("This plugin needs root access, so it can change system files. "
++                               "Install it only if you trust the author.");
++        }
+         c.gcode = fmt::format("ENABLE_PLUGIN NAME={} ROOT=1", p.name);
+         // A job first (root/install.sh, the status line); the restart follows it
+         c.restarts = false;
+@@ -156,6 +220,38 @@ Ad5xToggleConfirm ad5x_toggle_confirm(const Ad5xInstalledPlugin& p, bool on) {
+     return c;
+ }
+ 
++Ad5xCommunityNotice ad5x_community_notice() {
++    Ad5xCommunityNotice n;
++    n.title = lv_tr("About community plugins");
++    n.message = lv_tr("These plugins are made by members of the Kiln OS community. Each author "
++                      "looks after their own plugin, and every update passes Kiln's automated "
++                      "checks before it's offered. Questions or problems? The author's page is "
++                      "the best place to ask. You can turn off or remove a plugin any time.");
++    n.button = lv_tr("Got it");
++    n.back = lv_tr("Back");
++    return n;
++}
++
++Ad5xTabStep ad5x_tab_step(Ad5xPluginTab wanted) {
++    if (wanted != Ad5xPluginTab::Community) {
++        return Ad5xTabStep::Show;
++    }
++    auto* cfg = ::helix::Config::get_instance();
++    const bool seen = cfg && cfg->get<bool>(kAd5xCommunityNoticeSeen, false);
++    return seen ? Ad5xTabStep::Show : Ad5xTabStep::Notice;
++}
++
++Ad5xPluginTab ad5x_community_notice_answer(bool show) {
++    if (!show) {
++        return Ad5xPluginTab::Kiln;
++    }
++    if (auto* cfg = ::helix::Config::get_instance()) {
++        cfg->set<bool>(kAd5xCommunityNoticeSeen, true);
++        cfg->save();
++    }
++    return Ad5xPluginTab::Community;
++}
++
+ // ============================================================================
+ // LIFECYCLE
+ // ============================================================================
+@@ -187,6 +283,12 @@ void Ad5xPluginsOverlay::init_subjects() {
+         UI_MANAGED_SUBJECT_INT(busy_subject_, 1, "ad5x_plugins_busy", subjects_);
+         // 0 no catalog, 1 plugins to install, 2 all of them installed
+         UI_MANAGED_SUBJECT_INT(catalog_state_subject_, 0, "ad5x_plugins_catalog_state", subjects_);
++        // Ad5xPluginTab shown; the Community heading and the tab underline bind it
++        UI_MANAGED_SUBJECT_INT(tab_subject_, 0, "ad5x_plugins_tab", subjects_);
++        // 1: the Community tab's INSTALLED / AVAILABLE group has nothing to show
++        UI_MANAGED_SUBJECT_INT(installed_none_subject_, 0, "ad5x_plugins_installed_none",
++                               subjects_);
++        UI_MANAGED_SUBJECT_INT(catalog_none_subject_, 0, "ad5x_plugins_catalog_none", subjects_);
+     });
+ }
+ 
+@@ -206,6 +308,12 @@ void Ad5xPluginsOverlay::register_callbacks() {
+          [](lv_event_t* e) { get_ad5x_plugins_overlay().handle_update(event_plugin(e)); }},
+         {"on_ad5x_plugin_remove",
+          [](lv_event_t* e) { get_ad5x_plugins_overlay().handle_remove(event_plugin(e)); }},
++        {"on_ad5x_plugins_tab",
++         [](lv_event_t* e) {
++             get_ad5x_plugins_overlay().handle_tab(event_plugin(e) == "1"
++                                                       ? Ad5xPluginTab::Community
++                                                       : Ad5xPluginTab::Kiln);
++         }},
+     });
+ }
+ 
+@@ -214,6 +322,11 @@ lv_obj_t* Ad5xPluginsOverlay::create(lv_obj_t* parent) {
+         return nullptr;
+     }
+     rows_key_.clear();
++    // Each open starts on Kiln OS
++    tab_ = Ad5xPluginTab::Kiln;
++    if (subjects_initialized_) {
++        lv_subject_set_int(&tab_subject_, static_cast<int>(tab_));
++    }
+     render_rows(true);
+     return overlay_root_;
+ }
+@@ -377,6 +490,39 @@ const Ad5xInstalledPlugin* Ad5xPluginsOverlay::installed(const std::string& name
+     return nullptr;
+ }
+ 
++void Ad5xPluginsOverlay::handle_tab(Ad5xPluginTab tab) {
++    if (tab == tab_) {
++        return;
++    }
++    if (ad5x_tab_step(tab) == Ad5xTabStep::Show) {
++        set_tab(tab);
++        return;
++    }
++    const Ad5xCommunityNotice n = ad5x_community_notice();
++    helix::ui::ConfirmOptions opts;
++    opts.owner_token = object_lifetime_.token();
++    opts.cancel_text = lv_tr("Back"); // = n.back, as a pointer that outlives this call
++    // Back, or a tap beside the dialog: Kiln OS stays, the notice comes again
++    opts.on_cancel = [this]() { set_tab(ad5x_community_notice_answer(false)); };
++    opts.on_dismiss = [this]() { set_tab(ad5x_community_notice_answer(false)); };
++    helix::ui::modal_confirm(
++        n.title.c_str(), n.message.c_str(), ModalSeverity::Info, n.button.c_str(),
++        [this]() { set_tab(ad5x_community_notice_answer(true)); }, opts);
++}
++
++void Ad5xPluginsOverlay::set_tab(Ad5xPluginTab tab) {
++    tab_ = tab;
++    if (subjects_initialized_) {
++        lv_subject_set_int(&tab_subject_, static_cast<int>(tab_));
++    }
++    if (overlay_root_) {
++        if (lv_obj_t* content = lv_obj_find_by_name(overlay_root_, "overlay_content")) {
++            lv_obj_scroll_to_y(content, 0, LV_ANIM_OFF);
++        }
++    }
++    render_rows(true);
++}
++
+ void Ad5xPluginsOverlay::render_rows(bool force) {
+     json lists = json::object();
+     for (const char* key : {"enabled", "available", "catalog"}) {
+@@ -390,14 +536,19 @@ void Ad5xPluginsOverlay::render_rows(bool force) {
+         job && json_util::safe_string(*job, "state") == "failed") {
+         lists["failed_job"] = *job;
+     }
++    lists["tab"] = static_cast<int>(tab_);
+     const std::string key = json_util::safe_dump(lists);
+     installed_ = ad5x_installed_plugins(status_);
+-    const std::vector<Ad5xCatalogPlugin> catalog = ad5x_catalog_plugins(status_);
++    const std::vector<Ad5xInstalledPlugin> shown = ad5x_installed_plugins(status_, tab_);
++    const std::vector<Ad5xCatalogPlugin> catalog = ad5x_catalog_plugins(status_, tab_);
++    const bool community = tab_ == Ad5xPluginTab::Community;
+ 
+     if (subjects_initialized_) {
+-        const json* raw_catalog = json_util::find_member(status_, "catalog");
+-        const bool has_catalog = raw_catalog && raw_catalog->is_object() && !raw_catalog->empty();
+-        lv_subject_set_int(&catalog_state_subject_, !has_catalog ? 0 : catalog.empty() ? 2 : 1);
++        const int catalog_state = ad5x_catalog_state(status_, tab_);
++        lv_subject_set_int(&catalog_state_subject_, catalog_state);
++        // Kiln's tab always has its built-in plugins; Community may have none yet
++        lv_subject_set_int(&installed_none_subject_, community && loaded_ && shown.empty() ? 1 : 0);
++        lv_subject_set_int(&catalog_none_subject_, community && loaded_ && catalog_state == 0 ? 1 : 0);
+     }
+ 
+     // A rebuild inside the status deferral would also reset a switch the user
+@@ -410,8 +561,11 @@ void Ad5xPluginsOverlay::render_rows(bool force) {
+     lv_obj_t* group = helix::ui::find_required(overlay_root_, "ad5x_plugins_installed", get_name());
+     if (group) {
+         clear_group_rows(group);
+-        for (const auto& p : installed_) {
++        for (const auto& p : shown) {
+             std::string details = p.version.empty() ? std::string() : "v" + p.version;
++            // Community rows: "By {author}" and the Root badge; Kiln rows as before
++            const std::string byline = community ? ad5x_author_line(p.author) : std::string();
++            const bool root = community && p.root;
+             // Switching off stays possible for a plugin that is on
+             const bool blocked = !p.compatible && !p.enabled;
+             const char* attrs[] = {
+@@ -424,6 +578,10 @@ void Ad5xPluginsOverlay::render_rows(bool force) {
+                 "blocked",     blocked ? "1" : "0",
+                 "note",        p.compatible ? "" : lv_tr("Needs a newer Kiln OS"),
+                 "manage",      p.builtin ? "" : "1",
++                "byline",       byline.c_str(),
++                "root",         root ? "1" : "",
++                "byline_shown", !byline.empty() || root ? "1" : "",
++                "min_height",   community ? "80" : "0",
+                 nullptr};
+             if (!lv_xml_create(group, "ad5x_plugin_row", attrs)) {
+                 spdlog::warn("[AD5X plugins] cannot create a row for {}", p.name);
+@@ -435,12 +593,15 @@ void Ad5xPluginsOverlay::render_rows(bool force) {
+     if (group) {
+         clear_group_rows(group);
+         for (const auto& p : catalog) {
++            const std::string byline = community ? ad5x_author_line(p.author) : std::string();
+             const char* attrs[] = {
+                 "plugin",      p.name.c_str(),
+                 "title",       p.title.c_str(),
+                 "description", p.description.c_str(),
+                 "blocked",     p.compatible ? "0" : "1",
+                 "note",        p.compatible ? "" : lv_tr("Needs a newer Kiln OS"),
++                "byline",      byline.c_str(),
++                "min_height",  community ? "80" : "0",
+                 nullptr};
+             if (!lv_xml_create(group, "ad5x_catalog_row", attrs)) {
+                 spdlog::warn("[AD5X plugins] cannot create a row for {}", p.name);
+diff --git a/tests/unit/test_job_holds_machine.cpp b/tests/unit/test_job_holds_machine.cpp
+index 36bc5ac..8e4c5f7 100644
+--- a/tests/unit/test_job_holds_machine.cpp
++++ b/tests/unit/test_job_holds_machine.cpp
+@@ -702,6 +702,9 @@ constexpr const char* kNoMachineControlFiles[] = {
+     // Kiln OS: the IFS firmware switch moves nothing; Kiln's agent refuses it
+     // during a print and its buttons are greyed then
+     "ui_xml/settings_ad5x_ifs_firmware_overlay.xml",
++    // Kiln OS: Settings > Plugins' Kiln OS / Community tabs only switch the list;
++    // the rows' switches and buttons are counted in their own files above
++    "ui_xml/settings_ad5x_plugins_overlay.xml",
+     "ui_xml/wizard_ad5x_nozzle.xml",
+     "ui_xml/wizard_ad5x_setup.xml",
+     "ui_xml/wizard_ad5x_timezone.xml",
+diff --git a/tests/unit/test_settings_ad5x_plugins.cpp b/tests/unit/test_settings_ad5x_plugins.cpp
+index 49480d8..8ee6a4c 100644
+--- a/tests/unit/test_settings_ad5x_plugins.cpp
++++ b/tests/unit/test_settings_ad5x_plugins.cpp
+@@ -2,10 +2,14 @@
+ 
+ #include "ui_settings_ad5x_plugins.h"
+ 
++#include "config.h"
+ #include "lvgl/src/others/translation/lv_translation.h"
+ #include "translation_loader.h"
+ 
++#include <spdlog/fmt/fmt.h>
++
+ #include <string>
++#include <vector>
+ 
+ #include "../catch_amalgamated.hpp"
+ #include "hv/json.hpp"
+@@ -43,6 +47,76 @@ json sample_status() {
+     })");
+ }
+ 
++/// The object with community plugins: Klipper's community/author/commit fields.
++json community_status() {
++    return json::parse(R"({
++        "api_version": "1.6",
++        "enabled": ["zmod-compat", "spool-colors"],
++        "available": {
++            "zmod-compat": {"source": "shipped", "description": "zMod macros", "version": "1.1.0",
++                            "compatible": true, "community": false, "author": ""},
++            "notify": {"source": "user", "description": "Print notifications", "version": "0.3.0",
++                       "compatible": true, "community": false},
++            "spool-colors": {"source": "user", "description": "Spool colours", "version": "0.2.0",
++                             "compatible": true, "community": true, "author": "Jane Maker"},
++            "usb-relay": {"source": "user", "description": "A USB relay", "version": "1.0.0",
++                          "compatible": true, "community": true, "author": "", "root": true},
++            "by-hand": {"source": "user", "description": "", "version": "",
++                        "compatible": true, "community": true}
++        },
++        "catalog": {
++            "notify": {"title": "Notifications", "description": "Telegram, ntfy, ...",
++                       "compatible": true, "installed": true, "community": false, "author": "",
++                       "commit": ""},
++            "timelapse": {"title": "Timelapse", "description": "Videos of the print",
++                          "compatible": true, "installed": false, "community": false},
++            "usb-relay": {"title": "USB relay", "description": "Switch a relay",
++                          "compatible": true, "installed": true, "community": true,
++                          "author": "Relay Person",
++                          "commit": "0123456789abcdef0123456789abcdef01234567"},
++            "bed-glow": {"title": "Bed glow", "description": "LED effects", "compatible": true,
++                         "installed": false, "community": true, "author": "Glow Dev",
++                         "commit": "89abcdef0123456789abcdef0123456789abcdef"},
++            "no-author": {"title": "No author", "description": "", "compatible": true,
++                          "installed": false, "community": true, "author": ""}
++        },
++        "job": {"name": "", "action": "", "state": "idle", "message": ""},
++        "warnings": []
++    })");
++}
++
++std::vector<std::string> names(const std::vector<Ad5xInstalledPlugin>& rows) {
++    std::vector<std::string> out;
++    for (const auto& r : rows) {
++        out.push_back(r.name);
++    }
++    return out;
++}
++
++std::vector<std::string> names(const std::vector<Ad5xCatalogPlugin>& rows) {
++    std::vector<std::string> out;
++    for (const auto& r : rows) {
++        out.push_back(r.name);
++    }
++    return out;
++}
++
++/// Puts the notice back to "not seen" before and after a case.
++struct CommunityNoticeReset {
++    CommunityNoticeReset() {
++        helix::Config::get_instance()->set<bool>(kAd5xCommunityNoticeSeen, false);
++    }
++    ~CommunityNoticeReset() {
++        helix::Config::get_instance()->set<bool>(kAd5xCommunityNoticeSeen, false);
++    }
++};
++
++struct RestoreLanguage {
++    ~RestoreLanguage() {
++        lv_translation_set_language(helix::ui::kIdentityLocale);
++    }
++};
++
+ } // namespace
+ 
+ TEST_CASE("installed plugins are sorted, titled from the catalog and carry their state",
+@@ -175,3 +249,218 @@ TEST_CASE("the root question is in every language, one language at a time",
+     CHECK_THAT(ru.message, ContainsSubstring("Klipper перезапустится"));
+     CHECK(ru.button == "Включить");
+ }
++
++// ============================================================================
++// Kiln OS and Community tabs (patch 0100)
++// ============================================================================
++
++TEST_CASE("each tab lists its own plugins: Kiln's in Kiln OS, community=true in Community",
++          "[ad5x_plugins][community]") {
++    const json status = community_status();
++
++    // Every installed plugin is still known (switches and buttons look them up)
++    CHECK(ad5x_installed_plugins(status).size() == 5);
++
++    using V = std::vector<std::string>;
++    CHECK(names(ad5x_installed_plugins(status, Ad5xPluginTab::Kiln)) == V{"notify", "zmod-compat"});
++    CHECK(names(ad5x_installed_plugins(status, Ad5xPluginTab::Community)) ==
++          V{"by-hand", "spool-colors", "usb-relay"});
++
++    CHECK(names(ad5x_catalog_plugins(status, Ad5xPluginTab::Kiln)) == V{"timelapse"});
++    CHECK(names(ad5x_catalog_plugins(status, Ad5xPluginTab::Community)) ==
++          V{"bed-glow", "no-author"});
++
++    const auto community = ad5x_installed_plugins(status, Ad5xPluginTab::Community);
++    REQUIRE(community.size() == 3);
++    CHECK(community[0].community);
++    CHECK(community[2].title == "USB relay");
++    CHECK(community[2].root);
++
++    CHECK(ad5x_catalog_state(status, Ad5xPluginTab::Kiln) == 1);
++    CHECK(ad5x_catalog_state(status, Ad5xPluginTab::Community) == 1);
++}
++
++TEST_CASE("a tab's AVAILABLE state counts only that tab's catalog plugins",
++          "[ad5x_plugins][community]") {
++    json status = community_status();
++    status["available"]["timelapse"] = {{"source", "user"}, {"compatible", true}};
++    // Kiln's catalog all installed; Community still offers two
++    CHECK(ad5x_catalog_state(status, Ad5xPluginTab::Kiln) == 2);
++    CHECK(ad5x_catalog_state(status, Ad5xPluginTab::Community) == 1);
++
++    status["catalog"].erase("bed-glow");
++    status["catalog"].erase("no-author");
++    status["catalog"].erase("usb-relay");
++    // No community plugin in the catalog at all
++    CHECK(ad5x_catalog_state(status, Ad5xPluginTab::Community) == 0);
++    CHECK(ad5x_catalog_plugins(status, Ad5xPluginTab::Community).empty());
++}
++
++TEST_CASE("without community fields every plugin is on the Kiln OS tab, as before",
++          "[ad5x_plugins][community]") {
++    const json status = sample_status();
++    CHECK(ad5x_installed_plugins(status, Ad5xPluginTab::Kiln).size() == 4);
++    CHECK(ad5x_installed_plugins(status, Ad5xPluginTab::Community).empty());
++    CHECK(ad5x_catalog_plugins(status, Ad5xPluginTab::Kiln).size() == 2);
++    CHECK(ad5x_catalog_plugins(status, Ad5xPluginTab::Community).empty());
++    CHECK(ad5x_catalog_state(status, Ad5xPluginTab::Kiln) == 1);
++    CHECK(ad5x_catalog_state(status, Ad5xPluginTab::Community) == 0);
++}
++
++TEST_CASE("community rows say By {author}, and nothing without an author",
++          "[ad5x_plugins][community]") {
++    CHECK(ad5x_author_line("Jane Maker") == "By Jane Maker");
++    CHECK(ad5x_author_line("").empty());
++
++    const json status = community_status();
++    const auto installed = ad5x_installed_plugins(status, Ad5xPluginTab::Community);
++    REQUIRE(installed.size() == 3);
++    // plugin.json's author
++    CHECK(installed[1].author == "Jane Maker");
++    CHECK(ad5x_author_line(installed[1].author) == "By Jane Maker");
++    // Empty in plugin.json: the catalog's
++    CHECK(installed[2].author == "Relay Person");
++    // Installed by hand, no author anywhere: no line
++    CHECK(installed[0].author.empty());
++    CHECK(ad5x_author_line(installed[0].author).empty());
++
++    const auto catalog = ad5x_catalog_plugins(status, Ad5xPluginTab::Community);
++    REQUIRE(catalog.size() == 2);
++    CHECK(ad5x_author_line(catalog[0].author) == "By Glow Dev");
++    CHECK(ad5x_author_line(catalog[1].author).empty());
++
++    // Kiln's own plugins carry no author line
++    for (const auto& p : ad5x_installed_plugins(status, Ad5xPluginTab::Kiln)) {
++        CHECK(p.author.empty());
++    }
++}
++
++TEST_CASE("the community notice shows until Got it, and Back keeps Kiln OS",
++          "[ad5x_plugins][community]") {
++    CommunityNoticeReset reset;
++
++    // Kiln OS never asks
++    CHECK(ad5x_tab_step(Ad5xPluginTab::Kiln) == Ad5xTabStep::Show);
++    CHECK(ad5x_tab_step(Ad5xPluginTab::Community) == Ad5xTabStep::Notice);
++
++    // Back: the Kiln OS tab, nothing remembered, so it comes again
++    CHECK(ad5x_community_notice_answer(false) == Ad5xPluginTab::Kiln);
++    CHECK_FALSE(helix::Config::get_instance()->get<bool>(kAd5xCommunityNoticeSeen, false));
++    CHECK(ad5x_tab_step(Ad5xPluginTab::Community) == Ad5xTabStep::Notice);
++
++    // Got it: Community, remembered in the settings
++    CHECK(ad5x_community_notice_answer(true) == Ad5xPluginTab::Community);
++    CHECK(helix::Config::get_instance()->get<bool>(kAd5xCommunityNoticeSeen, false));
++
++    // Shown once: the next open goes straight to the tab
++    CHECK(ad5x_tab_step(Ad5xPluginTab::Community) == Ad5xTabStep::Show);
++    CHECK(ad5x_tab_step(Ad5xPluginTab::Community) == Ad5xTabStep::Show);
++
++    const Ad5xCommunityNotice n = ad5x_community_notice();
++    CHECK(n.title == "About community plugins");
++    CHECK(n.message == "These plugins are made by members of the Kiln OS community. Each author "
++                       "looks after their own plugin, and every update passes Kiln's automated "
++                       "checks before it's offered. Questions or problems? The author's page is "
++                       "the best place to ask. You can turn off or remove a plugin any time.");
++    CHECK(n.button == "Got it");
++    CHECK(n.back == "Back");
++}
++
++TEST_CASE("the root confirmation adds the trust line only for a community plugin",
++          "[ad5x_plugins][community]") {
++    const char* line = "This plugin needs root access, so it can change system files. Install "
++                       "it only if you trust the author.";
++    const json status = community_status();
++    const auto community = ad5x_installed_plugins(status, Ad5xPluginTab::Community);
++    REQUIRE(community.size() == 3);
++    REQUIRE(community[2].name == "usb-relay");
++
++    // Community plugin with root scripts: 0097's text, then the line
++    const Ad5xToggleConfirm on = ad5x_toggle_confirm(community[2], true);
++    CHECK_THAT(on.message, ContainsSubstring("runs some of its code as root"));
++    CHECK_THAT(on.message, ContainsSubstring(std::string("Klipper restarts.\n\n") + line));
++    CHECK(on.gcode == "ENABLE_PLUGIN NAME=usb-relay ROOT=1");
++    CHECK_FALSE(on.restarts);
++
++    // Kiln's own plugin with root scripts: 0097's text only
++    Ad5xInstalledPlugin kiln = community[2];
++    kiln.community = false;
++    const Ad5xToggleConfirm kiln_on = ad5x_toggle_confirm(kiln, true);
++    CHECK_THAT(kiln_on.message, ContainsSubstring("runs some of its code as root"));
++    CHECK_THAT(kiln_on.message, !ContainsSubstring("trust the author"));
++    CHECK(kiln_on.gcode == "ENABLE_PLUGIN NAME=usb-relay ROOT=1");
++
++    // Community plugin without root scripts: the plain question
++    const Ad5xToggleConfirm plain = ad5x_toggle_confirm(community[1], true);
++    CHECK(plain.message == "Klipper restarts to apply this. Continue?");
++
++    // Turning a community root plugin off: no root text
++    Ad5xInstalledPlugin enabled = community[2];
++    enabled.enabled = true;
++    const Ad5xToggleConfirm off = ad5x_toggle_confirm(enabled, false);
++    CHECK(off.message == "Klipper restarts to apply this. Continue?");
++}
++
++TEST_CASE("the community texts are in every language, one language at a time",
++          "[ad5x_plugins][community][i18n]") {
++    RestoreLanguage restore;
++    Ad5xInstalledPlugin p;
++    p.name = "usb-relay";
++    p.title = "USB relay";
++    p.root = true;
++    p.community = true;
++    // Texts that cannot read the same in another language
++    const char* sentences[] = {
++        "Made and supported by their authors. You can turn them off at any time.",
++        "No community plugins installed",
++        "No community plugins in the catalog",
++        // The rest of the Plugins screen, so the tabs don't sit beside English
++        "Plugins can't be changed during a print",
++        "All catalog plugins are installed",
++        "Needs a newer Kiln OS",
++        "Waiting for Klipper...",
++        "Downloads the plugin and turns it on. Klipper restarts when it is installed.",
++        "When there is a new version, Klipper restarts to load it.",
++        "Turns the plugin off and deletes it from the printer. Klipper restarts.",
++        "Deletes the plugin from the printer.",
++    };
++    for (const char* lang : {"de", "es", "fr", "it", "ja", "ko", "pt", "ru", "tr", "zh"}) {
++        CAPTURE(lang);
++        helix::ui::ensure_translation_loaded(lang);
++        lv_translation_set_language(lang);
++
++        const Ad5xCommunityNotice n = ad5x_community_notice();
++        CHECK(n.title != "About community plugins");
++        CHECK(n.message.rfind("These plugins are made by members", 0) == std::string::npos);
++        CHECK_THAT(n.message, !ContainsSubstring("author's page"));
++        CHECK(n.button != "Got it");
++        CHECK(n.back != "Back");
++
++        const std::string by = ad5x_author_line("Jane Maker");
++        CHECK_THAT(by, ContainsSubstring("Jane Maker"));
++        CHECK(by != "By Jane Maker");
++
++        const Ad5xToggleConfirm on = ad5x_toggle_confirm(p, true);
++        CHECK_THAT(on.message, ContainsSubstring("root"));
++        CHECK_THAT(on.message, !ContainsSubstring("trust the author"));
++        CHECK_THAT(on.message, !ContainsSubstring("system files"));
++        // 0097's paragraph, then the community line
++        CHECK(on.message.find("\n\n") != std::string::npos);
++
++        for (const char* s : sentences) {
++            CAPTURE(s);
++            CHECK(std::string(lv_tr(s)) != s);
++        }
++        for (const char* s : {"Installing {}...", "Updating {}...", "Working on {}...",
++                              "Install {}?", "Update {}?", "Remove {}?", "Turn off {}?"}) {
++            CAPTURE(s);
++            const std::string t = fmt::format(fmt::runtime(lv_tr(s)), "USB relay");
++            CHECK_THAT(t, ContainsSubstring("USB relay"));
++            CHECK(t != fmt::format(fmt::runtime(s), "USB relay"));
++        }
++    }
++    helix::ui::ensure_translation_loaded("ru");
++    lv_translation_set_language("ru");
++    CHECK(std::string(lv_tr("Community")) == "Сообщество");
++    CHECK(ad5x_community_notice().button == "Понятно");
++}
+diff --git a/translations/de.yml b/translations/de.yml
+index 950d438..d290fa7 100644
+--- a/translations/de.yml
++++ b/translations/de.yml
+@@ -5178,3 +5178,34 @@ translations:
+   'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': 'Düsenkollision: Das Heizbett hat {} g erfasst (Grenzwert {} g) bei Z {}. Prüfen Sie den Druck und die Düse und setzen Sie dann fort oder brechen Sie ab.'
+   'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': 'Düsenkollision: Das Heizbett hat {} g erfasst (Grenzwert {} g). Prüfen Sie den Druck und die Düse und setzen Sie dann fort oder brechen Sie ab.'
+   'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': 'Düsenkollision erkannt. Prüfen Sie den Druck und die Düse und setzen Sie dann fort oder brechen Sie ab.'
++  # Kiln OS: Settings > Plugins, Kiln OS and Community tabs (patch 0100)
++  'Kiln OS': 'Kiln OS'
++  'Community': 'Community'
++  'By {}': 'Von {}'
++  'Root': 'Root'
++  'Made and supported by their authors. You can turn them off at any time.': 'Von ihren Autoren entwickelt und betreut. Du kannst sie jederzeit ausschalten.'
++  'About community plugins': 'Über Community-Plugins'
++  'These plugins are made by members of the Kiln OS community. Each author looks after their own plugin, and every update passes Kiln''s automated checks before it''s offered. Questions or problems? The author''s page is the best place to ask. You can turn off or remove a plugin any time.': 'Diese Plugins stammen von Mitgliedern der Kiln-OS-Community. Jeder Autor kümmert sich um sein eigenes Plugin, und jedes Update besteht Kilns automatische Prüfungen, bevor es angeboten wird. Fragen oder Probleme? Am besten fragst du auf der Seite des Autors. Du kannst ein Plugin jederzeit ausschalten oder entfernen.'
++  'This plugin needs root access, so it can change system files. Install it only if you trust the author.': 'Dieses Plugin braucht Zugriff als root und kann so Systemdateien ändern. Installiere es nur, wenn du dem Autor vertraust.'
++  'No community plugins installed': 'Keine Community-Plugins installiert'
++  'No community plugins in the catalog': 'Keine Community-Plugins im Katalog'
++  # Kiln OS: the rest of Settings > Plugins (patch 0005) in this language too, so the tabs are not beside English (patch 0100)
++  'STATUS': 'STATUS'
++  'INSTALLED': 'INSTALLIERT'
++  'AVAILABLE': 'VERFÜGBAR'
++  'Plugins can''t be changed during a print': 'Plugins können während des Drucks nicht geändert werden'
++  'All catalog plugins are installed': 'Alle Plugins aus dem Katalog sind installiert'
++  'Built-in': 'Integriert'
++  'Needs a newer Kiln OS': 'Benötigt neueres Kiln OS'
++  'Waiting for Klipper...': 'Warte auf Klipper...'
++  'Installing {}...': 'Installiere {}...'
++  'Updating {}...': 'Aktualisiere {}...'
++  'Working on {}...': 'Bearbeite {}...'
++  'Turn off {}?': '{} ausschalten?'
++  'Install {}?': '{} installieren?'
++  'Downloads the plugin and turns it on. Klipper restarts when it is installed.': 'Lädt das Plugin herunter und schaltet es ein. Klipper startet nach der Installation neu.'
++  'Update {}?': '{} aktualisieren?'
++  'When there is a new version, Klipper restarts to load it.': 'Gibt es eine neue Version, startet Klipper neu, um sie zu laden.'
++  'Remove {}?': '{} entfernen?'
++  'Turns the plugin off and deletes it from the printer. Klipper restarts.': 'Schaltet das Plugin aus und löscht es vom Drucker. Klipper startet neu.'
++  'Deletes the plugin from the printer.': 'Löscht das Plugin vom Drucker.'
+diff --git a/translations/en.yml b/translations/en.yml
+index 063c8b3..84cb73f 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -5420,3 +5420,14 @@ translations:
+   'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': 'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.'
+   'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': 'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.'
+   'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': 'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.'
++  # Kiln OS: Settings > Plugins, Kiln OS and Community tabs (patch 0100)
++  'Kiln OS': 'Kiln OS'
++  'Community': 'Community'
++  'By {}': 'By {}'
++  'Root': 'Root'
++  'Made and supported by their authors. You can turn them off at any time.': 'Made and supported by their authors. You can turn them off at any time.'
++  'About community plugins': 'About community plugins'
++  'These plugins are made by members of the Kiln OS community. Each author looks after their own plugin, and every update passes Kiln''s automated checks before it''s offered. Questions or problems? The author''s page is the best place to ask. You can turn off or remove a plugin any time.': 'These plugins are made by members of the Kiln OS community. Each author looks after their own plugin, and every update passes Kiln''s automated checks before it''s offered. Questions or problems? The author''s page is the best place to ask. You can turn off or remove a plugin any time.'
++  'This plugin needs root access, so it can change system files. Install it only if you trust the author.': 'This plugin needs root access, so it can change system files. Install it only if you trust the author.'
++  'No community plugins installed': 'No community plugins installed'
++  'No community plugins in the catalog': 'No community plugins in the catalog'
+diff --git a/translations/es.yml b/translations/es.yml
+index 002899c..3405587 100644
+--- a/translations/es.yml
++++ b/translations/es.yml
+@@ -5168,3 +5168,34 @@ translations:
+   'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': 'Choque de boquilla: la cama detectó {} g (límite {} g) en Z {}. Revise la impresión y la boquilla y luego reanude o cancele.'
+   'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': 'Choque de boquilla: la cama detectó {} g (límite {} g). Revise la impresión y la boquilla y luego reanude o cancele.'
+   'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': 'Choque de boquilla detectado. Revise la impresión y la boquilla y luego reanude o cancele.'
++  # Kiln OS: Settings > Plugins, Kiln OS and Community tabs (patch 0100)
++  'Kiln OS': 'Kiln OS'
++  'Community': 'Comunidad'
++  'By {}': 'Por {}'
++  'Root': 'Root'
++  'Made and supported by their authors. You can turn them off at any time.': 'Creados y mantenidos por sus autores. Puedes apagarlos cuando quieras.'
++  'About community plugins': 'Acerca de los plugins de la comunidad'
++  'These plugins are made by members of the Kiln OS community. Each author looks after their own plugin, and every update passes Kiln''s automated checks before it''s offered. Questions or problems? The author''s page is the best place to ask. You can turn off or remove a plugin any time.': 'Estos plugins los hacen miembros de la comunidad de Kiln OS. Cada autor se ocupa de su propio plugin, y cada actualización pasa las comprobaciones automáticas de Kiln antes de ofrecerse. ¿Dudas o problemas? Lo mejor es preguntar en la página del autor. Puedes apagar o eliminar un plugin cuando quieras.'
++  'This plugin needs root access, so it can change system files. Install it only if you trust the author.': 'Este plugin necesita acceso root, así que puede cambiar archivos del sistema. Instálalo solo si confías en el autor.'
++  'No community plugins installed': 'No hay plugins de la comunidad instalados'
++  'No community plugins in the catalog': 'No hay plugins de la comunidad en el catálogo'
++  # Kiln OS: the rest of Settings > Plugins (patch 0005) in this language too, so the tabs are not beside English (patch 0100)
++  'STATUS': 'ESTADO'
++  'INSTALLED': 'INSTALADOS'
++  'AVAILABLE': 'DISPONIBLES'
++  'Plugins can''t be changed during a print': 'No se pueden cambiar los plugins durante la impresión'
++  'All catalog plugins are installed': 'Todos los plugins del catálogo están instalados'
++  'Built-in': 'Integrado'
++  'Needs a newer Kiln OS': 'Requiere un Kiln OS más reciente'
++  'Waiting for Klipper...': 'Esperando a Klipper...'
++  'Installing {}...': 'Instalando {}...'
++  'Updating {}...': 'Actualizando {}...'
++  'Working on {}...': 'Procesando {}...'
++  'Turn off {}?': '¿Apagar {}?'
++  'Install {}?': '¿Instalar {}?'
++  'Downloads the plugin and turns it on. Klipper restarts when it is installed.': 'Descarga el plugin y lo enciende. Klipper se reinicia al terminar la instalación.'
++  'Update {}?': '¿Actualizar {}?'
++  'When there is a new version, Klipper restarts to load it.': 'Si hay una versión nueva, Klipper se reinicia para cargarla.'
++  'Remove {}?': '¿Eliminar {}?'
++  'Turns the plugin off and deletes it from the printer. Klipper restarts.': 'Apaga el plugin y lo elimina de la impresora. Klipper se reinicia.'
++  'Deletes the plugin from the printer.': 'Elimina el plugin de la impresora.'
+diff --git a/translations/fr.yml b/translations/fr.yml
+index 9d4442f..4aa14b6 100644
+--- a/translations/fr.yml
++++ b/translations/fr.yml
+@@ -5204,3 +5204,34 @@ translations:
+   'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': 'Collision de la buse : le plateau a détecté {} g (limite {} g) à Z {}. Vérifiez l''impression et la buse, puis reprenez ou annulez.'
+   'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': 'Collision de la buse : le plateau a détecté {} g (limite {} g). Vérifiez l''impression et la buse, puis reprenez ou annulez.'
+   'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': 'Collision de la buse détectée. Vérifiez l''impression et la buse, puis reprenez ou annulez.'
++  # Kiln OS: Settings > Plugins, Kiln OS and Community tabs (patch 0100)
++  'Kiln OS': 'Kiln OS'
++  'Community': 'Communauté'
++  'By {}': 'Par {}'
++  'Root': 'Root'
++  'Made and supported by their authors. You can turn them off at any time.': 'Créés et maintenus par leurs auteurs. Vous pouvez les désactiver à tout moment.'
++  'About community plugins': 'À propos des plugins de la communauté'
++  'These plugins are made by members of the Kiln OS community. Each author looks after their own plugin, and every update passes Kiln''s automated checks before it''s offered. Questions or problems? The author''s page is the best place to ask. You can turn off or remove a plugin any time.': 'Ces plugins sont créés par des membres de la communauté Kiln OS. Chaque auteur s''occupe de son propre plugin, et chaque mise à jour passe les vérifications automatiques de Kiln avant d''être proposée. Des questions ou un problème ? Le mieux est de demander sur la page de l''auteur. Vous pouvez désactiver ou supprimer un plugin à tout moment.'
++  'This plugin needs root access, so it can change system files. Install it only if you trust the author.': 'Ce plugin a besoin d''un accès root, il peut donc modifier des fichiers système. Ne l''installez que si vous faites confiance à son auteur.'
++  'No community plugins installed': 'Aucun plugin de la communauté installé'
++  'No community plugins in the catalog': 'Aucun plugin de la communauté dans le catalogue'
++  # Kiln OS: the rest of Settings > Plugins (patch 0005) in this language too, so the tabs are not beside English (patch 0100)
++  'STATUS': 'ÉTAT'
++  'INSTALLED': 'INSTALLÉS'
++  'AVAILABLE': 'DISPONIBLES'
++  'Plugins can''t be changed during a print': 'Impossible de modifier les plugins pendant l''impression'
++  'All catalog plugins are installed': 'Tous les plugins du catalogue sont installés'
++  'Built-in': 'Intégré'
++  'Needs a newer Kiln OS': 'Nécessite un Kiln OS plus récent'
++  'Waiting for Klipper...': 'Attente de Klipper...'
++  'Installing {}...': 'Installation de {}...'
++  'Updating {}...': 'Mise à jour de {}...'
++  'Working on {}...': 'Traitement de {}...'
++  'Turn off {}?': 'Éteindre {} ?'
++  'Install {}?': 'Installer {} ?'
++  'Downloads the plugin and turns it on. Klipper restarts when it is installed.': 'Télécharge le plugin et l''active. Klipper redémarre une fois l''installation terminée.'
++  'Update {}?': 'Mettre à jour {} ?'
++  'When there is a new version, Klipper restarts to load it.': 'S''il y a une nouvelle version, Klipper redémarre pour la charger.'
++  'Remove {}?': 'Supprimer {} ?'
++  'Turns the plugin off and deletes it from the printer. Klipper restarts.': 'Désactive le plugin et le supprime de l''imprimante. Klipper redémarre.'
++  'Deletes the plugin from the printer.': 'Supprime le plugin de l''imprimante.'
+diff --git a/translations/it.yml b/translations/it.yml
+index 41b30d3..1429bb4 100644
+--- a/translations/it.yml
++++ b/translations/it.yml
+@@ -5169,3 +5169,34 @@ translations:
+   'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': 'Urto dell''ugello: il piano ha rilevato {} g (limite {} g) a Z {}. Controlla la stampa e l''ugello, poi riprendi o annulla.'
+   'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': 'Urto dell''ugello: il piano ha rilevato {} g (limite {} g). Controlla la stampa e l''ugello, poi riprendi o annulla.'
+   'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': 'Rilevato un urto dell''ugello. Controlla la stampa e l''ugello, poi riprendi o annulla.'
++  # Kiln OS: Settings > Plugins, Kiln OS and Community tabs (patch 0100)
++  'Kiln OS': 'Kiln OS'
++  'Community': 'Comunità'
++  'By {}': 'Di {}'
++  'Root': 'Root'
++  'Made and supported by their authors. You can turn them off at any time.': 'Creati e mantenuti dai loro autori. Puoi spegnerli quando vuoi.'
++  'About community plugins': 'Informazioni sui plugin della comunità'
++  'These plugins are made by members of the Kiln OS community. Each author looks after their own plugin, and every update passes Kiln''s automated checks before it''s offered. Questions or problems? The author''s page is the best place to ask. You can turn off or remove a plugin any time.': 'Questi plugin sono creati da membri della comunità di Kiln OS. Ogni autore si occupa del proprio plugin, e ogni aggiornamento supera i controlli automatici di Kiln prima di essere proposto. Domande o problemi? Il posto migliore per chiedere è la pagina dell''autore. Puoi spegnere o rimuovere un plugin quando vuoi.'
++  'This plugin needs root access, so it can change system files. Install it only if you trust the author.': 'Questo plugin richiede l''accesso root, quindi può modificare i file di sistema. Installalo solo se ti fidi dell''autore.'
++  'No community plugins installed': 'Nessun plugin della comunità installato'
++  'No community plugins in the catalog': 'Nessun plugin della comunità nel catalogo'
++  # Kiln OS: the rest of Settings > Plugins (patch 0005) in this language too, so the tabs are not beside English (patch 0100)
++  'STATUS': 'STATO'
++  'INSTALLED': 'INSTALLATI'
++  'AVAILABLE': 'DISPONIBILI'
++  'Plugins can''t be changed during a print': 'Impossibile modificare i plugin durante la stampa'
++  'All catalog plugins are installed': 'Tutti i plugin del catalogo sono installati'
++  'Built-in': 'Integrato'
++  'Needs a newer Kiln OS': 'Richiede un Kiln OS più recente'
++  'Waiting for Klipper...': 'In attesa di Klipper...'
++  'Installing {}...': 'Installazione di {}...'
++  'Updating {}...': 'Aggiornamento di {}...'
++  'Working on {}...': 'Elaborazione di {}...'
++  'Turn off {}?': 'Spegnere {}?'
++  'Install {}?': 'Installare {}?'
++  'Downloads the plugin and turns it on. Klipper restarts when it is installed.': 'Scarica il plugin e lo accende. Klipper si riavvia dopo l''installazione.'
++  'Update {}?': 'Aggiornare {}?'
++  'When there is a new version, Klipper restarts to load it.': 'Quando c''è una nuova versione, Klipper si riavvia per caricarla.'
++  'Remove {}?': 'Rimuovere {}?'
++  'Turns the plugin off and deletes it from the printer. Klipper restarts.': 'Spegne il plugin e lo elimina dalla stampante. Klipper si riavvia.'
++  'Deletes the plugin from the printer.': 'Elimina il plugin dalla stampante.'
+diff --git a/translations/ja.yml b/translations/ja.yml
+index dc3b2ec..c6312d1 100644
+--- a/translations/ja.yml
++++ b/translations/ja.yml
+@@ -4912,3 +4912,34 @@ translations:
+   'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': 'ノズル接触：ベッドが {} g を検知しました（上限 {} g、Z {}）。印刷物とノズルを確認してから、再開またはキャンセルしてください。'
+   'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': 'ノズル接触：ベッドが {} g を検知しました（上限 {} g）。印刷物とノズルを確認してから、再開またはキャンセルしてください。'
+   'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': 'ノズル接触を検知しました。印刷物とノズルを確認してから、再開またはキャンセルしてください。'
++  # Kiln OS: Settings > Plugins, Kiln OS and Community tabs (patch 0100)
++  'Kiln OS': 'Kiln OS'
++  'Community': 'コミュニティ'
++  'By {}': '作者: {}'
++  'Root': 'Root'
++  'Made and supported by their authors. You can turn them off at any time.': '各作者が制作・サポートしています。いつでもオフにできます。'
++  'About community plugins': 'コミュニティプラグインについて'
++  'These plugins are made by members of the Kiln OS community. Each author looks after their own plugin, and every update passes Kiln''s automated checks before it''s offered. Questions or problems? The author''s page is the best place to ask. You can turn off or remove a plugin any time.': 'これらのプラグインはKiln OSコミュニティのメンバーが作っています。各作者が自分のプラグインを管理しており、すべての更新は提供される前にKilnの自動チェックを通過しています。質問や問題があれば、作者のページでお問い合わせください。プラグインはいつでもオフにしたり削除したりできます。'
++  'This plugin needs root access, so it can change system files. Install it only if you trust the author.': 'このプラグインには root アクセスが必要なため、システムファイルを変更できます。作者を信頼できる場合にのみインストールしてください。'
++  'No community plugins installed': 'インストール済みのコミュニティプラグインはありません'
++  'No community plugins in the catalog': 'カタログにコミュニティプラグインはありません'
++  # Kiln OS: the rest of Settings > Plugins (patch 0005) in this language too, so the tabs are not beside English (patch 0100)
++  'STATUS': 'ステータス'
++  'INSTALLED': 'インストール済み'
++  'AVAILABLE': '利用可能'
++  'Plugins can''t be changed during a print': '印刷中はプラグインを変更できません'
++  'All catalog plugins are installed': 'カタログのプラグインはすべてインストール済みです'
++  'Built-in': '標準'
++  'Needs a newer Kiln OS': '新しい Kiln OS が必要'
++  'Waiting for Klipper...': 'Klipper を待機中...'
++  'Installing {}...': '{} をインストール中...'
++  'Updating {}...': '{} を更新中...'
++  'Working on {}...': '{} を処理中...'
++  'Turn off {}?': '{} をオフにしますか？'
++  'Install {}?': '{} をインストールしますか？'
++  'Downloads the plugin and turns it on. Klipper restarts when it is installed.': 'プラグインをダウンロードしてオンにします。インストール後に Klipper が再起動します。'
++  'Update {}?': '{} を更新しますか？'
++  'When there is a new version, Klipper restarts to load it.': '新しいバージョンがある場合、読み込むために Klipper が再起動します。'
++  'Remove {}?': '{} を削除しますか？'
++  'Turns the plugin off and deletes it from the printer. Klipper restarts.': 'プラグインをオフにしてプリンターから削除します。Klipper が再起動します。'
++  'Deletes the plugin from the printer.': 'プラグインをプリンターから削除します。'
+diff --git a/translations/ko.yml b/translations/ko.yml
+index 9cac6f3..e94efaa 100644
+--- a/translations/ko.yml
++++ b/translations/ko.yml
+@@ -4711,3 +4711,34 @@ translations:
+   'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': '노즐 충돌: 베드가 {} g을 감지했습니다(한도 {} g, Z {}). 출력물과 노즐을 확인한 후 재개하거나 취소하세요.'
+   'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': '노즐 충돌: 베드가 {} g을 감지했습니다(한도 {} g). 출력물과 노즐을 확인한 후 재개하거나 취소하세요.'
+   'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': '노즐 충돌이 감지되었습니다. 출력물과 노즐을 확인한 후 재개하거나 취소하세요.'
++  # Kiln OS: Settings > Plugins, Kiln OS and Community tabs (patch 0100)
++  'Kiln OS': 'Kiln OS'
++  'Community': '커뮤니티'
++  'By {}': '제작: {}'
++  'Root': 'Root'
++  'Made and supported by their authors. You can turn them off at any time.': '각 제작자가 만들고 지원합니다. 언제든지 끌 수 있습니다.'
++  'About community plugins': '커뮤니티 플러그인 정보'
++  'These plugins are made by members of the Kiln OS community. Each author looks after their own plugin, and every update passes Kiln''s automated checks before it''s offered. Questions or problems? The author''s page is the best place to ask. You can turn off or remove a plugin any time.': '이 플러그인은 Kiln OS 커뮤니티 회원들이 만듭니다. 각 제작자가 자신의 플러그인을 관리하며, 모든 업데이트는 제공되기 전에 Kiln의 자동 검사를 통과합니다. 질문이나 문제가 있나요? 제작자 페이지에 문의하는 것이 가장 좋습니다. 플러그인은 언제든지 끄거나 제거할 수 있습니다.'
++  'This plugin needs root access, so it can change system files. Install it only if you trust the author.': '이 플러그인은 root 권한이 필요하므로 시스템 파일을 변경할 수 있습니다. 제작자를 신뢰할 수 있을 때만 설치하세요.'
++  'No community plugins installed': '설치된 커뮤니티 플러그인이 없습니다'
++  'No community plugins in the catalog': '카탈로그에 커뮤니티 플러그인이 없습니다'
++  # Kiln OS: the rest of Settings > Plugins (patch 0005) in this language too, so the tabs are not beside English (patch 0100)
++  'STATUS': '상태'
++  'INSTALLED': '설치됨'
++  'AVAILABLE': '사용 가능'
++  'Plugins can''t be changed during a print': '출력 중에는 플러그인을 바꿀 수 없습니다'
++  'All catalog plugins are installed': '카탈로그의 플러그인이 모두 설치되었습니다'
++  'Built-in': '기본 제공'
++  'Needs a newer Kiln OS': '최신 Kiln OS 필요'
++  'Waiting for Klipper...': 'Klipper 대기 중...'
++  'Installing {}...': '{} 설치 중...'
++  'Updating {}...': '{} 업데이트 중...'
++  'Working on {}...': '{} 처리 중...'
++  'Turn off {}?': '{}을(를) 끌까요?'
++  'Install {}?': '{}을(를) 설치할까요?'
++  'Downloads the plugin and turns it on. Klipper restarts when it is installed.': '플러그인을 다운로드하고 켭니다. 설치가 끝나면 Klipper가 재시작됩니다.'
++  'Update {}?': '{}을(를) 업데이트할까요?'
++  'When there is a new version, Klipper restarts to load it.': '새 버전이 있으면 Klipper가 재시작되어 불러옵니다.'
++  'Remove {}?': '{}을(를) 제거할까요?'
++  'Turns the plugin off and deletes it from the printer. Klipper restarts.': '플러그인을 끄고 프린터에서 삭제합니다. Klipper가 재시작됩니다.'
++  'Deletes the plugin from the printer.': '플러그인을 프린터에서 삭제합니다.'
+diff --git a/translations/pt.yml b/translations/pt.yml
+index d8e70bd..68c5f8b 100644
+--- a/translations/pt.yml
++++ b/translations/pt.yml
+@@ -5172,3 +5172,34 @@ translations:
+   'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': 'Batida do bico: a mesa detectou {} g (limite {} g) em Z {}. Verifique a impressão e o bico e depois retome ou cancele.'
+   'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': 'Batida do bico: a mesa detectou {} g (limite {} g). Verifique a impressão e o bico e depois retome ou cancele.'
+   'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': 'Batida do bico detectada. Verifique a impressão e o bico e depois retome ou cancele.'
++  # Kiln OS: Settings > Plugins, Kiln OS and Community tabs (patch 0100)
++  'Kiln OS': 'Kiln OS'
++  'Community': 'Comunidade'
++  'By {}': 'Por {}'
++  'Root': 'Root'
++  'Made and supported by their authors. You can turn them off at any time.': 'Criados e mantidos pelos autores. Você pode desligá-los a qualquer momento.'
++  'About community plugins': 'Sobre os plugins da comunidade'
++  'These plugins are made by members of the Kiln OS community. Each author looks after their own plugin, and every update passes Kiln''s automated checks before it''s offered. Questions or problems? The author''s page is the best place to ask. You can turn off or remove a plugin any time.': 'Estes plugins são feitos por membros da comunidade Kiln OS. Cada autor cuida do seu próprio plugin, e cada atualização passa pelas verificações automáticas do Kiln antes de ser oferecida. Dúvidas ou problemas? O melhor lugar para perguntar é a página do autor. Você pode desligar ou remover um plugin a qualquer momento.'
++  'This plugin needs root access, so it can change system files. Install it only if you trust the author.': 'Este plugin precisa de acesso root, por isso pode alterar arquivos do sistema. Instale-o apenas se confiar no autor.'
++  'No community plugins installed': 'Nenhum plugin da comunidade instalado'
++  'No community plugins in the catalog': 'Nenhum plugin da comunidade no catálogo'
++  # Kiln OS: the rest of Settings > Plugins (patch 0005) in this language too, so the tabs are not beside English (patch 0100)
++  'STATUS': 'ESTADO'
++  'INSTALLED': 'INSTALADOS'
++  'AVAILABLE': 'DISPONÍVEIS'
++  'Plugins can''t be changed during a print': 'Não é possível alterar plugins durante a impressão'
++  'All catalog plugins are installed': 'Todos os plugins do catálogo estão instalados'
++  'Built-in': 'Integrado'
++  'Needs a newer Kiln OS': 'Requer um Kiln OS mais recente'
++  'Waiting for Klipper...': 'Aguardando o Klipper...'
++  'Installing {}...': 'Instalando {}...'
++  'Updating {}...': 'Atualizando {}...'
++  'Working on {}...': 'Processando {}...'
++  'Turn off {}?': 'Desligar {}?'
++  'Install {}?': 'Instalar {}?'
++  'Downloads the plugin and turns it on. Klipper restarts when it is installed.': 'Baixa o plugin e o liga. O Klipper reinicia após a instalação.'
++  'Update {}?': 'Atualizar {}?'
++  'When there is a new version, Klipper restarts to load it.': 'Quando houver uma nova versão, o Klipper reinicia para carregá-la.'
++  'Remove {}?': 'Remover {}?'
++  'Turns the plugin off and deletes it from the printer. Klipper restarts.': 'Desliga o plugin e o exclui da impressora. O Klipper reinicia.'
++  'Deletes the plugin from the printer.': 'Exclui o plugin da impressora.'
+diff --git a/translations/ru.yml b/translations/ru.yml
+index bd6b422..0c991fb 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -5587,3 +5587,14 @@ translations:
+   'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': 'Удар сопла: стол почувствовал {} г (предел {} г) на Z {}. Проверьте модель и сопло, затем продолжите или отмените печать.'
+   'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': 'Удар сопла: стол почувствовал {} г (предел {} г). Проверьте модель и сопло, затем продолжите или отмените печать.'
+   'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': 'Обнаружен удар сопла. Проверьте модель и сопло, затем продолжите или отмените печать.'
++  # Kiln OS: Settings > Plugins, Kiln OS and Community tabs (patch 0100)
++  'Kiln OS': 'Kiln OS'
++  'Community': 'Сообщество'
++  'By {}': 'Автор: {}'
++  'Root': 'Root'
++  'Made and supported by their authors. You can turn them off at any time.': 'Созданы и поддерживаются своими авторами. Их можно выключить в любой момент.'
++  'About community plugins': 'О плагинах сообщества'
++  'These plugins are made by members of the Kiln OS community. Each author looks after their own plugin, and every update passes Kiln''s automated checks before it''s offered. Questions or problems? The author''s page is the best place to ask. You can turn off or remove a plugin any time.': 'Эти плагины делают участники сообщества Kiln OS. Каждый автор сам следит за своим плагином, а каждое обновление проходит автоматические проверки Kiln, прежде чем его предложат. Вопросы или проблемы? Лучше всего спросить на странице автора. Плагин можно выключить или удалить в любой момент.'
++  'This plugin needs root access, so it can change system files. Install it only if you trust the author.': 'Этому плагину нужен доступ root, поэтому он может менять системные файлы. Устанавливайте его, только если доверяете автору.'
++  'No community plugins installed': 'Нет установленных плагинов сообщества'
++  'No community plugins in the catalog': 'В каталоге нет плагинов сообщества'
+diff --git a/translations/tr.yml b/translations/tr.yml
+index 434f03f..e788aa7 100644
+--- a/translations/tr.yml
++++ b/translations/tr.yml
+@@ -4711,3 +4711,34 @@ translations:
+   'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': 'Nozul çarpması: tabla {} g algıladı (sınır {} g), Z {}. Baskıyı ve nozulu kontrol edin, ardından devam edin veya iptal edin.'
+   'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': 'Nozul çarpması: tabla {} g algıladı (sınır {} g). Baskıyı ve nozulu kontrol edin, ardından devam edin veya iptal edin.'
+   'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': 'Nozul çarpması algılandı. Baskıyı ve nozulu kontrol edin, ardından devam edin veya iptal edin.'
++  # Kiln OS: Settings > Plugins, Kiln OS and Community tabs (patch 0100)
++  'Kiln OS': 'Kiln OS'
++  'Community': 'Topluluk'
++  'By {}': '{} tarafından'
++  'Root': 'Root'
++  'Made and supported by their authors. You can turn them off at any time.': 'Yazarları tarafından yapılır ve desteklenir. İstediğiniz zaman kapatabilirsiniz.'
++  'About community plugins': 'Topluluk eklentileri hakkında'
++  'These plugins are made by members of the Kiln OS community. Each author looks after their own plugin, and every update passes Kiln''s automated checks before it''s offered. Questions or problems? The author''s page is the best place to ask. You can turn off or remove a plugin any time.': 'Bu eklentileri Kiln OS topluluğunun üyeleri yapar. Her yazar kendi eklentisiyle ilgilenir ve her güncelleme, sunulmadan önce Kiln''in otomatik kontrollerinden geçer. Sorularınız veya sorunlarınız mı var? En iyisi yazarın sayfasında sormaktır. Bir eklentiyi istediğiniz zaman kapatabilir veya kaldırabilirsiniz.'
++  'This plugin needs root access, so it can change system files. Install it only if you trust the author.': 'Bu eklenti root erişimi gerektirir, bu yüzden sistem dosyalarını değiştirebilir. Yalnızca yazarına güveniyorsanız kurun.'
++  'No community plugins installed': 'Kurulu topluluk eklentisi yok'
++  'No community plugins in the catalog': 'Katalogda topluluk eklentisi yok'
++  # Kiln OS: the rest of Settings > Plugins (patch 0005) in this language too, so the tabs are not beside English (patch 0100)
++  'STATUS': 'DURUM'
++  'INSTALLED': 'KURULU'
++  'AVAILABLE': 'KULLANILABİLİR'
++  'Plugins can''t be changed during a print': 'Baskı sırasında eklentiler değiştirilemez'
++  'All catalog plugins are installed': 'Katalogdaki tüm eklentiler kurulu'
++  'Built-in': 'Yerleşik'
++  'Needs a newer Kiln OS': 'Daha yeni bir Kiln OS gerekir'
++  'Waiting for Klipper...': 'Klipper bekleniyor...'
++  'Installing {}...': '{} kuruluyor...'
++  'Updating {}...': '{} güncelleniyor...'
++  'Working on {}...': '{} işleniyor...'
++  'Turn off {}?': '{} kapatılsın mı?'
++  'Install {}?': '{} kurulsun mu?'
++  'Downloads the plugin and turns it on. Klipper restarts when it is installed.': 'Eklentiyi indirir ve açar. Kurulum bitince Klipper yeniden başlar.'
++  'Update {}?': '{} güncellensin mi?'
++  'When there is a new version, Klipper restarts to load it.': 'Yeni bir sürüm olduğunda Klipper onu yüklemek için yeniden başlar.'
++  'Remove {}?': '{} kaldırılsın mı?'
++  'Turns the plugin off and deletes it from the printer. Klipper restarts.': 'Eklentiyi kapatır ve yazıcıdan siler. Klipper yeniden başlar.'
++  'Deletes the plugin from the printer.': 'Eklentiyi yazıcıdan siler.'
+diff --git a/translations/zh.yml b/translations/zh.yml
+index dba9414..3142c71 100644
+--- a/translations/zh.yml
++++ b/translations/zh.yml
+@@ -4902,3 +4902,34 @@ translations:
+   'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': '喷嘴冲击：热床检测到 {} g（上限 {} g，Z {}）。请检查打印件和喷嘴，然后恢复或取消。'
+   'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': '喷嘴冲击：热床检测到 {} g（上限 {} g）。请检查打印件和喷嘴，然后恢复或取消。'
+   'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': '检测到喷嘴冲击。请检查打印件和喷嘴，然后恢复或取消。'
++  # Kiln OS: Settings > Plugins, Kiln OS and Community tabs (patch 0100)
++  'Kiln OS': 'Kiln OS'
++  'Community': '社区'
++  'By {}': '作者：{}'
++  'Root': 'Root'
++  'Made and supported by their authors. You can turn them off at any time.': '由各自的作者制作和维护。您可以随时关闭。'
++  'About community plugins': '关于社区插件'
++  'These plugins are made by members of the Kiln OS community. Each author looks after their own plugin, and every update passes Kiln''s automated checks before it''s offered. Questions or problems? The author''s page is the best place to ask. You can turn off or remove a plugin any time.': '这些插件由 Kiln OS 社区成员制作。每位作者负责维护自己的插件，每次更新在提供之前都会通过 Kiln 的自动检查。有疑问或遇到问题？最好到作者的页面询问。您可以随时关闭或移除插件。'
++  'This plugin needs root access, so it can change system files. Install it only if you trust the author.': '此插件需要 root 权限，因此可以更改系统文件。仅在您信任作者时才安装。'
++  'No community plugins installed': '未安装社区插件'
++  'No community plugins in the catalog': '目录中没有社区插件'
++  # Kiln OS: the rest of Settings > Plugins (patch 0005) in this language too, so the tabs are not beside English (patch 0100)
++  'STATUS': '状态'
++  'INSTALLED': '已安装'
++  'AVAILABLE': '可用'
++  'Plugins can''t be changed during a print': '打印时无法更改插件'
++  'All catalog plugins are installed': '目录中的插件均已安装'
++  'Built-in': '内置'
++  'Needs a newer Kiln OS': '需要更新版本的 Kiln OS'
++  'Waiting for Klipper...': '正在等待 Klipper...'
++  'Installing {}...': '正在安装 {}...'
++  'Updating {}...': '正在更新 {}...'
++  'Working on {}...': '正在处理 {}...'
++  'Turn off {}?': '关闭 {}？'
++  'Install {}?': '安装 {}？'
++  'Downloads the plugin and turns it on. Klipper restarts when it is installed.': '下载插件并开启。安装完成后 Klipper 将重新启动。'
++  'Update {}?': '更新 {}？'
++  'When there is a new version, Klipper restarts to load it.': '有新版本时，Klipper 将重新启动以加载它。'
++  'Remove {}?': '移除 {}？'
++  'Turns the plugin off and deletes it from the printer. Klipper restarts.': '关闭插件并将其从打印机中删除。Klipper 将重新启动。'
++  'Deletes the plugin from the printer.': '从打印机中删除插件。'
+diff --git a/ui_xml/components/ad5x_catalog_row.xml b/ui_xml/components/ad5x_catalog_row.xml
+index 7a4b696..30f59f8 100644
+--- a/ui_xml/components/ad5x_catalog_row.xml
++++ b/ui_xml/components/ad5x_catalog_row.xml
+@@ -1,7 +1,8 @@
+ <?xml version="1.0"?>
+ <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+ <!-- One catalog plugin not installed yet in Settings > Plugins: title, description -->
+-<!-- and Install. Created by Ad5xPluginsOverlay::render_rows(). -->
++<!-- and Install. Created by Ad5xPluginsOverlay::render_rows(). On the Community tab -->
++<!-- also "By {author}". -->
+ <component>
+   <api>
+     <prop name="plugin" type="string" default=""/>
+@@ -10,6 +11,9 @@
+     <!-- 1: Install never works (plugin API too old), on top of print/busy -->
+     <prop name="blocked" type="string" default="0"/>
+     <prop name="note" type="string" default=""/>
++    <prop name="min_height" type="string" default="0"/>
++    <!-- "By {author}", translated by the overlay; empty hides it -->
++    <prop name="byline" type="string" default=""/>
+   </api>
+   <styles>
+     <style name="pad_standard"
+@@ -18,8 +22,8 @@
+            pad_left="#space_md" pad_right="#space_md" pad_top="#space_sm" pad_bottom="#space_sm" pad_gap="#space_sm"/>
+   </styles>
+   <view name="ad5x_catalog_row"
+-        extends="lv_obj" width="100%" height="content" flex_flow="row" style_flex_cross_place="center"
+-        style_bg_opa="0" style_border_width="0" scrollable="false">
++        extends="lv_obj" width="100%" height="content" style_min_height="$min_height" flex_flow="row"
++        style_flex_cross_place="center" style_bg_opa="0" style_border_width="0" scrollable="false">
+     <bind_style_if_eq name="pad_micro" subject="ui_breakpoint" ref_value="0"/>
+     <bind_style_if_ge name="pad_standard" subject="ui_breakpoint" ref_value="1"/>
+     <icon src="download" size="sm" variant="secondary"/>
+@@ -27,6 +31,7 @@
+             height="content" flex_grow="1" style_pad_all="0" flex_flow="column" style_pad_gap="#space_xs"
+             style_bg_opa="0" style_border_width="0" scrollable="false">
+       <text_body name="title" width="100%" text="$title" long_mode="wrap"/>
++      <text_small name="byline" width="100%" text="$byline" style_text_color="#text_muted" hidden_if_empty="$byline"/>
+       <text_small name="description"
+                   width="100%" text="$description" long_mode="wrap" style_text_color="#text_muted"
+                   hidden_if_empty="$description"/>
+diff --git a/ui_xml/components/ad5x_plugin_row.xml b/ui_xml/components/ad5x_plugin_row.xml
+index 3ad02ec..6656651 100644
+--- a/ui_xml/components/ad5x_plugin_row.xml
++++ b/ui_xml/components/ad5x_plugin_row.xml
+@@ -2,6 +2,7 @@
+ <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+ <!-- One installed AD5X plugin in Settings > Plugins: title, description, version, -->
+ <!-- Built-in tag and an on/off switch; Update and Remove for user-installed plugins. -->
++<!-- On the Community tab also "By {author}" and, with root scripts, a key and Root. -->
+ <!-- Created by Ad5xPluginsOverlay::render_rows(); every value is fixed at creation -->
+ <!-- (the rows are rebuilt when the plugin lists change). -->
+ <component>
+@@ -18,6 +19,13 @@
+     <prop name="note" type="string" default=""/>
+     <!-- Non-empty: show Update and Remove -->
+     <prop name="manage" type="string" default=""/>
++    <!-- Community tab: the row's least height (80), and non-empty when byline or root is -->
++    <prop name="min_height" type="string" default="0"/>
++    <prop name="byline_shown" type="string" default=""/>
++    <!-- "By {author}", translated by the overlay; empty hides it -->
++    <prop name="byline" type="string" default=""/>
++    <!-- Non-empty: the plugin has root scripts (key and Root, not colour alone) -->
++    <prop name="root" type="string" default=""/>
+   </api>
+   <styles>
+     <style name="pad_standard"
+@@ -26,8 +34,8 @@
+            pad_left="#space_md" pad_right="#space_md" pad_top="#space_sm" pad_bottom="#space_sm" pad_gap="#space_xs"/>
+   </styles>
+   <view name="ad5x_plugin_row"
+-        extends="lv_obj" width="100%" height="content" flex_flow="column" style_bg_opa="0" style_border_width="0"
+-        scrollable="false">
++        extends="lv_obj" width="100%" height="content" style_min_height="$min_height" flex_flow="column"
++        style_flex_main_place="center" style_bg_opa="0" style_border_width="0" scrollable="false">
+     <bind_style_if_eq name="pad_micro" subject="ui_breakpoint" ref_value="0"/>
+     <bind_style_if_ge name="pad_standard" subject="ui_breakpoint" ref_value="1"/>
+     <lv_obj width="100%"
+@@ -44,6 +52,36 @@
+           <text_small name="details" text="$details" style_text_color="#text_muted" hidden_if_empty="$details"/>
+           <status_pill name="builtin" text="$builtin" variant="muted" hidden_if_empty="$builtin"/>
+         </lv_obj>
++        <lv_obj name="byline_row"
++                width="100%" height="content" style_pad_all="0" flex_flow="row_wrap" style_flex_cross_place="center"
++                style_pad_gap="#space_md" style_bg_opa="0" style_border_width="0" scrollable="false"
++                hidden_if_empty="$byline_shown">
++          <text_small name="byline" text="$byline" style_text_color="#text_muted" hidden_if_empty="$byline"/>
++          <!-- Root scripts: a key drawn from three boxes (the icon font has no key) and the word -->
++          <lv_obj name="root_badge"
++                  width="content" height="content" style_pad_all="0" flex_flow="row" style_flex_cross_place="center"
++                  style_pad_gap="#space_xs" style_bg_opa="0" style_border_width="0" scrollable="false"
++                  hidden_if_empty="$root">
++            <lv_obj name="root_key"
++                    width="20" height="12" style_pad_all="0" style_bg_opa="0" style_border_width="0" style_radius="0"
++                    scrollable="false" clickable="false">
++              <lv_obj x="0"
++                      y="0" width="12" height="12" style_pad_all="0" style_radius="9999" style_bg_opa="0"
++                      style_border_width="2" style_border_color="#warning" style_border_opa="255" scrollable="false"
++                      clickable="false"/>
++              <lv_obj x="11"
++                      y="5" width="9" height="2" style_pad_all="0" style_radius="0" style_bg_opa="255"
++                      style_bg_color="#warning" style_border_width="0" scrollable="false" clickable="false"/>
++              <lv_obj x="15"
++                      y="7" width="2" height="3" style_pad_all="0" style_radius="0" style_bg_opa="255"
++                      style_bg_color="#warning" style_border_width="0" scrollable="false" clickable="false"/>
++              <lv_obj x="18"
++                      y="7" width="2" height="4" style_pad_all="0" style_radius="0" style_bg_opa="255"
++                      style_bg_color="#warning" style_border_width="0" scrollable="false" clickable="false"/>
++            </lv_obj>
++            <text_small text="Root" style_text_color="#warning"/>
++          </lv_obj>
++        </lv_obj>
+         <text_small name="description"
+                     width="100%" text="$description" long_mode="wrap" style_text_color="#text_muted"
+                     hidden_if_empty="$description"/>
+diff --git a/ui_xml/settings_ad5x_plugins_overlay.xml b/ui_xml/settings_ad5x_plugins_overlay.xml
+index 28c8693..c4074e0 100644
+--- a/ui_xml/settings_ad5x_plugins_overlay.xml
++++ b/ui_xml/settings_ad5x_plugins_overlay.xml
+@@ -2,17 +2,60 @@
+ <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+ <!-- Settings > Plugins on the AD5X: the printer's Klipper plugins (ad5x_plugins object) -->
+ <!-- Ad5xPluginsOverlay builds one row per plugin into the INSTALLED and AVAILABLE groups -->
++<!-- of the tab shown: Kiln OS (Kiln's own plugins) or Community (community=true) -->
+ <component>
+   <styles>
+     <style name="pad_standard" pad_left="#space_lg" pad_right="#space_lg" pad_top="#space_md" pad_bottom="#space_md"/>
+     <style name="pad_micro" pad_left="#space_md" pad_right="#space_md" pad_top="#space_sm" pad_bottom="#space_sm"/>
+     <style name="text_failed" text_color="#danger"/>
++    <!-- Tabs: the selected one underlined in the primary colour, the other's label muted.
++         Both set bg and border, so no inline value overrides them. -->
++    <style name="tab_selected"
++           bg_opa="0" border_side="bottom" border_width="#tab_underline_width" border_color="#primary" border_opa="255"/>
++    <style name="tab_idle" bg_opa="0" border_width="0"/>
++    <style name="tab_label_idle" text_color="#text_muted"/>
+   </styles>
+   <view name="settings_ad5x_plugins_overlay" extends="overlay_panel" title="Plugins" bg_color="#screen_bg">
++    <!-- Two tabs under the header, outside the scrolling content (half the width each,
++         the header's height: 400x56 at 800x480) -->
++    <lv_obj name="ad5x_plugins_tabs"
++            width="100%" height="#header_height" style_pad_all="0" style_pad_gap="0" flex_flow="row"
++            style_bg_opa="0" style_border_width="0" style_radius="0" scrollable="false">
++      <lv_button name="ad5x_plugins_tab_kiln"
++                 width="0" height="100%" flex_grow="1" style_radius="0" style_shadow_width="0" style_pad_all="0">
++        <bind_style_if_eq name="tab_selected" subject="ad5x_plugins_tab" ref_value="0"/>
++        <bind_style_if_not_eq name="tab_idle" subject="ad5x_plugins_tab" ref_value="0"/>
++        <text_body text="Kiln OS" align="center">
++          <bind_style_if_not_eq name="tab_label_idle" subject="ad5x_plugins_tab" ref_value="0"/>
++        </text_body>
++        <event_cb trigger="clicked" callback="on_ad5x_plugins_tab" user_data="0"/>
++      </lv_button>
++      <lv_button name="ad5x_plugins_tab_community"
++                 width="0" height="100%" flex_grow="1" style_radius="0" style_shadow_width="0" style_pad_all="0">
++        <bind_style_if_eq name="tab_selected" subject="ad5x_plugins_tab" ref_value="1"/>
++        <bind_style_if_not_eq name="tab_idle" subject="ad5x_plugins_tab" ref_value="1"/>
++        <text_body text="Community" align="center">
++          <bind_style_if_not_eq name="tab_label_idle" subject="ad5x_plugins_tab" ref_value="1"/>
++        </text_body>
++        <event_cb trigger="clicked" callback="on_ad5x_plugins_tab" user_data="1"/>
++      </lv_button>
++    </lv_obj>
+     <!-- Content Area - no padding, rows handle their own -->
+     <lv_obj name="overlay_content"
+             width="100%" flex_grow="1" style_pad_top="0" style_pad_left="0" style_pad_right="0"
+             style_pad_bottom="#space_lg" scrollable="true" flex_flow="column">
++      <!-- Community tab only: what these plugins are -->
++      <lv_obj name="ad5x_plugins_community_intro"
++              width="100%" height="content" flex_flow="column" style_pad_gap="#space_xs" style_bg_opa="0"
++              style_border_width="0" scrollable="false" hidden="true">
++        <bind_style_if_eq name="pad_micro" subject="ui_breakpoint" ref_value="0"/>
++        <bind_style_if_ge name="pad_standard" subject="ui_breakpoint" ref_value="1"/>
++        <bind_flag_if_not_eq subject="ad5x_plugins_tab" flag="hidden" ref_value="1"/>
++        <text_heading text="Community"/>
++        <text_small width="100%"
++                    text="Made and supported by their authors. You can turn them off at any time." long_mode="wrap"
++                    style_text_color="#text_muted"/>
++      </lv_obj>
+       <!-- Running job or last result, warnings, print lock; collapses when all are hidden -->
+       <setting_group name="ad5x_plugins_status_group">
+         <setting_group_header title="STATUS"/>
+@@ -51,6 +94,13 @@
+       </setting_group>
+       <setting_group name="ad5x_plugins_installed">
+         <setting_group_header title="INSTALLED"/>
++        <lv_obj name="ad5x_installed_none"
++                width="100%" height="content" style_bg_opa="0" style_border_width="0" scrollable="false">
++          <bind_style_if_eq name="pad_micro" subject="ui_breakpoint" ref_value="0"/>
++          <bind_style_if_ge name="pad_standard" subject="ui_breakpoint" ref_value="1"/>
++          <bind_flag_if_eq subject="ad5x_plugins_installed_none" flag="hidden" ref_value="0"/>
++          <text_small text="No community plugins installed"/>
++        </lv_obj>
+       </setting_group>
+       <!-- Catalog plugins not installed yet; hidden when the OS offers none -->
+       <setting_group name="ad5x_plugins_catalog">
+@@ -62,6 +112,13 @@
+           <bind_flag_if_not_eq subject="ad5x_plugins_catalog_state" flag="hidden" ref_value="2"/>
+           <text_small text="All catalog plugins are installed"/>
+         </lv_obj>
++        <lv_obj name="ad5x_catalog_none"
++                width="100%" height="content" style_bg_opa="0" style_border_width="0" scrollable="false">
++          <bind_style_if_eq name="pad_micro" subject="ui_breakpoint" ref_value="0"/>
++          <bind_style_if_ge name="pad_standard" subject="ui_breakpoint" ref_value="1"/>
++          <bind_flag_if_eq subject="ad5x_plugins_catalog_none" flag="hidden" ref_value="0"/>
++          <text_small text="No community plugins in the catalog"/>
++        </lv_obj>
+       </setting_group>
+     </lv_obj>
+   </view>

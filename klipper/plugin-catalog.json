@@ -1,5 +1,5 @@
 {
-  "comment": "Plugins in their own repositories that this release offers (INSTALL_PLUGIN, HelixScreen Settings > Plugins) and is tested with (tools/test_plugin_repos.sh). components: Moonraker components that must load (test only).",
+  "comment": "Plugins in their own repositories that this release offers (INSTALL_PLUGIN, HelixScreen Settings > Plugins) and is tested with (tools/test_plugin_repos.sh). components: Moonraker components that must load (test only). Community plugins (not Kiln's own repositories): commit (pinned, 40 hex) and author required (tools/test_plugin_catalog.py, docs/plugins.md).",
   "plugins": [
     {
       "name": "notify",
@@ -34,10 +34,20 @@
       "components": ["microspool"]
     },
     {
+      "name": "tailscale",
+      "title": "Tailscale (remote access)",
+      "description": "Fluidd and Moonraker from anywhere through your own Tailscale tailnet, no ports opened on your router (needs Extended memory on a 512 MiB printer)",
+      "url": "https://github.com/djvalic/kiln-tailscale.git",
+      "requires_os": "1.8",
+      "components": ["tailscale"]
+    },
+    {
       "name": "happy-hare",
       "title": "Happy Hare",
       "description": "Happy Hare MMU software in place of Kiln's IFS driver: tool changes parked at the toolhead, the IFS synced with the extruder, clog detection from the IFS stall sensors (needs the IFS on Klipper firmware)",
       "url": "https://github.com/KilnOS-Plugins/kiln-happy-hare.git",
+      "commit": "98c1248039bf322963b23663bc44a4252ad8d82b",
+      "author": "jolting",
       "requires_os": "1.5",
       "components": []
     }

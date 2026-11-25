@@ -29,7 +29,7 @@ exists and does what is described below.
 | `END_PRINT` | 140 | `PRINT_END`; `unload_filament: 1` unloads the IFS lane first (zMod `remove_filament`) | zmod-compat |
 | `T0`-`T3` | 5,665 | `IFS_SWAP` through the tool map (`ifs.cfg`); purge decided by the mode below | core / nopoop |
 | `SAVE_VARIABLE VARIABLE=use_trash_on_print VALUE=0|2` | 50 | purge mode for the print's tool changes | nopoop |
-| `SAVE_ZMOD_DATA USE_TRASH_ON_PRINT=0|1|2` | | the same save variable (zMod's documented way); another value is refused, not saved. `REMOVE_FILAMENT`, `DISABLE_PRIMING`, `PRINT_LEVELING`, `USE_KAMP`: not saved, a line names the `local.cfg` setting here (table below). Other keys: one line, ignored | zmod-compat |
+| `SAVE_ZMOD_DATA USE_TRASH_ON_PRINT=0|1|2` | | the same save variable (zMod's documented way); another value is refused, not saved. `REMOVE_FILAMENT`, `DISABLE_PRIMING`, `PRINT_LEVELING`, `USE_KAMP`: not saved, a line names the `local.cfg` setting here (table below). `ZCONTROL_Z`: not saved, a line ("Nozzle control" below). Other keys: one line, ignored | zmod-compat |
 | `_GOTO_TRASH [SPEED=]` | 337 | into the purge box: X 52.5, Y 229 plus this printer's offset (`TRASH_OFFSET`, else `unit.cfg`; as `_PURGE_BOX_POS` holds it); X first, leaving the box towards Y 220 if inside it; nothing if already there | zmod-compat |
 | `_SBROS_TRASH` | 337 | out of the box to Y 220, back in, out again (knocks the purge off) | zmod-compat |
 | `_DISABLE_SENSOR` / `_ENABLE_SENSOR` | 81 / 81 | toolhead runout sensor (`toolhead`) off / back on, only if it was on | zmod-compat |
@@ -39,9 +39,14 @@ exists and does what is described below.
 | `SET_ACTIVE_SPOOL ID=` / `CLEAR_ACTIVE_SPOOL` | 9 | Spoolman through Moonraker once `variable_spoolman: 1` (otherwise a message; without Moonraker's `[spoolman]` Klipper would stop the print) | zmod-compat |
 | `SET_PRINT_STATS_INFO` | 138 | Klipper's, plus pause at a layer | zmod-compat |
 | `SET_PAUSE_NEXT_LAYER`, `SET_PAUSE_AT_LAYER` | | pause when the layer starts (`MACRO=` default `PAUSE`); Fluidd/Mainsail use these too | zmod-compat |
-| `M600` | | filament change: `PAUSE`, lift (zMod's park lift, 50 mm, at most to 5 mm under the top of Z; `variable_lift` in `local.cfg`), then `_GOTO_TRASH` into the purge box. `RESUME` goes back like the IFS swap: still lifted, Y first (out of the box), then X, then Z down over the print position, ending in the same G-code state (modes, speed, E) as before; a filament purged by hand at the box no longer gets dragged onto the bed or the print. `T=`/`TRASH=` do nothing on the AD5X, as in zMod. Not homed: pauses only. The plugin's `PAUSE`/`RESUME` are `ad5x.cfg`'s pass-throughs plus this way back: a pause without `M600` (screen, Fluidd, runout, IFS auto-refill) resumes with Klipper's single move as without the plugin | zmod-compat |
+| `M600` | | filament change: `PAUSE`, Z +50 mm (the bed lowers; zMod's park lift, at most to 5 mm under the top of Z; `variable_lift` in `local.cfg`), then `_GOTO_TRASH` into the purge box. `RESUME` goes back like the IFS swap: still lifted, Y first (out of the box), then X, then Z down over the print position, ending in the same G-code state (modes, speed, E) as before; a filament purged by hand at the box no longer gets dragged onto the bed or the print. `T=`/`TRASH=` do nothing on the AD5X, as in zMod. Not homed: pauses only. The plugin's `PAUSE`/`RESUME` are `ad5x.cfg`'s pass-throughs plus this way back: a pause without `M600` (screen, Fluidd, runout, IFS auto-refill) resumes with Klipper's single move as without the plugin | zmod-compat |
 | `LINE_PURGE` | | `_PRIME_LINE FORCE=1` (line in front of the labelled objects; the printer's `macros/prime_line.cfg`, a message without it). During a print, skipped with a console line once `PRINT_START` has drawn its prime line; `LINE_PURGE FORCE=1` draws anyway ("KAMP" below) | zmod-compat |
 | `LED_ON`, `LED_OFF`, `LED S=0-100` | | chamber light | zmod-compat |
+| `NOZZLE_CONTROL WEIGHT=<g>` | | the nozzle-guard plugin's limit, saved, and the guard on: `NOZZLE_GUARD ENABLE=1 THRESHOLD=<g>` (no `WEIGHT=`: only the report, `NOZZLE_GUARD`; zMod would set its default 1500 g); `WEIGHT=0`: `NOZZLE_GUARD ENABLE=0`. No restart (zMod restarts Klipper or the printer). zMod's usual 800-1500 g are far less sensitive than the guard's 300 g; the value is used as given. Not a number or under 20 g: a line, nothing changed ("Nozzle control" below) | zmod-compat + nozzle-guard |
+| `ZCONTROL_ON`, `ZCONTROL_PAUSE`, `ZCONTROL_AUTO` / `ZCONTROL_OFF` | | `NOZZLE_GUARD ARM=1` / `ARM=0`: watch / stop watching for the rest of the print (arming works during a print only) | zmod-compat + nozzle-guard |
+| `ZCONTROL_ABORT` | | `NOZZLE_GUARD ARM=1` and a line: a hit pauses here, Klipper is not stopped | zmod-compat + nozzle-guard |
+| `ZCONTROL_STATUS` | | `NOZZLE_GUARD` (state, limit, largest push of the print) | zmod-compat + nozzle-guard |
+| `ZCONTROL_Z Z=`, `SAVE_ZMOD_DATA ZCONTROL_Z=` | | accepted, a line, no effect (a hit pauses at any height) | zmod-compat |
 | `M300`, `PLAY_MIDI FILE=` | | the speaker (`ad5x_sound`, system): beep, MIDI files from the config folder's `midi/` or the image's sounds | system |
 | `G10`, `G11`, `SET_RETRACTION` | 128,759 / 128,704 / 2 | Klipper `[firmware_retraction]`: 0.7 mm at 35 mm/s (zMod's values; the Home profile says 1.4 mm, which zMod didn't apply) | core (`ad5x.cfg`) |
 | `G17` (and `G2`/`G3`) | 3,527 | Klipper `[gcode_arcs]` | core |
@@ -79,6 +84,37 @@ which `SAVE_CONFIG` can't), `COLDPULL`, zMod's
 camera, MIDI, Telegram and display macros, Bambufy's colour dialogs,
 `POOP` and port sensors, QuickSwap's calibration macros (`IFS_TUNE` does
 that here).
+
+## Nozzle control (nozzle-guard plugin)
+
+zMod's `NOZZLE_CONTROL` and its `ZCONTROL_*` switches drive the
+`nozzle-guard` plugin here (`docs/nozzle-guard.md`), which is off by
+default. With it off, each of these commands shows one line ("the
+nozzle-guard plugin is off, ignored", and how to turn it on: Settings >
+Safety & Alerts, or `ENABLE_PLUGIN NAME=nozzle-guard`) and the file goes
+on printing; none of them raises an error.
+
+Differences from zMod:
+
+- A hit always pauses the print and the bed stays hot. zMod's abort mode
+  (a Klipper shutdown, which turns the bed off) is not copied:
+  `ZCONTROL_ABORT` and `ZCONTROL_AUTO` arm the guard the same way as
+  `ZCONTROL_PAUSE`, and `ZCONTROL_Z` (zMod's height between abort and
+  pause) does nothing.
+- `PRINT_START` (also through `START_PRINT`) arms the guard at the end of
+  the start, after homing, Z check, mesh, purge and the first colour. zMod
+  arms early in its `START_PRINT`; a `ZCONTROL_ON` or `ZCONTROL_PAUSE` in
+  the file during the start arms it earlier here too, and `PRINT_START`
+  arms it again (new baseline) at its end.
+- zMod's own `PAUSE` / `RESUME` switch its control off and on. Here the
+  guard doesn't watch while paused and watches again on resume by itself;
+  after a `ZCONTROL_OFF` it stays off until a `ZCONTROL_ON` or the next
+  print, a resume included.
+- `NOZZLE_CONTROL WEIGHT=` takes effect at once; zMod restarts Klipper (or
+  the printer with its native screen). The guard needs several readings in
+  a row over the limit (3 by default), zMod one.
+- zMod's control is off until `NOZZLE_CONTROL` is first called; the
+  guard is on (300 g) once its plugin is enabled.
 
 ## Purge modes (nopoop plugin)
 

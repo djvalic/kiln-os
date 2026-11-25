@@ -303,6 +303,7 @@ touched; delete it and reboot to get the default again.
 | `nopoop` | on | zMod's purge modes: in a print, `use_trash_on_print` 0 (prime tower) or 2 (slicer flush) makes tool changes prime only, without purge rounds (0 from layer 2: on the prime tower, as zMod), and `PRINT_START` skips its purge at the box |
 | `bambufy-compat` | off (on when migrating from a zMod with Bambufy) | Bambufy profiles: `_NOPOOP`, `_M106`; needs `zmod-compat` |
 | `recommend` | off (also after zMod; probe speed moves the Z offset) | zMod's recommended probing, mesh and corner values |
+| `nozzle-guard` | off | Pauses the print when the nozzle hits the print or the bed: the bed weighing board is read during the print and a push over the limit (300 g by default) pauses it, with the reason on the screen. Settings > Safety & Alerts on the touch screen, or `NOZZLE_GUARD` (`docs/nozzle-guard.md`) |
 
 Each has a `README.md` in its directory.
 
@@ -316,13 +317,102 @@ below) and updated from Fluidd, separately from Kiln OS:
 | `spoolman` | [kiln-spoolman](https://github.com/djvalic/kiln-spoolman) | A Spoolman spool per IFS slot: the loaded slot's spool is the active one, and the slot takes the spool's material, colour and temperature (plugin API 1.3, `ifs:loaded`, Moonraker component `spoolman_slots`) |
 | `notify` | [kiln-notify](https://github.com/djvalic/kiln-notify) | Notifications with a camera photo through Apprise (Telegram, Discord, ntfy, e-mail, ...): print events, progress, auto-refill, interrupted prints; set up with `NOTIFY_SETUP` (plugin API 1.3) |
 | `timelapse` | [kiln-timelapse](https://github.com/djvalic/kiln-timelapse) | moonraker-timelapse with an ffmpeg built from source for the printer; Fluidd's Timelapse tab (plugin API 1.3) |
-| `happy-hare` | [kiln-happy-hare](https://github.com/KilnOS-Plugins/kiln-happy-hare) | Happy Hare v4 drives the IFS instead of Kiln's `[ifs]`: tool changes parked at the toolhead, the IFS feeder synced with the extruder, FlowGuard clog detection from the IFS stall sensors; needs the IFS on Klipper firmware (plugin API 1.5, `owns_ifs`). Not from Kiln's own repositories: maintained by its author |
+
+Community plugins in the catalog (next section) are listed there too.
 
 They are listed in the image's catalog (`klipper/plugin-catalog.json`,
 `/usr/share/ad5x/plugin-catalog.json`), which `INSTALL_PLUGIN` and
 HelixScreen's Settings > Plugins offer, and each release is tested with
 them (`tools/test_plugin_repos.sh`): their own tests, and Moonraker
 starting with all of them enabled.
+
+## Community plugins
+
+Plugins made by other people, listed in the catalog next to Kiln's own.
+On the touch screen they are under Settings > Plugins > **Community**,
+with their author's name; in `printer.ad5x_plugins` they have
+`community: true` (plugin API 1.11).
+
+| Plugin | Author | Repository | What |
+|---|---|---|---|
+| `happy-hare` | jolting | [kiln-happy-hare](https://github.com/KilnOS-Plugins/kiln-happy-hare) | Happy Hare v4 drives the IFS instead of Kiln's `[ifs]`: tool changes parked at the toolhead, the IFS feeder synced with the extruder, FlowGuard clog detection from the IFS stall sensors; needs the IFS on Klipper firmware (plugin API 1.5, `owns_ifs`) |
+
+**Made and supported by their authors.** Kiln OS doesn't write these
+plugins or test every change to them, and offers them as they are: you
+use them at your own risk. Problems and questions go to the author's
+page (the repository's issues). Any plugin can be switched off or
+removed at any time (`DISABLE_PLUGIN`, `REMOVE_PLUGIN`, or Settings >
+Plugins); a plugin with root scripts runs its `uninstall.sh` then.
+
+**Pinned.** The catalog names one commit of each community plugin.
+`INSTALL_PLUGIN` installs exactly that commit and `UPDATE_PLUGIN` moves to
+the commit the catalog names, never to whatever the author pushed last
+(git submodules follow that commit too). A newer version of a community
+plugin comes with a Kiln OS update whose catalog names its new commit,
+after we looked at what changed (above all its root scripts) and tested it
+with `tools/test_plugin_repos.sh`. The plugin's folder is then a git
+checkout of that commit ("detached HEAD"), not a branch.
+
+A plugin installed by hand (`git clone`, then `ENABLE_PLUGIN`) isn't
+pinned or checked, even when the catalog lists it: it gets what you clone,
+`UPDATE_PLUGIN` is a `git pull`, and its own `[update_manager]` updates it
+from Fluidd, as before. The touch screen lists it under Community.
+Only an install from the catalog (`INSTALL_PLUGIN`, Install on the touch
+screen) is pinned; it is marked so in its git settings (`kiln.pinned`).
+
+**How the pins move.** Before a Kiln OS build (test builds about daily,
+updates about once a week; not a fixed schedule),
+`tools/update_community_pins.py` looks at each community plugin's newest
+commit (its default branch, a branch named in the entry's `follow`, or
+with `"follow": "tags"` its newest version tag) and checks it: the plugin
+rules (`tools/check_plugin.py`), and what changed since the pinned commit
+in `root/` (scripts that run as root), `.gitmodules` and `moonraker.conf`.
+A change there is held until a person has read it; anything else that
+passes moves the pin. The build then runs the plugins at their new pins:
+their own tests and Moonraker starting with them
+(`tools/test_plugin_repos.sh`). A plugin that fails stays on the last
+commit that passed, and its author is told what failed.
+
+### Getting a plugin listed
+
+Ask on GitHub (an issue on [kiln-os](https://github.com/djvalic/kiln-os))
+or in #plugin-dev on the Kiln OS Discord. A listed plugin:
+
+- **stays in your own repository.** Kiln OS doesn't host copies. Public
+  GitHub repositories are accepted; another public git host over https
+  can be added on request (`ALLOWED_HOSTS` in
+  `tools/test_plugin_catalog.py`).
+- **is pinned to a commit**: the build follows your default branch, a
+  branch you name or your release tags (say which), as above.
+- has a licence, a `README.md` that says what it does and how to remove
+  it, and an issue tracker for its users;
+- passes `tools/check_plugin.py`, uses no `kiln_`/`ad5x_` names ("Names"
+  in `docs/plugin-api.md`) and doesn't take a name a Kiln plugin uses;
+- may ship its own `[update_manager]` for people who install it by hand.
+  When it is installed from the catalog (pinned), Kiln leaves that section
+  out of what Moonraker loads, so Fluidd doesn't move it past the pin;
+- runs as root only through `root/` scripts (`docs/plugin-root-hooks.md`),
+  and its `uninstall.sh` undoes what `install.sh` did;
+- fetches git submodules over https only (plugin API 1.7).
+
+The catalog entry:
+
+```
+{
+  "name": "myplugin",
+  "title": "My plugin",
+  "description": "One line on what it does",
+  "url": "https://github.com/someone/myplugin.git",
+  "commit": "<the 40-character commit id>",
+  "follow": "release",
+  "author": "someone",
+  "requires_os": "1.11"
+}
+```
+
+`follow` is optional (the default branch when left out; a branch name, or
+`"tags"`). The build refuses a community entry without `commit` and
+`author`, or on a host not on the list (`tools/test_plugin_catalog.py`).
 
 ## Writing a plugin
 
@@ -344,7 +434,8 @@ tested with are in its catalog (`/usr/share/ad5x/plugin-catalog.json`):
 ```
 INSTALL_PLUGIN NAME=notify ENABLE=1   (clone it into /data/ad5x/plugins, switch it on)
 INSTALL_PLUGIN NAME=x ENABLE=1 ROOT=1 (the same for a plugin with root scripts)
-UPDATE_PLUGIN NAME=notify             (git pull; restarts what it needs if on)
+UPDATE_PLUGIN NAME=notify             (git pull, or the catalog's commit for a
+                                      community plugin; restarts what it needs if on)
 REMOVE_PLUGIN NAME=notify             (switch it off and delete it)
 ```
 
@@ -369,6 +460,9 @@ reboot is needed. A plugin not in the catalog is installed by hand as
 below.
 
 ### Keeping a git plugin up to date
+
+Not for community plugins in the catalog: they follow the catalog's
+pinned commit ("Community plugins").
 
 Moonraker's update manager updates a git repository; it doesn't switch
 the plugin on or off (that stays `ENABLE_PLUGIN`), and it doesn't update

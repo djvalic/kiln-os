@@ -8,11 +8,11 @@ with any system update ("Public and internal names" below).
 
 ## Version
 
-Current: **1.9**.
+Current: **1.11**.
 
 - In Klipper: `printer.ad5x_plugins.api_version` (also printed by
   `LIST_PLUGINS`).
-- On the system: `AD5X_PLUGIN_API="1.9"` in `/usr/lib/os-release`
+- On the system: `AD5X_PLUGIN_API="1.11"` in `/usr/lib/os-release`
   (`/etc/os-release`), for scripts.
 - In the code: `PLUGIN_API_VERSION` in `klipper/extras/ad5x_plugins.py`
   (the build copies it to os-release). `tools/test_plugin_api_doc.py`
@@ -62,6 +62,8 @@ they are loaded".
 | 1.7 | 2026-11-16 | v1.0.0-rc3 | Klipper module names with capitals (`extras/AFC_lane.py`; names that differ only in case count as one, also for the `kiln_`/`ad5x_` rule); `plugin.json` `module_dirs`: more Klipper module folders inside the plugin (a checkout of another project), imported when needed as Klipper imports its own ("Plugin layout", "Module folders"); `INSTALL_PLUGIN` and `UPDATE_PLUGIN` fetch the plugin's git submodules, https only ("Submodules"); `BED_MESH_CALIBRATE`, `LINE_PURGE` and `VORON_PURGE` skipped after `PRINT_START`'s mesh / prime line (or the same step already run) in the same print, `FORCE=1` (issue #73) |
 | 1.8 | 2026-11-18 | v1.0.0-rc4 | Extended memory mode on printers with 512 MiB (`docs/memory.md`): the macro `KILN_MEMORY_MODE [ENABLE=0\|1]` (macros/ `system.cfg`), Moonraker's `GET`/`POST /machine/kiln_os/memory` and `POST /machine/kiln_os/memory_notice_seen` and the feature name `memory_mode` (`docs/api.md`); the IFS firmware switch: Moonraker's `GET`/`POST /machine/kiln_os/ifs_firmware`, the feature name `ifs_firmware` and the owner's opt-in `/data/ad5x/ifs-switch.enable` ("A plugin that drives the IFS"); bed screws: `[screws_tilt_adjust]`, `SCREWS_TILT_CALCULATE` with tare and the macro `BED_LEVEL_SCREWS_TUNE` (macros/ `quick_actions.cfg`, issue #69) |
 | 1.9 | 2026-11-18 | v1.0.0-rc5 | The setup wizard's filament step (`SETUP_WIZARD_STEP STEP=filament`, `MATERIAL_<n>=`, `HEAD=`), `printer.ad5x_setup` `action`, `action_arg`, `step_started`, `prompt`, `filament`, `zoffset_plan`; `IFS_FIND_HEAD_SLOT`, `printer.ifs` `find_result`, `head_found`, `tube_blocked`, `loaded_source` (a slot only adopted at startup is a guess: `IFS_SWAP` to it loads it again, its unload is checked, the find and the wizard don't trust it). A Z offset step ends after a second `accept` (the test print is off the bed). `HOME=1` on `IFS_LOAD`, `IFS_UNLOAD`, `IFS_SWAP`, `IFS_EJECT`, `IFS_FIND_HEAD_SLOT`, `IFS_TUNE`: an idle printer that isn't homed homes first instead of the error, `printer.ifs` `phase` `homing_printer` meanwhile |
+| 1.10 | 2026-11-24 | v1.0.1-rc2 | The bed weighing board's background reading (`WEIGHT_MONITOR START=1 [RATE=] / START=0 / RESET_PEAK=1 / REBASE=1`; `printer.ad5x_weight` `monitor`, `rate`, `raw`, `baseline`, `force`, `peak`, `samples`, `errors`, `counts_per_gram`), the event `"ad5x_weight:sample"` and the module calls `monitor_start(rate)`, `monitor_stop()`, `monitor_rebase()`; the shipped `nozzle-guard` plugin (`NOZZLE_GUARD`, `printer.ad5x_nozzle_guard`, docs/nozzle-guard.md) |
+| 1.11 | 2026-11-25 | v1.0.1-rc2 | Community plugins (docs/plugins.md): catalog entries may name a `commit` (pinned: `INSTALL_PLUGIN` installs exactly it, `UPDATE_PLUGIN` moves to the catalog's commit), a `follow` (what `tools/update_community_pins.py` follows) and an `author`; `printer.ad5x_plugins` `catalog.<name>` `author`, `commit`, `community` and `available.<name>` `community`, `pinned`; a pinned install's own `[update_manager]` is left out of what Moonraker loads. Installs made by hand are not pinned |
 
 **1.5\*** marks the few items that came with a later 1.5 release:
 `LOG_MODE` and `printer.ad5x_log` (v0.0.53), `printer.ad5x_soak.cancel`
@@ -447,6 +449,7 @@ printer` before calling one.
 | `LINE_PURGE`, `VORON_PURGE` | `FORCE=1` | The zmod-compat plugin's (or another config's) purge line; Kiln adds: while a print runs, skipped after `PRINT_START`'s prime line or another of these that ran in that print, unless `FORCE=1` (issue #73). Only there when a plugin or config defines it | 1.7 |
 | `SAVE_CONFIG` | Klipper's | PID and input shaper results go to `ad5x-tuning.cfg`, a probe `z_offset` becomes the saved print Z offset; the rest as Klipper | 1.5 |
 | `WEIGHT_TARE`, `LOAD_CELL_TARE` | | Zero the bed strain gauges | 1.0 |
+| `WEIGHT_MONITOR` | `[START=1\|0]` `[RATE=hz]` (0.5-10, default `monitor_rate` 5) `[RESET_PEAK=1]` `[REBASE=1]` | Background reading of the bed force: the raw count a few times a second, the force in grams above a baseline that follows slow drift (bed heat, the print's weight) but not a push (`baseline_band` 100 g, `baseline_tc` 30 s). A reading is skipped while a tare or another weighing command has the board. Reports the state | 1.10 |
 | `Z_OFFSET_ESTIMATE` | `[X=]` `[Y=]` `[MAX_FORCE=]` `[STEP=]` `[CLEAN=0]` `[SAVE=1]` | Estimate the print Z offset from the bed load cells (homed first); result in `printer.ad5x_zestimate`; `SAVE=1` sets it when the fit is good | 1.5 |
 | `LOAD_FILAMENT`, `UNLOAD_FILAMENT`, `CLEAR_NOZZLE`, `AUTO_FULL_BED_LEVEL` | as in macros/ `quick_actions.cfg` | Screen quick actions | 1.0 |
 | `SCREWS_TILT_CALCULATE` | Klipper's (`DIRECTION=`, `MAX_DEVIATION=`, ...) | Probe at the four bed screws (`[screws_tilt_adjust]` in `ad5x.cfg`) and show the turns; tares the strain gauges over screw1 and makes one uncounted `PROBE` there first, refuses when not homed; results in Klipper's `printer.screws_tilt_adjust` | 1.8 |
@@ -504,7 +507,7 @@ later definition replaces a whole template. Templates must not call
 | `purge_gcode` | `OLD`, `NEW`, `ROUND`, `ROUNDS`, `FLUSH`, `FLUSH_SPEED` | Each purge round | 1.0 |
 | `prime_gcode` | `OLD`, `NEW` | After a prime-only swap at the box (macros/ `ifs_templates.cfg`) | 1.0 |
 | `prime_at_print_gcode` | `OLD`, `NEW` | After a prime at the print position, instead of `prime_gcode` (macros/ `ifs_templates.cfg`) | 1.5 |
-| `after_gcode` | `OLD`, `NEW` | End of a swap: back to the print as stock, still lifted, Y, then X, then Z (to the position `before_gcode` notes; a replaced `before_gcode` that doesn't note it gets one `RESTORE_GCODE_STATE MOVE=1`) | 1.0 |
+| `after_gcode` | `OLD`, `NEW` | End of a swap: back to the print as stock, Z still up, the bed lowered, Y, then X, then Z (to the position `before_gcode` notes; a replaced `before_gcode` that doesn't note it gets one `RESTORE_GCODE_STATE MOVE=1`) | 1.0 |
 | `abort_gcode` | `OLD`, `NEW` | A swap failed or was stopped after `before_gcode` ran: put back the state without moving | 1.5 |
 
 Options a plugin may set: `purge_mode_variable`, `prime_length`,
@@ -537,7 +540,7 @@ bounding box; else at the box.
 | `ENABLE_PLUGIN`, `DISABLE_PLUGIN` | `NAME=` `[RESTART=0]`; 1.6: `ENABLE_PLUGIN ROOT=1`, needed for a plugin with root scripts (`docs/plugin-root-hooks.md`) | Switch a plugin | 1.0 |
 | `LIST_PLUGINS` | | The plugins and the API version | 1.0 |
 | `INSTALL_PLUGIN` | `NAME=` (a catalog plugin) `[ENABLE=1]`; 1.6: `[ROOT=1]` | Clone it into `/data/ad5x/plugins`; 1.7: with its git submodules ("Submodules") | 1.4 |
-| `UPDATE_PLUGIN`, `REMOVE_PLUGIN` | `NAME=` (a plugin in `/data/ad5x/plugins`) | `git pull` / switch off and delete; 1.7: `UPDATE_PLUGIN` updates its git submodules too | 1.4 |
+| `UPDATE_PLUGIN`, `REMOVE_PLUGIN` | `NAME=` (a plugin in `/data/ad5x/plugins`) | `git pull` / switch off and delete; 1.7: `UPDATE_PLUGIN` updates its git submodules too; 1.11: a pinned install (from a catalog entry with `commit`) moves to the catalog's commit instead of pulling | 1.4 |
 
 ### Buttons (macros/ `system.cfg`)
 
@@ -579,6 +582,7 @@ step.
 | `printer.ifs_materials` | `available`, `channel_count`, `slots` (`"1"`-`"4"`: `type`, `color`, `temp`), `loaded`, `temperatures` | 1.0 |
 | `printer.ad5x_setup` | `step`, `state`, `message`, `progress`, `results`, `checks`, `pending_save`, `zoffset`; 1.5: `estimate` (the Z offset step uses `Z_OFFSET_ESTIMATE`: setup.cfg `zoffset_estimate`); 1.9: `action` (what the step does now, a short key; "" idle), `action_arg` (its slot or patch number, 0 none), `step_started` (Unix time the step started, 0 none), `prompt` (null, `clear_bed`, `head_unknown`, `pick_slot`), `filament` (`present`, `materials`, `head`, `head_source` (`loaded`, `user`, `found`, `unknown`, `kept`, `tube`, `empty`), `head_filament`; null without Kiln's IFS module), `zoffset_plan` (`slot`, `material`, `nozzle`, `bed`, `guess`, `source`; null before the Z offset step) (`docs/setup-wizard.md`) | 1.0 |
 | `printer.ad5x_weight` | `connected`, `weight` | 1.0 |
+| `printer.ad5x_weight` | `monitor` (background reading on), `rate` (readings/s, 0 when off), `raw` (last raw count), `baseline` (raw count the force is measured from), `force` (g above the baseline, + = pushed), `peak` (largest \|force\| since the start or `RESET_PEAK`), `samples`, `errors` (readings without a reply), `counts_per_gram` (56) | 1.10 |
 | `printer.ad5x_config` | `notices` (lines of `config-updates.txt`), `backups` (`macros/*.bak-*`) | 1.1 |
 | `printer.ad5x_resume` | `available`, `file`, `z`, `time` (an interrupted print) | 1.2 |
 | `printer.ad5x_nozzle` | `size` (running), `saved` (nozzle.cfg, null), `local` (local.cfg sets it), `sizes` | 1.4 |
@@ -587,7 +591,7 @@ step.
 | `printer.ad5x_zestimate` | Empty until the first `Z_OFFSET_ESTIMATE`, then: `estimate` (mm, the print Z offset it suggests), `press_in` (mm, first contact relative to where the probe fires), `stiffness` (g/mm), `r2` (fit quality, below 0.95 poor), `points`, `trigger_force` (g, null), `saved` (the saved Z offset then, null), `drift` (g), `first_touch` (mm above the trigger, null) | 1.5 |
 | `printer.ad5x_log` | `mode` (`short`/`extended`), `until` (Unix time back to short, null) | 1.5\* |
 | `printer.ad5x_mlock` | `locked` (Klipper's memory is locked in RAM), `flags` (`current,future,onfault`), `limit` (bytes, null: unlimited), `error` (why not, null; `off (...)` with `/data/ad5x/klipper-mlock.disable`) | 1.8 |
-| `printer.ad5x_plugins` | `api_version`, `enabled`, `available` (per plugin: `source`, `description`, `version`, `author`, `url`, `requires_os`, `compatible`; 1.5: `owns_ifs`; 1.6: `root` (it has root scripts), `root_installed` (its `install.sh` ran)), `warnings`; 1.4: `catalog` (per plugin: `title`, `description`, `url`, `requires_os`, `compatible`, `installed`), `job` (`name`, `action`, `state` idle/running/done/failed, `message`; 1.6: `action` `root install`/`root update`/`root uninstall` for the root scripts); 1.5: `ifs_owner` (the plugin driving the IFS at this start, "" Kiln's `[ifs]`) | 1.0 |
+| `printer.ad5x_plugins` | `api_version`, `enabled`, `available` (per plugin: `source`, `description`, `version`, `author`, `url`, `requires_os`, `compatible`; 1.5: `owns_ifs`; 1.6: `root` (it has root scripts), `root_installed` (its `install.sh` ran); 1.11: `community` (not Kiln OS's own: a community catalog plugin, or installed by hand), `pinned` (installed pinned from the catalog)), `warnings`; 1.4: `catalog` (per plugin: `title`, `description`, `url`, `requires_os`, `compatible`, `installed`; 1.11: `author`, `commit` ("" when not pinned), `community`), `job` (`name`, `action`, `state` idle/running/done/failed, `message`; 1.6: `action` `root install`/`root update`/`root uninstall` for the root scripts); 1.5: `ifs_owner` (the plugin driving the IFS at this start, "" Kiln's `[ifs]`) | 1.0 |
 | `printer['gcode_macro _AD5X_UNIT']` | `z_offset`, `cut_x_offset`, `cut_y_offset`, `x_offset`, `y_offset` (purge box at X 52.5 + `x_offset`, Y 229 + `y_offset`; cut at X `cut_x_offset` - 2.5, Y `cut_y_offset` - 7.5) | 1.0 |
 | `printer['gcode_macro _PURGE_BOX_POS']` | `x`, `y` (the purge box spot, with the saved `TRASH_OFFSET`), `dx`, `dy` (its offset from X 52.5 / Y 229: `TRASH_OFFSET`, else unit.cfg's `x_offset`/`y_offset`); what every Kiln box move uses | 1.5\* |
 | `printer['filament_switch_sensor toolhead']` | Klipper's runout fields (`enabled`, `filament_detected`); also `adc_filament_sensor toolhead`; `SET_FILAMENT_SENSOR SENSOR=toolhead` | 1.0 |
@@ -621,7 +625,13 @@ Read them; write only your own (prefixed) variables, except
   commands and status fields.
 - Events (`printer.register_event_handler`): `"ifs:loaded"` (1.2), with
   the slot now in the nozzle (1-4, 0 = emptied), after every load,
-  unload, swap and `IFS_SET_CHANNEL`.
+  unload, swap and `IFS_SET_CHANNEL`. `"ad5x_weight:sample"` (1.10),
+  with `eventtime`, `raw`, `force` (g above the baseline), after each
+  background reading of the bed weighing board.
+- `ad5x_weight`'s `monitor_start(rate=None)`, `monitor_stop()` and
+  `monitor_rebase()` (1.10, `printer.lookup_object('ad5x_weight')`) start
+  and stop the background reading and restart its baseline; the same as
+  `WEIGHT_MONITOR`. Stop it when your plugin no longer needs it.
 
 ## Moonraker
 

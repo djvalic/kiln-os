@@ -107,6 +107,13 @@ repeatable Z offset than the trip point plus fixed offsets. Untried.
   trip point is somewhere around 200-900 g (the probe and the weight are
   read a moment apart). Scale: about 56 raw counts per gram. Not yet
   checked with the nozzle touching the bed.
+- ~~Reading rate, noise and drift~~ (2026-11-24, X2600E printer, nothing
+  moved): about 11 `H7` readings a second through G-code (91 ms each);
+  noise about 115 raw counts (2 g) standard deviation; the grams field
+  stayed at 0 (20 g steps), so background reading uses the raw count.
+  The bed heated to 60 °C drifts the reading by -190 g over 20 minutes
+  (at most 0.6 g/s while heating), then holds. `WEIGHT_MONITOR`
+  (`docs/nozzle-guard.md`) follows it with a 30 s baseline.
 - What `H2 S500`, `H3 S100` and `H3 S200` calibrate (likely a known
   weight in grams); don't send them until known.
 - Whether Y-3 is on the bed's edge or past it (where the scrub happens).

@@ -101,6 +101,14 @@
 # Moonraker loads, the root update agent (S68ad5x-update-agent) restarts
 # Moonraker. HelixScreen's Settings > Plugins uses these. See
 # docs/plugins.md and docs/plugin-api.md.
+# Pinned entries (plugin API 1.11): a catalog entry may name a commit (40
+# hex digits). INSTALL_PLUGIN then checks out exactly that commit (fetching
+# it if the default branch doesn't have it) and UPDATE_PLUGIN fetches and
+# moves to the catalog's commit, never to whatever the author pushed last;
+# a new commit comes with a new catalog (a Kiln OS update). Community
+# plugins (not from Kiln's own repositories) are always pinned: the build
+# refuses a catalog without it (tools/test_plugin_catalog.py). Entries also
+# carry author and community (docs/plugins.md "Community plugins").
 # Submodules (plugin API 1.7, issue #69): a plugin with a .gitmodules gets
 # its submodules after the clone or pull (git submodule update --init
 # --recursive, in the same background job), https only: .gitmodules is
@@ -135,6 +143,7 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import configparser
+import errno
 import hashlib
 import importlib
 import io
@@ -152,11 +161,17 @@ import tarfile
 # The plugin API this system offers (docs/plugin-api.md): major.minor.
 # Minor: additions only. Major: something plugins may use changed or went.
 # post-build.sh copies it to /usr/lib/os-release as AD5X_PLUGIN_API.
-PLUGIN_API_VERSION = "1.9"
+PLUGIN_API_VERSION = "1.11"
 
 CONFIG_DIR = "/home/klipper/printer_data/config"
 SHIPPED_DIR = "/usr/share/ad5x/plugins"
 USER_DIR = "/data/ad5x/plugins"
+# INSTALL_PLUGIN clones here first, then moves the finished plugin into
+# USER_DIR in one rename. Not inside USER_DIR: Moonraker watches it (as
+# config/plugins) and warned about the half-cloned folders it saw vanish
+# ("Error adding inotify watch"). Same file system as USER_DIR (/data), and
+# not one of Moonraker's roots.
+STAGING_DIR = "/home/klipper/printer_data/plugin-staging"
 # Seconds between checks of USER_DIR for plugins added or removed by hand
 DIR_CHECK = 2.
 
@@ -218,6 +233,10 @@ PLUGIN_JSON_KEYS = ('name', 'description', 'version', 'author', 'url',
 RESERVED_PREFIXES = ('ad5x_', 'kiln_')
 RESERVED_MODULE_PREFIXES = RESERVED_PREFIXES
 OFFICIAL_URL_PREFIXES = ('https://github.com/djvalic/kiln-',)
+# A pinned catalog commit (plugin API 1.11): a full SHA-1
+COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+# git config key INSTALL_PLUGIN sets in a pinned install
+PIN_GIT_KEY = "kiln.pinned"
 # [include <dir>/<name>/plugin.cfg], with or without the glob brackets
 INCLUDE_RE = re.compile(
     r"^\s*\[include\s+(?P<path>\S*/(?P<name>[A-Za-z0-9_.-]+)/"
@@ -515,7 +534,9 @@ def scan(shipped_dir=SHIPPED_DIR, user_dir=USER_DIR,
                     d, 'moonraker', 'components')),
                 'root': has_root(d),
                 'root_installed': os.path.isdir(os.path.join(roots_dir,
-                                                             name))})
+                                                             name)),
+                # plugin API 1.11: installed pinned from the catalog
+                'pinned': source == 'user' and is_pinned(d)})
             found[name] = info
     return found
 
@@ -758,10 +779,18 @@ def moonraker_text(names, found, ifs_flag=None):
             continue
         path = os.path.join(info['dir'], 'moonraker.conf')
         try:
-            updates |= "[update_manager" in read_regular(path)
+            text = read_regular(path)
         except (OSError, ValueError) as e:
             logging.warning("ad5x_plugins: %s skipped: %s", path, e)
             continue
+        pinned = info.get('pinned') and without_update_manager(
+            text, info['dir'])
+        if pinned is not None and pinned is not False:
+            # Pinned from the catalog: without its own update manager
+            lines += ["# %s (pinned: its [update_manager] left out)" % (
+                path,), pinned]
+            continue
+        updates |= "[update_manager" in text
         lines.append("[include %s]" % (path,))
     if updates:
         # Plugins kept up to date by Moonraker: this system has no package
@@ -790,9 +819,10 @@ def env_text(names, found):
         ":".join(python), ":".join(components))
 
 def read_catalog(path):
-    """name -> {title, description, url, requires_os} of the catalog's
-    valid entries (https git URLs; file:// for tests); a missing file is
-    empty."""
+    """name -> {title, description, url, requires_os, author, commit,
+    community} of the catalog's valid entries (https git URLs; file:// for
+    tests; commit, when given, 40 hex digits); a missing file is empty.
+    community: not from one of Kiln's own repositories."""
     try:
         with open(path) as f:
             data = json.load(f)
@@ -804,15 +834,80 @@ def read_catalog(path):
         if not isinstance(p, dict):
             continue
         name, url = p.get('name'), p.get('url')
+        commit = p.get('commit') or ''
         if not isinstance(name, str) or not NAME_RE.match(name) or \
                 not isinstance(url, str) or \
-                not url.startswith(('https://', 'file://')):
+                not url.startswith(('https://', 'file://')) or \
+                not isinstance(commit, str) or \
+                (commit and not COMMIT_RE.match(commit)):
             continue
         out[name] = {'title': str(p.get('title') or name),
                      'description': str(p.get('description') or ''),
                      'url': url,
-                     'requires_os': str(p.get('requires_os') or '')}
+                     'requires_os': str(p.get('requires_os') or ''),
+                     'author': str(p.get('author') or ''),
+                     'commit': commit,
+                     'community': not url.startswith(OFFICIAL_URL_PREFIXES)}
     return out
+
+def is_pinned(plugin_dir):
+    """Whether INSTALL_PLUGIN installed this plugin pinned to a catalog
+    commit (PIN_GIT_KEY in its .git/config). A clone made by hand is not.
+    Read from the file, not with git: root reads it at boot (S62moonraker)
+    and git refuses a repository another user owns."""
+    try:
+        text = read_regular(os.path.join(plugin_dir, '.git', 'config'))
+    except (OSError, ValueError):
+        return False
+    section, key = PIN_GIT_KEY.split('.')
+    inside = False
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith('['):
+            inside = line.lower() == '[%s]' % (section,)
+        elif inside and '=' in line:
+            k, v = line.split('=', 1)
+            if k.strip().lower() == key and v.strip().lower() == 'true':
+                return True
+    return False
+
+UPDATE_MANAGER_RE = re.compile(r"^\[\s*update_manager(\s[^\]]*)?\]")
+SECTION_RE = re.compile(r"^\[[^\]]+\]")
+INCLUDE_LINE_RE = re.compile(r"^\[\s*include\s+(\S+)\s*\]\s*$")
+
+def without_update_manager(text, plugin_dir):
+    """A pinned plugin's moonraker.conf for Moonraker (plugin API 1.11):
+    its [update_manager ...] sections left out (Moonraker would check out
+    the plugin's branch, past the catalog's commit), relative [include]s
+    made absolute (the text goes inline into the generated file). None
+    when it has no [update_manager]."""
+    if not any(UPDATE_MANAGER_RE.match(l) for l in text.splitlines()):
+        return None
+    out, skip = [], False
+    for line in text.splitlines():
+        if SECTION_RE.match(line):
+            skip = bool(UPDATE_MANAGER_RE.match(line))
+            m = INCLUDE_LINE_RE.match(line)
+            if m and not os.path.isabs(m.group(1)):
+                line = "[include %s]" % (os.path.join(plugin_dir,
+                                                      m.group(1)),)
+        if not skip:
+            out.append(line)
+    return "\n".join(out)
+
+def same_repo(a, b):
+    """Whether two git URLs name the same repository (a trailing ".git" or
+    "/" and the host's case aside). None when either is empty."""
+    def norm(u):
+        u = u.strip().rstrip('/')
+        if u.endswith('.git'):
+            u = u[:-4]
+        head, sep, rest = u.partition('://')
+        host, slash, path = rest.partition('/')
+        return head.lower() + sep + host.lower() + slash + path
+    if not a or not b:
+        return None
+    return norm(a) == norm(b)
 
 def touches_moonraker(info):
     """A plugin whose switch changes what Moonraker loads."""
@@ -1111,6 +1206,7 @@ class AD5XPlugins:
                                            'moonraker-plugins.conf'))
         self.shipped_dir = config.get('shipped_dir', SHIPPED_DIR)
         self.user_dir = config.get('user_dir', USER_DIR)
+        self.staging_dir = config.get('staging_dir', STAGING_DIR)
         self.catalog_file = config.get('catalog_file', CATALOG_FILE)
         self.restart_file = config.get('moonraker_restart_file',
                                        MOONRAKER_RESTART_FILE)
@@ -1725,6 +1821,42 @@ class AD5XPlugins:
         return msg
     cmd_INSTALL_PLUGIN_help = ("Install a plugin from the catalog: NAME= "
                                "[ENABLE=1 [ROOT=1]]")
+    def _pin(self, d, commit, then, name, action, cleanup=None):
+        """Pinned catalog entries (plugin API 1.11): check out commit in d
+        (detached HEAD), fetching it from origin first when the clone or
+        fetch didn't bring it (not on a branch). then() continues the job;
+        failures call cleanup() (if given) and raise. Local changes are
+        kept unless they collide."""
+        def fail(msg):
+            if cleanup:
+                cleanup()
+            raise Exception(msg)
+        checkout = ["git", "-C", d, "checkout", "-q", "--detach", commit]
+        rc, out = run_git(checkout)
+        if rc == 0:
+            return then()
+        rc2, _ = run_git(["git", "-C", d, "cat-file", "-e",
+                          commit + "^{commit}"])
+        if rc2 == 0:
+            fail("can't check out the catalog's commit %s: %s"
+                 % (commit[:7], out[-300:]))
+        def fetched(rc, out):
+            if rc != 0:
+                fail("the catalog's commit %s isn't on the plugin's "
+                     "repository: %s" % (commit[:7], out[-300:]))
+            rc, out = run_git(checkout)
+            if rc != 0:
+                fail("can't check out the catalog's commit %s: %s"
+                     % (commit[:7], out[-300:]))
+            return then()
+        try:
+            self._spawn(name, action, ["git", "-C", d, "fetch", "-q",
+                                       "origin", commit], fetched, None,
+                        "%s %s: fetching %s..." % (action, name,
+                                                   commit[:7]))
+        except OSError as e:
+            fail("Can't run git: %s" % (e,))
+        return "fetching the catalog's commit %s" % (commit[:7],)
     def cmd_INSTALL_PLUGIN(self, gcmd):
         name, entry = self._catalog_entry(gcmd)
         enable = gcmd.get_int('ENABLE', 0)
@@ -1739,12 +1871,25 @@ class AD5XPlugins:
                                          PLUGIN_API_VERSION))
         if enable:
             self._check_idle(gcmd)
-        tmp = os.path.join(self.user_dir, ".install-" + name)
+        tmp = os.path.join(self.staging_dir, name)
         shutil.rmtree(tmp, ignore_errors=True)
+        # Left by an install before STAGING_DIR (cut by a power loss)
+        shutil.rmtree(os.path.join(self.user_dir, ".install-" + name),
+                      ignore_errors=True)
         def done(rc, out):
             if rc != 0:
                 shutil.rmtree(tmp, ignore_errors=True)
                 raise Exception("git clone failed: %s" % (out[-300:],))
+            if not entry['commit']:
+                return cloned()
+            return self._pin(tmp, entry['commit'], cloned, name, "install",
+                             lambda: shutil.rmtree(tmp, ignore_errors=True))
+        def cloned():
+            if entry['commit']:
+                # Marks a pinned install (UPDATE_PLUGIN follows the
+                # catalog's commit); a clone made by hand has no mark and
+                # stays free (git pull, its own update manager)
+                run_git(["git", "-C", tmp, "config", PIN_GIT_KEY, "true"])
             meta = read_metadata(tmp, name)
             if meta['error']:
                 shutil.rmtree(tmp, ignore_errors=True)
@@ -1773,7 +1918,15 @@ class AD5XPlugins:
                                 % (out[-300:],))
             return installed()
         def installed():
-            os.rename(tmp, dest)
+            try:
+                os.rename(tmp, dest)
+            except OSError as e:
+                # staging_dir on another file system (a changed setup):
+                # copied, then the staging copy removed
+                if e.errno != errno.EXDEV:
+                    shutil.rmtree(tmp, ignore_errors=True)
+                    raise
+                shutil.move(tmp, dest)
             self.found = self._scan()
             has_root = name in self.found and self.found[name]['root']
             if enable and (root or not has_root):
@@ -1792,13 +1945,15 @@ class AD5XPlugins:
                         "root/ scripts). Read them, then ENABLE_PLUGIN "
                         "NAME=%s ROOT=1" % (name,))
             return "installed (ENABLE_PLUGIN NAME=%s)" % (name,)
-        try:
-            os.makedirs(self.user_dir, exist_ok=True)
-        except OSError as e:
-            raise gcmd.error("Can't create %s: %s" % (self.user_dir, e))
+        for d in (self.user_dir, self.staging_dir):
+            try:
+                os.makedirs(d, exist_ok=True)
+            except OSError as e:
+                raise gcmd.error("Can't create %s: %s" % (d, e))
         self._start_job(gcmd, name, "install",
                         ["git", "clone", "-q", entry['url'], tmp], done)
-    cmd_UPDATE_PLUGIN_help = "Update an installed plugin (git pull): NAME="
+    cmd_UPDATE_PLUGIN_help = ("Update an installed plugin (git pull, or the "
+                              "catalog's pinned commit): NAME=")
     def cmd_UPDATE_PLUGIN(self, gcmd):
         name = gcmd.get('NAME').strip().lower()
         d = os.path.join(self.user_dir, name)
@@ -1808,6 +1963,16 @@ class AD5XPlugins:
         on = name in read_enabled(self.plugins_file)[0]
         if on:
             self._check_idle(gcmd)
+        # Installed pinned from the catalog (plugin API 1.11): fetch, then
+        # the catalog's commit. A clone made by hand isn't pinned.
+        self.catalog = read_catalog(self.catalog_file)
+        entry = self.catalog.get(name)
+        commit = entry['commit'] if entry and is_pinned(d) else ''
+        if commit:
+            rc, origin = run_git(["git", "-C", d, "config", "--get",
+                                  "remote.origin.url"])
+            if rc != 0 or same_repo(origin, entry['url']) is False:
+                commit = ''
         def rev(what="--short"):
             try:
                 return subprocess.check_output(
@@ -1872,6 +2037,16 @@ class AD5XPlugins:
             if on:
                 return self._restart_after(self.found.get(name), msg)
             return msg
+        if commit:
+            def fetched(rc, out):
+                if rc != 0:
+                    raise Exception("git fetch failed: %s" % (out[-300:],))
+                return self._pin(d, commit, lambda: done(0, ""), name,
+                                 "update")
+            self._start_job(gcmd, name, "update",
+                            ["git", "-C", d, "fetch", "-q",
+                             "--no-recurse-submodules", "origin"], fetched)
+            return
         # Submodules only in the step after, with only https allowed
         self._start_job(gcmd, name, "update",
                         ["git", "-C", d, "pull", "-q", "--ff-only",
@@ -2144,10 +2319,15 @@ class AD5XPlugins:
             'api_version': PLUGIN_API_VERSION,
             'enabled': list(self.loaded),
             'available': {
-                n: {k: i[k] for k in ('source', 'description', 'version',
-                                      'author', 'url', 'requires_os',
-                                      'compatible', 'owns_ifs', 'root',
-                                      'root_installed')}
+                n: dict({k: i[k] for k in ('source', 'description',
+                                           'version', 'author', 'url',
+                                           'requires_os', 'compatible',
+                                           'owns_ifs', 'root',
+                                           'root_installed', 'pinned')},
+                        # plugin API 1.11: not Kiln OS's own (installed
+                        # by hand, or a community catalog entry)
+                        community=not is_official(n, i['source'],
+                                                  self.catalog))
                 for n, i in self.found.items()},
             'ifs_owner': self.ifs_owner,
             'catalog': {

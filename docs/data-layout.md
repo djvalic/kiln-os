@@ -84,6 +84,7 @@ both paths name the same files.
 | `printer_data/config/` | `printer.cfg`, `unit.cfg`, `local.cfg`, `plugins.cfg`, `moonraker.conf`, `variables.cfg`, `macros/*.cfg` and the generated `plugins-active.cfg` and `moonraker-plugins.conf`; see [config-layout.md](config-layout.md) | `S05ad5x-data` (first-boot copies, `macros/` templates), Klipper, `S61klipper`, `S62moonraker`, you |
 | `printer_data/logs/` | `klippy.log` (and dated copies, at most 5 and 50 MB), `moonraker.log`, `helixscreen.log`, `wifi.log` (+ `.1`), `network.log` (+ `.1`, main OS); see [logs.md](logs.md) | the services, `S42ad5x-wifi` or `S46ad5x-wifi-log`, `S40ad5x-network` |
 | `printer_data/gcodes/` | Uploaded print files | Moonraker |
+| `printer_data/plugin-staging/` | A plugin while `INSTALL_PLUGIN` clones it; moved into `/data/ad5x/plugins/` in one step when complete, so Moonraker (which watches `config/plugins`) never sees a half-cloned plugin. Empty between installs | `ad5x_plugins.py` |
 | `printer_data/comms/klippy.sock` | Klipper's API socket | Klipper (`S61klipper` passes the path) |
 | `printer_data/comms/log-mode` | `short` or `extended [until]`: log detail for Moonraker (`-v`) and HelixScreen | Klipper's `LOG_MODE` (`ad5x_log.py`); read by `S62moonraker`, `S70helixscreen` |
 | `printer_data/comms/run-setup-wizard` | Run the setup wizard once more at the next screen start | `SETUP_WIZARD` (`ad5x_setup.py`); HelixScreen deletes it |

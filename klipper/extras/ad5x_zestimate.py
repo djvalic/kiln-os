@@ -17,6 +17,13 @@
 # Reports only (SAVE=1 saves it as the print Z offset). Every step is
 # logged to klippy.log ("ad5x_zestimate:").
 #
+# Heights: the probe result is in toolhead (machine) coordinates, before the
+# bed mesh and the G-code Z offset. Every move after the probe is made in
+# the same coordinates (toolhead.manual_move), not with G1: with a mesh
+# loaded (a print's adaptive mesh stays loaded after it ends) or an offset
+# set, G1 Z<trigger + x> lands somewhere else, measured 3 mm below the
+# trigger on a real printer (2026-11-25), pressing the nozzle into the bed.
+#
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import logging
 
@@ -49,20 +56,28 @@ class AD5XZEstimate:
         self.gcode = self.printer.lookup_object('gcode')
         self.x, self.y = config.getfloatlist('position', (107.5, 107.5),
                                              count=2)
-        self.start = config.getfloat('start_above', .6, above=0.)
-        self.step = config.getfloat('step', .01, above=0.)
-        self.max_force = config.getfloat('max_force', 400., above=0.)
-        self.min_force = config.getfloat('min_force', 30., above=0.)
+        # Measured hot, first contact is 0.2-0.25 mm above the trigger, but
+        # plastic on the tip reaches up to 0.7 mm: start well above that
+        self.start = config.getfloat('start_above', 1.2, above=0.)
+        self.step = config.getfloat('step', .02, above=0.)
+        # Grams at the board's 56 counts per gram (issue #94: these were
+        # 400 / 30 at a wrong 43 counts per gram, the same forces)
+        self.max_force = config.getfloat('max_force', 300., above=0.)
+        self.min_force = config.getfloat('min_force', 23., above=0.)
         # 0: no lower than where the probe fired, so never pressing harder
         # than probing does
         self.below = config.getfloat('max_below_trigger', 0., minval=0.)
         self.samples = config.getint('samples', 3, minval=1)
-        self.counts_per_gram = config.getfloat('counts_per_gram', 43.,
+        # None: [ad5x_weight]'s counts_per_gram (56)
+        self.counts_per_gram = config.getfloat('counts_per_gram', None,
                                                above=0.)
         # fit only from this share of the highest force up
         self.fit_from = config.getfloat('fit_from', .25, minval=0.,
                                         maxval=.9)
         self.settle = config.getfloat('settle', .3, minval=0.)
+        # After the probe's press the reading creeps back for a while:
+        # wait before taring
+        self.tare_wait = config.getfloat('tare_wait', 3., minval=0.)
         self.last = {}
         self.gcode.register_command(
             'Z_OFFSET_ESTIMATE', self.cmd_Z_OFFSET_ESTIMATE,
@@ -71,10 +86,24 @@ class AD5XZEstimate:
     def _run(self, script):
         self.gcode.run_script_from_command(script)
 
+    def _move(self, x=None, y=None, z=None, speed=5.):
+        """Move in toolhead coordinates (as the probe reports them), past
+        the bed mesh and the G-code offset; speed in mm/s."""
+        toolhead = self.printer.lookup_object('toolhead')
+        toolhead.manual_move([x, y, z], speed)
+        toolhead.wait_moves()
+
+    def _trigger(self):
+        """Toolhead Z where the probe last fired (last_probe_position is
+        the bed's height: the trigger minus the probe's z_offset)."""
+        probe = self.printer.lookup_object('probe')
+        lp = probe.get_status(self.reactor.monotonic())['last_probe_position']
+        return lp.z + self.z_offset
+
     def _raw(self, weight):
         """Mean raw count over samples reads. H7's reply is "command H7
         ok. <raw> <grams> g": grams come in 20 g steps, the raw count is
-        about 43 per gram."""
+        about 56 per gram ([ad5x_weight] counts_per_gram)."""
         vals = []
         for _ in range(self.samples):
             reply = weight._run(weight._request, "H7")
@@ -85,17 +114,18 @@ class AD5XZEstimate:
                     "Z_OFFSET_ESTIMATE: bad H7 reply %r" % (reply,))
         return sum(vals) / float(len(vals))
 
-    def _clean(self, z_offset):
+    def _clean(self):
         """As the print's Z check: tare, probe at the bed's front edge,
         then scrub the nozzle along it (soft plastic on the tip squashes a
         little more at every touch)."""
         self._run("G1 X60 Y-3 F30000\nWEIGHT_TARE\nPROBE")
-        probe = self.printer.lookup_object('probe')
-        lp = probe.get_status(self.reactor.monotonic())['last_probe_position']
-        z = lp.z + z_offset
-        self._run("G1 Z%.3f F1000\nG1 X130 F1200\nG1 X150 F1200\n"
-                  "G1 Z%.3f F1000\nG1 X170 F1200\nG1 Z5 F6000\nM400"
-                  % (z + .3, z + .1))
+        z = self._trigger()
+        self._move(z=z + .3, speed=1000 / 60.)
+        self._move(x=130., speed=20.)
+        self._move(x=150., speed=20.)
+        self._move(z=z + .1, speed=1000 / 60.)
+        self._move(x=170., speed=20.)
+        self._move(z=z + 5., speed=10.)
 
     def get_status(self, eventtime):
         return dict(self.last)
@@ -124,20 +154,21 @@ class AD5XZEstimate:
         max_force = gcmd.get_float('MAX_FORCE', self.max_force, above=50.,
                                    maxval=1000.)
         cf = self.printer.lookup_object('configfile')
-        z_offset = float(cf.get_status(now)['settings']['probe']['z_offset'])
+        self.z_offset = float(
+            cf.get_status(now)['settings']['probe']['z_offset'])
         self._run("G90\nG1 Z5 F800")
         if gcmd.get_int('CLEAN', 1):
-            self._clean(z_offset)
+            self._clean()
         # 1. Probe: tared first, as the Z check does
-        self._run("G1 X%.2f Y%.2f F12000\nM400" % (x, y))
+        self._move(x=x, y=y, speed=200.)
         self._run("WEIGHT_TARE\nPROBE")
-        lp = probe.get_status(self.reactor.monotonic())['last_probe_position']
-        trigger = lp.z + z_offset          # toolhead Z where it fired
-        # 2. Above contact, tare, then step down
+        trigger = self._trigger()          # toolhead Z where it fired
+        # 2. Above contact, tare, then step down (all in toolhead Z)
         top = trigger + self.start
-        self._run("G1 Z%.4f F300\nM400" % (top,))
-        self.reactor.pause(self.reactor.monotonic() + .5)
+        self._move(z=top, speed=5.)
+        self.reactor.pause(self.reactor.monotonic() + self.tare_wait)
         weight._run(weight._tare)
+        cpg = self.counts_per_gram or getattr(weight, 'counts_per_gram', 56.)
         base = self._raw(weight)
         base_time = self.reactor.monotonic()
         points = []
@@ -146,9 +177,9 @@ class AD5XZEstimate:
         stop = "the lowest point"
         try:
             while z >= bottom - 1e-6:
-                self._run("G1 Z%.4f F120\nM400" % (z,))
+                self._move(z=z, speed=2.)
                 self.reactor.pause(self.reactor.monotonic() + self.settle)
-                f = (self._raw(weight) - base) / self.counts_per_gram
+                f = (self._raw(weight) - base) / cpg
                 points.append((round(z - trigger, 4), round(f, 1)))
                 logging.info("ad5x_zestimate: z %+.3f (above trigger) "
                              "%.1f g", z - trigger, f)
@@ -157,12 +188,12 @@ class AD5XZEstimate:
                     break
                 z -= step
         finally:
-            self._run("G1 Z%.4f F600\nM400" % (top,))
+            self._move(z=top, speed=10.)
         # The sensor's zero, clear of the bed again: how far it drifted
         self.reactor.pause(self.reactor.monotonic() + .5)
-        drift = (self._raw(weight) - base) / self.counts_per_gram
+        drift = (self._raw(weight) - base) / cpg
         drift_time = self.reactor.monotonic() - base_time
-        self._run("G1 Z%.4f F600\nM400" % (trigger + 5.,))
+        self._move(z=trigger + 5., speed=10.)
         # 3. Fit
         if points and points[0][1] >= self.min_force:
             raise gcmd.error("Z_OFFSET_ESTIMATE: already touching %.1f mm "
@@ -180,7 +211,7 @@ class AD5XZEstimate:
                     len(points), points[-1][1] if points else 0, stop))
         contact, stiffness, r2, n = fit
         press_in = contact                  # relative to the trigger
-        estimate = round(press_in + z_offset, 3)
+        estimate = round(press_in + self.z_offset, 3)
         trig_force = None
         for (z1, f1), (z2, f2) in zip(points, points[1:]):
             if z1 >= 0. >= z2 and z1 != z2:
@@ -201,7 +232,7 @@ class AD5XZEstimate:
                "above where the probe fires (ad5x.cfg assumes %.3f); bed "
                "%.0f g/mm, fit of %d points r2 %.3f%s; stopped at %s." % (
                    estimate, "%.3f" % saved if saved is not None else "none",
-                   press_in, -z_offset, stiffness, n, r2,
+                   press_in, -self.z_offset, stiffness, n, r2,
                    "" if trig_force is None else
                    ", probe fires at about %.0f g" % (trig_force,), stop))
         msg += (" Sensor zero drifted %+.0f g in %.0f s; first force at "

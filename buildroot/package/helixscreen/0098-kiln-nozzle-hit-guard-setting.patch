@@ -1,0 +1,1311 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Tue, 24 Nov 2026 15:03:00 -0500
+Subject: [PATCH] settings: Safety & Alerts has the nozzle-hit guard
+
+Kiln's shipped plugin nozzle-guard (off by default) pauses a print when
+the bed weighing board feels the nozzle hit the print or the bed; with
+it on, Klipper has the ad5x_nozzle_guard object (enabled, sensitivity,
+threshold, ...) and NOZZLE_GUARD ENABLE=0|1 and SENSITIVITY=low|medium|
+high change it, saved, no restart.
+
+Settings > Safety & Alerts gets two rows, only on a Kiln OS printer (one
+with ad5x_weight): "Nozzle-hit guard", a switch ("Pause the print if the
+nozzle hits the print or the bed"), and "Sensitivity" (Low, Medium,
+High; 600, 300, 150 g) while the guard is on. A "custom" limit
+(NOZZLE_GUARD THRESHOLD=) shows as the nearest choice.
+
+The switch, without the object (the plugin off): on asks first with the
+confirmation Settings > Plugins shows for it (ad5x_toggle_confirm(),
+patch 0005: "Turn on the nozzle-hit guard?", "Klipper restarts to apply
+this. Continue?") and sends ENABLE_PLUGIN NAME=nozzle-guard, handled as
+that page sends it (the restart drops the reply; the expected-restart
+notice). The switch stays on and locked until the discovery after the
+restart, which sees the object; when Klipper doesn't go down within 15 s
+of the answer (already enabled), the switch shows Klipper's state again.
+Klipper refuses ENABLE_PLUGIN during a print, so then the switch is
+locked with the line "Can be turned on when no print is running (Klipper
+restarts)". With the object: NOZZLE_GUARD ENABLE=1|0, also during a
+print. A refusal shows Klipper's message and puts the switch back.
+
+Ad5xNozzleGuardModel (ui_settings_ad5x_nozzle_guard.cpp) follows the
+object as Ad5xLogModel (patch 0049) does: a tail discovery step
+(ad5x_nozzle_guard_watch) attaches it on every discovery, the
+subscription takes enabled, sensitivity and threshold only (print_peak
+changes during a print), the Safety overlay registers its subjects and
+asks Klipper when it opens.
+
+On a hit the module writes "!! Nozzle hit detected: ..." and pauses: the
+pause overlay already shows that line as the reason (print_stop_reason),
+and the filament runout explanation replaces it only when a loaded
+lane's sensor reads empty. A test pins the line as the pause reason.
+
+The new strings are in en.yml and, as in patch 0097, in de, es, fr, it,
+ja, ko, pt, ru, tr and zh, with each file's own words for nozzle, print,
+bed, sensitivity and "Klipper restarts". "the nozzle-hit guard" goes
+into the "Turn on {}?" title, so each language has the form that fits
+there (Russian in the accusative, German and Turkish without an article).
+Japanese and Chinese name it with characters the baked CJK fonts have
+("contact" and "impact": the usual words for collision are not
+baked). The question's "Klipper restarts to apply this. Continue?" was
+in en.yml and ru.yml only; the other nine get it here (patches 0005,
+0008 and 0009 ask it too).
+---
+ include/ui_settings_ad5x_nozzle_guard.h       | 158 ++++++
+ include/ui_settings_safety.h                  |   5 +
+ src/api/moonraker_discovery_sequence.cpp      |  11 +
+ src/application/discovery_steps.cpp           |   9 +
+ src/ui/ui_settings_ad5x_nozzle_guard.cpp      | 456 ++++++++++++++++++
+ src/ui/ui_settings_safety.cpp                 |  18 +
+ tests/unit/test_discovery_steps.cpp           |   1 +
+ .../unit/test_settings_ad5x_nozzle_guard.cpp  | 191 ++++++++
+ translations/de.yml                           |  13 +
+ translations/en.yml                           |  10 +
+ translations/es.yml                           |  13 +
+ translations/fr.yml                           |  13 +
+ translations/it.yml                           |  13 +
+ translations/ja.yml                           |  13 +
+ translations/ko.yml                           |  13 +
+ translations/pt.yml                           |  13 +
+ translations/ru.yml                           |  11 +
+ translations/tr.yml                           |  13 +
+ translations/zh.yml                           |  13 +
+ ui_xml/settings_safety_overlay.xml            |  35 ++
+ 20 files changed, 1022 insertions(+)
+ create mode 100644 include/ui_settings_ad5x_nozzle_guard.h
+ create mode 100644 src/ui/ui_settings_ad5x_nozzle_guard.cpp
+ create mode 100644 tests/unit/test_settings_ad5x_nozzle_guard.cpp
+
+diff --git a/include/ui_settings_ad5x_nozzle_guard.h b/include/ui_settings_ad5x_nozzle_guard.h
+new file mode 100644
+index 0000000..e07f4be
+--- /dev/null
++++ b/include/ui_settings_ad5x_nozzle_guard.h
+@@ -0,0 +1,158 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++/**
++ * @file ui_settings_ad5x_nozzle_guard.h
++ * @brief Kiln OS nozzle-hit guard: its rows on Settings > Safety & Alerts
++ *
++ * Klipper's `ad5x_nozzle_guard` object (Kiln's shipped plugin nozzle-guard,
++ * off by default): `enabled`, `sensitivity` ("low", "medium", "high" or
++ * "custom") and `threshold` (g). NOZZLE_GUARD ENABLE=0|1 and NOZZLE_GUARD
++ * SENSITIVITY=low|medium|high change them, saved by Klipper, no restart.
++ *
++ * The rows show on a Kiln OS printer (one with `ad5x_weight`, the bed
++ * weighing board). Without the object the plugin is off: switching the guard
++ * on asks first and sends ENABLE_PLUGIN NAME=nozzle-guard, with the same
++ * confirmation and restart handling as Settings > Plugins (patch 0005,
++ * ad5x_toggle_confirm()); Klipper refuses that during a print, so the switch
++ * is locked then, with a hint. With the object the switch sends NOZZLE_GUARD
++ * ENABLE=0|1.
++ *
++ * On a hit the module writes a `!!` line and pauses; the pause overlay shows
++ * that line as the reason (print_stop_reason.cpp), nothing here.
++ *
++ * @pattern Process-wide model, as Ad5xLogModel
++ * @threading Main thread only; Moonraker callbacks hop over via lifetime tokens
++ */
++
++#pragma once
++
++#include "ui_observer_guard.h"
++#include "ui_subscription_guard.h"
++#include "ui_timer_guard.h"
++
++#include "async_lifetime_guard.h"
++#include "json_fwd.h"
++#include "lvgl/lvgl.h"
++#include "subject_managed_panel.h"
++
++#include <string>
++
++namespace helix {
++class IMoonrakerAPI;
++}
++
++namespace helix::ad5x_nozzle_guard {
++
++/// The plugin's NAME= for ENABLE_PLUGIN
++inline constexpr const char* kPluginName = "nozzle-guard";
++
++/// The sensitivity choices, in the dropdown's order.
++enum class Sensitivity {
++    Low = 0,    ///< 600 g
++    Medium = 1, ///< 300 g, the default
++    High = 2,   ///< 150 g
++};
++
++/// "low" / "medium" / "high" for @p index (out of range: "medium").
++const char* sensitivity_name(int index);
++
++/// The dropdown index for Klipper's `sensitivity`; a "custom" limit shows as
++/// the nearest choice by @p threshold (g).
++int sensitivity_index(const std::string& name, double threshold);
++
++/// "NOZZLE_GUARD ENABLE=1"
++std::string enable_gcode(bool on);
++
++/// "NOZZLE_GUARD SENSITIVITY=medium"
++std::string sensitivity_gcode(int index);
++
++/// What the switch does when the user moves it.
++enum class SwitchAction {
++    None = 0,         ///< Nothing to send: the switch goes back
++    EnablePlugin = 1, ///< Ask, then ENABLE_PLUGIN NAME=nozzle-guard (Klipper restarts)
++    Command = 2,      ///< NOZZLE_GUARD ENABLE=0|1 (no restart)
++};
++
++/// The switch moved to @p on; @p installed: Klipper has the object (the
++/// plugin is on); @p print_active: a print runs or is paused.
++SwitchAction switch_action(bool on, bool installed, bool print_active);
++
++/// The model: the object, the shared subjects and the commands.
++///
++/// Subjects: `ad5x_nozzle_guard_available` (1 on a Kiln OS printer: shows the
++/// rows), `ad5x_nozzle_guard_enabled` (the switch: the plugin on and the
++/// guard on), `ad5x_nozzle_guard_sensitivity` (Sensitivity),
++/// `ad5x_nozzle_guard_locked` (1: the switch can't be used now),
++/// `ad5x_nozzle_guard_busy` (1: the sensitivity can't be changed now) and
++/// `ad5x_nozzle_guard_print_hint` (1: the plugin is off and a print runs).
++class Ad5xNozzleGuardModel {
++  public:
++    Ad5xNozzleGuardModel() = default;
++    ~Ad5xNozzleGuardModel();
++    Ad5xNozzleGuardModel(const Ad5xNozzleGuardModel&) = delete;
++    Ad5xNozzleGuardModel& operator=(const Ad5xNozzleGuardModel&) = delete;
++
++    void init_subjects();
++
++    /// From each discovery (again after Klipper's restart, so the object
++    /// the plugin adds is seen): follow @p api's status updates and take
++    /// `ad5x_nozzle_guard` from the discovery's initial @p status. Nothing
++    /// on a printer without `ad5x_weight`.
++    void attach(IMoonrakerAPI* api, const json& status);
++
++    /// Ask Klipper for the object, when it has it.
++    void query();
++
++    /// The switch moved (see switch_action()).
++    void handle_switch(bool on);
++
++    /// NOZZLE_GUARD SENSITIVITY=low|medium|high
++    void set_sensitivity(int index);
++
++    bool available() const {
++        return api_ != nullptr;
++    }
++    bool installed() const {
++        return installed_;
++    }
++
++  private:
++    void detach();
++    void merge(const json& delta);
++    void send(const std::string& gcode);
++    /// ENABLE_PLUGIN: Klipper restarts on success, the reply may never come
++    void send_enable_plugin(const std::string& gcode, bool restarts);
++    void refresh();
++    /// The switch back to what Klipper has (after a refusal or Cancel)
++    void restore_switch();
++    /// ENABLE_PLUGIN answered but Klipper never went down (already enabled)
++    void restart_wait_over();
++
++    SubjectManager subjects_;
++    lv_subject_t available_{};
++    lv_subject_t enabled_{};
++    lv_subject_t sensitivity_{};
++    lv_subject_t locked_{};
++    lv_subject_t busy_{};
++    lv_subject_t print_hint_{};
++    bool subjects_initialized_ = false;
++
++    IMoonrakerAPI* api_ = nullptr;
++    json obj_ = json::object(); ///< `ad5x_nozzle_guard`'s fields
++    bool installed_ = false;    ///< Klipper has the object
++    bool loaded_ = false;       ///< ...and it has answered
++    bool klippy_ready_ = true;
++    bool restarting_ = false;  ///< ENABLE_PLUGIN sent: until Klipper is back
++    bool saw_restart_ = false; ///< ...and Klipper went down since
++    int pending_ = 0;
++
++    SubscriptionGuard subscription_;
++    ObserverGuard klippy_observer_;
++    ObserverGuard print_observer_;
++    helix::ui::LvglTimerGuard restart_timer_;
++    AsyncLifetimeGuard lifetime_;
++};
++
++Ad5xNozzleGuardModel& model();
++
++} // namespace helix::ad5x_nozzle_guard
+diff --git a/include/ui_settings_safety.h b/include/ui_settings_safety.h
+index 07cbce8..b6290db 100644
+--- a/include/ui_settings_safety.h
++++ b/include/ui_settings_safety.h
+@@ -9,6 +9,7 @@
+  * - E-Stop confirmation toggle
+  * - Cancel escalation toggle and timeout
+  * - Print completion alert mode
++ * - Kiln OS: the nozzle-hit guard (ui_settings_ad5x_nozzle_guard.h)
+  *
+  * @pattern Overlay (lazy init)
+  * @threading Main thread only
+@@ -40,7 +41,11 @@ class SafetySettingsOverlay : public OverlayBase {
+         return "settings_safety_overlay";
+     }
+ 
++    /// Kiln OS: the nozzle-hit guard rows bind the model's subjects
++    void init_subjects() override;
+     void register_callbacks() override;
++    /// Kiln OS: asks Klipper for the nozzle-hit guard's state
++    void on_activate() override;
+ };
+ 
+ inline SafetySettingsOverlay& get_safety_settings_overlay() {
+diff --git a/src/api/moonraker_discovery_sequence.cpp b/src/api/moonraker_discovery_sequence.cpp
+index 22c2e31..16f532c 100644
+--- a/src/api/moonraker_discovery_sequence.cpp
++++ b/src/api/moonraker_discovery_sequence.cpp
+@@ -1599,6 +1599,17 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
+         }
+     }
+ 
++    // Kiln OS nozzle-hit guard (ui_settings_ad5x_nozzle_guard.cpp): the
++    // switch and the sensitivity on Settings > Safety & Alerts. Only these
++    // fields: print_peak and the rest change during a print.
++    {
++        const auto& objects = hw.printer_objects();
++        if (std::find(objects.begin(), objects.end(), "ad5x_nozzle_guard") != objects.end()) {
++            subscription_objects["ad5x_nozzle_guard"] =
++                json::array({"enabled", "sensitivity", "threshold"});
++        }
++    }
++
+     // AD5X filament auto-refill (ui_settings_ad5x_refill.cpp): `ifs` carries
+     // auto_refill, refill_match, refill_backups and refill_notice, which the
+     // Settings screen and the "No backup spool" pop-up read; `ifs_materials`
+diff --git a/src/application/discovery_steps.cpp b/src/application/discovery_steps.cpp
+index 788f9b4..e27a188 100644
+--- a/src/application/discovery_steps.cpp
++++ b/src/application/discovery_steps.cpp
+@@ -12,6 +12,7 @@
+ #include "ui_settings_about.h"
+ #include "ui_settings_ad5x_ifs_firmware.h"
+ #include "ui_settings_ad5x_log.h"
++#include "ui_settings_ad5x_nozzle_guard.h"
+ #include "ui_settings_ad5x_refill.h"
+ #include "ui_update_queue.h"
+ #include "ui_wizard.h"
+@@ -215,6 +216,13 @@ void ad5x_log_watch_step(DiscoveryContext& ctx) {
+     ad5x_log::model().attach(&ctx.api, ctx.status);
+ }
+ 
++// Kiln OS nozzle-hit guard: its rows on Settings > Safety & Alerts. Each
++// discovery lists the objects again, so the plugin's object, there after
++// ENABLE_PLUGIN's restart, is seen; nothing on a printer that isn't Kiln OS.
++void ad5x_nozzle_guard_watch_step(DiscoveryContext& ctx) {
++    ad5x_nozzle_guard::model().attach(&ctx.api, ctx.status);
++}
++
+ constexpr DiscoveryStep kTailSteps[] = {
+     {"update_checker_connected", false, update_checker_connected_step, nullptr},
+     {"about_print_hours", false, about_print_hours_step, nullptr},
+@@ -233,6 +241,7 @@ constexpr DiscoveryStep kTailSteps[] = {
+     {"manual_probe_autoopen", false, manual_probe_autoopen_step, nullptr},
+     {"ad5x_refill_watch", false, ad5x_refill_watch_step, nullptr},
+     {"ad5x_log_watch", false, ad5x_log_watch_step, nullptr},
++    {"ad5x_nozzle_guard_watch", false, ad5x_nozzle_guard_watch_step, nullptr},
+ };
+ 
+ } // namespace
+diff --git a/src/ui/ui_settings_ad5x_nozzle_guard.cpp b/src/ui/ui_settings_ad5x_nozzle_guard.cpp
+new file mode 100644
+index 0000000..7efc32f
+--- /dev/null
++++ b/src/ui/ui_settings_ad5x_nozzle_guard.cpp
+@@ -0,0 +1,456 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include "ui_settings_ad5x_nozzle_guard.h"
++
++#include "ui_emergency_stop.h"
++#include "ui_error_reporting.h"
++#include "ui_modal.h"
++#include "ui_settings_ad5x_plugins.h"
++#include "ui_update_queue.h"
++
++#include "app_globals.h"
++#include "i_moonraker_api.h"
++#include "i_moonraker_client.h"
++#include "json_utils.h"
++#include "lvgl/src/others/translation/lv_translation.h"
++#include "macro_executor.h"
++#include "observer_factory.h"
++#include "printer_discovery.h"
++#include "printer_state.h"
++#include "static_panel_registry.h"
++
++#include <spdlog/fmt/fmt.h>
++#include <spdlog/spdlog.h>
++
++#include <algorithm>
++#include <cmath>
++#include <iterator>
++
++namespace helix::ad5x_nozzle_guard {
++
++namespace {
++
++constexpr const char* kObject = "ad5x_nozzle_guard";
++/// The bed weighing board: every Kiln OS printer has it, others don't
++constexpr const char* kKilnObject = "ad5x_weight";
++constexpr const char* kSensitivities[] = {"low", "medium", "high"};
++/// Klipper's limits for them (ad5x_nozzle_guard.py SENSITIVITY), g
++constexpr double kThresholds[] = {600.0, 300.0, 150.0};
++/// How long after ENABLE_PLUGIN's answer Klipper has to go down for its restart
++constexpr uint32_t kRestartWaitMs = 15000;
++
++void set_if_changed(lv_subject_t* subject, int value) {
++    if (lv_subject_get_int(subject) != value) {
++        lv_subject_set_int(subject, value);
++    }
++}
++
++bool has_object(IMoonrakerAPI* api, const char* name) {
++    const auto& objects = api->hardware().printer_objects();
++    return std::find(objects.begin(), objects.end(), name) != objects.end();
++}
++
++bool print_active() {
++    return lv_subject_get_int(get_printer_state().print_state().get_print_active_subject()) != 0;
++}
++
++} // namespace
++
++const char* sensitivity_name(int index) {
++    if (index < 0 || index >= static_cast<int>(std::size(kSensitivities))) {
++        return kSensitivities[static_cast<int>(Sensitivity::Medium)];
++    }
++    return kSensitivities[index];
++}
++
++int sensitivity_index(const std::string& name, double threshold) {
++    for (int i = 0; i < static_cast<int>(std::size(kSensitivities)); ++i) {
++        if (name == kSensitivities[i]) {
++            return i;
++        }
++    }
++    // "custom" (NOZZLE_GUARD THRESHOLD=): the nearest choice
++    int best = static_cast<int>(Sensitivity::Medium);
++    if (threshold > 0) {
++        for (int i = 0; i < static_cast<int>(std::size(kThresholds)); ++i) {
++            if (std::abs(threshold - kThresholds[i]) < std::abs(threshold - kThresholds[best])) {
++                best = i;
++            }
++        }
++    }
++    return best;
++}
++
++std::string enable_gcode(bool on) {
++    return fmt::format("NOZZLE_GUARD ENABLE={}", on ? 1 : 0);
++}
++
++std::string sensitivity_gcode(int index) {
++    return fmt::format("NOZZLE_GUARD SENSITIVITY={}", sensitivity_name(index));
++}
++
++SwitchAction switch_action(bool on, bool installed, bool print_active) {
++    if (installed) {
++        return SwitchAction::Command;
++    }
++    // Without the object the guard is off: only switching it on means
++    // something, and ENABLE_PLUGIN restarts Klipper, which it refuses mid-print
++    return (on && !print_active) ? SwitchAction::EnablePlugin : SwitchAction::None;
++}
++
++// ============================================================================
++// MODEL
++// ============================================================================
++
++Ad5xNozzleGuardModel::~Ad5xNozzleGuardModel() {
++    lifetime_.invalidate();
++    restart_timer_.reset();
++    subscription_.reset();
++    klippy_observer_.reset();
++    print_observer_.reset();
++    subjects_.deinit_all();
++}
++
++void Ad5xNozzleGuardModel::init_subjects() {
++    if (subjects_initialized_) {
++        return;
++    }
++    // 1 on a Kiln OS printer (ad5x_weight): the rows show
++    UI_MANAGED_SUBJECT_INT(available_, 0, "ad5x_nozzle_guard_available", subjects_);
++    // The switch: the plugin on and NOZZLE_GUARD ENABLE=1
++    UI_MANAGED_SUBJECT_INT(enabled_, 0, "ad5x_nozzle_guard_enabled", subjects_);
++    // 0 low, 1 medium, 2 high
++    UI_MANAGED_SUBJECT_INT(sensitivity_, 1, "ad5x_nozzle_guard_sensitivity", subjects_);
++    // 1 while the switch can't be used: a change pending, Klipper not ready or
++    // restarting, or the plugin off during a print
++    UI_MANAGED_SUBJECT_INT(locked_, 1, "ad5x_nozzle_guard_locked", subjects_);
++    // 1 while the sensitivity can't be changed
++    UI_MANAGED_SUBJECT_INT(busy_, 1, "ad5x_nozzle_guard_busy", subjects_);
++    // 1 when the plugin is off and a print runs: "turn it on after the print"
++    UI_MANAGED_SUBJECT_INT(print_hint_, 0, "ad5x_nozzle_guard_print_hint", subjects_);
++    subjects_initialized_ = true;
++}
++
++void Ad5xNozzleGuardModel::attach(IMoonrakerAPI* api, const json& status) {
++    init_subjects();
++    if (!api) {
++        return;
++    }
++    if (!has_object(api, kKilnObject)) {
++        // Not a Kiln OS printer: no rows
++        detach();
++        return;
++    }
++
++    if (api != api_) {
++        detach();
++        api_ = api;
++        const auto token = lifetime_.token();
++        // Runs on the WebSocket thread: copy the object out, apply it on the main thread
++        const SubscriptionId id = api->subscribe_notifications([this, token](const json& note) {
++            const json* params = json_util::find_member(note, "params");
++            if (!params || !params->is_array() || params->empty()) {
++                return;
++            }
++            const json* obj = json_util::find_member((*params)[0], kObject);
++            if (!obj || !obj->is_object() || obj->empty()) {
++                return;
++            }
++            json delta = *obj;
++            token.defer("Ad5xNozzleGuardModel::status_update", [this, delta]() { merge(delta); });
++        });
++        subscription_ = SubscriptionGuard(api, id);
++    }
++
++    if (!klippy_observer_) {
++        klippy_observer_ = ui::observe<int>(
++            get_printer_state().network_state().get_klippy_state_subject(), this,
++            [](Ad5xNozzleGuardModel* self, int state) {
++                const bool ready = static_cast<KlippyState>(state) == KlippyState::READY;
++                if (ready == self->klippy_ready_) {
++                    return;
++                }
++                self->klippy_ready_ = ready;
++                if (!ready && self->restarting_) {
++                    // ENABLE_PLUGIN's restart: the next discovery releases the switch
++                    self->saw_restart_ = true;
++                    self->restart_timer_.reset();
++                }
++                if (ready) {
++                    self->query();
++                }
++                self->refresh();
++            },
++            get_printer_state().get_subjects_lifetime());
++    }
++    if (!print_observer_) {
++        // The plugin can't be switched on during a print: lock and hint follow it
++        print_observer_ = ui::observe<int>(
++            get_printer_state().print_state().get_print_active_subject(), this,
++            [](Ad5xNozzleGuardModel* self, int) { self->refresh(); },
++            get_printer_state().get_subjects_lifetime());
++    }
++
++    // Each discovery lists the objects again: after ENABLE_PLUGIN's restart
++    // the plugin's object is there
++    restarting_ = false;
++    saw_restart_ = false;
++    restart_timer_.reset();
++    const bool had = installed_;
++    installed_ = has_object(api, kObject);
++    if (!installed_ || !had) {
++        obj_ = json::object();
++        loaded_ = false;
++    }
++    // The discovery's initial status carries the object whole
++    if (!installed_) {
++        refresh();
++    } else if (const json* obj = json_util::find_member(status, kObject);
++               obj && obj->is_object() && !obj->empty()) {
++        merge(*obj);
++    } else {
++        query();
++        refresh();
++    }
++}
++
++void Ad5xNozzleGuardModel::detach() {
++    subscription_.reset();
++    api_ = nullptr;
++    obj_ = json::object();
++    installed_ = false;
++    loaded_ = false;
++    restarting_ = false;
++    saw_restart_ = false;
++    restart_timer_.reset();
++    pending_ = 0;
++    refresh();
++}
++
++void Ad5xNozzleGuardModel::query() {
++    IMoonrakerClient* client = get_moonraker_client();
++    if (!client || client->get_connection_state() != ConnectionState::CONNECTED || !api_ ||
++        !installed_) {
++        return;
++    }
++    const auto token = lifetime_.token();
++    json params = {{"objects", {{kObject, json::array({"enabled", "sensitivity", "threshold"})}}}};
++    client->send_jsonrpc(
++        "printer.objects.query", params,
++        [this, token](const json& response) {
++            const json* result = json_util::find_member(response, "result");
++            const json* status = result ? json_util::find_member(*result, "status") : nullptr;
++            const json* obj = status ? json_util::find_member(*status, kObject) : nullptr;
++            if (!obj || !obj->is_object()) {
++                return;
++            }
++            json delta = *obj;
++            token.defer("Ad5xNozzleGuardModel::status_query", [this, delta]() { merge(delta); });
++        },
++        [](const MoonrakerError& err) {
++            spdlog::debug("[AD5X nozzle guard] {} query failed: {}", kObject, err.message);
++        },
++        0, /*silent=*/true);
++}
++
++void Ad5xNozzleGuardModel::merge(const json& delta) {
++    if (!api_ || !installed_) {
++        return;
++    }
++    for (auto it = delta.begin(); it != delta.end(); ++it) {
++        obj_[it.key()] = it.value();
++    }
++    loaded_ = obj_.contains("enabled");
++    refresh();
++}
++
++void Ad5xNozzleGuardModel::send(const std::string& gcode) {
++    IMoonrakerAPI* api = get_moonraker_api();
++    if (!api) {
++        NOTIFY_WARNING("{}", lv_tr("Not connected to the printer"));
++        restore_switch();
++        return;
++    }
++    spdlog::info("[AD5X nozzle guard] {}", gcode);
++    ++pending_;
++    refresh();
++
++    // Klipper's answer releases the rows; a fresh query then shows what it kept
++    const auto token = lifetime_.token();
++    api->execute_gcode(
++        gcode,
++        [this, token]() {
++            token.defer("Ad5xNozzleGuardModel::send_done", [this]() {
++                pending_ = std::max(0, pending_ - 1);
++                query();
++                refresh();
++            });
++        },
++        [this, token](const MoonrakerError& err) {
++            const std::string message = err.message;
++            token.defer("Ad5xNozzleGuardModel::send_error", [this, message]() {
++                pending_ = std::max(0, pending_ - 1);
++                NOTIFY_WARNING("{}", message.empty() ? std::string(lv_tr("Failed")) : message);
++                query();
++                restore_switch();
++            });
++        },
++        0, /*silent=*/false, /*on_queued=*/nullptr, /*caller_surfaces_errors=*/true);
++}
++
++// As Ad5xPluginsOverlay::send(): a restart drops the reply, and that is the
++// command working
++void Ad5xNozzleGuardModel::send_enable_plugin(const std::string& gcode, bool restarts) {
++    IMoonrakerAPI* api = get_moonraker_api();
++    if (!api) {
++        NOTIFY_WARNING("{}", lv_tr("Not connected to the printer"));
++        restore_switch();
++        return;
++    }
++    spdlog::info("[AD5X nozzle guard] {}", gcode);
++    restarting_ = true;
++    saw_restart_ = false;
++    refresh();
++
++    const auto token = lifetime_.token();
++    const MacroHostEffect effect = restarts ? MacroHostEffect::Restarts : MacroHostEffect::None;
++    api->execute_gcode(
++        gcode,
++        [this, token, restarts]() {
++            // The next discovery (after the restart) releases the switch
++            if (restarts) {
++                helix::ui::begin_expected_klippy_restart("Firmware restarting...");
++            }
++            token.defer("Ad5xNozzleGuardModel::enable_plugin_done", [this]() {
++                // "already enabled" restarts nothing: don't wait forever
++                if (restarting_ && !saw_restart_ && !restart_timer_) {
++                    restart_timer_.reset(lv_timer_create(
++                        [](lv_timer_t* t) {
++                            static_cast<Ad5xNozzleGuardModel*>(lv_timer_get_user_data(t))
++                                ->restart_wait_over();
++                        },
++                        kRestartWaitMs, this));
++                }
++            });
++        },
++        [this, token, effect](const MoonrakerError& err) {
++            if (classify_macro_rpc_failure(effect, err) == MacroFailureReport::ExpectedRestart) {
++                helix::ui::begin_expected_klippy_restart("Firmware restarting...");
++                return;
++            }
++            const std::string message = err.message;
++            token.defer("Ad5xNozzleGuardModel::enable_plugin_error", [this, message]() {
++                restarting_ = false;
++                NOTIFY_WARNING("{}", message.empty() ? std::string(lv_tr("Failed")) : message);
++                restore_switch();
++            });
++        },
++        0, /*silent=*/false, /*on_queued=*/nullptr, /*caller_surfaces_errors=*/true);
++}
++
++void Ad5xNozzleGuardModel::restart_wait_over() {
++    restart_timer_.reset();
++    if (!restarting_ || saw_restart_) {
++        return;
++    }
++    spdlog::info("[AD5X nozzle guard] no Klipper restart after ENABLE_PLUGIN");
++    restarting_ = false;
++    query();
++    restore_switch();
++}
++
++void Ad5xNozzleGuardModel::handle_switch(bool on) {
++    spdlog::debug("[AD5X nozzle guard] switched {}", on ? "on" : "off");
++    if (!api_) {
++        restore_switch();
++        return;
++    }
++    switch (switch_action(on, installed_, print_active())) {
++    case SwitchAction::None:
++        restore_switch();
++        return;
++    case SwitchAction::Command:
++        if (subjects_initialized_) {
++            lv_subject_set_int(&enabled_, on ? 1 : 0);
++        }
++        send(enable_gcode(on));
++        return;
++    case SwitchAction::EnablePlugin:
++        break;
++    }
++
++    // The same question Settings > Plugins asks for this plugin
++    settings::Ad5xInstalledPlugin plugin;
++    plugin.name = kPluginName;
++    plugin.title = lv_tr("the nozzle-hit guard");
++    plugin.builtin = true;
++    const settings::Ad5xToggleConfirm c = settings::ad5x_toggle_confirm(plugin, true);
++    helix::ui::ConfirmOptions opts;
++    opts.owner_token = lifetime_.token();
++    // Cancelling puts the switch back
++    opts.on_cancel = [this]() { restore_switch(); };
++    opts.on_dismiss = [this]() { restore_switch(); };
++    helix::ui::modal_confirm(
++        c.title.c_str(), c.message.c_str(), ModalSeverity::Warning, c.button.c_str(),
++        [this, gcode = c.gcode, restarts = c.restarts]() {
++            // A print may have started while the dialog was up
++            if (print_active()) {
++                restore_switch();
++                return;
++            }
++            send_enable_plugin(gcode, restarts);
++        },
++        opts);
++}
++
++void Ad5xNozzleGuardModel::set_sensitivity(int index) {
++    index = std::clamp(index, 0, static_cast<int>(std::size(kSensitivities)) - 1);
++    if (!installed_) {
++        refresh();
++        return;
++    }
++    if (subjects_initialized_) {
++        lv_subject_set_int(&sensitivity_, index);
++    }
++    send(sensitivity_gcode(index));
++}
++
++void Ad5xNozzleGuardModel::restore_switch() {
++    refresh();
++    if (subjects_initialized_) {
++        // An unchanged value does not notify: re-apply the binding by hand
++        lv_subject_notify(&enabled_);
++        lv_subject_notify(&sensitivity_);
++    }
++}
++
++void Ad5xNozzleGuardModel::refresh() {
++    if (!subjects_initialized_) {
++        return;
++    }
++    const bool available = api_ != nullptr;
++    const bool printing = print_active();
++    set_if_changed(&available_, available ? 1 : 0);
++    // While Klipper has not answered a change, the rows keep what the user set
++    if (pending_ == 0 && !restarting_) {
++        const bool on = installed_ && loaded_ && json_util::safe_bool(obj_, "enabled");
++        set_if_changed(&enabled_, on ? 1 : 0);
++        if (loaded_) {
++            set_if_changed(&sensitivity_,
++                           sensitivity_index(json_util::safe_string(obj_, "sensitivity"),
++                                             json_util::safe_double(obj_, "threshold")));
++        }
++    }
++    const bool waiting = pending_ > 0 || restarting_ || !klippy_ready_;
++    const bool locked =
++        !available || waiting || (installed_ && !loaded_) || (!installed_ && printing);
++    set_if_changed(&locked_, locked ? 1 : 0);
++    set_if_changed(&busy_, (!available || waiting || !installed_ || !loaded_) ? 1 : 0);
++    set_if_changed(&print_hint_, (available && !installed_ && !restarting_ && printing) ? 1 : 0);
++}
++
++Ad5xNozzleGuardModel& model() {
++    return helix::lazy_global<Ad5xNozzleGuardModel>("Ad5xNozzleGuardModel");
++}
++
++} // namespace helix::ad5x_nozzle_guard
+diff --git a/src/ui/ui_settings_safety.cpp b/src/ui/ui_settings_safety.cpp
+index f6b05fd..d74e80f 100644
+--- a/src/ui/ui_settings_safety.cpp
++++ b/src/ui/ui_settings_safety.cpp
+@@ -5,6 +5,7 @@
+ 
+ #include "ui_callback_helpers.h"
+ #include "ui_emergency_stop.h"
++#include "ui_settings_ad5x_nozzle_guard.h"
+ 
+ #include "audio_settings_manager.h"
+ #include "safety_settings_manager.h"
+@@ -20,6 +21,16 @@ namespace helix::settings {
+ using helix::ui::event_checked;
+ using helix::ui::event_selected;
+ 
++void SafetySettingsOverlay::init_subjects() {
++    // Kiln OS: the nozzle-hit guard rows bind these; the model may not be attached yet
++    helix::ad5x_nozzle_guard::model().init_subjects();
++}
++
++void SafetySettingsOverlay::on_activate() {
++    OverlayBase::on_activate();
++    helix::ad5x_nozzle_guard::model().query();
++}
++
+ void SafetySettingsOverlay::register_callbacks() {
+     register_xml_callbacks({
+         {"on_estop_confirm_changed",
+@@ -60,6 +71,13 @@ void SafetySettingsOverlay::register_callbacks() {
+          [](lv_event_t* e) {
+              SettingsManager::instance().set_detection_pause_on_detect(event_checked(e));
+          }},
++        // Kiln OS: the nozzle-hit guard (NOZZLE_GUARD, or ENABLE_PLUGIN when the plugin is off)
++        {"on_ad5x_nozzle_guard_changed",
++         [](lv_event_t* e) { helix::ad5x_nozzle_guard::model().handle_switch(event_checked(e)); }},
++        {"on_ad5x_nozzle_guard_sensitivity_changed",
++         [](lv_event_t* e) {
++             helix::ad5x_nozzle_guard::model().set_sensitivity(event_selected(e));
++         }},
+     });
+ }
+ 
+diff --git a/tests/unit/test_discovery_steps.cpp b/tests/unit/test_discovery_steps.cpp
+index 0d2e150..c37889d 100644
+--- a/tests/unit/test_discovery_steps.cpp
++++ b/tests/unit/test_discovery_steps.cpp
+@@ -158,6 +158,7 @@ TEST_CASE("the tail discovery steps run in this order", "[discovery_steps]") {
+         "manual_probe_autoopen",
+         "ad5x_refill_watch",
+         "ad5x_log_watch",
++        "ad5x_nozzle_guard_watch",
+     };
+     CHECK(tail == expected);
+ }
+diff --git a/tests/unit/test_settings_ad5x_nozzle_guard.cpp b/tests/unit/test_settings_ad5x_nozzle_guard.cpp
+new file mode 100644
+index 0000000..46a2794
+--- /dev/null
++++ b/tests/unit/test_settings_ad5x_nozzle_guard.cpp
+@@ -0,0 +1,191 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++// Kiln OS nozzle-hit guard: the commands, what the switch does, the rows on
++// Settings > Safety & Alerts, and the module's pause line as the pause reason.
++
++#include "ui_settings_ad5x_nozzle_guard.h"
++#include "ui_update_queue.h"
++
++#include "../lvgl_ui_test_fixture.h"
++#include "helix-xml/src/xml/lv_xml.h"
++#include "print_stop_reason.h"
++#include "printer_state.h"
++#include "settings_manager.h"
++
++#include <lvgl.h>
++#include <string>
++#include <vector>
++
++#include "../catch_amalgamated.hpp"
++#include "hv/json.hpp"
++
++using namespace helix::ad5x_nozzle_guard;
++using helix::ui::UpdateQueue;
++
++namespace {
++
++/// What ad5x_nozzle_guard.py writes before it pauses
++constexpr const char* kHitLine =
++    "!! Nozzle hit detected: the bed felt 412 g (limit 300 g) at Z 1.20. Print paused: check "
++    "the print and the nozzle, then resume or cancel.";
++
++struct NozzleGuardRowsFixture : public LVGLUITestFixture {
++    NozzleGuardRowsFixture() {
++        SettingsManager::instance().init_subjects();
++        model().init_subjects();
++        for (const char* name : {"ad5x_nozzle_guard_available", "ad5x_nozzle_guard_enabled",
++                                 "ad5x_nozzle_guard_locked", "ad5x_nozzle_guard_print_hint",
++                                 "ad5x_nozzle_guard_busy", "ad5x_nozzle_guard_sensitivity"}) {
++            lv_subject_t* s = lv_xml_get_subject(nullptr, name);
++            REQUIRE(s != nullptr);
++            subjects_.push_back(s);
++        }
++    }
++
++    ~NozzleGuardRowsFixture() override {
++        if (root_ && lv_obj_is_valid(root_)) {
++            lv_obj_delete(root_);
++        }
++        root_ = nullptr;
++        UpdateQueue::instance().drain();
++        // The model's defaults: no rows, locked, busy, medium
++        set("ad5x_nozzle_guard_available", 0);
++        set("ad5x_nozzle_guard_enabled", 0);
++        set("ad5x_nozzle_guard_locked", 1);
++        set("ad5x_nozzle_guard_print_hint", 0);
++        set("ad5x_nozzle_guard_busy", 1);
++        set("ad5x_nozzle_guard_sensitivity", 1);
++        UpdateQueue::instance().drain();
++    }
++
++    static void set(const char* name, int value) {
++        lv_subject_set_int(lv_xml_get_subject(nullptr, name), value);
++    }
++
++    void build() {
++        root_ = static_cast<lv_obj_t*>(
++            lv_xml_create(test_screen(), "settings_safety_overlay", nullptr));
++        REQUIRE(root_ != nullptr);
++        process_lvgl(10);
++    }
++
++    lv_obj_t* find(const char* name) {
++        lv_obj_t* o = lv_obj_find_by_name(root_, name);
++        REQUIRE(o != nullptr);
++        return o;
++    }
++
++    bool hidden(const char* name) {
++        return lv_obj_has_flag(find(name), LV_OBJ_FLAG_HIDDEN);
++    }
++
++    lv_obj_t* toggle() {
++        lv_obj_t* t = lv_obj_find_by_name(find("row_ad5x_nozzle_guard"), "toggle");
++        REQUIRE(t != nullptr);
++        return t;
++    }
++
++    lv_obj_t* root_ = nullptr;
++    std::vector<lv_subject_t*> subjects_;
++};
++
++} // namespace
++
++TEST_CASE("nozzle guard commands", "[ad5x_nozzle_guard]") {
++    CHECK(enable_gcode(true) == "NOZZLE_GUARD ENABLE=1");
++    CHECK(enable_gcode(false) == "NOZZLE_GUARD ENABLE=0");
++    CHECK(sensitivity_gcode(0) == "NOZZLE_GUARD SENSITIVITY=low");
++    CHECK(sensitivity_gcode(1) == "NOZZLE_GUARD SENSITIVITY=medium");
++    CHECK(sensitivity_gcode(2) == "NOZZLE_GUARD SENSITIVITY=high");
++    CHECK(sensitivity_gcode(9) == "NOZZLE_GUARD SENSITIVITY=medium");
++    CHECK(sensitivity_gcode(-1) == "NOZZLE_GUARD SENSITIVITY=medium");
++}
++
++TEST_CASE("nozzle guard sensitivity from Klipper's status", "[ad5x_nozzle_guard]") {
++    CHECK(sensitivity_index("low", 600) == 0);
++    CHECK(sensitivity_index("medium", 300) == 1);
++    CHECK(sensitivity_index("high", 150) == 2);
++    // NOZZLE_GUARD THRESHOLD= gives "custom": the nearest choice shows
++    CHECK(sensitivity_index("custom", 500) == 0);
++    CHECK(sensitivity_index("custom", 350) == 1);
++    CHECK(sensitivity_index("custom", 100) == 2);
++    CHECK(sensitivity_index("", 0) == 1);
++}
++
++TEST_CASE("nozzle guard switch: the plugin on its own, the guard by command",
++          "[ad5x_nozzle_guard]") {
++    // The plugin's object there: NOZZLE_GUARD ENABLE=, also during a print
++    CHECK(switch_action(true, true, false) == SwitchAction::Command);
++    CHECK(switch_action(false, true, false) == SwitchAction::Command);
++    CHECK(switch_action(true, true, true) == SwitchAction::Command);
++    CHECK(switch_action(false, true, true) == SwitchAction::Command);
++    // The plugin off: on asks and sends ENABLE_PLUGIN, but not during a print
++    CHECK(switch_action(true, false, false) == SwitchAction::EnablePlugin);
++    CHECK(switch_action(true, false, true) == SwitchAction::None);
++    CHECK(switch_action(false, false, false) == SwitchAction::None);
++    CHECK(std::string(kPluginName) == "nozzle-guard");
++}
++
++TEST_CASE("nozzle guard: the module's pause line is the pause reason",
++          "[ad5x_nozzle_guard][stop_reason]") {
++    const json frame = json{{"params", json::array({"// NOZZLE_GUARD armed", kHitLine})}};
++    const auto text = helix::last_gcode_error_text(frame);
++    REQUIRE(text.has_value());
++    const std::string expected =
++        "Nozzle hit detected: the bed felt 412 g (limit 300 g) at Z 1.20. Print paused: check the "
++        "print and the nozzle, then resume or cancel.";
++    CHECK(*text == expected);
++
++    constexpr double kStop = 1'700'000'000.0;
++    helix::JournalEntry e;
++    e.kind = helix::journal_kind::kGcodeError;
++    e.text = *text;
++    e.time = kStop - 0.5;
++    CHECK(helix::decide_print_stop_reason(helix::PrintJobState::PAUSED, "", {e}, kStop) ==
++          expected);
++}
++
++TEST_CASE_METHOD(NozzleGuardRowsFixture, "nozzle guard rows on Settings > Safety & Alerts",
++                 "[ad5x_nozzle_guard][settings][safety][binding]") {
++    SECTION("not a Kiln OS printer: no rows") {
++        set("ad5x_nozzle_guard_available", 0);
++        build();
++        CHECK(hidden("container_ad5x_nozzle_guard"));
++    }
++
++    SECTION("the guard off: the switch, no sensitivity") {
++        set("ad5x_nozzle_guard_available", 1);
++        set("ad5x_nozzle_guard_enabled", 0);
++        set("ad5x_nozzle_guard_locked", 0);
++        build();
++        CHECK_FALSE(hidden("container_ad5x_nozzle_guard"));
++        CHECK_FALSE(lv_obj_has_state(toggle(), LV_STATE_CHECKED));
++        CHECK_FALSE(lv_obj_has_state(toggle(), LV_STATE_DISABLED));
++        CHECK(hidden("container_ad5x_nozzle_guard_sensitivity"));
++        CHECK(hidden("row_ad5x_nozzle_guard_print_hint"));
++    }
++
++    SECTION("the guard on: the sensitivity shows") {
++        set("ad5x_nozzle_guard_available", 1);
++        set("ad5x_nozzle_guard_enabled", 1);
++        set("ad5x_nozzle_guard_locked", 0);
++        set("ad5x_nozzle_guard_busy", 0);
++        set("ad5x_nozzle_guard_sensitivity", 2);
++        build();
++        CHECK(lv_obj_has_state(toggle(), LV_STATE_CHECKED));
++        CHECK_FALSE(hidden("container_ad5x_nozzle_guard_sensitivity"));
++        lv_obj_t* dd = lv_obj_find_by_name(find("row_ad5x_nozzle_guard_sensitivity"), "dropdown");
++        REQUIRE(dd != nullptr);
++        CHECK(lv_dropdown_get_selected(dd) == 2);
++    }
++
++    SECTION("the plugin off during a print: locked, with the hint") {
++        set("ad5x_nozzle_guard_available", 1);
++        set("ad5x_nozzle_guard_enabled", 0);
++        set("ad5x_nozzle_guard_locked", 1);
++        set("ad5x_nozzle_guard_print_hint", 1);
++        build();
++        CHECK(lv_obj_has_state(toggle(), LV_STATE_DISABLED));
++        CHECK_FALSE(hidden("row_ad5x_nozzle_guard_print_hint"));
++    }
++}
+diff --git a/translations/de.yml b/translations/de.yml
+index d7c39ca..d058787 100644
+--- a/translations/de.yml
++++ b/translations/de.yml
+@@ -5161,3 +5161,16 @@ translations:
+   # Kiln OS: switching on a plugin that runs code as root (patch 0097)
+   'Turn on {}?': '{} einschalten?'
+   'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'Dieses Plugin führt einen Teil seines Codes als root aus, dem Administratorkonto des Systems, zum Beispiel um USB-Geräte einzurichten. Schalte es nur ein, wenn du seiner Herkunft vertraust. Klipper startet neu.'
++  # Kiln OS: the nozzle-hit guard on Settings > Safety & Alerts (patch 0098)
++  'Nozzle-hit guard': 'Düsen-Kollisionsschutz'
++  'Pause the print if the nozzle hits the print or the bed': 'Pausiert den Druck, wenn die Düse gegen den Druck oder das Heizbett stößt'
++  'Can be turned on when no print is running (Klipper restarts)': 'Kann eingeschaltet werden, wenn kein Druck läuft (Klipper startet neu)'
++  'Sensitivity': 'Empfindlichkeit'
++  'Low': 'Niedrig'
++  'Medium': 'Mittel'
++  'High': 'Hoch'
++  'How hard a push pauses the print: Low 600 g, Medium 300 g, High 150 g': 'Ab welcher Kraft der Druck pausiert: Niedrig 600 g, Mittel 300 g, Hoch 150 g'
++  # Goes into 'Turn on {}?', the title of the confirmation before Klipper restarts
++  'the nozzle-hit guard': 'Düsen-Kollisionsschutz'
++  # The question before a Klipper restart (patches 0005, 0008, 0009 and this switch)
++  'Klipper restarts to apply this. Continue?': 'Klipper startet neu, um dies zu übernehmen. Fortfahren?'
+diff --git a/translations/en.yml b/translations/en.yml
+index 3ff02e3..c3520ab 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -5406,3 +5406,13 @@ translations:
+   'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader. Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader. Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
+   # Kiln OS: switching on a plugin that runs code as root (patch 0097)
+   'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.'
++  # Kiln OS: the nozzle-hit guard on Settings > Safety & Alerts (patch 0098)
++  'Nozzle-hit guard': 'Nozzle-hit guard'
++  'Pause the print if the nozzle hits the print or the bed': 'Pause the print if the nozzle hits the print or the bed'
++  'Can be turned on when no print is running (Klipper restarts)': 'Can be turned on when no print is running (Klipper restarts)'
++  'Sensitivity': 'Sensitivity'
++  'Low': 'Low'
++  'Medium': 'Medium'
++  'High': 'High'
++  'How hard a push pauses the print: Low 600 g, Medium 300 g, High 150 g': 'How hard a push pauses the print: Low 600 g, Medium 300 g, High 150 g'
++  'the nozzle-hit guard': 'the nozzle-hit guard'
+diff --git a/translations/es.yml b/translations/es.yml
+index 053c6e3..fdb30b8 100644
+--- a/translations/es.yml
++++ b/translations/es.yml
+@@ -5151,3 +5151,16 @@ translations:
+   # Kiln OS: switching on a plugin that runs code as root (patch 0097)
+   'Turn on {}?': '¿Encender {}?'
+   'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'Este plugin ejecuta parte de su código como root, la cuenta de administrador del sistema, por ejemplo para configurar dispositivos USB. Enciéndelo solo si confías en su origen. Klipper se reinicia.'
++  # Kiln OS: the nozzle-hit guard on Settings > Safety & Alerts (patch 0098)
++  'Nozzle-hit guard': 'Protección contra choques de boquilla'
++  'Pause the print if the nozzle hits the print or the bed': 'Pausa la impresión si la boquilla choca con la impresión o la cama'
++  'Can be turned on when no print is running (Klipper restarts)': 'Se puede encender cuando no hay ninguna impresión en curso (Klipper se reinicia)'
++  'Sensitivity': 'Sensibilidad'
++  'Low': 'Baja'
++  'Medium': 'Media'
++  'High': 'Alta'
++  'How hard a push pauses the print: Low 600 g, Medium 300 g, High 150 g': 'Fuerza que pausa la impresión: Baja 600 g, Media 300 g, Alta 150 g'
++  # Goes into 'Turn on {}?', the title of the confirmation before Klipper restarts
++  'the nozzle-hit guard': 'la protección contra choques de boquilla'
++  # The question before a Klipper restart (patches 0005, 0008, 0009 and this switch)
++  'Klipper restarts to apply this. Continue?': 'Klipper se reinicia para aplicarlo. ¿Continuar?'
+diff --git a/translations/fr.yml b/translations/fr.yml
+index 867f12e..0b0e9d1 100644
+--- a/translations/fr.yml
++++ b/translations/fr.yml
+@@ -5187,3 +5187,16 @@ translations:
+   # Kiln OS: switching on a plugin that runs code as root (patch 0097)
+   'Turn on {}?': 'Allumer {} ?'
+   'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'Ce plugin exécute une partie de son code en tant que root, le compte administrateur du système, par exemple pour configurer des périphériques USB. Ne l''activez que si vous faites confiance à sa provenance. Klipper redémarre.'
++  # Kiln OS: the nozzle-hit guard on Settings > Safety & Alerts (patch 0098)
++  'Nozzle-hit guard': 'Protection anti-collision de la buse'
++  'Pause the print if the nozzle hits the print or the bed': 'Met l''impression en pause si la buse heurte l''impression ou le plateau'
++  'Can be turned on when no print is running (Klipper restarts)': 'Peut être allumée quand aucune impression n''est en cours (Klipper redémarre)'
++  'Sensitivity': 'Sensibilité'
++  'Low': 'Faible'
++  'Medium': 'Moyenne'
++  'High': 'Élevée'
++  'How hard a push pauses the print: Low 600 g, Medium 300 g, High 150 g': 'Force qui met l''impression en pause : Faible 600 g, Moyenne 300 g, Élevée 150 g'
++  # Goes into 'Turn on {}?', the title of the confirmation before Klipper restarts
++  'the nozzle-hit guard': 'la protection anti-collision de la buse'
++  # The question before a Klipper restart (patches 0005, 0008, 0009 and this switch)
++  'Klipper restarts to apply this. Continue?': 'Klipper redémarre pour appliquer ce changement. Continuer ?'
+diff --git a/translations/it.yml b/translations/it.yml
+index 9cb41f2..f00d3fb 100644
+--- a/translations/it.yml
++++ b/translations/it.yml
+@@ -5152,3 +5152,16 @@ translations:
+   # Kiln OS: switching on a plugin that runs code as root (patch 0097)
+   'Turn on {}?': 'Accendere {}?'
+   'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'Questo plugin esegue parte del suo codice come root, l''account amministratore del sistema, ad esempio per configurare dispositivi USB. Accendilo solo se ti fidi della sua provenienza. Klipper si riavvia.'
++  # Kiln OS: the nozzle-hit guard on Settings > Safety & Alerts (patch 0098)
++  'Nozzle-hit guard': 'Protezione urti dell''ugello'
++  'Pause the print if the nozzle hits the print or the bed': 'Mette in pausa la stampa se l''ugello urta la stampa o il piano'
++  'Can be turned on when no print is running (Klipper restarts)': 'Si può accendere quando nessuna stampa è in corso (Klipper si riavvia)'
++  'Sensitivity': 'Sensibilità'
++  'Low': 'Bassa'
++  'Medium': 'Media'
++  'High': 'Alta'
++  'How hard a push pauses the print: Low 600 g, Medium 300 g, High 150 g': 'Spinta che mette in pausa la stampa: Bassa 600 g, Media 300 g, Alta 150 g'
++  # Goes into 'Turn on {}?', the title of the confirmation before Klipper restarts
++  'the nozzle-hit guard': 'la protezione urti dell''ugello'
++  # The question before a Klipper restart (patches 0005, 0008, 0009 and this switch)
++  'Klipper restarts to apply this. Continue?': 'Klipper si riavvia per applicare la modifica. Continuare?'
+diff --git a/translations/ja.yml b/translations/ja.yml
+index 820a926..6c905a3 100644
+--- a/translations/ja.yml
++++ b/translations/ja.yml
+@@ -4895,3 +4895,16 @@ translations:
+   # Kiln OS: switching on a plugin that runs code as root (patch 0097)
+   'Turn on {}?': '{} をオンにしますか？'
+   'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'このプラグインはコードの一部を root（システムの管理者アカウント）として実行します。たとえば USB デバイスの設定に使います。提供元を信頼できる場合にのみオンにしてください。Klipper が再起動します。'
++  # Kiln OS: the nozzle-hit guard on Settings > Safety & Alerts (patch 0098)
++  'Nozzle-hit guard': 'ノズル接触ガード'
++  'Pause the print if the nozzle hits the print or the bed': 'ノズルが印刷物またはベッドに当たったら印刷を一時停止します'
++  'Can be turned on when no print is running (Klipper restarts)': '印刷中でないときにオンにできます（Klipper が再起動します）'
++  'Sensitivity': '感度'
++  'Low': '低'
++  'Medium': '中'
++  'High': '高'
++  'How hard a push pauses the print: Low 600 g, Medium 300 g, High 150 g': '印刷を一時停止する力：低 600 g、中 300 g、高 150 g'
++  # Goes into 'Turn on {}?', the title of the confirmation before Klipper restarts
++  'the nozzle-hit guard': 'ノズル接触ガード'
++  # The question before a Klipper restart (patches 0005, 0008, 0009 and this switch)
++  'Klipper restarts to apply this. Continue?': 'これを適用するため Klipper が再起動します。続行しますか？'
+diff --git a/translations/ko.yml b/translations/ko.yml
+index 19ad384..5373b52 100644
+--- a/translations/ko.yml
++++ b/translations/ko.yml
+@@ -4694,3 +4694,16 @@ translations:
+   # Kiln OS: switching on a plugin that runs code as root (patch 0097)
+   'Turn on {}?': '{}을(를) 켤까요?'
+   'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': '이 플러그인은 USB 장치 설정 등을 위해 코드의 일부를 root(시스템 관리자 계정)로 실행합니다. 출처를 신뢰할 수 있을 때만 켜세요. Klipper가 재시작됩니다.'
++  # Kiln OS: the nozzle-hit guard on Settings > Safety & Alerts (patch 0098)
++  'Nozzle-hit guard': '노즐 충돌 보호'
++  'Pause the print if the nozzle hits the print or the bed': '노즐이 출력물이나 베드에 부딪히면 출력을 일시정지합니다'
++  'Can be turned on when no print is running (Klipper restarts)': '출력 중이 아닐 때 켤 수 있습니다 (Klipper가 재시작됩니다)'
++  'Sensitivity': '감도'
++  'Low': '낮음'
++  'Medium': '보통'
++  'High': '높음'
++  'How hard a push pauses the print: Low 600 g, Medium 300 g, High 150 g': '출력을 일시정지하는 힘: 낮음 600 g, 보통 300 g, 높음 150 g'
++  # Goes into 'Turn on {}?', the title of the confirmation before Klipper restarts
++  'the nozzle-hit guard': '노즐 충돌 보호'
++  # The question before a Klipper restart (patches 0005, 0008, 0009 and this switch)
++  'Klipper restarts to apply this. Continue?': '적용하려면 Klipper가 재시작됩니다. 계속할까요?'
+diff --git a/translations/pt.yml b/translations/pt.yml
+index 25f7c10..287ace6 100644
+--- a/translations/pt.yml
++++ b/translations/pt.yml
+@@ -5155,3 +5155,16 @@ translations:
+   # Kiln OS: switching on a plugin that runs code as root (patch 0097)
+   'Turn on {}?': 'Ligar {}?'
+   'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'Este plugin executa parte do seu código como root, a conta de administrador do sistema, por exemplo para configurar dispositivos USB. Ligue-o apenas se confiar na sua origem. O Klipper reinicia.'
++  # Kiln OS: the nozzle-hit guard on Settings > Safety & Alerts (patch 0098)
++  'Nozzle-hit guard': 'Proteção contra batida do bico'
++  'Pause the print if the nozzle hits the print or the bed': 'Pausa a impressão se o bico bater na impressão ou na mesa'
++  'Can be turned on when no print is running (Klipper restarts)': 'Pode ser ligada quando nenhuma impressão está em andamento (o Klipper reinicia)'
++  'Sensitivity': 'Sensibilidade'
++  'Low': 'Baixa'
++  'Medium': 'Média'
++  'High': 'Alta'
++  'How hard a push pauses the print: Low 600 g, Medium 300 g, High 150 g': 'Força que pausa a impressão: Baixa 600 g, Média 300 g, Alta 150 g'
++  # Goes into 'Turn on {}?', the title of the confirmation before Klipper restarts
++  'the nozzle-hit guard': 'a proteção contra batida do bico'
++  # The question before a Klipper restart (patches 0005, 0008, 0009 and this switch)
++  'Klipper restarts to apply this. Continue?': 'O Klipper reinicia para aplicar isto. Continuar?'
+diff --git a/translations/ru.yml b/translations/ru.yml
+index c796cd7..cd3db7f 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -5572,3 +5572,14 @@ translations:
+   'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader. Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'У Kiln OS есть собственный загрузчик для этого принтера. Чтобы установить его: Настройки > Система > Загрузить систему восстановления > Питание > Установить загрузчик Kiln. Сначала прочитайте руководство по загрузчику, в нём описаны риск и флешка для восстановления: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
+   # Kiln OS: switching on a plugin that runs code as root (patch 0097)
+   'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'Часть кода этого плагина выполняется от имени root, учётной записи администратора системы, например для настройки USB-устройств. Включайте его, только если доверяете его источнику. Klipper перезапустится.'
++  # Kiln OS: the nozzle-hit guard on Settings > Safety & Alerts (patch 0098)
++  'Nozzle-hit guard': 'Защита от удара сопла'
++  'Pause the print if the nozzle hits the print or the bed': 'Приостанавливает печать, если сопло ударится о модель или стол'
++  'Can be turned on when no print is running (Klipper restarts)': 'Можно включить, когда не идёт печать (Klipper перезапустится)'
++  'Sensitivity': 'Чувствительность'
++  'Low': 'Низкая'
++  'Medium': 'Средняя'
++  'High': 'Высокая'
++  'How hard a push pauses the print: Low 600 g, Medium 300 g, High 150 g': 'Усилие, при котором печать встаёт на паузу: Низкая 600 г, Средняя 300 г, Высокая 150 г'
++  # Goes into 'Turn on {}?', the title of the confirmation before Klipper restarts
++  'the nozzle-hit guard': 'защиту от удара сопла'
+diff --git a/translations/tr.yml b/translations/tr.yml
+index b5df9c1..5234291 100644
+--- a/translations/tr.yml
++++ b/translations/tr.yml
+@@ -4694,3 +4694,16 @@ translations:
+   # Kiln OS: switching on a plugin that runs code as root (patch 0097)
+   'Turn on {}?': '{} açılsın mı?'
+   'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'Bu eklenti, örneğin USB aygıtlarını kurmak için kodunun bir kısmını sistemin yönetici hesabı olan root olarak çalıştırır. Yalnızca kaynağına güveniyorsanız açın. Klipper yeniden başlar.'
++  # Kiln OS: the nozzle-hit guard on Settings > Safety & Alerts (patch 0098)
++  'Nozzle-hit guard': 'Nozul çarpma koruması'
++  'Pause the print if the nozzle hits the print or the bed': 'Nozul baskıya veya tablaya çarparsa baskıyı duraklatır'
++  'Can be turned on when no print is running (Klipper restarts)': 'Baskı yokken açılabilir (Klipper yeniden başlar)'
++  'Sensitivity': 'Hassasiyet'
++  'Low': 'Düşük'
++  'Medium': 'Orta'
++  'High': 'Yüksek'
++  'How hard a push pauses the print: Low 600 g, Medium 300 g, High 150 g': 'Baskıyı duraklatan kuvvet: Düşük 600 g, Orta 300 g, Yüksek 150 g'
++  # Goes into 'Turn on {}?', the title of the confirmation before Klipper restarts
++  'the nozzle-hit guard': 'Nozul çarpma koruması'
++  # The question before a Klipper restart (patches 0005, 0008, 0009 and this switch)
++  'Klipper restarts to apply this. Continue?': 'Bunu uygulamak için Klipper yeniden başlar. Devam edilsin mi?'
+diff --git a/translations/zh.yml b/translations/zh.yml
+index 9072f06..6685099 100644
+--- a/translations/zh.yml
++++ b/translations/zh.yml
+@@ -4885,3 +4885,16 @@ translations:
+   # Kiln OS: switching on a plugin that runs code as root (patch 0097)
+   'Turn on {}?': '开启 {}？'
+   'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': '此插件的部分代码以 root（系统管理员账户）身份运行，例如用于设置 USB 设备。仅在您信任其来源时才开启。Klipper 将重新启动。'
++  # Kiln OS: the nozzle-hit guard on Settings > Safety & Alerts (patch 0098)
++  'Nozzle-hit guard': '喷嘴冲击保护'
++  'Pause the print if the nozzle hits the print or the bed': '喷嘴碰到打印件或热床时暂停打印'
++  'Can be turned on when no print is running (Klipper restarts)': '仅在未打印时可开启（Klipper 将重启）'
++  'Sensitivity': '灵敏度'
++  'Low': '低'
++  'Medium': '中'
++  'High': '高'
++  'How hard a push pauses the print: Low 600 g, Medium 300 g, High 150 g': '触发暂停打印的力度：低 600 克，中 300 克，高 150 克'
++  # Goes into 'Turn on {}?', the title of the confirmation before Klipper restarts
++  'the nozzle-hit guard': '喷嘴冲击保护'
++  # The question before a Klipper restart (patches 0005, 0008, 0009 and this switch)
++  'Klipper restarts to apply this. Continue?': 'Klipper 将重启以应用此设置。是否继续？'
+diff --git a/ui_xml/settings_safety_overlay.xml b/ui_xml/settings_safety_overlay.xml
+index 5a6da3e..b6c694b 100644
+--- a/ui_xml/settings_safety_overlay.xml
++++ b/ui_xml/settings_safety_overlay.xml
+@@ -47,6 +47,41 @@
+                             description="Show a confirmation dialog when tapping a macro"
+                             subject="settings_macro_confirm" callback="on_macro_confirm_changed"/>
+         <!-- ================================================================== -->
++        <!-- KILN OS NOZZLE-HIT GUARD (only on a Kiln OS printer: ad5x_weight) -->
++        <!-- Off with the plugin off: switching on enables the plugin (Klipper
++             restarts, not during a print); with it on, NOZZLE_GUARD ENABLE= -->
++        <!-- ================================================================== -->
++        <lv_obj name="container_ad5x_nozzle_guard" width="100%" style_pad_all="0" scrollable="false"
++                flex_flow="column">
++          <bind_flag_if_eq subject="ad5x_nozzle_guard_available" flag="hidden" ref_value="0"/>
++          <setting_toggle_row name="row_ad5x_nozzle_guard"
++                              label="Nozzle-hit guard" icon="nozzle"
++                              description="Pause the print if the nozzle hits the print or the bed"
++                              subject="ad5x_nozzle_guard_enabled" callback="on_ad5x_nozzle_guard_changed"
++                              disabled="ad5x_nozzle_guard_locked"/>
++          <lv_obj name="row_ad5x_nozzle_guard_print_hint"
++                  width="100%" height="content" flex_flow="row" style_flex_cross_place="start"
++                  style_pad_left="#space_lg" style_pad_right="#space_lg" style_pad_bottom="#space_md"
++                  style_pad_gap="#space_sm" style_bg_opa="0" style_border_width="0" scrollable="false">
++            <bind_flag_if_eq subject="ad5x_nozzle_guard_print_hint" flag="hidden" ref_value="0"/>
++            <icon src="info_outline" size="xs" variant="secondary"/>
++            <text_small width="0"
++                        flex_grow="1" long_mode="wrap" style_text_color="#text_muted"
++                        text="Can be turned on when no print is running (Klipper restarts)"/>
++          </lv_obj>
++          <lv_obj name="container_ad5x_nozzle_guard_sensitivity" width="100%" style_pad_all="0"
++                  scrollable="false">
++            <bind_flag_if_eq subject="ad5x_nozzle_guard_enabled" flag="hidden" ref_value="0"/>
++            <setting_dropdown_row name="row_ad5x_nozzle_guard_sensitivity"
++                                  label="Sensitivity" icon="weight" options="Low&#10;Medium&#10;High"
++                                  options_tag="Low&#10;Medium&#10;High"
++                                  description="How hard a push pauses the print: Low 600 g, Medium 300 g, High 150 g"
++                                  bind_selected="ad5x_nozzle_guard_sensitivity"
++                                  callback="on_ad5x_nozzle_guard_sensitivity_changed"
++                                  disabled="ad5x_nozzle_guard_busy"/>
++          </lv_obj>
++        </lv_obj>
++        <!-- ================================================================== -->
+         <!-- SPAGHETTI DETECTION (only when a detection source is capable) -->
+         <!-- ================================================================== -->
+         <lv_obj name="container_detection" width="100%" style_pad_all="0" scrollable="false" flex_flow="column">
+-- 
+2.56.0
+

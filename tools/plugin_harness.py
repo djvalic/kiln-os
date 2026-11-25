@@ -219,6 +219,7 @@ class Rig:
             self.printer.objects["ifs"] = object()
         opts = {"plugins_file": self.pfile, "moonraker_file": self.mfile,
                 "shipped_dir": self.shipped, "user_dir": self.user,
+                "staging_dir": os.path.join(self.tmp, "staging"),
                 "catalog_file": os.path.join(self.tmp, "catalog.json"),
                 "moonraker_restart_file": os.path.join(self.tmp, "restart"),
                 "ifs_mcu_dir": self.mcudir, "ifs_klipper_flag": self.flag,
