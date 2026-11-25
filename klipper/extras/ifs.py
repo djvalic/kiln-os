@@ -436,6 +436,11 @@ class IFS:
         self.refill_noticed = set()
         self.refill_notice = ""
         self.prime_length = config.getfloat('prime_length', 12., minval=0.)
+        # Optional extra retract before a mode-2 PLA cut.
+        self.pre_cut_retract_length = config.getfloat(
+            'pre_cut_retract_length', 0., minval=0., maxval=20.)
+        self.pre_cut_retract_speed = config.getfloat(
+            'pre_cut_retract_speed', 600., above=0., maxval=600.)
         self.select_timeout = config.getfloat('select_timeout', 30., above=0.)
         self.load_timeout = config.getfloat('load_timeout', 60., above=0.)
         self.unload_timeout = config.getfloat('unload_timeout', 60., above=0.)
@@ -2639,8 +2644,50 @@ class IFS:
                              "toolhead" % (chan,))
         self._run(self._prefeed_channel, chan, op="prefeed", target=chan)
     # Full operations
+    def _pre_cut_retract(self, old, new):
+        """Extra extruder-only retract with the lane released. Return the
+        commanded distance, not a measurement of physical filament travel.
+        The stock cut and unload choreography is left unchanged."""
+        length = self.pre_cut_retract_length
+        if (not length or self.channel != old or self.channel_source != "kiln"
+                or self.refill_busy or not self._in_print()
+                or self._purge_mode() != 2 or self._head_has_filament() is not True
+                or any(self.materials[c - 1].get('type') != 'PLA'
+                       for c in (old, new))):
+            if length:
+                logging.info("ifs: pre-cut retract skipped: eligibility check")
+            return 0.
+        move = self.printer.lookup_object('gcode_move').get_status(
+            self.reactor.monotonic())
+        # The native paired push assumes the same physical E and IFS length.
+        # Avoid non-unity flow or speed overrides in this experiment.
+        if any(abs(move.get(k, 0.) - 1.) > 1.e-6
+               for k in ('extrude_factor', 'speed_factor')):
+            logging.info("ifs: pre-cut retract skipped: flow/speed override")
+            return 0.
+        st = self._query_status()
+        if not all(c in mask_channels(st.get('silk_state')) for c in (old, new)):
+            logging.info("ifs: pre-cut retract skipped: spool presence")
+            return 0.
+        self._check_stop("pre-cut retract")
+        self._release(old)
+        self._check_stop("pre-cut retract")
+        # Mark the strand before moving so existing failure recovery can
+        # detect a strand accidentally pulled above the head sensor.
+        self.unload_strand = old
+        self._track("cutting", "unloading", old)
+        self.gcode.run_script_from_command("M83\nG1 E-%s F%s" % (
+            self._fmt(length), self._fmt(self.pre_cut_retract_speed)))
+        if self._head_settled() is not True:
+            raise IfsError("pre-cut retract cleared the toolhead sensor; "
+                           "inspect filament path before retrying", fault=False)
+        self._check_stop("pre-cut retract")
+        logging.info("ifs: pre-cut retract %.3f mm; compensating next prime",
+                     length)
+        self.gcode.respond_info("IFS: pre-cut retract %.3f mm" % (length,))
+        return length
     def _swap(self, old, new, flush=None, rounds=None, purge=True,
-              at_print=False):
+              at_print=False, allow_pre_cut=False):
         toolhead = self.printer.lookup_object('toolhead')
         if old:
             self._track("cutting", "unloading", old)
@@ -2654,6 +2701,7 @@ class IFS:
         # Priming at the print needs the cut: cut_gcode takes the head back
         # there. Without a cut the head is still lifted: the box then.
         at_print = at_print and not purge and bool(old) and head is not False
+        compensation = 0.
         if old and head is False:
             logging.info("ifs: toolhead empty, skipping cut of channel %d",
                          old)
@@ -2667,6 +2715,8 @@ class IFS:
             # An abort during the heat wait (heater held off) ends it here,
             # before the cut's extruder move
             self._check_stop("swap")
+            if allow_pre_cut and not purge and not at_print and old != new:
+                compensation = self._pre_cut_retract(old, new)
             extra = {'AT_PRINT': 1} if at_print else {}
             # The strand moves from the cut on (_unload_left_in_tube)
             self.unload_strand = old
@@ -2678,7 +2728,7 @@ class IFS:
         self._select(new)
         self._load(new, self.load_length, self.load_speed)
         if not purge:
-            self._prime(old, new, at_print)
+            self._prime(old, new, at_print, compensation)
             self.swap_open = None
             return
         # Stock purge, in rounds: at the purge box, push the new strand
@@ -2720,7 +2770,7 @@ class IFS:
             self._clear_inserted(new)
         self._run_template(self.after_template, OLD=old, NEW=new)
         self.swap_open = None
-    def _prime(self, old, new, at_print=False):
+    def _prime(self, old, new, at_print=False, compensation=0.):
         """Second half of a swap without purge (the slicer purges: prime
         tower or its own flush): at the purge box, feed the new strand
         prime_length into the nozzle (IFS and extruder together, as zMod's
@@ -2731,8 +2781,9 @@ class IFS:
         done there, as zMod does from layer 2 on, then prime_at_print_gcode
         instead of prime_gcode."""
         toolhead = self.printer.lookup_object('toolhead')
-        logging.info("ifs: swap %d -> %d without purge, prime %.0f mm%s",
-                     old, new, self.prime_length,
+        insert_length = self.prime_length + compensation
+        logging.info("ifs: swap %d -> %d without purge, prime %.3f mm%s",
+                     old, new, insert_length,
                      " at the print position" if at_print else "")
         self._track("priming", "loading", new)
         if not at_print:
@@ -2740,8 +2791,8 @@ class IFS:
                                ROUND=1, ROUNDS=1)
         toolhead.wait_moves()
         self._ensure_hot()
-        if self.prime_length:
-            self._push(new, self.prime_length)
+        if insert_length:
+            self._push(new, insert_length)
         self._release(new)
         self._set_channel(new)
         self._track("priming", "loading", new)
@@ -2913,13 +2964,15 @@ class IFS:
                              "done (nothing was cut)" % (new,))
         flush = gcmd.get_float('FLUSH', None, minval=0.)
         rounds = gcmd.get_int('ROUNDS', None, minval=1, maxval=5)
+        allow_pre_cut = (not self.refill_busy and self._in_print())
         purge = self._swap_purges(gcmd)
         # Read here, before anything moves: the position is the print's
         at_print = not purge and self._at_print_ok()
         home = self._require_homed(gcmd)
         # "swap" takes a slot out of the nozzle first, "load" fills it
         self._with_heat(gcmd, (old, new), self._swap, old, new, flush, rounds,
-                        purge, at_print, op="swap" if old else "load",
+                        purge, at_print, allow_pre_cut,
+                        op="swap" if old else "load",
                         target=new, home=home)
     cmd_IFS_SWAP_help = ("Change to another IFS channel (cut, unload, load, "
                          "purge): CHANNEL= [TEMP=] [FLUSH=mm] [ROUNDS=] "
