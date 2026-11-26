@@ -28,29 +28,36 @@ reboot), refusals and the agent timeout as Moonraker now sends them, the
 reason taken off only when the data matches, and strip_kiln_reason on
 reasons and look-alikes.
 ---
- include/moonraker_error.h                  | 37 +++++++++
+ include/moonraker_error.h                  | 28 +++++++
  include/ui_settings_kiln_recovery.h        | 14 ++--
+ src/api/moonraker_error_rpc.cpp            | 14 ++++
  src/ui/ui_settings_kiln_recovery.cpp       | 23 ++----
- src/ui/ui_wizard_ad5x_setup.cpp            |  5 +-
+ src/ui/wizard/ui_wizard_ad5x_setup.cpp     |  5 +-
  tests/unit/test_settings_kiln_recovery.cpp | 92 +++++++++++++++++-----
- 5 files changed, 129 insertions(+), 42 deletions(-)
+ 6 files changed, 134 insertions(+), 42 deletions(-)
 
 diff --git a/include/moonraker_error.h b/include/moonraker_error.h
-index b737de03..cf630ec2 100644
+index d956962029..55b2a90542 100644
 --- a/include/moonraker_error.h
 +++ b/include/moonraker_error.h
-@@ -202,6 +202,35 @@ struct MoonrakerError {
+@@ -41,6 +41,9 @@ struct MoonrakerError {
+     std::string method;                                 ///< Method that caused the error
+     /// Untranslated key `message` was set from; nullptr when `message` is not ours to translate
+     const char* message_tag = nullptr;
++    /// Kiln OS: the JSON-RPC error data's "reason" (its Moonraker endpoints send
++    /// {"reason": "printing"}), "" for any other error.
++    std::string reason;
+ 
+     /**
+      * @brief Check if there's an error
+@@ -234,6 +237,31 @@ struct MoonrakerError {
          return helix::decode_firmware_error_text(extract_message_field(raw));
      }
  
 +    /// Kiln OS: the reason of an error from one of its Moonraker endpoints
 +    /// (the JSON-RPC error's data {"reason": "printing"}), "" for any other.
 +    std::string kiln_reason() const {
-+        if (!details.is_object()) {
-+            return {};
-+        }
-+        const auto it = details.find("reason");
-+        return it != details.end() && it->is_string() ? it->get<std::string>() : std::string();
++        return reason;
 +    }
 +
 +    /// Kiln OS: @p message without the reason its Klipper endpoints put in
@@ -75,23 +82,8 @@ index b737de03..cf630ec2 100644
      /// extract_friendly_message() of an error line that may still carry its
      /// `!!` / `Error:` prefixes (`!! Error: foo`), with them and the
      /// whitespace after each removed.
-@@ -292,6 +321,14 @@ struct MoonrakerError {
-             err.details = error_obj["data"];
-         }
- 
-+        // Kiln OS: its endpoints' errors start with their reason, "[printing] A
-+        // print is running", which Moonraker also sends as the error's data
-+        // {"reason": "printing"}. People get the text, programs kiln_reason().
-+        const std::string reason = err.kiln_reason();
-+        if (!reason.empty() && err.message.rfind("[" + reason + "] ", 0) == 0) {
-+            err.message.erase(0, reason.size() + 3);
-+        }
-+
-         // Map specific error codes to types
-         if (err.code == -32601) { // Method not found
-             err.type = MoonrakerErrorType::VALIDATION_ERROR;
 diff --git a/include/ui_settings_kiln_recovery.h b/include/ui_settings_kiln_recovery.h
-index 25e307d8..578c5001 100644
+index 06ef004d9f..f7d7587008 100644
 --- a/include/ui_settings_kiln_recovery.h
 +++ b/include/ui_settings_kiln_recovery.h
 @@ -7,9 +7,12 @@
@@ -122,8 +114,33 @@ index 25e307d8..578c5001 100644
  std::string refusal_text(const std::string& message);
  
  /// The answer, on the main thread: @p rebooting true when the printer is
+diff --git a/src/api/moonraker_error_rpc.cpp b/src/api/moonraker_error_rpc.cpp
+index bfa794bc7a..1d09112369 100644
+--- a/src/api/moonraker_error_rpc.cpp
++++ b/src/api/moonraker_error_rpc.cpp
+@@ -26,6 +26,20 @@ MoonrakerError MoonrakerError::from_json_rpc(const json& error_obj,
+         err.message = extract_friendly_message(msg_it->get<std::string>());
+     }
+ 
++    // Kiln OS: its endpoints' errors start with their reason, "[printing] A
++    // print is running", which Moonraker also sends as the error's data
++    // {"reason": "printing"}. People get the text, programs kiln_reason().
++    const auto data_it = error_obj.find("data");
++    if (data_it != error_obj.end() && data_it->is_object()) {
++        const auto r = data_it->find("reason");
++        if (r != data_it->end() && r->is_string()) {
++            err.reason = r->get<std::string>();
++        }
++    }
++    if (!err.reason.empty() && err.message.rfind("[" + err.reason + "] ", 0) == 0) {
++        err.message.erase(0, err.reason.size() + 3);
++    }
++
+     if (err.code == -32601) { // Method not found
+         err.type = MoonrakerErrorType::VALIDATION_ERROR;
+     } else if (err.message.find("not ready") != std::string::npos) {
 diff --git a/src/ui/ui_settings_kiln_recovery.cpp b/src/ui/ui_settings_kiln_recovery.cpp
-index 8916df45..d7e3511b 100644
+index 73c3c3c536..56e08a72f0 100644
 --- a/src/ui/ui_settings_kiln_recovery.cpp
 +++ b/src/ui/ui_settings_kiln_recovery.cpp
 @@ -34,13 +34,6 @@ constexpr bool kBuiltIn = false;
@@ -179,19 +196,19 @@ index 8916df45..d7e3511b 100644
              const std::string text = refusal_text(err.message);
              finish(false, text.empty() ? std::string(lv_tr("Failed")) : text);
          },
-diff --git a/src/ui/ui_wizard_ad5x_setup.cpp b/src/ui/ui_wizard_ad5x_setup.cpp
-index 4f7c8310..8049f25b 100644
---- a/src/ui/ui_wizard_ad5x_setup.cpp
-+++ b/src/ui/ui_wizard_ad5x_setup.cpp
-@@ -19,6 +19,7 @@
+diff --git a/src/ui/wizard/ui_wizard_ad5x_setup.cpp b/src/ui/wizard/ui_wizard_ad5x_setup.cpp
+index 78c4371a06..51e0e6e541 100644
+--- a/src/ui/wizard/ui_wizard_ad5x_setup.cpp
++++ b/src/ui/wizard/ui_wizard_ad5x_setup.cpp
+@@ -21,6 +21,7 @@
  #include "i_moonraker_api.h"
  #include "i_moonraker_client.h"
  #include "lvgl/src/others/translation/lv_translation.h"
 +#include "moonraker_error.h"
- #include "observer_factory.h"
+ #include "core/observer_factory.h"
  #include "printer_discovery.h"
  #include "printer_state.h"
-@@ -415,7 +416,9 @@ void Ad5xSetupModel::send(const std::string& action, double delta) {
+@@ -417,7 +418,9 @@ void Ad5xSetupModel::send(const std::string& action, double delta) {
          },
          [this, token, key, action, delta, is_start](const MoonrakerError& err) {
              const int code = err.code;
@@ -203,7 +220,7 @@ index 4f7c8310..8049f25b 100644
                                                            code, message]() {
                  // Moonraker without the endpoint: same action as G-code.
 diff --git a/tests/unit/test_settings_kiln_recovery.cpp b/tests/unit/test_settings_kiln_recovery.cpp
-index 9549ca8c..413a3a78 100644
+index 12cb831e59..3fa475a1d1 100644
 --- a/tests/unit/test_settings_kiln_recovery.cpp
 +++ b/tests/unit/test_settings_kiln_recovery.cpp
 @@ -2,7 +2,9 @@
@@ -216,7 +233,7 @@ index 9549ca8c..413a3a78 100644
 +// the code, "[reason] text" as the message and {"reason": ...} as the data.
  
  #include "ui_settings_kiln_recovery.h"
- #include "ui_update_queue.h"
+ #include "core/update_queue.h"
 @@ -49,53 +51,105 @@ template <typename Reply> Answer ask(Reply reply) {
      return answer;
  }

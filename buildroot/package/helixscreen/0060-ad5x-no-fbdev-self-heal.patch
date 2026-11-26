@@ -10,11 +10,14 @@ KD_GRAPHICS, and the mainline 7.3 kernel has no VT or fbcon (printk
 goes to the serial port only). The redraw only cost a full render and
 copy into the uncached framebuffer every 10 s, during prints too.
 ---
+ src/application/application.cpp | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
 diff --git a/src/application/application.cpp b/src/application/application.cpp
-index 98ec3d8..1c2863d 100644
+index f7fe0f0f41..b5bbe06e94 100644
 --- a/src/application/application.cpp
 +++ b/src/application/application.cpp
-@@ -2074,8 +2074,16 @@ int Application::main_loop() {
+@@ -988,8 +988,16 @@ int Application::main_loop() {
      // fbdev self-heal: periodic full-screen invalidation to overwrite any kernel
      // console text that bleeds through LVGL's partial render. KDSETMODE KD_GRAPHICS
      // is the primary defense; this is belt-and-suspenders for robustness.

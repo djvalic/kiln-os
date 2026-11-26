@@ -19,16 +19,16 @@ switching it back on works.
 Upstream: not applicable (AD5X OS specific)
 ---
  include/wifi_manager.h                        |  6 ++
- src/api/wifi_manager.cpp                      | 19 ++++-
+ src/network/wifi_manager.cpp                  | 19 ++++-
  tests/test_helpers/wifi_manager_test_access.h |  8 +++
  tests/unit/test_wifi_manager.cpp              | 72 +++++++++++++++++++
  4 files changed, 103 insertions(+), 2 deletions(-)
 
 diff --git a/include/wifi_manager.h b/include/wifi_manager.h
-index c7869699c3..c588781963 100644
+index 492ac1a05b..6102a76f1b 100644
 --- a/include/wifi_manager.h
 +++ b/include/wifi_manager.h
-@@ -810,6 +810,12 @@ class WiFiManager {
+@@ -856,6 +856,12 @@ class WiFiManager {
      // only network path is that radio). Defaults to "/sys"; tests point it at
      // a fixture tree via WiFiManagerTestAccess.
      static std::string sys_root_;
@@ -41,11 +41,11 @@ index c7869699c3..c588781963 100644
  };
  
  /**
-diff --git a/src/api/wifi_manager.cpp b/src/api/wifi_manager.cpp
-index 65d710c1e0..e76599c105 100644
---- a/src/api/wifi_manager.cpp
-+++ b/src/api/wifi_manager.cpp
-@@ -69,6 +69,14 @@ bool WiFiManager::in_association_grace() const {
+diff --git a/src/network/wifi_manager.cpp b/src/network/wifi_manager.cpp
+index 99d782e4bd..bd5c5c5acb 100644
+--- a/src/network/wifi_manager.cpp
++++ b/src/network/wifi_manager.cpp
+@@ -68,6 +68,14 @@ bool WiFiManager::in_association_grace() const {
  // can be pointed at a fixture tree instead of the real /sys.
  std::string WiFiManager::sys_root_ = "/sys";
  
@@ -57,10 +57,10 @@ index 65d710c1e0..e76599c105 100644
 +bool WiFiManager::local_screen_fallback_ = false;
 +#endif
 +
- // ============================================================================
  // Constructor / Destructor
- // ============================================================================
-@@ -165,6 +173,9 @@ void WiFiManager::register_backend_callbacks(bool silent) {
+ 
+ WiFiManager::WiFiManager(bool silent) : scan_timer_(nullptr), scan_pending_(false) {
+@@ -166,6 +174,9 @@ void WiFiManager::register_backend_callbacks(bool silent) {
          // network path (wired or otherwise) is actually up. When resolution of
          // the WiFi interface itself is inconclusive, fail safe: treat it the
          // same as "no known wired fallback" and do not disable the radio.
@@ -70,7 +70,7 @@ index 65d710c1e0..e76599c105 100644
          async_lifetime_.defer("WiFiManager::apply_stored_country",
                                [this]() { apply_stored_country(); });
          async_lifetime_.defer("WiFiManager::reassert_stored_radio_state", [this]() {
-@@ -200,12 +211,16 @@ void WiFiManager::register_backend_callbacks(bool silent) {
+@@ -201,12 +212,16 @@ void WiFiManager::register_backend_callbacks(bool silent) {
              };
              if (!want_on && backend_) {
                  const auto iface = backend_->resolved_interface();
@@ -90,10 +90,10 @@ index 65d710c1e0..e76599c105 100644
                  } else if (!wifi_configured && !backend_->is_radio_enabled()) {
                      // No HelixScreen WiFi configuration and the radio is
 diff --git a/tests/test_helpers/wifi_manager_test_access.h b/tests/test_helpers/wifi_manager_test_access.h
-index ccd9dd9c39..ab40ced7e8 100644
+index cdb8393d56..1119988ffd 100644
 --- a/tests/test_helpers/wifi_manager_test_access.h
 +++ b/tests/test_helpers/wifi_manager_test_access.h
-@@ -118,6 +118,14 @@ class WiFiManagerTestAccess {
+@@ -117,6 +117,14 @@ class WiFiManagerTestAccess {
          WiFiManager::sys_root_ = "/sys";
      }
  
@@ -109,10 +109,10 @@ index ccd9dd9c39..ab40ced7e8 100644
          WiFiManager::os_link_probe_ = std::move(probe);
      }
 diff --git a/tests/unit/test_wifi_manager.cpp b/tests/unit/test_wifi_manager.cpp
-index d8b44c0818..ba77a5247c 100644
+index a75b281713..38c21e8d2f 100644
 --- a/tests/unit/test_wifi_manager.cpp
 +++ b/tests/unit/test_wifi_manager.cpp
-@@ -1127,6 +1127,78 @@ TEST_CASE("READY refuses to disable the radio when interface resolution is incon
+@@ -1088,6 +1088,78 @@ TEST_CASE("READY refuses to disable the radio when interface resolution is incon
      WiFiManagerTestAccess::reset_sys_root();
  }
  
@@ -188,9 +188,6 @@ index d8b44c0818..ba77a5247c 100644
 +    WiFiManagerTestAccess::reset_sys_root();
 +}
 +
- // The mirror-image gap this task closes: a device whose stored preference is
- // WiFi ON but whose radio carries a stale soft rfkill block (e.g. one this
- // app itself applied before commit 8aaac4e78 made a soft block non-fatal at
--- 
-2.56.0
-
+ // A device whose stored preference is WiFi ON but whose radio carries a stale
+ // soft rfkill block (an older build of this app could apply one at startup)
+ // stays radio-dead until a human taps the touchscreen to toggle it back on. The

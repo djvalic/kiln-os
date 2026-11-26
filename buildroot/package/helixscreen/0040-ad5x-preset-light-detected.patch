@@ -32,10 +32,10 @@ index d9a0d7df7f..56721b602d 100644
        "cooldown": "SET_HEATER_TEMPERATURE HEATER=extruder TARGET=0\nSET_HEATER_TEMPERATURE HEATER=heater_bed TARGET=0",
        "load_filament": { "label": "Load", "gcode": "LOAD_FILAMENT" },
 diff --git a/tests/unit/test_config_preset.cpp b/tests/unit/test_config_preset.cpp
-index 18de36b089..6bbc5ae6fc 100644
+index 81f50e6f2a..5fa79718a2 100644
 --- a/tests/unit/test_config_preset.cpp
 +++ b/tests/unit/test_config_preset.cpp
-@@ -1077,14 +1077,14 @@ TEST_CASE_METHOD(PresetConfigFixture, "snapmaker_u1 preset carries no home panel
+@@ -1081,14 +1081,14 @@ TEST_CASE_METHOD(PresetConfigFixture, "snapmaker_u1 preset carries no home panel
  }
  
  TEST_CASE_METHOD(PresetConfigFixture,
@@ -54,11 +54,11 @@ index 18de36b089..6bbc5ae6fc 100644
  
      SECTION("a set-up printer keeps its capabilities") {
 diff --git a/tests/unit/test_preset_database_links.cpp b/tests/unit/test_preset_database_links.cpp
-index 29e16aaa02..a3dbb693e1 100644
+index b3a7952c3b..3bc3bb4544 100644
 --- a/tests/unit/test_preset_database_links.cpp
 +++ b/tests/unit/test_preset_database_links.cpp
-@@ -269,14 +269,13 @@ TEST_CASE("the OpenCreator Creator 5 presets name the hardware OpenCreator has",
-           expected.end());
+@@ -220,14 +220,13 @@ TEST_CASE("the stock Creator 5 Pro preset names chamber_heat_fan as a fan_generi
+     CHECK(expected.find("\"fan_generic chamber_heat_fan\"") != std::string::npos);
  }
  
 -// Z-Mod declares [led chamber_light] on every AD5X whether or not a light is
@@ -76,6 +76,3 @@ index 29e16aaa02..a3dbb693e1 100644
      const json& expected = printer["hardware"]["expected"];
      REQUIRE(expected.is_array());
      CHECK(std::find(expected.begin(), expected.end(), "led chamber_light") != expected.end());
--- 
-2.56.0
-

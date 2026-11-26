@@ -9,11 +9,16 @@ and then stops. On Kiln OS the start now ends at its next safe point
 soak end within a second, a probe, the mesh or a colour load first
 finishes), so the AD5X build says that.
 ---
-diff --git a/src/ui/print_control_buttons.cpp b/src/ui/print_control_buttons.cpp
-index 09dba91..b5bd7d9 100644
---- a/src/ui/print_control_buttons.cpp
-+++ b/src/ui/print_control_buttons.cpp
-@@ -320,8 +320,16 @@ void PrintControlButtons::request_sent_start_cancel() {
+ src/ui/print/print_control_buttons.cpp | 8 ++++++++
+ translations/en.yml                    | 2 ++
+ translations/ru.yml                    | 1 +
+ 3 files changed, 11 insertions(+)
+
+diff --git a/src/ui/print/print_control_buttons.cpp b/src/ui/print/print_control_buttons.cpp
+index 28982224ee..1f9edb8fe8 100644
+--- a/src/ui/print/print_control_buttons.cpp
++++ b/src/ui/print/print_control_buttons.cpp
+@@ -326,8 +326,16 @@ void PrintControlButtons::request_sent_start_cancel() {
      auto& ps = get_printer_state().print_state();
      cancel_epoch_ = lv_subject_get_int(ps.get_preparing_epoch_subject());
      ps.note_preparing_cancel_requested();
@@ -31,10 +36,10 @@ index 09dba91..b5bd7d9 100644
      // A start the printer announced itself is on the printer with no job of ours
      // to wait for.
 diff --git a/translations/en.yml b/translations/en.yml
-index d9b219a..db0b67f 100644
+index 4ea3dcf0bf..41347c53a6 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -5005,6 +5005,8 @@ translations:
+@@ -6472,6 +6472,8 @@ translations:
    NOT AVAILABLE HERE: "NOT AVAILABLE HERE"
    The plugin didn't say why.: "The plugin didn't say why."
    # Kiln OS (AD5X) strings from the Kiln HelixScreen patches
@@ -44,14 +49,14 @@ index d9b219a..db0b67f 100644
    'Printer warning': 'Printer warning'
    # Kiln's tour (patch 0058, tour_steps_kiln.cpp)
 diff --git a/translations/ru.yml b/translations/ru.yml
-index 861545a..b30a650 100644
+index 94a22f6b4b..69c608a053 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -5171,6 +5171,7 @@ translations:
+@@ -6644,6 +6644,7 @@ translations:
    'Macros, G-code console, print history, Spoolman, calibration, and Shutdown or Reboot.': 'Макросы, консоль G-code, история печати, Spoolman, калибровка, выключение и перезагрузка.'
    'Screen, sound, connection, and the printer''s own settings: Run Setup Wizard, Nozzle Size, Filament Auto-Refill, Plugins. Replay this tour from Help & About.': 'Экран, звук, соединение и настройки принтера: «Запустить мастер настройки», «Размер сопла», «Автозамена филамента», «Плагины». Повторить тур: «Помощь и о программе».'
    'Printer warning': 'Предупреждение принтера'
 +  'Cancel sent. The printer stops its start sequence at the next safe point.': 'Отмена отправлена. Принтер остановит стартовую последовательность в ближайшей безопасной точке.'
    'More': 'Ещё'
+   Price per kWh: "Цена за кВт·ч"
    'Price, location, lot, notes': 'Цена, место, партия, заметки'
-   'Product': 'Продукт'

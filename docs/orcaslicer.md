@@ -198,6 +198,13 @@ when it writes, so Kiln checks a few seconds after each slot change and
 once a minute, and puts its fields back where they are missing or out of
 date (a database read; a write only for a record that needs it).
 
+With the afc-kiln plugin (AFC-Klipper-Add-On) installed, AFC writes
+`lane_data` itself, as `T0`..`T3` for the same four slots. Kiln then
+leaves the namespace to AFC: at each Klipper start it checks for AFC's
+`AFC` object, and while it's there Kiln writes nothing and deletes the
+`lane1`..`lane4` records it wrote, so OrcaSlicer and Fluidd list each slot
+once. A record the touch screen wrote is left as it is.
+
 - **`filament_id`**: the screen's brand id (marked
   `helix_filament_id_source`, or written with a filament from its list,
   `helix_catalog_id`) is kept, so a linked spool's own profile wins over

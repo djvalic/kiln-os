@@ -103,8 +103,8 @@ For a printer that already runs the main OS from slot A, see
 
 The install screens on the stick are in English only: stock's start-up
 hook has no language setting to go by. The recovery screen's Installing
-Kiln OS page follows the touch screen language (English and Russian so
-far).
+Kiln OS page follows the touch screen language (English or Russian; a
+printer set to another language shows English).
 
 If the screen says **"Not installed"** or **"Installation failed"**, the
 printer waits with the message on screen. To use it as before, remove the
@@ -529,6 +529,48 @@ ssh root@<printer> 'sh -s status' < buildroot/package/ad5x-system/bin/ad5x-vendo
 ```
 
 The kernel partitions stay as they are.
+
+## SSH login and the root password
+
+Log in with `ssh root@<printer>`. The password is stock's root password
+until you set your own. After zMod's root package that is `root`; on a
+printer installed straight from Flashforge's firmware it is Flashforge's,
+which isn't public, so set one with the touch screen first (below). If
+the printer has no password at all (none set, none from stock), SSH and
+the serial console take `root` / `root`, also when the system fails early in
+its start; run `passwd` to choose your own.
+
+**Change it** over SSH:
+
+```
+passwd
+```
+
+It asks twice. The new password stays after restarts and updates, in the
+main OS and the recovery OS (Kiln saves its hash in
+`/data/ad5x/ssh/root-password`, never the password itself). `ad5x-passwd`
+is the same command; `ad5x-passwd --stock` goes back to stock's password,
+`ad5x-passwd --status` says which one applies.
+
+**Forgot it, or never had one** (installed straight from stock):
+
+1. On the printer's touch screen open Settings > System.
+2. Hold **Reset root password** for 5 seconds.
+3. Log in with `ssh root@<printer>`, password `root`.
+4. Run `passwd` and choose your own.
+
+The reset works only from the printer's own screen: not from the screen
+view in the browser, not from Fluidd or Moonraker, and not while a print
+runs. Anyone who can touch the printer can use it.
+
+**Turn the button off** (over SSH): `ad5x-passwd --lock-reset`;
+`ad5x-passwd --unlock-reset` turns it on again. It is on by default. The
+lock stops the button only: a **factory reset** (Settings > System >
+Factory reset) still sets the password to `root` and removes the lock, so
+there is always a way back in. A factory reset also puts all the touch
+screen's settings back to their defaults (the setup wizard runs again).
+
+SSH keys go in `/data/ad5x/ssh/authorized_keys`, used by both OSes.
 
 ## For developers
 

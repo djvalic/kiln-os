@@ -1,27 +1,24 @@
 
 ---
- include/ui_panel_settings.h           |   1 +
- include/ui_wizard_ad5x_setup.h        |  13 ++++
- include/wizard_step.h                 |   5 +-
- src/system/wizard_step.cpp            |   6 ++
- src/ui/ui_panel_settings.cpp          |   9 +++
- src/ui/ui_wizard_ad5x_setup.cpp       | 100 ++++++++++++++++++++++++--
- tests/unit/test_wizard_step_logic.cpp |  17 ++++-
- ui_xml/settings_panel.xml             |   6 ++
- ui_xml/wizard_ad5x_setup.xml          |  54 +++++++++++++-
- ui_xml/wizard_ad5x_soak.xml           |  15 ++++
- ui_xml/wizard_ad5x_summary.xml        |  15 ++++
- ui_xml/wizard_ad5x_trash.xml          |  15 ++++
+ include/ui_panel_settings.h            |   1 +
+ include/ui_wizard_ad5x_setup.h         |  13 ++++
+ include/wizard_step.h                  |   5 +-
+ src/system/wizard_step.cpp             |   6 ++
+ src/ui/settings/ui_panel_settings.cpp  |   9 +++
+ src/ui/wizard/ui_wizard_ad5x_setup.cpp | 100 +++++++++++++++++++++++--
+ tests/unit/test_wizard_step_logic.cpp  |  17 ++++-
+ ui_xml/settings_panel.xml              |   6 ++
+ ui_xml/wizard_ad5x_setup.xml           |  54 ++++++++++++-
+ ui_xml/wizard_ad5x_soak.xml            |  15 ++++
+ ui_xml/wizard_ad5x_summary.xml         |  15 ++++
+ ui_xml/wizard_ad5x_trash.xml           |  15 ++++
  12 files changed, 248 insertions(+), 8 deletions(-)
- create mode 100644 ui_xml/wizard_ad5x_soak.xml
- create mode 100644 ui_xml/wizard_ad5x_summary.xml
- create mode 100644 ui_xml/wizard_ad5x_trash.xml
 
 diff --git a/include/ui_panel_settings.h b/include/ui_panel_settings.h
-index 5431a18de2..992b63335a 100644
+index 2974b425e1..aa0c8a80a3 100644
 --- a/include/ui_panel_settings.h
 +++ b/include/ui_panel_settings.h
-@@ -191,6 +191,7 @@ class SettingsPanel : public PanelBase {
+@@ -197,6 +197,7 @@ class SettingsPanel : public PanelBase {
  
      /// Confirms, then runs the AD5X setup steps again as a targeted wizard session.
      void handle_ad5x_setup_clicked();
@@ -30,7 +27,7 @@ index 5431a18de2..992b63335a 100644
      // The root rows' callback table lives in register_settings_panel_callbacks()
      // and reaches the handlers above.
 diff --git a/include/ui_wizard_ad5x_setup.h b/include/ui_wizard_ad5x_setup.h
-index 994dcbbfee..cfbfd94793 100644
+index cf6906a639..4d03add1d5 100644
 --- a/include/ui_wizard_ad5x_setup.h
 +++ b/include/ui_wizard_ad5x_setup.h
 @@ -108,6 +108,11 @@ class Ad5xSetupModel {
@@ -46,12 +43,12 @@ index 994dcbbfee..cfbfd94793 100644
      /// Start parameters the targeted session now starting adds, by step key:
      /// {"pid": {"heaters": "extruder"}}. Read only while a targeted session
 @@ -135,6 +140,10 @@ class Ad5xSetupModel {
-     lv_subject_t message_{};
-     lv_subject_t results_{};
-     lv_subject_t zoffset_{};
-+    lv_subject_t is_trash_{};
-+    lv_subject_t can_accept_{};
-+    lv_subject_t estimate_avail_{};
+     helix::Subject message_{};
+     helix::Subject results_{};
+     helix::Subject zoffset_{};
++    helix::Subject is_trash_{};
++    helix::Subject can_accept_{};
++    helix::Subject estimate_avail_{};
 +    bool estimate_once_ = false;
      char explanation_buf_[512] = "";
      char message_buf_[256] = "";
@@ -68,10 +65,10 @@ index 994dcbbfee..cfbfd94793 100644
  /// PID step tuning only the hotend (heaters=extruder; the bed did not change).
  void launch_nozzle_checks(lv_obj_t* parent);
 diff --git a/include/wizard_step.h b/include/wizard_step.h
-index 59fbe40f8b..a8da568905 100644
+index 66bbcbc7bf..2515c488bd 100644
 --- a/include/wizard_step.h
 +++ b/include/wizard_step.h
-@@ -31,14 +31,17 @@ enum class StepId {
+@@ -33,14 +33,17 @@ enum class StepId {
      Ad5xMesh,
      Ad5xShaper,
      Ad5xIfs,
@@ -80,21 +77,21 @@ index 59fbe40f8b..a8da568905 100644
 +    Ad5xSoak,
 +    Ad5xSummary,
      Ad5xFinish,
-     InputShaper,
      Preferences,
      Summary,
      Telemetry,
+     Calibration,
  };
--inline constexpr int STEP_COUNT = 23;
-+inline constexpr int STEP_COUNT = 26;
+-inline constexpr int STEP_COUNT = 25;
++inline constexpr int STEP_COUNT = 28;
  
  // Plain data needed to decide skips — no LVGL, constructible in tests.
  struct StepContext {
 diff --git a/src/system/wizard_step.cpp b/src/system/wizard_step.cpp
-index 0b356eb648..74b5d2397d 100644
+index edf9375fff..98e72877b3 100644
 --- a/src/system/wizard_step.cpp
 +++ b/src/system/wizard_step.cpp
-@@ -39,8 +39,14 @@ const char* to_string(StepId id) {
+@@ -43,8 +43,14 @@ const char* to_string(StepId id) {
          return "Ad5xShaper";
      case StepId::Ad5xIfs:
          return "Ad5xIfs";
@@ -108,12 +105,12 @@ index 0b356eb648..74b5d2397d 100644
 +        return "Ad5xSummary";
      case StepId::Ad5xFinish:
          return "Ad5xFinish";
-     case StepId::InputShaper:
-diff --git a/src/ui/ui_panel_settings.cpp b/src/ui/ui_panel_settings.cpp
-index add00eece8..d13230fca2 100644
---- a/src/ui/ui_panel_settings.cpp
-+++ b/src/ui/ui_panel_settings.cpp
-@@ -363,6 +363,13 @@ void SettingsPanel::handle_hardware_health_clicked() {
+     case StepId::Preferences:
+diff --git a/src/ui/settings/ui_panel_settings.cpp b/src/ui/settings/ui_panel_settings.cpp
+index 9b5097efc1..99d53cf331 100644
+--- a/src/ui/settings/ui_panel_settings.cpp
++++ b/src/ui/settings/ui_panel_settings.cpp
+@@ -394,6 +394,13 @@ void SettingsPanel::handle_hardware_health_clicked() {
      overlay.show(parent_screen_);
  }
  
@@ -127,7 +124,7 @@ index add00eece8..d13230fca2 100644
  void SettingsPanel::handle_ad5x_setup_clicked() {
      if (is_wizard_active()) {
          return;
-@@ -440,6 +447,8 @@ void register_settings_panel_callbacks() {
+@@ -469,6 +476,8 @@ void register_settings_panel_callbacks() {
          {"on_ad5x_setup_clicked",
           [](lv_event_t*) { get_global_settings_panel().handle_ad5x_setup_clicked(); }},
          {"on_ad5x_nozzle_clicked", [](lv_event_t*) { helix::ui::Ad5xNozzleModal::show_owned(); }},
@@ -136,11 +133,11 @@ index add00eece8..d13230fca2 100644
  
          // Restart prompt and the shared header back button
          {"on_restart_later_clicked",
-diff --git a/src/ui/ui_wizard_ad5x_setup.cpp b/src/ui/ui_wizard_ad5x_setup.cpp
-index fadaa9940d..f39084d146 100644
---- a/src/ui/ui_wizard_ad5x_setup.cpp
-+++ b/src/ui/ui_wizard_ad5x_setup.cpp
-@@ -74,10 +74,23 @@ const std::vector<StepSpec> k_specs = {
+diff --git a/src/ui/wizard/ui_wizard_ad5x_setup.cpp b/src/ui/wizard/ui_wizard_ad5x_setup.cpp
+index 7b80b5072a..6ec85088a3 100644
+--- a/src/ui/wizard/ui_wizard_ad5x_setup.cpp
++++ b/src/ui/wizard/ui_wizard_ad5x_setup.cpp
+@@ -76,10 +76,23 @@ const std::vector<StepSpec> k_specs = {
       "Tunes filament swaps for every loaded IFS slot: the fastest reliable feed speed and the "
       "load and unload distances. Load filament into the slots you use first.",
       false},
@@ -165,7 +162,7 @@ index fadaa9940d..f39084d146 100644
       false},
      {StepId::Ad5xFinish, "finish", "wizard_ad5x_finish",
       "Saves the results to the printer configuration. Klipper restarts and the screen "
-@@ -99,8 +112,9 @@ struct ResultLabel {
+@@ -101,8 +114,9 @@ struct ResultLabel {
  constexpr ResultLabel k_result_labels[] = {
      {"selfcheck", "Self-check"},      {"pid", "PID"},
      {"mesh", "Bed mesh"},             {"shaper", "Vibration compensation"},
@@ -177,7 +174,7 @@ index fadaa9940d..f39084d146 100644
  };
  
  std::string str_field(const json& obj, const char* key) {
-@@ -226,6 +240,9 @@ void Ad5xSetupModel::init_subjects() {
+@@ -228,6 +242,9 @@ void Ad5xSetupModel::init_subjects() {
      }
      UI_MANAGED_SUBJECT_INT(view_, 0, "ad5x_setup_view", subjects_);
      UI_MANAGED_SUBJECT_INT(is_zoffset_, 0, "ad5x_setup_is_zoffset", subjects_);
@@ -187,7 +184,7 @@ index fadaa9940d..f39084d146 100644
      UI_MANAGED_SUBJECT_INT(progress_, 0, "ad5x_setup_progress", subjects_);
      UI_MANAGED_SUBJECT_STRING(explanation_, explanation_buf_, "", "ad5x_setup_explanation",
                                subjects_);
-@@ -286,6 +303,9 @@ void Ad5xSetupModel::activate(const StepSpec* spec) {
+@@ -288,6 +305,9 @@ void Ad5xSetupModel::activate(const StepSpec* spec) {
          copy_if_changed(&explanation_,
                          lv_tr(hotend_only ? k_pid_hotend_explanation : spec->explanation));
          set_if_changed(&is_zoffset_, std::strcmp(spec->key, "zoffset") == 0 ? 1 : 0);
@@ -197,7 +194,7 @@ index fadaa9940d..f39084d146 100644
      }
      query_status();
      refresh();
-@@ -314,6 +334,9 @@ json Ad5xSetupModel::step_options() const {
+@@ -316,6 +336,9 @@ json Ad5xSetupModel::step_options() const {
      if (!active_) {
          return options;
      }
@@ -207,7 +204,7 @@ index fadaa9940d..f39084d146 100644
      // The mesh step keeps the bed hot when the Z offset test comes next.
      if (std::strcmp(active_->key, "mesh") == 0) {
          const auto& ids = ui_wizard_active_step_subset();
-@@ -487,6 +510,12 @@ void Ad5xSetupModel::start() {
+@@ -488,6 +511,12 @@ void Ad5xSetupModel::start() {
      local_error_.clear();
      refresh();
      send("start");
@@ -220,7 +217,7 @@ index fadaa9940d..f39084d146 100644
  }
  
  void Ad5xSetupModel::abort() {
-@@ -501,6 +530,35 @@ void Ad5xSetupModel::accept() {
+@@ -502,6 +531,35 @@ void Ad5xSetupModel::accept() {
      send("accept");
  }
  
@@ -256,7 +253,7 @@ index fadaa9940d..f39084d146 100644
  void Ad5xSetupModel::query_status() {
      IMoonrakerClient* client = get_moonraker_client();
      if (!client || client->get_connection_state() != ConnectionState::CONNECTED) {
-@@ -585,8 +643,8 @@ std::string Ad5xSetupModel::results_text() const {
+@@ -586,8 +644,8 @@ std::string Ad5xSetupModel::results_text() const {
          }
      }
  
@@ -267,7 +264,7 @@ index fadaa9940d..f39084d146 100644
          for (const auto& label : k_result_labels) {
              auto it = results.find(label.key);
              if (it == results.end()) {
-@@ -655,6 +713,12 @@ void Ad5xSetupModel::refresh() {
+@@ -656,6 +714,12 @@ void Ad5xSetupModel::refresh() {
      if (auto it = status_.find("zoffset"); it != status_.end() && it->is_number()) {
          zoffset = fmt::format("{:+.3f} mm", it->get<double>());
      }
@@ -326,10 +323,10 @@ index fadaa9940d..f39084d146 100644
  
  lv_obj_t* WizardAd5xSetupStep::create(lv_obj_t* parent) {
 diff --git a/tests/unit/test_wizard_step_logic.cpp b/tests/unit/test_wizard_step_logic.cpp
-index 74c9b78fd4..08afaccc05 100644
+index a5e0a80b32..ae570d2876 100644
 --- a/tests/unit/test_wizard_step_logic.cpp
 +++ b/tests/unit/test_wizard_step_logic.cpp
-@@ -30,6 +30,15 @@ static void skip_step(std::vector<helix::StepSkip>& v, StepId s) {
+@@ -28,6 +28,15 @@ static void skip_step(std::vector<helix::StepSkip>& v, StepId s) {
              e.skipped = true;
  }
  
@@ -342,10 +339,10 @@ index 74c9b78fd4..08afaccc05 100644
 +        skip_step(v, s);
 +}
 +
- // ============================================================================
  // Default vector (no skips) — baseline behavior
- // ============================================================================
-@@ -67,6 +76,7 @@ TEST_CASE("Default: prev walks all steps backward", "[wizard][step_logic]") {
+ 
+ TEST_CASE("Default: all 14 steps shown", "[wizard][step_logic]") {
+@@ -61,6 +70,7 @@ TEST_CASE("Default: prev walks all steps backward", "[wizard][step_logic]") {
  
  TEST_CASE("Preset mode: skip hardware steps", "[wizard][step_logic][preset]") {
      auto v = full_vec();
@@ -353,7 +350,7 @@ index 74c9b78fd4..08afaccc05 100644
      skip_step(v, StepId::Wifi);
      skip_step(v, StepId::PrinterIdentify);
      skip_step(v, StepId::HeaterSelect);
-@@ -89,6 +99,7 @@ TEST_CASE("Preset mode: skip hardware steps", "[wizard][step_logic][preset]") {
+@@ -86,6 +96,7 @@ TEST_CASE("Preset mode: skip hardware steps", "[wizard][step_logic][preset]") {
  
  TEST_CASE("Preset mode: next skips hardware", "[wizard][step_logic][preset]") {
      auto v = full_vec();
@@ -361,7 +358,7 @@ index 74c9b78fd4..08afaccc05 100644
      skip_step(v, StepId::Wifi);
      skip_step(v, StepId::PrinterIdentify);
      skip_step(v, StepId::HeaterSelect);
-@@ -117,6 +128,7 @@ TEST_CASE("Normal mode: telemetry skipped by default", "[wizard][step_logic]") {
+@@ -116,6 +127,7 @@ TEST_CASE("Normal mode: telemetry skipped by default", "[wizard][step_logic]") {
  
  TEST_CASE("Preset mode: prev works", "[wizard][step_logic][preset]") {
      auto v = full_vec();
@@ -369,7 +366,7 @@ index 74c9b78fd4..08afaccc05 100644
      skip_step(v, StepId::Wifi);
      skip_step(v, StepId::PrinterIdentify);
      skip_step(v, StepId::HeaterSelect);
-@@ -136,6 +148,7 @@ TEST_CASE("Preset mode: prev works", "[wizard][step_logic][preset]") {
+@@ -137,6 +149,7 @@ TEST_CASE("Preset mode: prev works", "[wizard][step_logic][preset]") {
  
  TEST_CASE("Preset mode: connection also skipped", "[wizard][step_logic][preset]") {
      auto v = full_vec();
@@ -377,12 +374,12 @@ index 74c9b78fd4..08afaccc05 100644
      skip_step(v, StepId::Wifi);
      skip_step(v, StepId::Connection); // auto-validated
      skip_step(v, StepId::PrinterIdentify);
-@@ -210,6 +223,7 @@ TEST_CASE(
+@@ -209,6 +222,7 @@ TEST_CASE(
      REQUIRE_FALSE(plan.first_run);
  
      auto v = full_vec();
 +    skip_ad5x(v);
-     // first three steps are skipped for any subsequent printer
+     // every step before Connection is skipped for any subsequent printer
      skip_step(v, StepId::TouchCalibration);
      skip_step(v, StepId::Language);
 @@ -255,6 +269,7 @@ TEST_CASE("id-nav: next walks visible steps", "[wizard][step_logic][idnav]") {
@@ -392,10 +389,10 @@ index 74c9b78fd4..08afaccc05 100644
 +    skip_ad5x(v); // the AD5X steps sit between FilamentSensor and InputShaper
      for (auto& s : v)
          if (s.id == StepId::HeaterSelect || s.id == StepId::AmsIdentify ||
-             s.id == StepId::InputShaper)
+             s.id == StepId::LedSelect)
 @@ -262,7 +277,7 @@ TEST_CASE("id-nav: non-contiguous skips are honored", "[wizard][step_logic][idna
      REQUIRE(helix::wizard_next(StepId::PrinterIdentify, v) == StepId::FanSelect);
-     REQUIRE(helix::wizard_next(StepId::FanSelect, v) == StepId::LedSelect);
+     REQUIRE(helix::wizard_next(StepId::FanSelect, v) == StepId::FilamentSensor);
      REQUIRE(helix::wizard_next(StepId::FilamentSensor, v) == StepId::Preferences);
 -    REQUIRE(helix::wizard_visible_count(v) == helix::wizard::STEP_COUNT - 3);
 +    REQUIRE(helix::wizard_visible_count(v) == helix::wizard::STEP_COUNT - 15); // 3 + 12 AD5X
@@ -420,7 +417,7 @@ index 80240b1aac..51866b8f54 100644
        <setting_action_row name="row_ad5x_soak"
                            label="Bed Heat Soak" icon="heat_wave" callback="on_ad5x_soak_clicked"
 diff --git a/ui_xml/wizard_ad5x_setup.xml b/ui_xml/wizard_ad5x_setup.xml
-index 75bd4e9cf7..bd37899c48 100644
+index 449f863a58..f0c47a4745 100644
 --- a/ui_xml/wizard_ad5x_setup.xml
 +++ b/ui_xml/wizard_ad5x_setup.xml
 @@ -53,6 +53,52 @@
@@ -481,22 +478,22 @@ index 75bd4e9cf7..bd37899c48 100644
            <bind_flag_if_not_eq subject="ad5x_setup_view" flag="hidden" ref_value="0"/>
          </ui_button>
 +        <!-- Z offset: start from the load cell estimate (when the printer offers it) -->
-+        <ui_button name="btn_ad5x_start_estimate" width="#wizard_button_width" height="#button_height"
++        <ui_button name="btn_ad5x_start_estimate" width="140" height="#button_height"
 +                   text="Estimate first" variant="secondary">
 +          <event_cb trigger="clicked" callback="on_ad5x_setup_start_estimate"/>
 +          <bind_flag_if cond="ad5x_setup_is_zoffset eq 0 or ad5x_setup_view ne 0 or ad5x_setup_estimate_avail eq 0" flag="hidden"/>
 +        </ui_button>
-         <ui_button name="btn_ad5x_retry" width="#wizard_button_width" height="#button_height" text="Retry">
+         <ui_button name="btn_ad5x_retry" width="140" height="#button_height" text="Retry">
            <event_cb trigger="clicked" callback="on_ad5x_setup_start"/>
            <bind_flag_if_not_eq subject="ad5x_setup_view" flag="hidden" ref_value="4"/>
 @@ -79,7 +131,7 @@
-         <ui_button name="btn_ad5x_accept" width="#wizard_button_width" height="#button_height" text="Accept"
+         <ui_button name="btn_ad5x_accept" width="140" height="#button_height" text="Accept"
                     variant="success">
            <event_cb trigger="clicked" callback="on_ad5x_setup_accept"/>
 -          <bind_flag_if cond="ad5x_setup_is_zoffset eq 0 or ad5x_setup_view ne 2" flag="hidden"/>
 +          <bind_flag_if cond="ad5x_setup_can_accept eq 0 or ad5x_setup_view ne 2" flag="hidden"/>
          </ui_button>
-         <ui_button name="btn_ad5x_abort" width="#wizard_button_width" height="#button_height" text="Abort"
+         <ui_button name="btn_ad5x_abort" width="140" height="#button_height" text="Abort"
                     variant="danger">
 diff --git a/ui_xml/wizard_ad5x_soak.xml b/ui_xml/wizard_ad5x_soak.xml
 new file mode 100644
@@ -561,6 +558,3 @@ index 0000000000..2a423319b5
 +    <wizard_ad5x_setup/>
 +  </view>
 +</component>
--- 
-2.56.0
-

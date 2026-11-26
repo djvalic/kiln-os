@@ -11,14 +11,14 @@ activity, auto-refill, the AD5X setup wizard) to en.yml and ru.yml.
 Other languages show those in English.
 ---
  translations/en.yml | 207 ++++++++++++++++++++++++
- translations/ru.yml | 382 +++++++++++++++++++++++++++++++++-----------
- 2 files changed, 495 insertions(+), 94 deletions(-)
+ translations/ru.yml | 375 ++++++++++++++++++++++++++++++++++----------
+ 2 files changed, 498 insertions(+), 84 deletions(-)
 
 diff --git a/translations/en.yml b/translations/en.yml
-index 5d4fdc89e9..edc5eed5c5 100644
+index 4764fdb62f..f4e31f5e7d 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -5004,3 +5004,210 @@ translations:
+@@ -6471,3 +6471,210 @@ translations:
    RUNNING: "RUNNING"
    NOT AVAILABLE HERE: "NOT AVAILABLE HERE"
    The plugin didn't say why.: "The plugin didn't say why."
@@ -230,10 +230,10 @@ index 5d4fdc89e9..edc5eed5c5 100644
 +  '{} °C — {} (centre moved {:.2f} mm)': '{} °C — {} (centre moved {:.2f} mm)'
 +  '{}, set in local.cfg': '{}, set in local.cfg'
 diff --git a/translations/ru.yml b/translations/ru.yml
-index d3dc285b34..02d75b0633 100644
+index b0964ea229..f5a815e393 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -124,7 +124,7 @@ translations:
+@@ -150,7 +150,7 @@ translations:
    /wk: '/нед.'
    0 = computed: 0 = вычислено
    0 events queued: 0 событий в очереди
@@ -242,46 +242,46 @@ index d3dc285b34..02d75b0633 100644
    '0.4-2mm direct drive, 4-6mm bowden': '0.4-2мм для директа, 4-6мм для боудена'
    '0°': '0°'
    1 Hardware Issue: '1 проблема с оборудованием'
-@@ -227,8 +227,7 @@ translations:
-   A print started while spools are marked as on the bed. If they are still there, stop the printer now with the E-stop.: "Печать началась, когда катушки отмечены как лежащие на столе. Если они всё ещё там, немедленно остановите принтер аварийной остановкой."
+@@ -313,8 +313,7 @@ translations:
    A restart is already in progress: Перезапуск уже выполняется
    A right, B left: "A справа, B слева"
+   A saturated filter stops trapping fumes and particles.: "Насыщенный фильтр перестаёт задерживать пары и частицы."
 -  ? A sensor that measures the distance to the bed. HelixScreen uses it for Z offset calibration and probe tests on the Probe screen.
 -  : 'Датчик, измеряющий расстояние до стола. HelixScreen использует его для калибровки Z Offset и тестов зонда на экране «Зонд».'
 +  'A sensor that measures the distance to the bed. HelixScreen uses it for Z offset calibration and probe tests on the Probe screen.': 'Датчик, измеряющий расстояние до стола. HelixScreen использует его для калибровки смещения по Z и тестов зонда на экране «Зонд».'
    A sensor that reads the air temperature inside the enclosure. Watch it on the chamber temperature screen.: 'Датчик, измеряющий температуру воздуха внутри камеры. Следите за ней на экране температуры камеры.'
-   A spool may be tangled or the drive gear is jammed: Катушка может быть запутана или заклинило приводную шестерню
-   ? A system that feeds several filaments to the toolhead, shown with its slot count. Manage the slots on the filament system screen.
-@@ -582,8 +581,7 @@ translations:
-   Bypass disabled: Байпас отключён
-   Bypass enabled: Байпас включён
+   A setting has a value Klipper can't use: У параметра значение, которое Klipper не может использовать
+   A setting or pin in the printer's configuration is invalid.: 'Параметр или пин в конфигурации принтера недопустим.'
+@@ -777,8 +776,7 @@ translations:
    Bypass failed: Ошибка байпаса
+   Bypass filament is at the toolhead. Unload it before turning off bypass.: 'Филамент обхода находится в печатающей головке. Выгрузите его перед выключением обхода.'
+   Bypass filament is loaded: 'Филамент обхода загружен'
 -  ? Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?
 -  : Активен байпас, но эта печать использует слоты AMS. Принтер может отказаться загружать слот, пока филамент байпаса находится в печатающей головке. Извлеките филамент и выключите байпас перед печатью. Всё равно начать?
 +  'Bypass is active, but this print uses AMS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?': 'Активен байпас, но эта печать использует слоты IFS. Принтер может отказаться загружать слот, пока филамент байпаса находится в печатающей головке. Извлеките филамент и выключите байпас перед печатью. Всё равно начать?'
    Bypass mode is not currently active: 'Режим обхода сейчас не активен'
+   Bypass mode is on: 'Режим обхода включён'
    Bypass off macro: 'Макрос выключения обхода'
-   Bypass on macro: 'Макрос включения обхода'
-@@ -721,8 +719,7 @@ translations:
+@@ -922,7 +920,7 @@ translations:
    'Capabilities: ': 'Возможности: '
    Carriage empty: Каретка пуста
    Carriage empty · tap a head: 'Каретка пуста · выберите головку'
 -  Cartographer scan calibrate sent — use Z-Offset panel to adjust: Cartographer сканирующая калибровка отправлена — используйте панель Z-смещения для настройки
--    калибровка отправлена — используйте панель Z-Offset для настройки
 +  Cartographer scan calibrate sent — use Z-Offset panel to adjust: Cartographer сканирующая калибровка отправлена — используйте панель смещения по Z для настройки
    Cartographer touch calibrate sent: Cartographer тактильная калибровка отправлена
    Category: Категория
-   Center: 'Центр'
-@@ -922,7 +919,7 @@ translations:
+   Celsius (°C): Цельсий (°C)
+@@ -1218,7 +1216,8 @@ translations:
+   Configure Graph: Настроить график
    Configure Moonraker: Настроить Moonraker
-   Configure Spoolman integration and weight sync settings.: Настройте интеграцию со
-     Spoolman и синхронизацию веса.
--  Configure WiFi for this device, or skip if you're using Ethernet: Настройте WiFi
+   Configure Spoolman integration and weight sync settings.: Настройте интеграцию со Spoolman и синхронизацию веса.
+-  Configure WiFi for this device, or skip if you're using Ethernet: Настройте WiFi для этого устройства или пропустите, если используете Ethernet
 +  Configure WiFi for this device, or skip if you're using Ethernet: Настройте Wi-Fi
-     для этого устройства или пропустите, если используете Ethernet
++    для этого устройства или пропустите, если используете Ethernet
    Configure devices in Moonraker: Настроить устройства в Moonraker
    Configure label printer and auto-discovery: Настройка принтера этикеток и автообнаружение
-@@ -1064,12 +1061,12 @@ translations:
+   Configure printer sensors: Настроить датчики принтера
+@@ -1379,12 +1378,12 @@ translations:
    Could not confirm cancel: Не удалось подтвердить отмену
    Could not copy the printer's layout: "Не удалось скопировать раскладку принтера"
    'Could not copy {} from USB: {}': 'Не удалось скопировать {} с USB: {}'
@@ -296,7 +296,7 @@ index d3dc285b34..02d75b0633 100644
    Could not load printer database: Не удалось загрузить базу данных принтеров
    Could not move the plate: Не удалось переместить стол
  
-@@ -1088,7 +1085,7 @@ translations:
+@@ -1414,7 +1413,7 @@ translations:
  
    "Could not save the mesh as '{}': {}": "Не удалось сохранить сетку как '{}': {}"
    Could not save the printer image tags: Не удалось сохранить отметки изображения
@@ -305,16 +305,16 @@ index d3dc285b34..02d75b0633 100644
    'Could not set the material: {}': 'Не удалось задать материал: {}'
    Could not skip {}: 'Не удалось пропустить {}'
    Could not start Bluetooth discovery: Не удалось запустить поиск Bluetooth
-@@ -1286,7 +1283,7 @@ translations:
-   Duration: Длительность
+@@ -1657,7 +1656,7 @@ translations:
+   Dusty board and power supply fans run hot and fail early.: "Пыльные вентиляторы платы и БП перегреваются и быстро выходят из строя."
    E-Stop (M112): Авар. стоп (M112)
    E-Stop Confirmation: Подтверждение аварийной остановки
 -  EDDY CURRENT: EDDY CURRENT
 +  EDDY CURRENT: ВИХРЕТОКОВЫЙ ДАТЧИК
    EEPROM error on CFS unit: Ошибка EEPROM в блоке CFS
+   ELECTRICITY: "ЭЛЕКТРИЧЕСТВО"
    ELECTRONICS & ACCESSORIES: 'ЭЛЕКТРОНИКА И АКСЕССУАРЫ'
-   EMERGENCY STOP: АВАРИЙНАЯ ОСТАНОВКА
-@@ -1335,8 +1332,8 @@ translations:
+@@ -1710,8 +1709,8 @@ translations:
    Enable Retraction: Включить аппаратный ретракт
    Enable Timelapse: Включить таймлапс
    Enable UI motion effects: Включить эффекты движения интерфейса
@@ -325,16 +325,16 @@ index d3dc285b34..02d75b0633 100644
    Enable anonymous statistics: Включить анонимную статистику
    Enable assisted retraction at hub: 'Включить ретракцию с поддержкой на хабе'
    Enable audio feedback: Включить звуковую обратную связь
-@@ -1372,7 +1369,7 @@ translations:
+@@ -1748,7 +1747,7 @@ translations:
    Enter G-code command...: Введите команду G-code...
    Enter New PIN: Введите новый PIN
    Enter PIN: Введите PIN
 -  Enter WiFi Password: Введите пароль WiFi
 +  Enter WiFi Password: Введите пароль Wi-Fi
+   Enter a DNS server address.: 'Введите адрес DNS-сервера.'
+   Enter a gateway address.: 'Введите адрес шлюза.'
    Enter a length between 100 and {:.0f}mm: 'Введите длину от 100 до {:.0f}мм'
-   Enter a multiplier between 0.5 and 2.0: 'Введите множитель от 0,5 до 2,0'
-   Enter a name for this profile: "Введите имя для этого профиля"
-@@ -1491,7 +1488,7 @@ translations:
+@@ -1878,7 +1877,7 @@ translations:
    Failed to connect to '{}': Не удалось подключиться к '{}'
    Failed to connect to '{}'. Check password.: Не удалось подключиться к '{}'. Проверьте пароль.
    'Failed to connect to ''{}'': {}': 'Не удалось подключиться к ''{}'': {}'
@@ -343,7 +343,7 @@ index d3dc285b34..02d75b0633 100644
    'Failed to connect: %s': 'Не удалось подключиться: %s'
    'Failed to cool down: {}': 'Не удалось охладить: {}'
    'Failed to create filament:': 'Не удалось создать филамент:'
-@@ -1500,7 +1497,7 @@ translations:
+@@ -1887,7 +1886,7 @@ translations:
    Failed to delete file: Не удалось удалить файл
    Failed to delete profile: Не удалось удалить профиль
    Failed to delete spool: Не удалось удалить катушку
@@ -351,8 +351,8 @@ index d3dc285b34..02d75b0633 100644
 +  'Failed to disable WiFi: {}': 'Не удалось выключить Wi-Fi: {}'
    'Failed to discard recovery data: {}': 'Не удалось удалить данные восстановления: {}'
    'Failed to download G-code for Filament Mapping: {}': 'Не удалось скачать G-code для сопоставления филамента: {}'
-   'Failed to download G-code for modification: {}': 'Не удалось скачать G-code для
-@@ -1511,10 +1508,10 @@ translations:
+   'Failed to download G-code for modification: {}': 'Не удалось скачать G-code для изменения: {}'
+@@ -1897,10 +1896,10 @@ translations:
    : "Не удалось скачать moonraker.conf.\nПроверьте подключение принтера."
    'Failed to download the .3mf for printing: {}': 'Не удалось загрузить .3mf для печати: {}'
    Failed to duplicate spool: Не удалось дублировать катушку
@@ -365,7 +365,7 @@ index d3dc285b34..02d75b0633 100644
    Failed to get limits: Не удалось получить ограничения
    Failed to initialize Bluetooth: Не удалось инициализировать Bluetooth
    Failed to initialize Bluetooth context: Не удалось инициализировать контекст Bluetooth
-@@ -1555,7 +1552,7 @@ translations:
+@@ -1939,7 +1938,7 @@ translations:
    'Failed to resume: {}': 'Не удалось возобновить: {}'
    'Failed to rewrite G-code for Filament Mapping: {}': 'Не удалось переписать G-code для сопоставления филамента: {}'
    Failed to save LED configuration: Не удалось сохранить настройки LED
@@ -374,7 +374,7 @@ index d3dc285b34..02d75b0633 100644
    Failed to save config.: Не удалось сохранить конфигурацию.
    Failed to save configuration: Не удалось сохранить конфигурацию
    Failed to save fan configuration: Не удалось сохранить настройки вентилятора
-@@ -1569,7 +1566,7 @@ translations:
+@@ -1953,7 +1952,7 @@ translations:
    'Failed to send command: {}': 'Не удалось отправить команду: {}'
    Failed to send print data: Не удалось отправить данные печати
    Failed to send status request: Не удалось отправить запрос статуса
@@ -383,7 +383,7 @@ index d3dc285b34..02d75b0633 100644
    Failed to set active spool: Не удалось установить активную катушку
    'Failed to set flow rate: {}': 'Не удалось задать поток: {}'
    'Failed to set pressure advance: {}': 'Не удалось задать Pressure Advance: {}'
-@@ -1577,7 +1574,7 @@ translations:
+@@ -1961,7 +1960,7 @@ translations:
    'Failed to set temperature: {}': 'Не удалось задать температуру: {}'
    'Failed to set {} temp: {}': 'Не удалось задать темп. {}: {}'
    Failed to show confirmation dialog: Не удалось показать диалог подтверждения
@@ -392,8 +392,8 @@ index d3dc285b34..02d75b0633 100644
    Failed to start bed heating: 'Не удалось запустить нагрев стола'
    'Failed to start installer: ': 'Не удалось запустить установщик: '
    'Failed to start print: {}': 'Не удалось начать печать: {}'
-@@ -1796,7 +1793,7 @@ translations:
-   Get help and share feedback: Получить помощь и поделиться отзывом
+@@ -2239,7 +2238,7 @@ translations:
+   Give each feature its own pin and check its spelling against the board's sample configuration, then restart Klipper.: Назначьте каждой функции свой пин и сверьте написание с примером конфигурации платы, затем перезапустите Klipper.
    Glass Effects: Эффекты стекла
    Global: Общий
 -  Global Z offset: Общее Z-смещение
@@ -401,7 +401,7 @@ index d3dc285b34..02d75b0633 100644
    Good: Хорошо
    Good Accuracy: Хорошая точность
    Good Enough: "Достаточно"
-@@ -2036,18 +2033,18 @@ translations:
+@@ -2533,16 +2532,17 @@ translations:
    Initializing...: Инициализация...
    Initiate blade change procedure: 'Начать процедуру замены лезвия'
    Input: Ввод
@@ -412,22 +412,20 @@ index d3dc285b34..02d75b0633 100644
 +  Input Shaper Calibration: 'Калибровка компенсации вибраций'
 +  Input Shaper Help: 'Справка: компенсация вибраций'
    Input Shaping: Компенсация вибраций
+   Input shaper: 'Input Shaper'
 -  Input shaper calibration sensors: Датчики калибровки Input Shaper'а
 -  Input shaper calibration...: Калибровка Input Shaper'а...
 +  Input shaper calibration sensors: Датчики калибровки компенсации вибраций
 +  Input shaper calibration...: Калибровка компенсации вибраций...
    Input shaper settings applied!: Настройки компенсатора вибраций применены!
-   Input shaping reduces ringing and ghosting artifacts caused by printer vibrations during fast movements.: Компенсация
-     вибраций уменьшает артефакты звона и двоения, вызванные вибрациями принтера при
-     быстрых перемещениях.
--  Input shaping reduces vibration artifacts (ringing) in your prints.: Input Shaper
--    уменьшает артефакты вибрации (эхо) в ваших отпечатках.
+   Input shaping reduces ringing and ghosting artifacts caused by printer vibrations during fast movements.: Компенсация вибраций уменьшает артефакты звона и двоения, вызванные вибрациями принтера при быстрых перемещениях.
+-  Input shaping reduces vibration artifacts (ringing) in your prints.: Input Shaper уменьшает артефакты вибрации (эхо) в ваших отпечатках.
 +  Input shaping reduces vibration artifacts (ringing) in your prints.: Компенсация
 +    вибраций уменьшает артефакты вибрации (эхо) в ваших отпечатках.
    'Input: ': 'Вход: '
    InputShaper: InputShaper
-   Insert filament: 'Вставить филамент'
-@@ -2271,7 +2268,7 @@ translations:
+   Insert a USB stick with the {} firmware file in its top folder.: 'Вставьте USB-накопитель с файлом прошивки {} в корневой папке.'
+@@ -2832,7 +2832,7 @@ translations:
    Link a slot to the Spoolman spool its tag names: 'Привязывать слот к катушке Spoolman, указанной в его метке'
    List the shared screen with this printer's webcams: 'Показывать общий экран среди веб-камер этого принтера'
    Listen to all theme sounds: Прослушать все звуки темы
@@ -436,7 +434,7 @@ index d3dc285b34..02d75b0633 100644
    Live view from your webcam: Прямая трансляция с веб-камеры
    Load: Загрузить
    Load Cell: 'Тензодатчик'
-@@ -2390,7 +2387,7 @@ translations:
+@@ -2975,7 +2975,7 @@ translations:
    Macros installed - restart pending: 'Макросы установлены - ожидается перезапуск'
    Macros installed. Restart Klipper after the print to activate them.: 'Макросы установлены. Перезапустите Klipper после печати, чтобы активировать их.'
    Macros updated. Restart Klipper after the print to activate them.: 'Макросы обновлены. Перезапустите Klipper после печати, чтобы активировать их.'
@@ -445,8 +443,8 @@ index d3dc285b34..02d75b0633 100644
    Main LED Strip: Основная LED-лента
    Maintaining: Поддержание
    Maintenance: 'Обслуживание'
-@@ -2459,7 +2456,7 @@ translations:
-   Measurement incomplete. Try again.: Измерение не завершено. Повторите попытку.
+@@ -3061,7 +3061,7 @@ translations:
+   Measures each line itself, repeating until the readings agree: Сам измеряет каждую линию и повторяет, пока показания не совпадут
    Measures each toolhead's X, Y and Z offset so every head prints in the same place. Takes about 20 minutes.: Измеряет смещение X, Y и Z каждой головки, чтобы все печатали в одной точке. Занимает около 20 минут.
    Measures the bed at each adjustment screw and says how far to turn it. Run it on the Screws Tilt screen.: 'Измеряет стол у каждого регулировочного винта и показывает, насколько его повернуть. Запускается на экране «Наклон винтов».'
 -  Measures vibration for input shaping. Run resonance tests on the Input Shaper screen.: 'Измеряет вибрацию для input shaping. Тесты резонанса запускаются на экране Input Shaper.'
@@ -454,26 +452,27 @@ index d3dc285b34..02d75b0633 100644
    Measuring: 'Измерение'
    Measuring accelerometer noise...: 'Измерение шума акселерометра...'
    Measuring vibrations... {}%: 'Измерение вибраций... {}%'
-@@ -2811,7 +2808,7 @@ translations:
-   'Off': Выкл
+@@ -3468,7 +3468,7 @@ translations:
+   Off for This Print: 'Без таймлапса'
    'Off:': 'Выкл:'
    'Off: runs with these values without asking': 'Выкл.: запуск с этими значениями без запроса'
 -  Offer to save Z-offset changes to the printer config: 'Предлагать сохранить изменения Z-смещения в конфигурации принтера'
 +  Offer to save Z-offset changes to the printer config: 'Предлагать сохранить изменения смещения по Z в конфигурации принтера'
    Offset: Смещение
+   Offset per material: "Смещение по материалу"
    Offsets Saved: Смещения сохранены
-   Offsets saved: Смещения сохранены
-@@ -3550,8 +3547,7 @@ translations:
-   Runout Sensor: Датчик окончания
+@@ -4347,9 +4347,8 @@ translations:
+   Runs everything this printer needs, in order ·: 'Выполняет всё, что нужно этому принтеру, по порядку ·'
    Runs the printer's tool offset calibration for every tool.: Запускает калибровку смещений инструментов принтера для всех инструментов.
    'SAVE_CONFIG failed: {}. Tool offsets were applied but not saved. Run SAVE_CONFIG manually or they will be lost on restart.': 'Ошибка SAVE_CONFIG: {}. Смещения инструментов применены, но не сохранены. Выполните SAVE_CONFIG вручную, иначе они будут потеряны при перезапуске.'
 -  ? 'SAVE_CONFIG failed: {}. Z-offset was applied but not saved. Run SAVE_CONFIG manually or the offset will be lost on restart.'
 -  : 'Ошибка SAVE_CONFIG: {}. Z-смещение применено, но не сохранено. Выполните SAVE_CONFIG вручную, иначе смещение будет потеряно при перезапуске.'
+   SAVE_CONFIG wants to save '{2}' in section [{1}], but an included configuration file already sets it.: SAVE_CONFIG пытается сохранить '{2}' в секции [{1}], но этот параметр уже задан во включённом файле конфигурации.
 +  'SAVE_CONFIG failed: {}. Z-offset was applied but not saved. Run SAVE_CONFIG manually or the offset will be lost on restart.': 'Ошибка SAVE_CONFIG: {}. Смещение по Z применено, но не сохранено. Выполните SAVE_CONFIG вручную, иначе смещение будет потеряно при перезапуске.'
    SCREEN: ЭКРАН
    SETTINGS: НАСТРОЙКИ
    SHIPPED IMAGES: ВСТРОЕННЫЕ ИЗОБРАЖЕНИЯ
-@@ -3581,9 +3577,9 @@ translations:
+@@ -4384,9 +4383,9 @@ translations:
    Save Hardware: Сохранить оборудование
    Save Printer Configuration: Сохранить конфигурацию принтера
    Save Theme As: Сохранить тему как
@@ -483,54 +482,58 @@ index d3dc285b34..02d75b0633 100644
 +  Save Z-Offset: Сохранить смещение по Z
 +  Save Z-Offset Buttons: 'Кнопки сохранения смещения по Z'
 +  Save Z-Offset?: Сохранить смещение по Z?
-   Save calibration: Сохранить калибровку
-   Save changes to persist them across restarts?: Сохранить изменения, чтобы они сохранились
-     после перезапуска?
-@@ -3593,7 +3589,7 @@ translations:
-   Save the new heater values to printer.cfg? Klipper restarts.: Сохранить новые значения нагревателя в printer.cfg? Klipper перезапустится.
-   Save to Spool: Сохранить на катушку
-   Save to Spoolman: Сохранить в Spoolman
+   Save all: 'Сохранить все'
+   Save and restart Klipper: Сохранить и перезапустить Klipper
+   Save as {} mesh?: "Сохранить как сетку {}?"
+@@ -4404,7 +4403,7 @@ translations:
+   Save writes the print's material; off, it saves one offset for every print: "Сохранение пишет материал печати; выкл. — одно смещение для всех печатей"
+   Save writes these values to the extruder's config section and restarts Klipper. Keep runs them until the next restart.: "Сохранить записывает эти значения в секцию экструдера конфигурации и перезапускает Klipper. Оставить применяет их до следующего перезапуска."
+   Save {} mm for {}? Other materials keep their own offsets.: "Сохранить {} мм для {}? Другие материалы сохранят свои смещения."
 -  Saved Z-Offset: Сохранённое Z-смещение
 +  Saved Z-Offset: Сохранённое смещение по Z
    Saved for the mounted head; other heads keep their own: 'Сохранено для установленной печатающей головки; остальные головки сохраняют своё'
    "Saved {} mm": "Сохранено {} мм"
-   "Saved {} mm, {} mm after Save": "Сохранено {} мм, {} мм после сохранения"
-@@ -3608,7 +3604,7 @@ translations:
-   Saves to Klipper config and restarts firmware.: Сохраняет в конфигурацию Klipper
-     и перезапускает прошивку.
+   Saved {} mm for {}: "Сохранено {} мм для {}"
+@@ -4430,7 +4429,7 @@ translations:
+   Saves when the unload on {} finishes.: 'Сохранится после завершения выгрузки: {}.'
+   Saving 1 result: Сохранение 1 результата
    Saving Configuration...: Сохранение конфигурации...
 -  Saving Z-offset...: Сохранение Z-смещения...
 +  Saving Z-offset...: Сохранение смещения по Z...
    Saving and finishing...: Сохранение и завершение...
    Saving calibration: Сохранение калибровки
-   Saving calibration...: Сохранение калибровки...
-@@ -4308,8 +4304,7 @@ translations:
+   Saving calibration results...: 'Сохранение результатов калибровки...'
+@@ -5421,9 +5420,8 @@ translations:
    The tool change under way finished, and the tool was not parked: 'Текущая смена инструмента завершена, инструмент не припаркован'
    The tool change under way finished, and {} was not put back on the carriage: 'Текущая смена инструмента завершена, {} не возвращён на каретку'
    The toolhead has filament but no AMS slot reports it loaded. Pull it out manually before printing. Start anyway?: В печатающей головке есть филамент, но ни один слот IFS не сообщает о его загрузке. Извлеките его вручную перед печатью. Всё равно начать?
 -  ? The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?
 -  : 'В печатающей головке есть филамент, но ни один слот AMS не сообщает о его загрузке. Принтер может отказаться загружать слот, пока она не будет очищена. Всё равно начать?'
+   The toolhead is already loaded: Печатающая головка уже загружена
 +  'The toolhead has filament but no AMS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': 'В печатающей головке есть филамент, но ни один слот IFS не сообщает о его загрузке. Принтер может отказаться загружать слот, пока она не будет очищена. Всё равно начать?'
    The toolhead is not homed, so this would home into the print: 'Печатающая головка не запаркована, парковка ударит её о модель'
-   The toolhead sensor indicates filament is already loaded. Proceed with load anyway?: Датчик
-     печатающей головки показывает, что филамент уже загружен. Всё равно продолжить
-@@ -4352,13 +4347,13 @@ translations:
+   The toolhead is not loaded: Печатающая головка не загружена
+   The toolhead is unloaded: 'Филамент из печатающей головки выгружен'
+@@ -5497,7 +5495,8 @@ translations:
+   This Happy Hare system does not support bypass mode: 'Эта система Happy Hare не поддерживает режим обхода'
    Needs a newer Moonraker to hold uploads.: "Нужен более новый Moonraker, чтобы задерживать загрузки."
    This button controls: Эта кнопка управляет
-   This calibration uses the paper friction method to set your Z-offset.: Эта калибровка
--    использует метод трения бумаги об сопло для установки Z-смещения.
+-  This calibration uses the paper friction method to set your Z-offset.: Эта калибровка использует метод трения бумаги об сопло для установки Z-смещения.
++  This calibration uses the paper friction method to set your Z-offset.: Эта калибровка
 +    использует метод трения бумаги об сопло для установки смещения по Z.
    This cannot be undone.: Это действие нельзя отменить.
    This channel offers v{}, older than the installed v{}. Anything added since then will be removed.: 'Этот канал предлагает v{}, старее установленной v{}. Всё добавленное с тех пор будет удалено.'
-   ? "This check runs Klipper's resonance test along each belt path and compares the two responses. Balanced belts give curves of the same shape, with peaks at the same frequencies.\n\nEach sweep takes a few minutes and moves the toolhead; keep clear of the printer while it runs."
-   : "Эта проверка запускает резонансный тест Klipper по каждому пути ремня и сравнивает два отклика. Сбалансированные ремни дают кривые одинаковой формы с пиками на одних и тех же частотах.\n\nКаждый свип занимает несколько минут и перемещает печатающую головку; держитесь подальше от принтера во время работы."
+   This check reads the accelerometer directly, so HelixScreen must run on the printer's own computer.: 'Эта проверка читает акселерометр напрямую, поэтому HelixScreen должен работать на собственном компьютере принтера.'
+@@ -5506,7 +5505,7 @@ translations:
    This clears every Endless Spool backup. The print will stop on runout until you set up Endless Spool again.: Это очистит все резервы бесконечной катушки. Печать будет останавливаться при окончании филамента, пока вы снова не настроите бесконечную катушку.
+   ? This cold pull uses the filament loaded in this toolhead. The extruder and the top of its filament path must be reachable by hand.
+   : "Для этой холодной протяжки используется филамент, загруженный в эту головку. Экструдер и верх пути филамента должны быть доступны рукой."
 -  This device has no wired network connection. If you turn WiFi off, it can only be turned back on from this screen.: У этого устройства нет проводного подключения к сети. Если выключить WiFi, включить его обратно можно будет только с этого экрана.
 +  This device has no wired network connection. If you turn WiFi off, it can only be turned back on from this screen.: У этого устройства нет проводного подключения к сети. Если выключить Wi-Fi, включить его обратно можно будет только с этого экрана.
    ? This device has only {} MB of RAM. Resonance calibration is memory-intensive and can make the printer firmware report a "Timer Too Close" error or restart mid-test. Continue anyway?
    : На этом устройстве всего {} МБ ОЗУ. Калибровка резонансов требует много памяти и может привести к тому, что прошивка принтера сообщит об ошибке "Timer Too Close" или перезапустится во время теста. Всё равно продолжить?
    ? This device has very little RAM. Resonance calibration is memory-intensive and may cause a "Timer Too Close" error. Continue anyway?
-@@ -4409,8 +4404,8 @@ translations:
+@@ -5581,8 +5580,8 @@ translations:
    This printer's homing override homes Z along with X and Y, so a print can't be resumed.: "Homing override этого принтера паркует Z вместе с X и Y, поэтому печать нельзя продолжить."
    This printer's homing override sets the Z position when it homes X and Y, so a print can't be resumed.: "Homing override этого принтера задаёт положение Z при парковке X и Y, поэтому печать нельзя продолжить."
    This printer's homing override runs commands that may move Z, so a print can't be resumed.: "Homing override этого принтера выполняет команды, которые могут сдвинуть Z, поэтому печать нельзя продолжить."
@@ -539,27 +542,18 @@ index d3dc285b34..02d75b0633 100644
 +  This printer's network service controls the WiFi radio: Wi-Fi-модулем управляет сетевая служба этого принтера
 +  This printer's network service manages saved WiFi networks: Сохранёнными сетями Wi-Fi управляет сетевая служба этого принтера
    This printer's screen has not shared a layout: "Экран этого принтера не поделился раскладкой"
-   ? This removes the plugin's Moonraker component and restarts Moonraker. The printer will briefly disconnect. If old phase-tracking lines are still in PRINT_START, they are removed too, with backups kept. A Klipper restart applies that.
-   : Это удаляет компонент Moonraker плагина и перезапускает Moonraker. Принтер ненадолго отключится. Если в PRINT_START всё ещё остались старые строки отслеживания фаз, они также удаляются, при этом резервные копии сохраняются. Перезапуск Klipper применяет эти изменения.
-@@ -4426,14 +4421,8 @@ translations:
-     проверяет каждый винт стола и показывает, насколько его нужно отрегулировать.
-   'This update asks for new permissions:': 'Это обновление запрашивает новые разрешения:'
-   'This wait ends only at its temperature: canceling takes an emergency stop and a firmware restart.': 'Это ожидание заканчивается только по достижении температуры: для отмены нужны аварийная остановка и перезапуск прошивки.'
--  ? This will apply the Z-offset to your endstop and restart Klipper to save the configuration.
--    The printer will briefly disconnect.
--  : Z-offset будет применён к вашему концевику, и Klipper перезапустится для сохранения
--    конфигурации. Принтер ненадолго отключится.
--  ? This will apply the Z-offset to your probe and restart Klipper to save the configuration.
--    The printer will briefly disconnect.
--  : Z-offset будет применён к вашему зонду, и Klipper перезапустится для сохранения
--    конфигурации. Принтер ненадолго отключится.
+   ? This printer's start macro sets a Z offset for each material, so saving it into the probe would apply it twice. Turn on Settings > Printing > Z Offset by Material to save it for the print's material.
+   : "Стартовый макрос этого принтера задаёт Z-Offset для каждого материала, поэтому сохранение в зонд применит его дважды. Включите Настройки > Печать > Z-Offset по материалу, чтобы сохранить его для материала печати."
+@@ -5616,13 +5615,15 @@ translations:
+   : Будут собраны системная информация, логи, настройки и данные принтера для диагностики. Пароли и конфиденциальные данные включены не будут.
+   This will immediately halt all printer operations. The printer will require a restart to resume.: Это немедленно остановит все операции принтера. Для продолжения потребуется перезапуск.
+   This will remove all custom pages and restore the default widget layout.: Все пользовательские страницы будут удалены, и будет восстановлен макет виджетов по умолчанию.
 +  'This will apply the Z-offset to your endstop and restart Klipper to save the configuration. The printer will briefly disconnect.': 'Смещение по Z будет применено к вашему концевику, и Klipper перезапустится для сохранения конфигурации. Принтер ненадолго отключится.'
 +  'This will apply the Z-offset to your probe and restart Klipper to save the configuration. The printer will briefly disconnect.': 'Смещение по Z будет применено к вашему зонду, и Klipper перезапустится для сохранения конфигурации. Принтер ненадолго отключится.'
-   ? This will collect system info, logs, settings, and printer data to help diagnose
-     issues. No passwords or sensitive data will be included.
-   : Будут собраны системная информация, логи, настройки и данные принтера для диагностики.
-@@ -4451,7 +4440,7 @@ translations:
-     Klipper будет перезапущена. Активные операции будут прерваны.
+   This will remove all entries from the display.: Это удалит все записи с экрана.
+   This will remove the Spoolman configuration from Moonraker and restart the service.: Конфигурация Spoolman будет удалена из Moonraker, и сервис будет перезапущен.
+   This will reset all settings to defaults. This action cannot be undone.: Это сбросит все настройки к значениям по умолчанию. Это действие нельзя отменить.
+   This will restart Klipper firmware. Any active operations will be interrupted.: Прошивка Klipper будет перезапущена. Активные операции будут прерваны.
    This will restart Klipper.: Это перезапустит Klipper.
    This will restore the default jog step distances for all three modes.: Это восстановит шаги перемещения по умолчанию для всех трёх режимов.
 -  This will save the Z-offset and restart Klipper to write the configuration. The printer will briefly disconnect.: Z-смещение будет сохранено, и Klipper перезапустится для записи конфигурации. Принтер ненадолго отключится.
@@ -567,7 +561,7 @@ index d3dc285b34..02d75b0633 100644
    ? This writes the tool offsets to the printer's config and restarts Klipper, which takes a few seconds. Until then they apply only to this session.
    : Смещения инструментов будут записаны в конфигурацию принтера, и Klipper перезапустится, это займёт несколько секунд. До этого они действуют только в текущем сеансе.
    ? This {0} is set up for {1}, but it looks stock ({2}% confidence). A wrong profile applies incorrect pre-print options and presets.
-@@ -4578,7 +4567,7 @@ translations:
+@@ -5771,7 +5772,7 @@ translations:
    Turn Off: Выключить
    Turn Off LEDs: "Выключить LED"
    Turn Off Toolhead LED: "Выключить LED печатающей головки"
@@ -576,7 +570,7 @@ index d3dc285b34..02d75b0633 100644
    Turn On: Включить
    Turn On LEDs: 'Включить LED'
    Turn On Toolhead LED: "Включить LED печатающей головки"
-@@ -4800,35 +4789,35 @@ translations:
+@@ -6057,35 +6058,36 @@ translations:
    White: Белый
    Why the curves differ: "Почему кривые различаются"
    Why?: "Почему?"
@@ -587,6 +581,11 @@ index d3dc285b34..02d75b0633 100644
 -  WiFi: WiFi
 -  WiFi Disabled: WiFi отключён
 -  WiFi Enabled: WiFi включён
++  Wi-Fi {}: Wi-Fi {}
++  WiFi: Wi-Fi
++  WiFi Disabled: Wi-Fi отключён
++  WiFi Enabled: Wi-Fi включён
+   WiFi IPv4: 'IPv4 WiFi'
 -  WiFi Network: Сеть WiFi
 -  WiFi Permission Denied: Нет доступа к WiFi
 -  WiFi Service Not Running: Служба WiFi не запущена
@@ -602,11 +601,7 @@ index d3dc285b34..02d75b0633 100644
 -  WiFi unavailable. Cannot connect to network.: WiFi недоступен. Невозможно подключиться к сети.
 -  WiFi unavailable. Cannot forget network.: WiFi недоступен. Невозможно забыть сеть.
 -  WiFi unavailable. Cannot scan for networks.: WiFi недоступен. Невозможно выполнить поиск сетей.
--  WiFi was configured but hardware is not available. Check system configuration.: WiFi
-+  Wi-Fi {}: Wi-Fi {}
-+  WiFi: Wi-Fi
-+  WiFi Disabled: Wi-Fi отключён
-+  WiFi Enabled: Wi-Fi включён
+-  WiFi was configured but hardware is not available. Check system configuration.: WiFi был настроен, но оборудование недоступно. Проверьте конфигурацию системы.
 +  WiFi Network: Сеть Wi-Fi
 +  WiFi Permission Denied: Нет доступа к Wi-Fi
 +  WiFi Service Not Running: Служба Wi-Fi не запущена
@@ -623,7 +618,7 @@ index d3dc285b34..02d75b0633 100644
 +  WiFi unavailable. Cannot forget network.: Wi-Fi недоступен. Невозможно забыть сеть.
 +  WiFi unavailable. Cannot scan for networks.: Wi-Fi недоступен. Невозможно выполнить поиск сетей.
 +  WiFi was configured but hardware is not available. Check system configuration.: Wi-Fi
-     был настроен, но оборудование недоступно. Проверьте конфигурацию системы.
++    был настроен, но оборудование недоступно. Проверьте конфигурацию системы.
    Widget Labels: Подписи виджетов
    Widget removed: 'Виджет удалён'
    Width: Ширина
@@ -632,18 +627,18 @@ index d3dc285b34..02d75b0633 100644
 -  Wifi: WiFi
 +  Wifi: Wi-Fi
    Will not switch spools on runout: При обрыве катушка не переключится
-   Wipe nozzle on silicone cleaning strip: 'Очистить сопло о силиконовую полоску'
-   With exhaust cooling on, the recirculation fan cannot be turned on: 'При охлаждении вытяжкой вентилятор рециркуляции включить нельзя'
-@@ -4880,7 +4869,7 @@ translations:
-   Z: Z
+   Will switch to MPC (more stable): Будет переведено на MPC (стабильнее)
+   Will switch to PID: Будет переведено на PID
+@@ -6164,7 +6166,7 @@ translations:
+   Z Buttons Move: "Кнопки Z двигают"
    Z Calibration: Калибровка Z
    Z Movement: Движение Z
 -  Z Offset: Z-смещение
 +  Z Offset: Смещение по Z
-   Z Range: Диапазон Z
-   Z Tilt Adjust...: Регулировка наклона Z...
-   Z is at its limit ({}mm): Z на пределе ({}mm)
-@@ -4892,10 +4881,10 @@ translations:
+   Z Offset by Material: "Z-Offset по материалу"
+   ? Z Offset by Material is off here but was still on on the printer, so this offset includes a material's. It is now switched off on the printer; tap Save again to store the offset in the probe.
+   : "Z-Offset по материалу здесь выключен, но на принтере был ещё включён, поэтому это смещение включает смещение материала. Теперь он выключен на принтере; нажмите «Сохранить» ещё раз, чтобы записать смещение в зонд."
+@@ -6187,10 +6189,10 @@ translations:
    Z {:.2f} mm: Z {:.2f} мм
    Z {}, will lift to {}mm: 'Z {}, подъём до {}мм'
    'Z {}, will lift to {}mm: last print is {}mm tall': 'Z {}, подъём до {}мм: высота последней печати {}мм'
@@ -658,47 +653,48 @@ index d3dc285b34..02d75b0633 100644
    Z-Tilt: Z-наклон
    Z-Tilt Adjust: Регулировка Z-наклона
    Z-Tilt Adjust complete: Z-Tilt завершён
-@@ -4905,14 +4894,13 @@ translations:
-   Z-Tilt may still be running — response timed out: Z-Tilt может ещё выполняться —
-     время ожидания истекло
+@@ -6199,15 +6201,14 @@ translations:
+   Z-Tilt levels the gantry or bed using its separate Z motors. HelixScreen offers it on the Controls and Motion screens.: 'Z-наклон выравнивает портал или стол с помощью отдельных Z-моторов. HelixScreen предлагает его на экранах «Управление» и «Движение».'
+   Z-Tilt may still be running — response timed out: Z-Tilt может ещё выполняться — время ожидания истекло
    Z-Tilt timed out: Z-Tilt — время ожидания истекло
 -  Z-offset calibration timed out: Время ожидания калибровки Z-смещения истекло
 -  'Z-offset failed: {}': 'Ошибка Z-смещения: {}'
 -  Z-offset is auto-saved by firmware: Z-смещение автосохраняется прошивкой
 -  Z-offset saved: Z-смещение сохранено
--  Z-offset saved ({:+.3f}mm). Klipper restarting...: Z-смещение сохранено ({:+.3f}мм). Перезапуск Klipper...
--    Перезапуск Klipper...
--  Z-offset saved - Klipper restarting...: Z-смещение сохранено — Klipper перезапускается...
--  'Z-offset saving is off, so HelixScreen did not save this. Klipper holds it until the next config save.': 'Сохранение Z-смещения выключено, поэтому HelixScreen не сохранил его. Klipper хранит значение до следующего сохранения конфигурации.'
 +  Z-offset calibration timed out: Время ожидания калибровки смещения по Z истекло
 +  'Z-offset failed: {}': 'Ошибка смещения по Z: {}'
 +  Z-offset is auto-saved by firmware: Смещение по Z автосохраняется прошивкой
 +  Z-offset saved: Смещение по Z сохранено
-+  Z-offset saved ({:+.3f}mm). Klipper restarting...: Смещение по Z сохранено ({:+.3f}мм). Перезапуск Klipper...
+   Z-offset saved ({:+.3f}mm). Klipper restarting...: Z-offset сохранён ({:+.3f}мм). Перезапуск Klipper...
+-  Z-offset saved ({:+.3f}mm). Klipper restarting...: Z-смещение сохранено ({:+.3f}мм). Перезапуск Klipper...
+-    Перезапуск Klipper...
+-  Z-offset saved - Klipper restarting...: Z-смещение сохранено — Klipper перезапускается...
+-  'Z-offset saving is off, so HelixScreen did not save this. Klipper holds it until the next config save.': 'Сохранение Z-смещения выключено, поэтому HelixScreen не сохранил его. Klipper хранит значение до следующего сохранения конфигурации.'
 +  Z-offset saved - Klipper restarting...: Смещение по Z сохранено — Klipper перезапускается...
 +  'Z-offset saving is off, so HelixScreen did not save this. Klipper holds it until the next config save.': 'Сохранение смещения по Z выключено, поэтому HelixScreen не сохранил его. Klipper хранит значение до следующего сохранения конфигурации.'
++  Z-offset saved ({:+.3f}mm). Klipper restarting...: Смещение по Z сохранено ({:+.3f}мм). Перезапуск Klipper...
    'Z:': 'Z:'
    'Z: 0.000': 'Z: 0.000'
    Zone {:.0f}-{:.0f} Hz: "Зона {:.0f}-{:.0f} Гц"
-@@ -4978,7 +4966,7 @@ translations:
-   matched: совпадают
-   material differs: 'другой материал'
+@@ -6324,7 +6325,7 @@ translations:
+   measured {}: измерено {}
+   'method: {}': 'метод: {}'
    mm: мм
 -  mm Z-offset: мм Z-смещение
 +  mm Z-offset: мм смещение по Z
    mm before clog: мм до засора
+   'mm:': 'мм:'
    needs: требуется
-   needs approval: требует подтверждения
-@@ -5038,7 +5026,7 @@ translations:
+@@ -6412,7 +6413,7 @@ translations:
    was {:.0f}%: 'было {:.0f}%'
    what you turned: "сколько повернули"
    within one bin: "в пределах одного бина"
 -  wpa_supplicant is not running. WiFi features unavailable.: wpa_supplicant не запущен. Функции WiFi недоступны.
 +  wpa_supplicant is not running. WiFi features unavailable.: wpa_supplicant не запущен. Функции Wi-Fi недоступны.
    you have: у вас
-   ? '{0} are open. {1} prints best in a warm, closed enclosure; an open door cools the chamber and can cause warping or layer splits. Close them, or start anyway.'
-   : '{0} открыты. {1} лучше всего печатается в тёплом закрытом корпусе; открытая дверь охлаждает камеру и может вызвать коробление или расслоение. Закройте их или начните всё равно.'
-@@ -5188,3 +5176,209 @@ translations:
+   'you: first {} min': 'вы: первые {} мин'
+   '{0:.0f}-{1:.0f} mm/s: the {2}x ripple meets a {3:.0f} Hz resonance': '{0:.0f}-{1:.0f} mm/s: пульсация {2}x совпадает с резонансом {3:.0f} Hz'
+@@ -6649,3 +6650,209 @@ translations:
    RUNNING: "РАБОТАЕТ"
    NOT AVAILABLE HERE: "ЗДЕСЬ НЕДОСТУПНО"
    The plugin didn't say why.: "Плагин не указал причину."
@@ -908,6 +904,3 @@ index d3dc285b34..02d75b0633 100644
 +  '{}  centre {:+.3f} mm': '{}  центр {:+.3f} мм'
 +  '{} °C — {} (centre moved {:.2f} mm)': '{} °C — {} (центр сместился на {:.2f} мм)'
 +  '{}, set in local.cfg': '{}, задано в local.cfg'
--- 
-2.56.0
-

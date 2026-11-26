@@ -93,7 +93,7 @@ checked word for word).
  18 files changed, 927 insertions(+), 12 deletions(-)
 
 diff --git a/include/ui_settings_ad5x_plugins.h b/include/ui_settings_ad5x_plugins.h
-index 4b59a12..913805f 100644
+index c52e03bf31..6274da667f 100644
 --- a/include/ui_settings_ad5x_plugins.h
 +++ b/include/ui_settings_ad5x_plugins.h
 @@ -7,6 +7,9 @@
@@ -202,14 +202,14 @@ index 4b59a12..913805f 100644
 +    void set_tab(Ad5xPluginTab tab);
  
      SubjectManager subjects_;
-     lv_subject_t status_subject_{};
+     helix::Subject status_subject_{};
 @@ -137,12 +193,17 @@ class Ad5xPluginsOverlay : public OverlayBase {
-     lv_subject_t has_warnings_subject_{};
-     lv_subject_t busy_subject_{};
-     lv_subject_t catalog_state_subject_{};
-+    lv_subject_t tab_subject_{};
-+    lv_subject_t installed_none_subject_{};
-+    lv_subject_t catalog_none_subject_{};
+     helix::Subject has_warnings_subject_{};
+     helix::Subject busy_subject_{};
+     helix::Subject catalog_state_subject_{};
++    helix::Subject tab_subject_{};
++    helix::Subject installed_none_subject_{};
++    helix::Subject catalog_none_subject_{};
      char status_buf_[256] = "";
      char warnings_buf_[512] = "";
  
@@ -223,7 +223,7 @@ index 4b59a12..913805f 100644
      bool loaded_ = false;
      bool klippy_ready_ = true;
 diff --git a/src/ui/ui_settings_ad5x_plugins.cpp b/src/ui/ui_settings_ad5x_plugins.cpp
-index 8f934de..c9ab64d 100644
+index 0238b84e4c..b8c9575947 100644
 --- a/src/ui/ui_settings_ad5x_plugins.cpp
 +++ b/src/ui/ui_settings_ad5x_plugins.cpp
 @@ -10,6 +10,7 @@
@@ -523,10 +523,10 @@ index 8f934de..c9ab64d 100644
              if (!lv_xml_create(group, "ad5x_catalog_row", attrs)) {
                  spdlog::warn("[AD5X plugins] cannot create a row for {}", p.name);
 diff --git a/tests/unit/test_job_holds_machine.cpp b/tests/unit/test_job_holds_machine.cpp
-index 36bc5ac..8e4c5f7 100644
+index 62ca12c28c..7a46930d5e 100644
 --- a/tests/unit/test_job_holds_machine.cpp
 +++ b/tests/unit/test_job_holds_machine.cpp
-@@ -702,6 +702,9 @@ constexpr const char* kNoMachineControlFiles[] = {
+@@ -823,6 +823,9 @@ constexpr const char* kNoMachineControlFiles[] = {
      // Kiln OS: the IFS firmware switch moves nothing; Kiln's agent refuses it
      // during a print and its buttons are greyed then
      "ui_xml/settings_ad5x_ifs_firmware_overlay.xml",
@@ -537,7 +537,7 @@ index 36bc5ac..8e4c5f7 100644
      "ui_xml/wizard_ad5x_setup.xml",
      "ui_xml/wizard_ad5x_timezone.xml",
 diff --git a/tests/unit/test_settings_ad5x_plugins.cpp b/tests/unit/test_settings_ad5x_plugins.cpp
-index 49480d8..8ee6a4c 100644
+index 49480d888d..8ee6a4ca39 100644
 --- a/tests/unit/test_settings_ad5x_plugins.cpp
 +++ b/tests/unit/test_settings_ad5x_plugins.cpp
 @@ -2,10 +2,14 @@
@@ -852,10 +852,10 @@ index 49480d8..8ee6a4c 100644
 +    CHECK(ad5x_community_notice().button == "Понятно");
 +}
 diff --git a/translations/de.yml b/translations/de.yml
-index 950d438..d290fa7 100644
+index b7408d0141..07202436c9 100644
 --- a/translations/de.yml
 +++ b/translations/de.yml
-@@ -5178,3 +5178,34 @@ translations:
+@@ -6576,3 +6576,34 @@ translations:
    'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': 'Düsenkollision: Das Heizbett hat {} g erfasst (Grenzwert {} g) bei Z {}. Prüfen Sie den Druck und die Düse und setzen Sie dann fort oder brechen Sie ab.'
    'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': 'Düsenkollision: Das Heizbett hat {} g erfasst (Grenzwert {} g). Prüfen Sie den Druck und die Düse und setzen Sie dann fort oder brechen Sie ab.'
    'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': 'Düsenkollision erkannt. Prüfen Sie den Druck und die Düse und setzen Sie dann fort oder brechen Sie ab.'
@@ -891,10 +891,10 @@ index 950d438..d290fa7 100644
 +  'Turns the plugin off and deletes it from the printer. Klipper restarts.': 'Schaltet das Plugin aus und löscht es vom Drucker. Klipper startet neu.'
 +  'Deletes the plugin from the printer.': 'Löscht das Plugin vom Drucker.'
 diff --git a/translations/en.yml b/translations/en.yml
-index 063c8b3..84cb73f 100644
+index e7d3d8fb3d..285ced2aa5 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -5420,3 +5420,14 @@ translations:
+@@ -6887,3 +6887,14 @@ translations:
    'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': 'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.'
    'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': 'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.'
    'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': 'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.'
@@ -910,10 +910,10 @@ index 063c8b3..84cb73f 100644
 +  'No community plugins installed': 'No community plugins installed'
 +  'No community plugins in the catalog': 'No community plugins in the catalog'
 diff --git a/translations/es.yml b/translations/es.yml
-index 002899c..3405587 100644
+index d3bc27c868..0dcb23fa76 100644
 --- a/translations/es.yml
 +++ b/translations/es.yml
-@@ -5168,3 +5168,34 @@ translations:
+@@ -6576,3 +6576,34 @@ translations:
    'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': 'Choque de boquilla: la cama detectó {} g (límite {} g) en Z {}. Revise la impresión y la boquilla y luego reanude o cancele.'
    'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': 'Choque de boquilla: la cama detectó {} g (límite {} g). Revise la impresión y la boquilla y luego reanude o cancele.'
    'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': 'Choque de boquilla detectado. Revise la impresión y la boquilla y luego reanude o cancele.'
@@ -949,10 +949,10 @@ index 002899c..3405587 100644
 +  'Turns the plugin off and deletes it from the printer. Klipper restarts.': 'Apaga el plugin y lo elimina de la impresora. Klipper se reinicia.'
 +  'Deletes the plugin from the printer.': 'Elimina el plugin de la impresora.'
 diff --git a/translations/fr.yml b/translations/fr.yml
-index 9d4442f..4aa14b6 100644
+index bbcaac6ff1..a97f550f2b 100644
 --- a/translations/fr.yml
 +++ b/translations/fr.yml
-@@ -5204,3 +5204,34 @@ translations:
+@@ -6588,3 +6588,34 @@ translations:
    'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': 'Collision de la buse : le plateau a détecté {} g (limite {} g) à Z {}. Vérifiez l''impression et la buse, puis reprenez ou annulez.'
    'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': 'Collision de la buse : le plateau a détecté {} g (limite {} g). Vérifiez l''impression et la buse, puis reprenez ou annulez.'
    'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': 'Collision de la buse détectée. Vérifiez l''impression et la buse, puis reprenez ou annulez.'
@@ -988,10 +988,10 @@ index 9d4442f..4aa14b6 100644
 +  'Turns the plugin off and deletes it from the printer. Klipper restarts.': 'Désactive le plugin et le supprime de l''imprimante. Klipper redémarre.'
 +  'Deletes the plugin from the printer.': 'Supprime le plugin de l''imprimante.'
 diff --git a/translations/it.yml b/translations/it.yml
-index 41b30d3..1429bb4 100644
+index 19c20cb51d..52afb028e7 100644
 --- a/translations/it.yml
 +++ b/translations/it.yml
-@@ -5169,3 +5169,34 @@ translations:
+@@ -6576,3 +6576,34 @@ translations:
    'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': 'Urto dell''ugello: il piano ha rilevato {} g (limite {} g) a Z {}. Controlla la stampa e l''ugello, poi riprendi o annulla.'
    'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': 'Urto dell''ugello: il piano ha rilevato {} g (limite {} g). Controlla la stampa e l''ugello, poi riprendi o annulla.'
    'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': 'Rilevato un urto dell''ugello. Controlla la stampa e l''ugello, poi riprendi o annulla.'
@@ -1027,10 +1027,10 @@ index 41b30d3..1429bb4 100644
 +  'Turns the plugin off and deletes it from the printer. Klipper restarts.': 'Spegne il plugin e lo elimina dalla stampante. Klipper si riavvia.'
 +  'Deletes the plugin from the printer.': 'Elimina il plugin dalla stampante.'
 diff --git a/translations/ja.yml b/translations/ja.yml
-index dc3b2ec..c6312d1 100644
+index 3ec3f41b58..1721347525 100644
 --- a/translations/ja.yml
 +++ b/translations/ja.yml
-@@ -4912,3 +4912,34 @@ translations:
+@@ -6576,3 +6576,34 @@ translations:
    'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': 'ノズル接触：ベッドが {} g を検知しました（上限 {} g、Z {}）。印刷物とノズルを確認してから、再開またはキャンセルしてください。'
    'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': 'ノズル接触：ベッドが {} g を検知しました（上限 {} g）。印刷物とノズルを確認してから、再開またはキャンセルしてください。'
    'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': 'ノズル接触を検知しました。印刷物とノズルを確認してから、再開またはキャンセルしてください。'
@@ -1066,7 +1066,7 @@ index dc3b2ec..c6312d1 100644
 +  'Turns the plugin off and deletes it from the printer. Klipper restarts.': 'プラグインをオフにしてプリンターから削除します。Klipper が再起動します。'
 +  'Deletes the plugin from the printer.': 'プラグインをプリンターから削除します。'
 diff --git a/translations/ko.yml b/translations/ko.yml
-index 9cac6f3..e94efaa 100644
+index 9cac6f3476..e94efaa75f 100644
 --- a/translations/ko.yml
 +++ b/translations/ko.yml
 @@ -4711,3 +4711,34 @@ translations:
@@ -1105,10 +1105,10 @@ index 9cac6f3..e94efaa 100644
 +  'Turns the plugin off and deletes it from the printer. Klipper restarts.': '플러그인을 끄고 프린터에서 삭제합니다. Klipper가 재시작됩니다.'
 +  'Deletes the plugin from the printer.': '플러그인을 프린터에서 삭제합니다.'
 diff --git a/translations/pt.yml b/translations/pt.yml
-index d8e70bd..68c5f8b 100644
+index 368e994a0f..768ad1cb27 100644
 --- a/translations/pt.yml
 +++ b/translations/pt.yml
-@@ -5172,3 +5172,34 @@ translations:
+@@ -6576,3 +6576,34 @@ translations:
    'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': 'Batida do bico: a mesa detectou {} g (limite {} g) em Z {}. Verifique a impressão e o bico e depois retome ou cancele.'
    'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': 'Batida do bico: a mesa detectou {} g (limite {} g). Verifique a impressão e o bico e depois retome ou cancele.'
    'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': 'Batida do bico detectada. Verifique a impressão e o bico e depois retome ou cancele.'
@@ -1144,10 +1144,10 @@ index d8e70bd..68c5f8b 100644
 +  'Turns the plugin off and deletes it from the printer. Klipper restarts.': 'Desliga o plugin e o exclui da impressora. O Klipper reinicia.'
 +  'Deletes the plugin from the printer.': 'Exclui o plugin da impressora.'
 diff --git a/translations/ru.yml b/translations/ru.yml
-index bd6b422..0c991fb 100644
+index 1960aa7296..cd076e4e35 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -5587,3 +5587,14 @@ translations:
+@@ -7064,3 +7064,14 @@ translations:
    'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': 'Удар сопла: стол почувствовал {} г (предел {} г) на Z {}. Проверьте модель и сопло, затем продолжите или отмените печать.'
    'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': 'Удар сопла: стол почувствовал {} г (предел {} г). Проверьте модель и сопло, затем продолжите или отмените печать.'
    'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': 'Обнаружен удар сопла. Проверьте модель и сопло, затем продолжите или отмените печать.'
@@ -1163,7 +1163,7 @@ index bd6b422..0c991fb 100644
 +  'No community plugins installed': 'Нет установленных плагинов сообщества'
 +  'No community plugins in the catalog': 'В каталоге нет плагинов сообщества'
 diff --git a/translations/tr.yml b/translations/tr.yml
-index 434f03f..e788aa7 100644
+index 434f03f046..e788aa7a8b 100644
 --- a/translations/tr.yml
 +++ b/translations/tr.yml
 @@ -4711,3 +4711,34 @@ translations:
@@ -1202,10 +1202,10 @@ index 434f03f..e788aa7 100644
 +  'Turns the plugin off and deletes it from the printer. Klipper restarts.': 'Eklentiyi kapatır ve yazıcıdan siler. Klipper yeniden başlar.'
 +  'Deletes the plugin from the printer.': 'Eklentiyi yazıcıdan siler.'
 diff --git a/translations/zh.yml b/translations/zh.yml
-index dba9414..3142c71 100644
+index a08f251c6d..c7edca897d 100644
 --- a/translations/zh.yml
 +++ b/translations/zh.yml
-@@ -4902,3 +4902,34 @@ translations:
+@@ -6576,3 +6576,34 @@ translations:
    'Nozzle hit: the bed felt {} g (limit {} g) at Z {}. Check the print and the nozzle, then resume or cancel.': '喷嘴冲击：热床检测到 {} g（上限 {} g，Z {}）。请检查打印件和喷嘴，然后恢复或取消。'
    'Nozzle hit: the bed felt {} g (limit {} g). Check the print and the nozzle, then resume or cancel.': '喷嘴冲击：热床检测到 {} g（上限 {} g）。请检查打印件和喷嘴，然后恢复或取消。'
    'Nozzle hit detected. Check the print and the nozzle, then resume or cancel.': '检测到喷嘴冲击。请检查打印件和喷嘴，然后恢复或取消。'
@@ -1241,7 +1241,7 @@ index dba9414..3142c71 100644
 +  'Turns the plugin off and deletes it from the printer. Klipper restarts.': '关闭插件并将其从打印机中删除。Klipper 将重新启动。'
 +  'Deletes the plugin from the printer.': '从打印机中删除插件。'
 diff --git a/ui_xml/components/ad5x_catalog_row.xml b/ui_xml/components/ad5x_catalog_row.xml
-index 7a4b696..30f59f8 100644
+index 7a4b696de0..30f59f8828 100644
 --- a/ui_xml/components/ad5x_catalog_row.xml
 +++ b/ui_xml/components/ad5x_catalog_row.xml
 @@ -1,7 +1,8 @@
@@ -1284,7 +1284,7 @@ index 7a4b696..30f59f8 100644
                    width="100%" text="$description" long_mode="wrap" style_text_color="#text_muted"
                    hidden_if_empty="$description"/>
 diff --git a/ui_xml/components/ad5x_plugin_row.xml b/ui_xml/components/ad5x_plugin_row.xml
-index 3ad02ec..6656651 100644
+index 3ad02ec753..665665137b 100644
 --- a/ui_xml/components/ad5x_plugin_row.xml
 +++ b/ui_xml/components/ad5x_plugin_row.xml
 @@ -2,6 +2,7 @@
@@ -1358,7 +1358,7 @@ index 3ad02ec..6656651 100644
                      width="100%" text="$description" long_mode="wrap" style_text_color="#text_muted"
                      hidden_if_empty="$description"/>
 diff --git a/ui_xml/settings_ad5x_plugins_overlay.xml b/ui_xml/settings_ad5x_plugins_overlay.xml
-index 28c8693..c4074e0 100644
+index 28c8693668..c4074e09df 100644
 --- a/ui_xml/settings_ad5x_plugins_overlay.xml
 +++ b/ui_xml/settings_ad5x_plugins_overlay.xml
 @@ -2,17 +2,60 @@

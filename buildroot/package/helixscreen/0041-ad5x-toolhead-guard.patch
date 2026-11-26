@@ -17,8 +17,8 @@ The census in test_job_holds_machine.cpp lists our XML files: the four
 with guards and their counts, and the six that command nothing (the
 setup wizard pages run outside a print).
 ---
+ src/ui/settings/ui_panel_settings.cpp  | 15 +++++++++++++--
  src/ui/ui_ad5x_nozzle.cpp              |  6 ++++--
- src/ui/ui_panel_settings.cpp           | 15 +++++++++++++--
  src/ui/ui_settings_ad5x_soak.cpp       |  5 ++++-
  tests/unit/test_job_holds_machine.cpp  | 14 ++++++++++++++
  ui_xml/ad5x_nozzle_modal.xml           |  6 +++---
@@ -27,35 +27,11 @@ setup wizard pages run outside a print).
  ui_xml/settings_ad5x_soak_overlay.xml  |  4 ++--
  8 files changed, 48 insertions(+), 18 deletions(-)
 
-diff --git a/src/ui/ui_ad5x_nozzle.cpp b/src/ui/ui_ad5x_nozzle.cpp
-index e5385d1dc2..501a9b2e35 100644
---- a/src/ui/ui_ad5x_nozzle.cpp
-+++ b/src/ui/ui_ad5x_nozzle.cpp
-@@ -359,7 +359,8 @@ class NozzleChangeFollowUp {
-     void offer() const {
-         // Not over a wizard (it runs these steps itself) or a print
-         if (is_wizard_active() || !ad5x_setup::available() ||
--            lv_subject_get_int(get_printer_state().print_state().get_print_active_subject()) != 0) {
-+            lv_subject_get_int(
-+                get_printer_state().print_state().get_machine_motion_blocked_subject()) != 0) {
-             return;
-         }
-         spdlog::info("[AD5X nozzle] Klipper runs with {}: offering the checks",
-@@ -434,7 +435,8 @@ void Ad5xNozzleModal::on_ok() {
-     if (!chosen || status.local || (status.size && ad5x_nozzle::same_size(*chosen, *status.size))) {
-         return;
-     }
--    if (lv_subject_get_int(get_printer_state().print_state().get_print_active_subject()) != 0) {
-+    if (lv_subject_get_int(
-+            get_printer_state().print_state().get_machine_motion_blocked_subject()) != 0) {
-         NOTIFY_WARNING("{}", lv_tr("The nozzle size can't change during a print"));
-         return;
-     }
-diff --git a/src/ui/ui_panel_settings.cpp b/src/ui/ui_panel_settings.cpp
-index d13230fca2..34c12811ae 100644
---- a/src/ui/ui_panel_settings.cpp
-+++ b/src/ui/ui_panel_settings.cpp
-@@ -363,15 +363,26 @@ void SettingsPanel::handle_hardware_health_clicked() {
+diff --git a/src/ui/settings/ui_panel_settings.cpp b/src/ui/settings/ui_panel_settings.cpp
+index 99d53cf331..bfadabd506 100644
+--- a/src/ui/settings/ui_panel_settings.cpp
++++ b/src/ui/settings/ui_panel_settings.cpp
+@@ -394,15 +394,26 @@ void SettingsPanel::handle_hardware_health_clicked() {
      overlay.show(parent_screen_);
  }
  
@@ -84,8 +60,32 @@ index d13230fca2..34c12811ae 100644
          return;
      }
      helix::ui::ConfirmOptions opts;
+diff --git a/src/ui/ui_ad5x_nozzle.cpp b/src/ui/ui_ad5x_nozzle.cpp
+index 1f7d232a1a..6cc0218b92 100644
+--- a/src/ui/ui_ad5x_nozzle.cpp
++++ b/src/ui/ui_ad5x_nozzle.cpp
+@@ -359,7 +359,8 @@ class NozzleChangeFollowUp {
+     void offer() const {
+         // Not over a wizard (it runs these steps itself) or a print
+         if (is_wizard_active() || !ad5x_setup::available() ||
+-            lv_subject_get_int(get_printer_state().print_state().get_print_active_subject()) != 0) {
++            lv_subject_get_int(
++                get_printer_state().print_state().get_machine_motion_blocked_subject()) != 0) {
+             return;
+         }
+         spdlog::info("[AD5X nozzle] Klipper runs with {}: offering the checks",
+@@ -434,7 +435,8 @@ void Ad5xNozzleModal::on_ok() {
+     if (!chosen || status.local || (status.size && ad5x_nozzle::same_size(*chosen, *status.size))) {
+         return;
+     }
+-    if (lv_subject_get_int(get_printer_state().print_state().get_print_active_subject()) != 0) {
++    if (lv_subject_get_int(
++            get_printer_state().print_state().get_machine_motion_blocked_subject()) != 0) {
+         NOTIFY_WARNING("{}", lv_tr("The nozzle size can't change during a print"));
+         return;
+     }
 diff --git a/src/ui/ui_settings_ad5x_soak.cpp b/src/ui/ui_settings_ad5x_soak.cpp
-index c0d81d2f4e..5b5a1d0e8d 100644
+index f5f20b8fd4..4db2f33833 100644
 --- a/src/ui/ui_settings_ad5x_soak.cpp
 +++ b/src/ui/ui_settings_ad5x_soak.cpp
 @@ -685,7 +685,10 @@ void Ad5xSoakOverlay::handle_calibrate() {
@@ -101,11 +101,11 @@ index c0d81d2f4e..5b5a1d0e8d 100644
                                 lv_tr("The bed soak can't be calibrated during a print."),
                                 ModalSeverity::Warning);
 diff --git a/tests/unit/test_job_holds_machine.cpp b/tests/unit/test_job_holds_machine.cpp
-index eed6c7b750..5d2eaa62e4 100644
+index 25c693cd93..60ff4b52f7 100644
 --- a/tests/unit/test_job_holds_machine.cpp
 +++ b/tests/unit/test_job_holds_machine.cpp
-@@ -359,6 +359,12 @@ constexpr GuardedFile kGuardedFiles[] = {
-     {"ui_xml/temp_graph_overlay.xml", 2},
+@@ -404,6 +404,12 @@ constexpr GuardedFile kGuardedFiles[] = {
+     {"ui_xml/components/firmware_update_image_row.xml", 1},
      {"ui_xml/components/tool_switcher_feeder_segment.xml", 1},
      {"ui_xml/components/tool_switcher_park_segment.xml", 1},
 +    // AD5X: the nozzle size and the plugins restart Klipper, the soak
@@ -117,7 +117,7 @@ index eed6c7b750..5d2eaa62e4 100644
  };
  
  /// Control-bearing files that command nothing on the printer. A guard appearing
-@@ -688,6 +694,14 @@ constexpr const char* kNoMachineControlFiles[] = {
+@@ -809,6 +815,14 @@ constexpr const char* kNoMachineControlFiles[] = {
      "ui_xml/wizard_touch_calibration.xml",
      "ui_xml/wizard_vendor_row.xml",
      "ui_xml/wizard_wifi_setup.xml",
@@ -220,6 +220,3 @@ index f5780e3c8b..4f7d8126f3 100644
              <event_cb trigger="clicked" callback="on_ad5x_soak_calibrate"/>
            </ui_button>
          </lv_obj>
--- 
-2.56.0
-

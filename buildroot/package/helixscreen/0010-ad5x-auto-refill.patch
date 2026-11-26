@@ -27,7 +27,7 @@ Upstream: not applicable (AD5X OS specific)
  include/ui_settings_ad5x_refill.h          | 251 ++++++++
  src/api/moonraker_discovery_sequence.cpp   |  14 +
  src/application/discovery_steps.cpp        |   9 +
- src/ui/ui_panel_settings.cpp               |  10 +
+ src/ui/settings/ui_panel_settings.cpp      |  10 +
  src/ui/ui_settings_ad5x_refill.cpp         | 706 +++++++++++++++++++++
  tests/unit/test_discovery_steps.cpp        |   1 +
  tests/unit/test_settings_ad5x_refill.cpp   | 102 +++
@@ -36,29 +36,23 @@ Upstream: not applicable (AD5X OS specific)
  ui_xml/settings_ad5x_refill_overlay.xml    |  67 ++
  ui_xml/settings_panel.xml                  |   6 +
  12 files changed, 1216 insertions(+)
- create mode 100644 include/ui_settings_ad5x_refill.h
- create mode 100644 src/ui/ui_settings_ad5x_refill.cpp
- create mode 100644 tests/unit/test_settings_ad5x_refill.cpp
- create mode 100644 ui_xml/ad5x_refill_notice_modal.xml
- create mode 100644 ui_xml/components/ad5x_refill_slot_row.xml
- create mode 100644 ui_xml/settings_ad5x_refill_overlay.xml
 
 diff --git a/include/ui_panel_settings.h b/include/ui_panel_settings.h
-index 4df6629b1b..5431a18de2 100644
+index 3c4d6baccc..2974b425e1 100644
 --- a/include/ui_panel_settings.h
 +++ b/include/ui_panel_settings.h
-@@ -143,6 +143,8 @@ class SettingsPanel : public PanelBase {
-     lv_subject_t show_ad5x_nozzle_subject_{};
+@@ -147,6 +147,8 @@ class SettingsPanel : public PanelBase {
+     helix::Subject show_ad5x_nozzle_subject_{};
      // 1 when the printer has the AD5X bed soak object: unhides "Bed Heat Soak"
-     lv_subject_t show_ad5x_soak_subject_{};
+     helix::Subject show_ad5x_soak_subject_{};
 +    // 1 when the printer has the IFS (`ifs` object): unhides "Filament Auto-Refill"
-+    lv_subject_t show_ad5x_refill_subject_{};
++    helix::Subject show_ad5x_refill_subject_{};
  
      // Live status line shown under each stateful root row (settings_panel.xml),
      // refreshed by refresh_status_lines().
 diff --git a/include/ui_settings_ad5x_refill.h b/include/ui_settings_ad5x_refill.h
 new file mode 100644
-index 0000000000..494f43f510
+index 0000000000..a8e8ec1d55
 --- /dev/null
 +++ b/include/ui_settings_ad5x_refill.h
 @@ -0,0 +1,251 @@
@@ -88,14 +82,14 @@ index 0000000000..494f43f510
 +#pragma once
 +
 +#include "ui_modal.h"
-+#include "ui_observer_guard.h"
-+#include "ui_subscription_guard.h"
++#include "core/observer_guard.h"
++#include "subscription_guard.h"
 +
 +#include "async_lifetime_guard.h"
-+#include "json_fwd.h"
++#include "hv/json.hpp"
 +#include "lvgl/lvgl.h"
 +#include "overlay_base.h"
-+#include "static_panel_registry.h"
++#include "core/static_panel_registry.h"
 +#include "subject_managed_panel.h"
 +
 +#include <cstdint>
@@ -215,11 +209,11 @@ index 0000000000..494f43f510
 +    void check_notice();
 +
 +    SubjectManager subjects_;
-+    lv_subject_t summary_{};
-+    lv_subject_t enabled_{};
-+    lv_subject_t match_{};
-+    lv_subject_t busy_{};
-+    lv_subject_t has_backups_{};
++    helix::Subject summary_{};
++    helix::Subject enabled_{};
++    helix::Subject match_{};
++    helix::Subject busy_{};
++    helix::Subject has_backups_{};
 +    char summary_buf_[160] = "";
 +    bool subjects_initialized_ = false;
 +
@@ -314,10 +308,10 @@ index 0000000000..494f43f510
 +
 +} // namespace helix::settings
 diff --git a/src/api/moonraker_discovery_sequence.cpp b/src/api/moonraker_discovery_sequence.cpp
-index 82c7774b5f..b50729af3e 100644
+index 3a0cb27bc3..dd7b075442 100644
 --- a/src/api/moonraker_discovery_sequence.cpp
 +++ b/src/api/moonraker_discovery_sequence.cpp
-@@ -1549,6 +1549,20 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
+@@ -1604,6 +1604,20 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
          }
      }
  
@@ -339,7 +333,7 @@ index 82c7774b5f..b50729af3e 100644
      // Other variables on these macros (slicer args, profile names, etc.) are
      // irrelevant to the start-detection logic.
 diff --git a/src/application/discovery_steps.cpp b/src/application/discovery_steps.cpp
-index 0afc09f7b2..130cf34fff 100644
+index f5b654be57..9729bc36b3 100644
 --- a/src/application/discovery_steps.cpp
 +++ b/src/application/discovery_steps.cpp
 @@ -10,6 +10,7 @@
@@ -347,9 +341,9 @@ index 0afc09f7b2..130cf34fff 100644
  #include "ui_panel_calibration_zoffset.h"
  #include "ui_settings_about.h"
 +#include "ui_settings_ad5x_refill.h"
- #include "ui_update_queue.h"
  #include "ui_wizard.h"
  
+ #include "app_globals.h"
 @@ -173,6 +174,13 @@ void remote_screen_webcam_step(DiscoveryContext&) {
      RemoteScreenService::instance().apply_settings();
  }
@@ -372,10 +366,10 @@ index 0afc09f7b2..130cf34fff 100644
  };
  
  } // namespace
-diff --git a/src/ui/ui_panel_settings.cpp b/src/ui/ui_panel_settings.cpp
-index 1c8bc694c3..add00eece8 100644
---- a/src/ui/ui_panel_settings.cpp
-+++ b/src/ui/ui_panel_settings.cpp
+diff --git a/src/ui/settings/ui_panel_settings.cpp b/src/ui/settings/ui_panel_settings.cpp
+index c71797db6b..9b5097efc1 100644
+--- a/src/ui/settings/ui_panel_settings.cpp
++++ b/src/ui/settings/ui_panel_settings.cpp
 @@ -15,6 +15,7 @@
  #include "ui_panel_memory_stats.h"
  #include "ui_printer_manager_overlay.h"
@@ -384,7 +378,7 @@ index 1c8bc694c3..add00eece8 100644
  #include "ui_settings_ad5x_soak.h"
  #include "ui_settings_appearance.h"
  #include "ui_settings_connection.h"
-@@ -147,6 +148,9 @@ void SettingsPanel::init_subjects() {
+@@ -160,6 +161,9 @@ void SettingsPanel::init_subjects() {
      UI_MANAGED_SUBJECT_INT(show_ad5x_soak_subject_, 0, "settings_show_ad5x_soak", subjects_);
      // The Bed Heat Soak row's line (ad5x_soak_summary) follows the printer's object
      helix::ad5x_soak::model().init_subjects();
@@ -394,7 +388,7 @@ index 1c8bc694c3..add00eece8 100644
  
      // Live status line under each stateful root row; refresh_status_lines()
      // fills these in, first from setup() and then on every return to the root.
-@@ -242,6 +246,11 @@ void SettingsPanel::refresh_status_lines() {
+@@ -258,6 +262,11 @@ void SettingsPanel::refresh_status_lines() {
      if (has_soak) {
          helix::ad5x_soak::model().start();
      }
@@ -406,7 +400,7 @@ index 1c8bc694c3..add00eece8 100644
  
      // Formatted here rather than once at init, so it is in the language of the
      // latest return to the settings root.
-@@ -416,6 +425,7 @@ void register_settings_panel_callbacks() {
+@@ -445,6 +454,7 @@ void register_settings_panel_callbacks() {
          {"on_updates_clicked", nav_row<get_updates_settings_overlay>()},
          {"on_ad5x_plugins_clicked", nav_row<get_ad5x_plugins_overlay>()},
          {"on_ad5x_soak_clicked", nav_row<get_ad5x_soak_overlay>()},
@@ -416,7 +410,7 @@ index 1c8bc694c3..add00eece8 100644
  #else
 diff --git a/src/ui/ui_settings_ad5x_refill.cpp b/src/ui/ui_settings_ad5x_refill.cpp
 new file mode 100644
-index 0000000000..4710785d91
+index 0000000000..668663c72c
 --- /dev/null
 +++ b/src/ui/ui_settings_ad5x_refill.cpp
 @@ -0,0 +1,706 @@
@@ -428,7 +422,7 @@ index 0000000000..4710785d91
 +#include "ui_error_reporting.h"
 +#include "ui_panel_ams_overview.h"
 +#include "ui_swatch.h"
-+#include "ui_update_queue.h"
++#include "core/update_queue.h"
 +#include "ui_utils.h"
 +
 +#include "ams_state.h"
@@ -438,7 +432,7 @@ index 0000000000..4710785d91
 +#include "i_moonraker_client.h"
 +#include "json_utils.h"
 +#include "lvgl/src/others/translation/lv_translation.h"
-+#include "observer_factory.h"
++#include "core/observer_factory.h"
 +#include "printer_discovery.h"
 +#include "printer_state.h"
 +#include "theme_manager.h"
@@ -467,7 +461,7 @@ index 0000000000..4710785d91
 +void copy_if_changed(lv_subject_t* subject, const std::string& text) {
 +    const char* cur = lv_subject_get_string(subject);
 +    if (!cur || text != cur) {
-+        lv_subject_copy_string(subject, text.c_str());
++        lv_subject_set_string(subject, text.c_str());
 +    }
 +}
 +
@@ -1127,7 +1121,7 @@ index 0000000000..4710785d91
 +
 +} // namespace helix::settings
 diff --git a/tests/unit/test_discovery_steps.cpp b/tests/unit/test_discovery_steps.cpp
-index 2567f38eac..8783ea33ad 100644
+index 7b9a2fac03..35f8554e7e 100644
 --- a/tests/unit/test_discovery_steps.cpp
 +++ b/tests/unit/test_discovery_steps.cpp
 @@ -156,6 +156,7 @@ TEST_CASE("the tail discovery steps run in this order", "[discovery_steps]") {
@@ -1396,6 +1390,3 @@ index 6286f575e4..80240b1aac 100644
        <!-- AD5X: the printer's own plugins (Klipper add-ons), not HelixScreen's -->
        <setting_action_row name="row_ad5x_plugins"
                            label="Plugins" icon="puzzle_outline" callback="on_ad5x_plugins_clicked"
--- 
-2.56.0
-

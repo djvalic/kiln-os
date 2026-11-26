@@ -18,7 +18,7 @@ install). Our AD5X steps are added by a HelixScreen patch:
 | # | Step | Source |
 |---|------|--------|
 | 1 | Touch calibration (on a fresh install always: the seed has no valid calibration; skipped once one is saved) | HelixScreen |
-| 2 | Language | HelixScreen |
+| 2 | Language (English or Russian, patch 0033) | HelixScreen |
 | 3 | Wi-Fi (optional) | HelixScreen |
 | 4 | Connection (auto, local Moonraker) | HelixScreen |
 | 5 | **Time zone** | HelixScreen (patch 0006) |
@@ -761,8 +761,9 @@ an update.
 
 ## HelixScreen side (`buildroot/package/helixscreen/000*.patch`)
 
-Patches on HelixScreen v1.1.0-rc.1 (92 files, `0001` to `0100`; the missing
-numbers were dropped because upstream has them), applied by Buildroot after
+Patches on HelixScreen v1.2.0-alpha.1 (93 files, `0001` to `0103`; the missing
+numbers were dropped because upstream has them or, with 1.2, no longer needs
+them), applied by Buildroot after
 extract (after the `GIT_INIT` hook has committed the pristine tree, so
 upstream's own submodule patching is unaffected; they touch `src/`,
 `include/`, `ui_xml/`, `tests/`, `translations/`, a few `assets/` files, and
@@ -904,14 +905,32 @@ The status object is subscribed with the app's main subscription (whole
 object) when `objects/list` has `ad5x_setup`; the step also queries it
 when it opens, after every request and whenever Klipper becomes ready.
 
+### Language (patches 0033, 0104)
+
+The language step and Settings > Language & Time offer English and Russian
+only (patch 0033: `kLanguageCodes` in `system_settings_manager.cpp`, the
+two rows of `wizard_language_chooser.xml`), and the image installs only
+their packs (`ui_xml/translations/en.xml`, `ru.xml`; `helixscreen.mk`), to
+keep the rootfs inside its slot. The other languages' `translations/*.yml`
+stay in the patches, so one can come back later. A printer whose saved
+language is another one (de, zh, tr, ... from before v1.0.1) starts in
+English: at start HelixScreen reads the saved language through
+`SystemSettingsManager::startup_language()` (patch 0104), which writes `en`
+back to `settings.json` when the list doesn't have it, so the screen, the
+date and clock defaults and the wizard's language step agree. With `en`
+saved, a wizard run shows the language step again. The recovery screen
+reads the same key and also shows English for any code but `en` and `ru`
+(`docs/recovery-os.md`).
+
 ### Time zone (patch 0006)
 
 The first AD5X step, before the self-check: a dropdown of HelixScreen's
 time zones (the same list as Settings > Language & Time), set to the
 current one; a choice is applied and saved at once (the screen's clock and
 screensaver; the printer itself keeps UTC). It runs nothing on the printer
-and always offers Next. It is in the first-start wizard and in every
-"Run Setup Wizard" session.
+and always offers Next. It is in every "Run Setup Wizard" session. The
+first-start wizard skips it since HelixScreen 1.2: that wizard's Appearance &
+Region step, after Language, has the same time zone row.
 
 ### Nozzle size (patch 0008)
 

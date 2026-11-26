@@ -15,8 +15,23 @@
 // the linear touch_range scale (LVGL evdev), then the affine calibration
 // (a..f, rotation 0). Re-read when settings.json changes.
 //
+// The touch panel can't tell these touches from a finger, so each one is
+// first recorded in MARKER (default /run/ad5x/remote-touch, root's): one
+// line "STATE TIME", STATE "down" (a browser finger is on the screen) or
+// "up", TIME the seconds since boot (CLOCK_BOOTTIME, as /proc/uptime) of
+// the last browser touch, always 26 bytes and rewritten in place (pwrite:
+// no new space). A touch that can't be recorded is not made (503). A
+// restart counts as a touch, and a press an earlier run left down (the
+// record says "down": it died before the "up") is released first, so it
+// doesn't stay held in the input system. SIGTERM and SIGINT release a
+// press this run holds and record "up" before it exits.
+// The update agent reads it: the touch screen's root password reset is
+// refused while a browser holds the screen or touched it lately
+// (physical access only; S68ad5x-update-agent).
+//
 // usage: ad5x-fbstream [-p PORT] [-f FPS] [-q QUALITY] [-d FBDEV]
 //                      [-t TOUCH_EVDEV] [-s SETTINGS_JSON] [-D DRMDEV]
+//                      [-m MARKER]
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -46,6 +61,8 @@ static const char *fbdev = "/dev/fb0";
 static const char *drmdev = "/dev/dri/card0";
 static const char *touchdev;	// found by name when not given
 static const char *settings = "/data/ad5x/helixscreen/config/settings.json";
+static const char *marker = "/run/ad5x/remote-touch";
+static int marker_fd = -1;
 static int port = 8092, fps = 2, quality = 70;
 
 static int fb_fd = -1;
@@ -417,13 +434,56 @@ static void to_raw(double sx, double sy, int *rx, int *ry)
 	}
 }
 
+static unsigned long long boot_s(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_BOOTTIME, &ts);
+	return (unsigned long long)ts.tv_sec;
+}
+
+// MARKER: "STATE TIME\n", 26 bytes, in place; 0 when written whole
+static int mark(int down, unsigned long long t)
+{
+	char line[32];
+	int n = snprintf(line, sizeof(line), "%-4s %20llu\n", down ? "down" : "up",
+			 t);
+	return marker_fd >= 0 && n == 26 && pwrite(marker_fd, line, n, 0) == n ? 0 : -1;
+}
+
+static int remote_down;	// this run's last touch was down or move
+
+// A release on the panel's node: what "up" sends
+static void release(void)
+{
+	emit(EV_KEY, BTN_TOUCH, 0);
+	emit(EV_ABS, ABS_PRESSURE, 0);
+	emit(EV_SYN, SYN_REPORT, 0);
+}
+
+// SIGTERM, SIGINT: blocked everywhere, taken here; a held browser press
+// is released and "up" recorded before the exit
+static void *on_signal(void *arg)
+{
+	sigset_t *set = arg;
+	int sig;
+	sigwait(set, &sig);
+	pthread_mutex_lock(&touch_lock);
+	if (remote_down && touch_fd >= 0)
+		release();
+	if (marker_fd >= 0)
+		mark(0, boot_s());
+	_exit(0);
+	return NULL;
+}
+
 static int touch(const char *state, double x, double y)
 {
 	int rx, ry, down = strcmp(state, "up") != 0;
 	pthread_mutex_lock(&touch_lock);
 	if (touch_fd < 0)
 		touch_fd = find_touch();
-	if (touch_fd < 0) {
+	// Recorded before it is made; no record, no touch
+	if (touch_fd < 0 || mark(down, boot_s()) < 0) {
 		pthread_mutex_unlock(&touch_lock);
 		return -1;
 	}
@@ -436,6 +496,8 @@ static int touch(const char *state, double x, double y)
 		emit(EV_ABS, ABS_PRESSURE, down ? 200 : 0);
 	}
 	emit(EV_SYN, SYN_REPORT, 0);
+	if (strcmp(state, "move") != 0)
+		remote_down = down;
 	pthread_mutex_unlock(&touch_lock);
 	return 0;
 }
@@ -582,7 +644,7 @@ int main(int argc, char **argv)
 	int opt, s, one = 1;
 	struct sockaddr_in a = { .sin_family = AF_INET };
 
-	while ((opt = getopt(argc, argv, "p:f:q:d:t:s:D:")) != -1) {
+	while ((opt = getopt(argc, argv, "p:f:q:d:t:s:D:m:")) != -1) {
 		switch (opt) {
 		case 'p': port = atoi(optarg); break;
 		case 'f': fps = atoi(optarg) > 0 ? atoi(optarg) : 1; break;
@@ -591,16 +653,60 @@ int main(int argc, char **argv)
 		case 't': touchdev = optarg; break;
 		case 's': settings = optarg; break;
 		case 'D': drmdev = optarg; break;
+		case 'm': marker = optarg; break;
 		default:
 			fprintf(stderr, "usage: %s [-p PORT] [-f FPS] [-q QUALITY] "
-				"[-d FBDEV] [-t TOUCH_EVDEV] [-s SETTINGS] [-D DRMDEV]\n", argv[0]);
+				"[-d FBDEV] [-t TOUCH_EVDEV] [-s SETTINGS] [-D DRMDEV] [-m MARKER]\n", argv[0]);
 			return 2;
 		}
 	}
 	drm_open();
 	if (fb_open() < 0 && drm_fd < 0)
 		return 1;
+	// The touch record, written whole once here so later rewrites need no
+	// space; without it the screen is view only. Left by an earlier run:
+	// "up" now (it may have left a press on the panel), else "up 0".
+	struct stat mst;
+	int restarted = lstat(marker, &mst) == 0;
+	// An earlier run's press still down: release it on the panel first
+	if (restarted) {
+		char old[32] = "";
+		int ofd = open(marker, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+		if (ofd >= 0) {
+			if (read(ofd, old, sizeof(old) - 1) < 0)
+				old[0] = 0;
+			close(ofd);
+		}
+		if (strncmp(old, "down", 4) == 0) {
+			if (touch_fd < 0)
+				touch_fd = find_touch();
+			if (touch_fd >= 0) {
+				release();
+				fprintf(stderr, "ad5x-fbstream: released a browser press left down\n");
+			} else {
+				fprintf(stderr, "ad5x-fbstream: a browser press was left down, no touch device to release it\n");
+			}
+		}
+	}
+	marker_fd = open(marker, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0644);
+	if (marker_fd < 0 || mark(0, restarted ? boot_s() : 0) < 0) {
+		perror(marker);
+		fprintf(stderr, "ad5x-fbstream: touches off (no %s)\n", marker);
+		if (marker_fd >= 0)
+			close(marker_fd);
+		marker_fd = -1;
+	}
 	signal(SIGPIPE, SIG_IGN);
+	{
+		static sigset_t set;
+		pthread_t st;
+		sigemptyset(&set);
+		sigaddset(&set, SIGTERM);
+		sigaddset(&set, SIGINT);
+		pthread_sigmask(SIG_BLOCK, &set, NULL);
+		if (pthread_create(&st, NULL, on_signal, &set) == 0)
+			pthread_detach(st);
+	}
 	s = socket(AF_INET, SOCK_STREAM, 0);
 	setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
 	a.sin_port = htons(port);

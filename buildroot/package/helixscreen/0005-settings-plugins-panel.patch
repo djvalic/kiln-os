@@ -18,7 +18,7 @@ Upstream: not applicable (AD5X OS specific)
  include/ui_panel_settings.h               |   2 +
  include/ui_settings_ad5x_plugins.h        | 144 ++++++
  src/api/moonraker_discovery_sequence.cpp  |   9 +
- src/ui/ui_panel_settings.cpp              |   5 +
+ src/ui/settings/ui_panel_settings.cpp     |   5 +
  src/ui/ui_settings_ad5x_plugins.cpp       | 550 ++++++++++++++++++++++
  tests/unit/test_settings_ad5x_plugins.cpp |  84 ++++
  ui_xml/components/ad5x_catalog_row.xml    |  43 ++
@@ -26,29 +26,23 @@ Upstream: not applicable (AD5X OS specific)
  ui_xml/settings_ad5x_plugins_overlay.xml  |  68 +++
  ui_xml/settings_panel.xml                 |   6 +
  10 files changed, 988 insertions(+)
- create mode 100644 include/ui_settings_ad5x_plugins.h
- create mode 100644 src/ui/ui_settings_ad5x_plugins.cpp
- create mode 100644 tests/unit/test_settings_ad5x_plugins.cpp
- create mode 100644 ui_xml/components/ad5x_catalog_row.xml
- create mode 100644 ui_xml/components/ad5x_plugin_row.xml
- create mode 100644 ui_xml/settings_ad5x_plugins_overlay.xml
 
 diff --git a/include/ui_panel_settings.h b/include/ui_panel_settings.h
-index e132344a4a..fce561fe88 100644
+index 355944fb7e..045e2b1bf8 100644
 --- a/include/ui_panel_settings.h
 +++ b/include/ui_panel_settings.h
-@@ -137,6 +137,8 @@ class SettingsPanel : public PanelBase {
-     lv_subject_t plugins_available_subject_{};
+@@ -141,6 +141,8 @@ class SettingsPanel : public PanelBase {
+     helix::Subject firmware_update_subject_{};
      // 1 when the printer has the AD5X setup steps: unhides "Run Setup Wizard"
-     lv_subject_t show_ad5x_setup_subject_{};
+     helix::Subject show_ad5x_setup_subject_{};
 +    // 1 when the printer has the AD5X plugin object: unhides the printer's "Plugins"
-+    lv_subject_t show_ad5x_plugins_subject_{};
++    helix::Subject show_ad5x_plugins_subject_{};
  
      // Live status line shown under each stateful root row (settings_panel.xml),
      // refreshed by refresh_status_lines().
 diff --git a/include/ui_settings_ad5x_plugins.h b/include/ui_settings_ad5x_plugins.h
 new file mode 100644
-index 0000000000..cc80efa509
+index 0000000000..d6a30416d7
 --- /dev/null
 +++ b/include/ui_settings_ad5x_plugins.h
 @@ -0,0 +1,144 @@
@@ -74,12 +68,12 @@ index 0000000000..cc80efa509
 +
 +#pragma once
 +
-+#include "ui_observer_guard.h"
-+#include "ui_subscription_guard.h"
++#include "core/observer_guard.h"
++#include "subscription_guard.h"
 +
-+#include "json_fwd.h"
++#include "hv/json.hpp"
 +#include "overlay_base.h"
-+#include "static_panel_registry.h"
++#include "core/static_panel_registry.h"
 +#include "subject_managed_panel.h"
 +
 +#include <string>
@@ -170,12 +164,12 @@ index 0000000000..cc80efa509
 +    const Ad5xInstalledPlugin* installed(const std::string& name) const;
 +
 +    SubjectManager subjects_;
-+    lv_subject_t status_subject_{};
-+    lv_subject_t status_kind_subject_{};
-+    lv_subject_t warnings_subject_{};
-+    lv_subject_t has_warnings_subject_{};
-+    lv_subject_t busy_subject_{};
-+    lv_subject_t catalog_state_subject_{};
++    helix::Subject status_subject_{};
++    helix::Subject status_kind_subject_{};
++    helix::Subject warnings_subject_{};
++    helix::Subject has_warnings_subject_{};
++    helix::Subject busy_subject_{};
++    helix::Subject catalog_state_subject_{};
 +    char status_buf_[256] = "";
 +    char warnings_buf_[512] = "";
 +
@@ -197,10 +191,10 @@ index 0000000000..cc80efa509
 +
 +} // namespace helix::settings
 diff --git a/src/api/moonraker_discovery_sequence.cpp b/src/api/moonraker_discovery_sequence.cpp
-index ca65478ca6..eec991227d 100644
+index 6054bac0ef..5df629fcf4 100644
 --- a/src/api/moonraker_discovery_sequence.cpp
 +++ b/src/api/moonraker_discovery_sequence.cpp
-@@ -1512,6 +1512,15 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
+@@ -1567,6 +1567,15 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
          }
      }
  
@@ -216,10 +210,10 @@ index ca65478ca6..eec991227d 100644
      // Print start macros — only the boolean flags PrintStartCollector reads.
      // Other variables on these macros (slicer args, profile names, etc.) are
      // irrelevant to the start-detection logic.
-diff --git a/src/ui/ui_panel_settings.cpp b/src/ui/ui_panel_settings.cpp
-index 681b526b57..c9827bf55a 100644
---- a/src/ui/ui_panel_settings.cpp
-+++ b/src/ui/ui_panel_settings.cpp
+diff --git a/src/ui/settings/ui_panel_settings.cpp b/src/ui/settings/ui_panel_settings.cpp
+index 71f0380b98..9427168df7 100644
+--- a/src/ui/settings/ui_panel_settings.cpp
++++ b/src/ui/settings/ui_panel_settings.cpp
 @@ -13,6 +13,7 @@
  #include "ui_nav.h"
  #include "ui_panel_memory_stats.h"
@@ -228,15 +222,15 @@ index 681b526b57..c9827bf55a 100644
  #include "ui_settings_appearance.h"
  #include "ui_settings_connection.h"
  #include "ui_settings_display.h"
-@@ -137,6 +138,7 @@ void SettingsPanel::init_subjects() {
- 
+@@ -150,6 +151,7 @@ void SettingsPanel::init_subjects() {
+                            "settings_firmware_update", subjects_);
      // Set from the live printer on every return to the root (refresh_status_lines())
      UI_MANAGED_SUBJECT_INT(show_ad5x_setup_subject_, 0, "settings_show_ad5x_setup", subjects_);
 +    UI_MANAGED_SUBJECT_INT(show_ad5x_plugins_subject_, 0, "settings_show_ad5x_plugins", subjects_);
  
      // Live status line under each stateful root row; refresh_status_lines()
      // fills these in, first from setup() and then on every return to the root.
-@@ -220,6 +222,8 @@ void SettingsPanel::refresh_status_lines() {
+@@ -236,6 +238,8 @@ void SettingsPanel::refresh_status_lines() {
      using namespace helix::settings::status;
  
      lv_subject_set_int(&show_ad5x_setup_subject_, helix::ad5x_setup::available() ? 1 : 0);
@@ -245,7 +239,7 @@ index 681b526b57..c9827bf55a 100644
  
      // Formatted here rather than once at init, so it is in the language of the
      // latest return to the settings root.
-@@ -392,6 +396,7 @@ void register_settings_panel_callbacks() {
+@@ -421,6 +425,7 @@ void register_settings_panel_callbacks() {
          {"on_touch_input_clicked", nav_row<get_touch_settings_overlay>()},
          {"on_connection_clicked", nav_row<get_connection_settings_overlay>()},
          {"on_updates_clicked", nav_row<get_updates_settings_overlay>()},
@@ -255,7 +249,7 @@ index 681b526b57..c9827bf55a 100644
  #else
 diff --git a/src/ui/ui_settings_ad5x_plugins.cpp b/src/ui/ui_settings_ad5x_plugins.cpp
 new file mode 100644
-index 0000000000..787788cc18
+index 0000000000..db745e6f9a
 --- /dev/null
 +++ b/src/ui/ui_settings_ad5x_plugins.cpp
 @@ -0,0 +1,550 @@
@@ -267,7 +261,7 @@ index 0000000000..787788cc18
 +#include "ui_emergency_stop.h"
 +#include "ui_error_reporting.h"
 +#include "ui_modal.h"
-+#include "ui_update_queue.h"
++#include "core/update_queue.h"
 +#include "ui_utils.h"
 +
 +#include "app_globals.h"
@@ -277,7 +271,7 @@ index 0000000000..787788cc18
 +#include "json_utils.h"
 +#include "lvgl/src/others/translation/lv_translation.h"
 +#include "macro_executor.h"
-+#include "observer_factory.h"
++#include "core/observer_factory.h"
 +#include "printer_discovery.h"
 +#include "printer_state.h"
 +#include "ui/ui_widget_helpers.h"
@@ -591,7 +585,7 @@ index 0000000000..787788cc18
 +            kind = job_state == "failed" ? Ad5xJobLine::Failed : Ad5xJobLine::Done;
 +        }
 +    }
-+    lv_subject_copy_string(&status_subject_, line.c_str());
++    lv_subject_set_string(&status_subject_, line.c_str());
 +    lv_subject_set_int(&status_kind_subject_, static_cast<int>(kind));
 +
 +    std::string warnings;
@@ -603,7 +597,7 @@ index 0000000000..787788cc18
 +            warnings += json_util::as_string(w);
 +        }
 +    }
-+    lv_subject_copy_string(&warnings_subject_, warnings.c_str());
++    lv_subject_set_string(&warnings_subject_, warnings.c_str());
 +    lv_subject_set_int(&has_warnings_subject_, warnings.empty() ? 0 : 1);
 +
 +    const bool busy = !klippy_ready_ || !loaded_ || job_running || command_in_flight_;
@@ -705,7 +699,7 @@ index 0000000000..787788cc18
 +        gcode,
 +        [this, token, restarts]() {
 +            if (restarts) {
-+                helix::ui::begin_expected_klippy_restart("Firmware restarting...");
++                helix::ui::begin_expected_klippy_restart("Firmware restarting...", get_moonraker_api());
 +            }
 +            token.defer("Ad5xPluginsOverlay::command_done", [this]() {
 +                command_in_flight_ = false;
@@ -716,7 +710,7 @@ index 0000000000..787788cc18
 +        [this, token, effect](const MoonrakerError& err) {
 +            // Klipper restarting drops the reply: that is the command working
 +            if (classify_macro_rpc_failure(effect, err) == MacroFailureReport::ExpectedRestart) {
-+                helix::ui::begin_expected_klippy_restart("Firmware restarting...");
++                helix::ui::begin_expected_klippy_restart("Firmware restarting...", get_moonraker_api());
 +                token.defer("Ad5xPluginsOverlay::command_restart", [this]() {
 +                    command_in_flight_ = false;
 +                    refresh();
@@ -1122,6 +1116,3 @@ index f6cb809b94..0f16557e7a 100644
      </setting_group>
      <setting_group name="group_helixscreen">
        <setting_group_header title="HELIXSCREEN"/>
--- 
-2.56.0
-

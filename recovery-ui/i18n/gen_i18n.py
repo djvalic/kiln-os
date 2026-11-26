@@ -4,8 +4,11 @@
 usage: gen_i18n.py [--out DIR]     (default DIR: ../src next to this file)
 
 Source: en.txt (the key list: id, TAB, English text) and one file per
-language code (zh.txt, ja.txt, ...). Each language file has the same ids
+language code (ru.txt, de.txt, ...). Each language file has the same ids
 with the translation after the TAB; an empty text means "show English".
+Only the languages in LANGS go into the table (Kiln OS ships English and
+Russian, as on the touch screen); the files of KEPT stay here and are
+checked the same way, so a language can come back by moving its code.
 Rules checked here:
   - ids are lower case words; every id is in en.txt and each is in en.txt once
   - en.txt has a text for every id
@@ -22,8 +25,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, "..", "src")
 
 # Codes of the setup wizard's language picker; index = enum value.
-# en is first: it is the fallback for every other language.
-LANGS = ["en", "zh", "ja", "de", "es", "it", "ru", "pt", "ko", "tr"]
+# en is first: it is the fallback for every other language, and a saved
+# code that is not here (a language Kiln OS no longer ships) reads as en.
+LANGS = ["en", "ru"]
+# Translation files kept for later, checked but not built
+KEPT = ["zh", "ja", "de", "es", "it", "pt", "ko", "tr"]
 ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 SPEC_RE = re.compile(r"%[-+ #0-9.]*[lhz]*[a-zA-Z]")
 
@@ -54,7 +60,8 @@ def specs(text):
 
 
 def collect(here=HERE):
-    """({code: {id: text}}, [ids in en.txt order]); checks everything above."""
+    """({code: {id: text}} for LANGS, [ids in en.txt order]); checks
+    everything above in the files of LANGS and KEPT."""
     en = load(os.path.join(here, "en.txt"))
     ids = [k for k, _ in en]
     if len(set(ids)) != len(ids):
@@ -64,7 +71,7 @@ def collect(here=HERE):
         if not t:
             raise Error("en.txt: %s has no English text" % k)
     tables = {"en": english}
-    for code in LANGS[1:]:
+    for code in LANGS[1:] + KEPT:
         path = os.path.join(here, code + ".txt")
         if not os.path.exists(path):
             raise Error("missing %s" % path)
@@ -79,7 +86,7 @@ def collect(here=HERE):
                             % (code, k, specs(t), specs(english[k])))
             tab[k] = t
         tables[code] = tab
-    return tables, ids
+    return {c: tables[c] for c in LANGS}, ids
 
 
 def c_str(s):

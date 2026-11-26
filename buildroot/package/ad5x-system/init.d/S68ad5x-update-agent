@@ -52,6 +52,17 @@
 # restart Klipper, reboot or power off the printer, install an update or
 # run a plugin's root script are refused at once ("the IFS firmware is
 # being switched"); memory-mode still goes through.
+# Also, from the touch screen only: "root-password-default" in $SCREQ, a
+# folder of root's (0700) in /run, so no request survives a restart and
+# Moonraker, Klipper and plugins (user klipper) can't make one. HelixScreen
+# runs as root and writes it after a 5 s hold of its reset button: root's
+# password becomes "root" (ad5x-passwd --default), answered in
+# root-password-default.status beside it; see screen_password_request.
+# root-password-reset.state there says "locked" or "unlocked" (the owner's
+# ad5x-passwd --lock-reset, over SSH), kept up to date each round, so the
+# screen can grey the button. These run in a loop of their own ("screen",
+# every second, pid $SPID), so nothing the main loop does (hashing a big
+# download, a plugin's root script, a slow Moonraker) delays them.
 # A Kiln OS update is also refused before start-up has finished: the
 # reboot would leave our kernel's start marker behind, which counts as an
 # unfinished start of it (issue #47). And while the recovery OS is being
@@ -74,7 +85,8 @@
 # written in $STAGE and renamed over $D/status (a rename replaces a link or
 # a FIFO klipper put there instead of writing through it), and the log is
 # in a folder of root's, $LOGD, that klipper can only read.
-# "S68ad5x-update-agent once": one round of the loop (tests); AD5X_LIB
+# "S68ad5x-update-agent once": one round of the loop (tests); "screen-once":
+# one round of the screen requests' loop; AD5X_LIB
 # overrides /usr/lib/ad5x (tools/test_kernel_fallback.sh), AD5X_DATA /data
 # (tools/test_update_agent_links.sh).
 
@@ -91,6 +103,14 @@ LOG=$LOGD/agent.log
 STAGE=${AD5X_DATA:-/data}/ad5x/kiln-stage
 . ${AD5X_LIB:-/usr/lib/ad5x}/apps.sh
 . ${AD5X_LIB:-/usr/lib/ad5x}/slot.sh
+# Root's password (screen_password_request: the owner's lock on the
+# screen's reset); without the file the reset counts as locked
+if [ -f ${AD5X_LIB:-/usr/lib/ad5x}/rootpw.sh ]; then
+	. ${AD5X_LIB:-/usr/lib/ad5x}/rootpw.sh
+else
+	rootpw_reset_locked() { return 0; }
+	rootpw_reset_unlock() { return 1; }
+fi
 # The plugins' root scripts (plugin_request, pr_setup)
 [ -f ${AD5X_LIB:-/usr/lib/ad5x}/plugin-root.sh ] && . ${AD5X_LIB:-/usr/lib/ad5x}/plugin-root.sh
 # The IFS firmware switch (ifs_request, ifs_job): its status in a folder of
@@ -104,6 +124,33 @@ IFS_OPTIN=${AD5X_DATA:-/data}/ad5x/ifs-switch.enable
 IFS_KLIPPER=${AD5X_DATA:-/data}/ad5x/ifs-klipper.enable
 KINIT=${AD5X_INITD:-/etc/init.d}/S61klipper
 IFS_HEX=${AD5X_MCU_FW:-/usr/share/ad5x/mcu}/ifs.hex
+
+# The touch screen's root-only requests (screen_password_request), and
+# ad5x-fbstream's record of touches from a browser (S65ad5x-screen)
+# (under the test's data folder when AD5X_DATA is set)
+RUND=${AD5X_DATA:+$AD5X_DATA/run/ad5x}
+RUND=${RUND:-/run/ad5x}
+SCREQ=${AD5X_SCREEN_REQ:-$RUND/screen-request}
+RTOUCH=${AD5X_REMOTE_TOUCH:-$RUND/remote-touch}
+SCREEN_PID=${AD5X_SCREEN_PID:-/run/ad5x-screen.pid}
+# The screen requests' own loop
+SPID=/run/ad5x-update-agent-screen.pid
+# A browser touch this long before the press (seconds) or later refuses
+# the reset: more than the screen's 5 s hold
+REMOTE_TOUCH_WINDOW=30
+# A request whose press is older than this (seconds) is refused: the
+# screen gave up on it, or it waited behind something
+REQUEST_MAX_AGE=10
+# Whether the owner's lock (ad5x-passwd --lock-reset) also stops
+# HelixScreen's factory reset from setting root's password: no (the
+# owner's choice) = a factory reset always sets it to "root" and removes
+# the lock, so whoever locked themselves out has a way back, at the cost
+# of the screen's settings; yes = it leaves the password and the lock
+# alone while locked (the rest of the factory reset still happens). The
+# one place for this choice. The button always honours the lock.
+FACTORY_RESET_HONOURS_LOCK=no
+# root's uid (the laptop test runs this as a normal user)
+ROOT_UID=${AD5X_TEST_ROOT_UID:-0}
 
 log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >> $LOG; }
 
@@ -550,6 +597,27 @@ power_request() {
 	fi
 }
 
+# screen_reset_state: "locked" or "unlocked" in $SCREQ for the touch
+# screen, rewritten only when it changes
+screen_reset_state() {
+	local want=unlocked t cur=
+	rootpw_reset_locked && want=locked
+	[ -d $SCREQ ] && [ ! -L $SCREQ ] || return 0
+	{ read -r cur < $SCREQ/root-password-reset.state; } 2>/dev/null
+	[ "$cur" = $want ] && return 0
+	t=$(mktemp $SCREQ/.s.XXXXXX) || return 0
+	echo $want > "$t" && chmod 644 "$t" &&
+		mv -f "$t" $SCREQ/root-password-reset.state || rm -f "$t"
+}
+
+# screen_once: one round of the screen requests' loop
+screen_once() {
+	screen_reset_state
+	if [ -e $SCREQ/root-password-default ] || [ -L $SCREQ/root-password-default ]; then
+		screen_password_request
+	fi
+}
+
 agent_once() {
 	if [ -e $D/ifs-firmware ] || [ -L $D/ifs-firmware ]; then
 		ifs_request
@@ -656,6 +724,123 @@ agent_once() {
 	fi
 }
 
+# screen_say TEXT: the touch screen's answer, renamed into place in $SCREQ
+screen_say() {
+	local t
+	t=$(mktemp $SCREQ/.s.XXXXXX) || return 1
+	printf '%s\n' "$*" > "$t" && chmod 600 "$t" &&
+		mv -f "$t" $SCREQ/root-password-default.status || rm -f "$t"
+}
+
+# remote_touch_near STAMP: true while the record says a browser press is
+# down (also with the streamer gone: an injected press stays held in the
+# input system until something releases it), or a browser touched it at or after REMOTE_TOUCH_WINDOW
+# seconds before STAMP (the press's start; its record: "STATE
+# SECONDS-SINCE-BOOT"). Those touches reach the panel's own input device,
+# so the screen can't tell them from a finger. With the streamer running
+# and no readable record: true. Measured from the press, not from now, so
+# a request that waited is judged as when it was made.
+remote_touch_near() {
+	local st t running= pid
+	pid=$(cat $SCREEN_PID 2>/dev/null)
+	case $pid in ''|*[!0-9]*) ;; *) kill -0 $pid 2>/dev/null && running=1 ;; esac
+	if [ ! -f $RTOUCH ] || [ -L $RTOUCH ]; then
+		[ -n "$running" ]; return
+	fi
+	read -r st t < $RTOUCH 2>/dev/null
+	case $t in ''|*[!0-9]*) [ -n "$running" ]; return ;; esac
+	[ "$st" = down ] && return 0
+	[ $t -ge $(( $1 - REMOTE_TOUCH_WINDOW )) ]
+}
+
+# print_state_soon: print_stats's state with a short wait (the screen's
+# answer is due within seconds); empty without an answer
+print_state_soon() {
+	wget -q -T 2 -O- 'http://127.0.0.1:7125/printer/objects/query?print_stats=state' \
+		2>/dev/null | sed -n 's/.*"state": *"\([a-z_]*\)".*/\1/p' | head -n 1
+}
+
+# fresh STAMP: the press was at most REQUEST_MAX_AGE seconds ago (and not
+# in the future)
+fresh() {
+	local now
+	now=$(uptime_s)
+	[ "$1" -le "$now" ] && [ $(( now - $1 )) -le $REQUEST_MAX_AGE ]
+}
+
+# screen_password_request: HelixScreen's "Reset root password" (Settings >
+# System, a 5 s hold on the printer's screen; docs/install.md, "SSH login
+# and the root password"). Physical access only: the request folder is
+# root's, and a reset is refused while touches come from a browser
+# (remote_touch_near). Refused while a print runs. The request is one
+# line in a plain file of root's: "KIND STAMP", KIND "reset" (the button)
+# or "factory-reset" (HelixScreen's Settings > System > Factory reset,
+# after its own reset: applied whatever the lock says, and the lock
+# removed, as FACTORY_RESET_HONOURS_LOCK says), STAMP the seconds since
+# boot (CLOCK_BOOTTIME, as /proc/uptime) when the press began. Refused
+# when that is more than REQUEST_MAX_AGE seconds ago, checked first and
+# again last, just before the password changes. Moonraker not answering
+# the print state (2 s) counts as not printing: a reset can't harm a
+# print, a broken Moonraker shouldn't keep the owner out, and a slow
+# answer only makes the request too old.
+screen_password_request() {
+	local f=$SCREQ/root-password-default out kind= stamp= line=
+	# read only once it is a plain file of root's (never a FIFO or a link)
+	plain $f && [ "$(ls -ldn $f | awk '{print $3}')" = "$ROOT_UID" ] &&
+		line=$(head -c 40 $f)
+	case $line in
+	reset\ [0-9]*|factory-reset\ [0-9]*)
+		kind=${line%% *} stamp=${line#* }
+		case $stamp in ''|*[!0-9]*|0?*) kind= ;; esac
+		[ ${#stamp} -le 10 ] || kind= ;;
+	esac
+	if [ -z "$kind" ]; then
+		rm -f $f
+		log "touch screen password reset: ignored a bad request"
+		screen_say "failed: bad request"
+		return
+	fi
+	rm -f $f
+	if ! fresh $stamp; then
+		log "touch screen password reset ($kind) refused: the request is too old (press at ${stamp}s, now $(uptime_s)s)"
+		screen_say "refused: the request came too late; try again"
+	elif rootpw_reset_locked &&
+			{ [ $kind = reset ] || [ $FACTORY_RESET_HONOURS_LOCK = yes ]; }; then
+		log "touch screen password reset ($kind) refused: locked (ad5x-passwd --lock-reset)"
+		screen_say "refused: password reset is locked (turned off over SSH)"
+	elif remote_touch_near $stamp; then
+		log "touch screen password reset refused: the screen was used from a browser"
+		screen_say "refused: the screen was used from a browser; touch it on the printer itself and try again in 30 seconds"
+	elif case "$(print_state_soon)" in printing|paused) true ;; *) false ;; esac; then
+		log "touch screen password reset refused: printing"
+		screen_say "refused: a print is running"
+	elif ! fresh $stamp; then
+		log "touch screen password reset ($kind) refused: too old once checked (press at ${stamp}s, now $(uptime_s)s)"
+		screen_say "refused: the request came too late; try again"
+	elif out=$(AD5X_PASSWD_WHO="touch screen, $kind" \
+			AD5X_PASSWD_NOT_AFTER=$(( stamp + REQUEST_MAX_AGE )) ad5x-passwd --default 2>&1); then
+		log "touch screen password reset ($kind): root's password is root"
+		if [ $kind = factory-reset ] && rootpw_reset_locked &&
+				[ $FACTORY_RESET_HONOURS_LOCK = no ]; then
+			if rootpw_reset_unlock; then
+				log "touch screen factory reset: the password reset lock removed"
+			else
+				log "touch screen factory reset: the lock could not be removed"
+			fi
+		fi
+		screen_say "done"
+	else
+		case $out in
+		*"ad5x-passwd: too late"*)
+			log "touch screen password reset ($kind) refused: too old once the password lock was free"
+			screen_say "refused: the request came too late; try again" ;;
+		*)
+			log "touch screen password reset failed: $out"
+			screen_say "failed: ${out#ad5x-passwd: }" ;;
+		esac
+	fi
+}
+
 # install_request: Moonraker's "install" (file name, sha256), read from the
 # staged copy; the download is staged when the install goes ahead
 install_request() {
@@ -735,6 +920,13 @@ agent() {
 	done
 }
 
+screen_agent() {
+	while :; do
+		screen_once
+		sleep 1
+	done
+}
+
 case "$1" in
 start)
 	mkdir -p $D $APPS $LOGD
@@ -757,6 +949,10 @@ start)
 		IFS_FW_STATUS=$IFS_STATUS ad5x-mcu ifs-status state=failed phase= reason=interrupted \
 			message="the printer restarted during the switch; try again" >> $LOG 2>&1
 	fi
+	# The touch screen's request folder: root's only, in RAM
+	[ -d $SCREQ ] && [ ! -L $SCREQ ] || { rm -f $SCREQ; mkdir -p $SCREQ; }
+	chown root:root $SCREQ && chmod 700 $SCREQ
+	rm -f $SCREQ/root-password-default $SCREQ/root-password-reset.state $SCREQ/.s.*
 	# Staged files a reboot left behind (root's own; a folder klipper
 	# swapped in stays)
 	mkdir -p $STAGE && chown root:root $STAGE && chmod 700 $STAGE
@@ -766,19 +962,27 @@ start)
 	# plugin script runs here (S69ad5x-plugin-boot runs the boot scripts).
 	command -v pr_setup > /dev/null && pr_setup
 	start-stop-daemon -S -b -m -p $PID -x /bin/sh -- $0 run
+	start-stop-daemon -S -b -m -p $SPID -x /bin/sh -- $0 screen-run
 	;;
 run)
 	agent
 	;;
+screen-run)
+	screen_agent
+	;;
 once)
 	agent_once
+	;;
+screen-once)
+	screen_once
 	;;
 ifs-job)
 	ifs_job "$2"
 	;;
 stop)
+	start-stop-daemon -K -p $SPID
 	start-stop-daemon -K -p $PID
-	rm -f $PID
+	rm -f $PID $SPID
 	;;
 esac
 exit 0

@@ -18,21 +18,18 @@ Upstream: not applicable (AD5X OS specific)
 ---
  include/ui_settings_kiln_recovery.h           |  81 ++++++++++
  include/ui_settings_system.h                  |   2 +-
+ src/ui/settings/ui_settings_system.cpp        |   6 +
  src/ui/ui_settings_kiln_recovery.cpp          | 141 ++++++++++++++++++
- src/ui/ui_settings_system.cpp                 |   6 +
  tests/unit/test_settings_kiln_recovery.cpp    | 114 ++++++++++++++
  tests/unit/test_settings_system_callbacks.cpp |  34 +++++
  translations/en.yml                           |   6 +
  translations/ru.yml                           |   6 +
  ui_xml/settings_system_overlay.xml            |   9 +-
  9 files changed, 397 insertions(+), 2 deletions(-)
- create mode 100644 include/ui_settings_kiln_recovery.h
- create mode 100644 src/ui/ui_settings_kiln_recovery.cpp
- create mode 100644 tests/unit/test_settings_kiln_recovery.cpp
 
 diff --git a/include/ui_settings_kiln_recovery.h b/include/ui_settings_kiln_recovery.h
 new file mode 100644
-index 0000000000..25e307d868
+index 0000000000..06ef004d9f
 --- /dev/null
 +++ b/include/ui_settings_kiln_recovery.h
 @@ -0,0 +1,81 @@
@@ -110,7 +107,7 @@ index 0000000000..25e307d868
 +
 +  private:
 +    SubjectManager subjects_;
-+    lv_subject_t available_{};
++    helix::Subject available_{};
 +    bool subjects_initialized_ = false;
 +};
 +
@@ -118,11 +115,11 @@ index 0000000000..25e307d868
 +
 +} // namespace helix::kiln_recovery
 diff --git a/include/ui_settings_system.h b/include/ui_settings_system.h
-index 2345b2e294..826aa81814 100644
+index 9c5b542990..d8bf41ed67 100644
 --- a/include/ui_settings_system.h
 +++ b/include/ui_settings_system.h
-@@ -47,7 +47,7 @@ class SystemSettingsOverlay : public OverlayBase {
-         return "settings_system_overlay";
+@@ -49,7 +49,7 @@ class SystemSettingsOverlay : public OverlayBase {
+         return true;
      }
  
 -    /// Kiln OS: the Log detail row's subjects (ad5x_log), before the XML
@@ -130,9 +127,40 @@ index 2345b2e294..826aa81814 100644
      void init_subjects() override;
      void register_callbacks() override;
  
+diff --git a/src/ui/settings/ui_settings_system.cpp b/src/ui/settings/ui_settings_system.cpp
+index b0c418c280..5a7d0a288c 100644
+--- a/src/ui/settings/ui_settings_system.cpp
++++ b/src/ui/settings/ui_settings_system.cpp
+@@ -9,6 +9,7 @@
+ #include "ui_overlay_performance.h"
+ #include "ui_panel_common.h"
+ #include "ui_settings_ad5x_log.h"
++#include "ui_settings_kiln_recovery.h"
+ #include "ui_settings_security.h"
+ #include "ui_settings_storage.h"
+ #if !defined(HELIX_PLATFORM_ESP32)
+@@ -42,6 +43,8 @@ namespace helix::settings {
+ void SystemSettingsOverlay::init_subjects() {
+     // Kiln OS: the Log detail row binds these; the model may not be attached yet
+     helix::ad5x_log::model().init_subjects();
++    // Kiln OS: Boot into recovery shows on the AD5X build only
++    helix::kiln_recovery::row().init_subjects();
+ }
+ 
+ void SystemSettingsOverlay::register_callbacks() {
+@@ -106,6 +109,9 @@ void SystemSettingsOverlay::register_callbacks() {
+          [](lv_event_t*) { get_system_settings_overlay().open_performance(); }},
+         {"on_restart_helix_settings_clicked",
+          [](lv_event_t*) { get_system_settings_overlay().handle_restart_helix_clicked(); }},
++        // Kiln OS: restart into the recovery OS (machine.kiln_os.boot_recovery)
++        {"on_kiln_boot_recovery_clicked",
++         [](lv_event_t*) { helix::kiln_recovery::confirm_and_request(); }},
+         {"on_factory_reset_clicked",
+          [](lv_event_t*) { get_system_settings_overlay().handle_factory_reset_clicked(); }},
+         {"on_restore_stock_screen_clicked",
 diff --git a/src/ui/ui_settings_kiln_recovery.cpp b/src/ui/ui_settings_kiln_recovery.cpp
 new file mode 100644
-index 0000000000..8916df45f9
+index 0000000000..73c3c3c536
 --- /dev/null
 +++ b/src/ui/ui_settings_kiln_recovery.cpp
 @@ -0,0 +1,141 @@
@@ -143,14 +171,14 @@ index 0000000000..8916df45f9
 +#include "ui_error_reporting.h"
 +#include "ui_modal.h"
 +#include "ui_toast_manager.h"
-+#include "ui_update_queue.h"
++#include "core/update_queue.h"
 +
 +#include "app_globals.h"
 +#include "i_moonraker_client.h"
 +#include "json_utils.h"
 +#include "lvgl/src/others/translation/lv_translation.h"
 +#include "moonraker_error.h"
-+#include "static_panel_registry.h"
++#include "core/static_panel_registry.h"
 +
 +#include <spdlog/fmt/fmt.h>
 +#include <spdlog/spdlog.h>
@@ -277,40 +305,9 @@ index 0000000000..8916df45f9
 +}
 +
 +} // namespace helix::kiln_recovery
-diff --git a/src/ui/ui_settings_system.cpp b/src/ui/ui_settings_system.cpp
-index ab72aa6a27..02c6e2ee09 100644
---- a/src/ui/ui_settings_system.cpp
-+++ b/src/ui/ui_settings_system.cpp
-@@ -8,6 +8,7 @@
- #include "ui_overlay_performance.h"
- #include "ui_panel_common.h"
- #include "ui_settings_ad5x_log.h"
-+#include "ui_settings_kiln_recovery.h"
- #include "ui_settings_security.h"
- #include "ui_settings_storage.h"
- #if !defined(HELIX_PLATFORM_ESP32)
-@@ -36,6 +37,8 @@ SystemSettingsOverlay::~SystemSettingsOverlay() {
- void SystemSettingsOverlay::init_subjects() {
-     // Kiln OS: the Log detail row binds these; the model may not be attached yet
-     helix::ad5x_log::model().init_subjects();
-+    // Kiln OS: Boot into recovery shows on the AD5X build only
-+    helix::kiln_recovery::row().init_subjects();
- }
- 
- void SystemSettingsOverlay::register_callbacks() {
-@@ -78,6 +81,9 @@ void SystemSettingsOverlay::register_callbacks() {
-          [](lv_event_t*) { get_system_settings_overlay().open_performance(); }},
-         {"on_restart_helix_settings_clicked",
-          [](lv_event_t*) { get_system_settings_overlay().handle_restart_helix_clicked(); }},
-+        // Kiln OS: restart into the recovery OS (machine.kiln_os.boot_recovery)
-+        {"on_kiln_boot_recovery_clicked",
-+         [](lv_event_t*) { helix::kiln_recovery::confirm_and_request(); }},
-         {"on_factory_reset_clicked",
-          [](lv_event_t*) { get_system_settings_overlay().handle_factory_reset_clicked(); }},
-         {"on_factory_reset_confirm",
 diff --git a/tests/unit/test_settings_kiln_recovery.cpp b/tests/unit/test_settings_kiln_recovery.cpp
 new file mode 100644
-index 0000000000..9549ca8c1c
+index 0000000000..12cb831e59
 --- /dev/null
 +++ b/tests/unit/test_settings_kiln_recovery.cpp
 @@ -0,0 +1,114 @@
@@ -321,7 +318,7 @@ index 0000000000..9549ca8c1c
 +// the recovery OS, and shows why when Kiln's update agent refuses.
 +
 +#include "ui_settings_kiln_recovery.h"
-+#include "ui_update_queue.h"
++#include "core/update_queue.h"
 +
 +#include "../fake_moonraker_client.h"
 +#include "../lvgl_test_fixture.h"
@@ -429,7 +426,7 @@ index 0000000000..9549ca8c1c
 +    recovery::set_available_for_test(std::nullopt);
 +}
 diff --git a/tests/unit/test_settings_system_callbacks.cpp b/tests/unit/test_settings_system_callbacks.cpp
-index 6816a5e059..c60aef5fd3 100644
+index 4ab9b18b9a..02db5e2878 100644
 --- a/tests/unit/test_settings_system_callbacks.cpp
 +++ b/tests/unit/test_settings_system_callbacks.cpp
 @@ -7,6 +7,7 @@
@@ -438,9 +435,9 @@ index 6816a5e059..c60aef5fd3 100644
  #include "ui_panel_settings.h"
 +#include "ui_settings_kiln_recovery.h"
  #include "ui_settings_system.h"
- #include "ui_update_queue.h"
  
-@@ -111,6 +112,7 @@ TEST_CASE_METHOD(SystemCallbacksFixture, "System page: every action row runs its
+ #include "../lvgl_ui_test_fixture.h"
+@@ -112,6 +113,7 @@ TEST_CASE_METHOD(SystemCallbacksFixture, "System page: every action row runs its
                               Binding{"row_performance", "on_system_performance_clicked"},
                               Binding{"row_telemetry_view_data", "on_telemetry_view_data"},
                               Binding{"row_restart_helix", "on_restart_helix_settings_clicked"},
@@ -448,7 +445,7 @@ index 6816a5e059..c60aef5fd3 100644
                               Binding{"row_factory_reset", "on_factory_reset_clicked"}}) {
          CAPTURE(b.row, b.callback);
          CHECK(row_runs(b.row, b.callback));
-@@ -142,3 +144,35 @@ TEST_CASE_METHOD(SystemCallbacksFixture,
+@@ -143,3 +145,35 @@ TEST_CASE_METHOD(SystemCallbacksFixture,
      sys.set_telemetry_enabled(before);
      helix::ui::UpdateQueue::instance().drain();
  }
@@ -485,10 +482,10 @@ index 6816a5e059..c60aef5fd3 100644
 +    process_lvgl(5);
 +}
 diff --git a/translations/en.yml b/translations/en.yml
-index 3493bbdb08..5989953c34 100644
+index 4af4cfcf53..94ce5f5db1 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -5043,6 +5043,8 @@ translations:
+@@ -6510,6 +6510,8 @@ translations:
    'Bed soak': 'Bed soak'
    'Bed soak at {} °C calibrated.': 'Bed soak at {} °C calibrated.'
    'Bed temperature': 'Bed temperature'
@@ -497,7 +494,7 @@ index 3493bbdb08..5989953c34 100644
    'Built-in': 'Built-in'
    'CALIBRATE': 'CALIBRATE'
    'Calibrate the bed soak at {} °C?': 'Calibrate the bed soak at {} °C?'
-@@ -5050,6 +5052,7 @@ translations:
+@@ -6517,6 +6519,7 @@ translations:
    'Calibrates the bed heat soak: how long the bed keeps warming after it reaches 60 °C, so the first layer stays flat. Takes about 15 minutes and starts from a cold bed. Skip it if you don''t need it.': 'Calibrates the bed heat soak: how long the bed keeps warming after it reaches 60 °C, so the first layer stays flat. Takes about 15 minutes and starts from a cold bed. Skip it if you don''t need it.'
    'CALIBRATING': 'CALIBRATING'
    'Calibration stopped. Heaters off, nothing saved.': 'Calibration stopped. Heaters off, nothing saved.'
@@ -505,7 +502,7 @@ index 3493bbdb08..5989953c34 100644
    'Can''t calibrate now': 'Can''t calibrate now'
    'Change the nozzle size to {}?': 'Change the nozzle size to {}?'
    'Changing filament': 'Changing filament'
-@@ -5159,6 +5162,8 @@ translations:
+@@ -6626,6 +6629,8 @@ translations:
    'Purge Box': 'Purge Box'
    'Purge box': 'Purge box'
    'Remove {}?': 'Remove {}?'
@@ -514,7 +511,7 @@ index 3493bbdb08..5989953c34 100644
    'Retracting filament': 'Retracting filament'
    'Retracting {}': 'Retracting {}'
    'Run Again': 'Run Again'
-@@ -5203,6 +5208,7 @@ translations:
+@@ -6670,6 +6675,7 @@ translations:
    'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it.': 'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it.'
    'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.': 'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.'
    'The nozzle size can''t change during a print': 'The nozzle size can''t change during a print'
@@ -523,10 +520,10 @@ index 3493bbdb08..5989953c34 100644
    'The results so far, before Save': 'The results so far, before Save'
    'The temperature to measure, from a cold bed': 'The temperature to measure, from a cold bed'
 diff --git a/translations/ru.yml b/translations/ru.yml
-index d66ad156ff..cfaeefb669 100644
+index 333512dfbf..38932823c9 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -5214,6 +5214,8 @@ translations:
+@@ -6688,6 +6688,8 @@ translations:
    'Bed soak': 'Прогрев стола'
    'Bed soak at {} °C calibrated.': 'Прогрев стола при {} °C откалиброван.'
    'Bed temperature': 'Температура стола'
@@ -535,7 +532,7 @@ index d66ad156ff..cfaeefb669 100644
    'Built-in': 'Встроенный'
    'CALIBRATE': 'КАЛИБРОВАТЬ'
    'Calibrate the bed soak at {} °C?': 'Откалибровать прогрев стола при {} °C?'
-@@ -5221,6 +5223,7 @@ translations:
+@@ -6695,6 +6697,7 @@ translations:
    'Calibrates the bed heat soak: how long the bed keeps warming after it reaches 60 °C, so the first layer stays flat. Takes about 15 minutes and starts from a cold bed. Skip it if you don''t need it.': 'Калибрует прогрев стола: сколько стол ещё прогревается после достижения 60 °C, чтобы первый слой оставался ровным. Занимает около 15 минут и начинается с холодного стола. Если это не нужно, пропустите шаг.'
    'CALIBRATING': 'ИДЁТ КАЛИБРОВКА'
    'Calibration stopped. Heaters off, nothing saved.': 'Калибровка остановлена. Нагреватели выключены, ничего не сохранено.'
@@ -543,7 +540,7 @@ index d66ad156ff..cfaeefb669 100644
    'Can''t calibrate now': 'Сейчас калибровка невозможна'
    'Change the nozzle size to {}?': 'Изменить размер сопла на {}?'
    'Changing filament': 'Смена филамента'
-@@ -5330,6 +5333,8 @@ translations:
+@@ -6804,6 +6807,8 @@ translations:
    'Purge Box': 'Лоток для отходов'
    'Purge box': 'Лоток для отходов'
    'Remove {}?': 'Удалить {}?'
@@ -552,7 +549,7 @@ index d66ad156ff..cfaeefb669 100644
    'Retracting filament': 'Втягивание филамента'
    'Retracting {}': 'Втягивание: {}'
    'Run Again': 'Ещё раз'
-@@ -5374,6 +5379,7 @@ translations:
+@@ -6848,6 +6853,7 @@ translations:
    'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it.': 'Сопло, установленное на принтере. От него зависят ширина линий, длина продувки и тест первого слоя.'
    'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.': 'Сопло, установленное на принтере. От него зависят ширина линий, длина продувки и тест первого слоя. Изменить его можно позже в настройках.'
    'The nozzle size can''t change during a print': 'Размер сопла нельзя изменить во время печати'
@@ -561,19 +558,19 @@ index d66ad156ff..cfaeefb669 100644
    'The results so far, before Save': 'Результаты на данный момент, до сохранения'
    'The temperature to measure, from a cold bed': 'Температура для измерения, начиная с холодного стола'
 diff --git a/ui_xml/settings_system_overlay.xml b/ui_xml/settings_system_overlay.xml
-index ff3e82e353..02faeb6b6e 100644
+index 17b0e86362..c9fb2c20a5 100644
 --- a/ui_xml/settings_system_overlay.xml
 +++ b/ui_xml/settings_system_overlay.xml
 @@ -2,7 +2,7 @@
  <!-- Copyright (C) 2025-2026 356C LLC -->
  <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
  <!-- System Settings Overlay -->
--<!-- Security, performance, telemetry, log level, restart, factory reset -->
-+<!-- Security, performance, telemetry, log level, restart, boot into recovery (Kiln OS), factory reset -->
+-<!-- Security, performance, telemetry, log level, restart, factory reset, restore stock screen -->
++<!-- Security, performance, telemetry, log level, restart, boot into recovery (Kiln OS), factory reset, restore stock screen -->
  <component>
    <view name="settings_system_overlay" extends="overlay_panel" title="System" bg_color="#screen_bg">
      <!-- Content Area - no padding, rows handle their own -->
-@@ -71,6 +71,13 @@
+@@ -83,6 +83,13 @@
          <setting_action_row name="row_restart_helix"
                              label="Restart HelixScreen" icon="restart" description="Restart the display application"
                              callback="on_restart_helix_settings_clicked"/>
@@ -587,6 +584,3 @@ index ff3e82e353..02faeb6b6e 100644
          <!-- ================================================================== -->
          <!-- FACTORY RESET -->
          <!-- ================================================================== -->
--- 
-2.56.0
-

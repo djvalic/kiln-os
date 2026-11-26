@@ -48,18 +48,17 @@ and ui_wizard_reshow() shows and raises it.
  include/ui_effects.h                        |   8 +
  include/ui_wizard.h                         |   9 ++
  src/application/filament_insert_watcher.cpp |  11 ++
- src/ui/ui_effects.cpp                       |  25 +++
+ src/ui/effects/ui_effects.cpp               |  26 ++++
+ src/ui/settings/ui_panel_settings.cpp       |  17 +-
  src/ui/ui_nav_manager.cpp                   |   3 +-
- src/ui/ui_panel_settings.cpp                |  17 +-
- src/ui/ui_wizard.cpp                        |  22 +++
- tests/unit/test_ams_backend_snapmaker.cpp   |  25 +++
+ src/ui/wizard/ui_wizard.cpp                 |  22 +++
+ tests/unit/test_ams_backend_snapmaker.cpp   |  24 +++
  tests/unit/test_filament_insert_policy.cpp  |   4 +
  tests/unit/test_kiln_wizard_kept_layer.cpp  | 164 ++++++++++++++++++++
  12 files changed, 291 insertions(+), 5 deletions(-)
- create mode 100644 tests/unit/test_kiln_wizard_kept_layer.cpp
 
 diff --git a/include/filament_insert_policy.h b/include/filament_insert_policy.h
-index ee5edce..26c5648 100644
+index ee5edced57..26c5648e32 100644
 --- a/include/filament_insert_policy.h
 +++ b/include/filament_insert_policy.h
 @@ -20,6 +20,8 @@ struct FilamentInsertContext {
@@ -81,7 +80,7 @@ index ee5edce..26c5648 100644
  
  /// What a lane's insert does to the slot editor once its presence edge passed
 diff --git a/include/filament_insert_watcher.h b/include/filament_insert_watcher.h
-index b2cbb66..6fb8bcb 100644
+index 2750a3723e..a10d29ef2e 100644
 --- a/include/filament_insert_watcher.h
 +++ b/include/filament_insert_watcher.h
 @@ -33,7 +33,8 @@ class FilamentInsertWatcher {
@@ -103,10 +102,10 @@ index b2cbb66..6fb8bcb 100644
      void open_external();
  
 diff --git a/include/ui_effects.h b/include/ui_effects.h
-index 4e2e388..79a75bb 100644
+index 7c3e1a30e3..f70a40d2c0 100644
 --- a/include/ui_effects.h
 +++ b/include/ui_effects.h
-@@ -127,6 +127,14 @@ void bring_to_front(lv_obj_t* obj);
+@@ -129,6 +129,14 @@ void bring_to_front(lv_obj_t* obj);
  /// (stale-overlay hiding, the keyboard's page shift) must leave alone.
  bool is_screen_chrome(const lv_obj_t* child);
  
@@ -122,10 +121,10 @@ index 4e2e388..79a75bb 100644
   * @brief Flash an object with a brief opacity pulse for touch feedback
   *
 diff --git a/include/ui_wizard.h b/include/ui_wizard.h
-index 8a5e0af..c957250 100644
+index 5a6e5f1da6..82452cb202 100644
 --- a/include/ui_wizard.h
 +++ b/include/ui_wizard.h
-@@ -138,6 +138,15 @@ bool ui_wizard_request_step(helix::wizard::StepId step);
+@@ -115,6 +115,15 @@ bool ui_wizard_request_step(helix::wizard::StepId step);
   */
  bool ui_wizard_cancel_session();
  
@@ -142,18 +141,18 @@ index 8a5e0af..c957250 100644
   * Set wizard title
   *
 diff --git a/src/application/filament_insert_watcher.cpp b/src/application/filament_insert_watcher.cpp
-index 9aaedcf..9a1c6d5 100644
+index 23df411fbd..d54f48139f 100644
 --- a/src/application/filament_insert_watcher.cpp
 +++ b/src/application/filament_insert_watcher.cpp
-@@ -12,6 +12,7 @@
- #include "ams_backend.h"
+@@ -13,6 +13,7 @@
+ #include "ams_insert_signals.h"
  #include "ams_state.h"
  #include "app_globals.h"
 +#include "config.h"
  #include "connection_state.h"
  #include "filament_insert_policy.h"
  #include "filament_sensor_manager.h"
-@@ -73,6 +74,14 @@ bool FilamentInsertWatcher::operation_busy() const {
+@@ -83,6 +84,14 @@ bool FilamentInsertWatcher::operation_busy() const {
      return ams_action_is_busy(action) || get_printer_state().app_macro_activity().recently_active();
  }
  
@@ -168,7 +167,7 @@ index 9aaedcf..9a1c6d5 100644
  void FilamentInsertWatcher::reseed() {
      // A reconnect, a Klipper restart or a sensor reconfiguration moves readings
      // without anyone inserting filament; whatever arrives next is a snapshot.
-@@ -94,6 +103,7 @@ void FilamentInsertWatcher::on_ams_changed() {
+@@ -104,6 +113,7 @@ void FilamentInsertWatcher::on_ams_changed() {
      ctx.operation_busy = operation_busy();
      ctx.setting_enabled = SettingsManager::instance().get_filament_auto_open_editor();
      ctx.editor_open = editor_open();
@@ -176,7 +175,7 @@ index 9aaedcf..9a1c6d5 100644
  
      const int open_slot = judge_lanes(*backend, ctx);
      if (open_slot >= 0) {
-@@ -161,6 +171,7 @@ void FilamentInsertWatcher::on_sensor_changed() {
+@@ -174,6 +184,7 @@ void FilamentInsertWatcher::on_sensor_changed() {
      ctx.operation_busy = operation_busy();
      ctx.setting_enabled = SettingsManager::instance().get_filament_auto_open_editor();
      ctx.editor_open = editor_open();
@@ -184,11 +183,11 @@ index 9aaedcf..9a1c6d5 100644
      if (should_open_editor_on_insert(ctx)) {
          open_external();
      }
-diff --git a/src/ui/ui_effects.cpp b/src/ui/ui_effects.cpp
-index 2d0dffb..b4760a4 100644
---- a/src/ui/ui_effects.cpp
-+++ b/src/ui/ui_effects.cpp
-@@ -271,6 +271,31 @@ bool is_screen_chrome(const lv_obj_t* child) {
+diff --git a/src/ui/effects/ui_effects.cpp b/src/ui/effects/ui_effects.cpp
+index 907c1e0b8c..d215f64ad6 100644
+--- a/src/ui/effects/ui_effects.cpp
++++ b/src/ui/effects/ui_effects.cpp
+@@ -262,6 +262,32 @@ bool is_screen_chrome(const lv_obj_t* child) {
      return child && find_chrome(child) != s_always_on_top.end();
  }
  
@@ -203,7 +202,8 @@ index 2d0dffb..b4760a4 100644
 +} // namespace
 +
 +void set_kept_screen_layer(lv_obj_t* obj) {
-+    if (s_kept_screen_layer && s_kept_screen_layer != obj && lv_obj_is_valid(s_kept_screen_layer)) {
++    // kept_layer_deleted_cb clears it when the layer goes, so it is live here
++    if (s_kept_screen_layer && s_kept_screen_layer != obj) {
 +        lv_obj_remove_event_cb(s_kept_screen_layer, kept_layer_deleted_cb);
 +    }
 +    s_kept_screen_layer = obj;
@@ -220,40 +220,19 @@ index 2d0dffb..b4760a4 100644
  lv_obj_t* create_fullscreen_backdrop(lv_obj_t* parent, lv_opa_t opacity) {
      if (!parent) {
          spdlog::error("[UI Effects] Cannot create backdrop: parent is null");
-diff --git a/src/ui/ui_nav_manager.cpp b/src/ui/ui_nav_manager.cpp
-index f2ec8cd..35a0b0e 100644
---- a/src/ui/ui_nav_manager.cpp
-+++ b/src/ui/ui_nav_manager.cpp
-@@ -896,6 +896,7 @@ void NavigationManager::switch_to_panel_impl(int panel_id) {
- 
-             // Screen chrome (the navbar E-stop) and open modals are not overlays.
-             if (child == app_layout_widget_ || helix::ui::is_screen_chrome(child) ||
-+                helix::ui::is_kept_screen_layer(child) ||
-                 ModalStack::instance().backdrop_for_backdrop(child)) {
-                 continue;
-             }
-@@ -2008,7 +2009,7 @@ void NavigationManager::go_back_now() {
-                 lv_obj_t* child = lv_obj_get_child(screen, static_cast<int32_t>(i));
-                 if (child == mgr.app_layout_widget_ || child == mgr.backdrop_.primary() ||
-                     child == current_top || child == previous_panel ||
--                    helix::ui::is_screen_chrome(child) ||
-+                    helix::ui::is_screen_chrome(child) || helix::ui::is_kept_screen_layer(child) ||
-                     ModalStack::instance().backdrop_for_backdrop(child)) {
-                     continue;
-                 }
-diff --git a/src/ui/ui_panel_settings.cpp b/src/ui/ui_panel_settings.cpp
-index cdccd0b..d985442 100644
---- a/src/ui/ui_panel_settings.cpp
-+++ b/src/ui/ui_panel_settings.cpp
-@@ -36,6 +36,7 @@
+diff --git a/src/ui/settings/ui_panel_settings.cpp b/src/ui/settings/ui_panel_settings.cpp
+index dde207faf0..a677e4ccc4 100644
+--- a/src/ui/settings/ui_panel_settings.cpp
++++ b/src/ui/settings/ui_panel_settings.cpp
+@@ -38,6 +38,7 @@
+ #include "ui_snake_game.h"
  #include "ui_toast_manager.h"
- #include "ui_update_queue.h"
  #include "ui_utils.h"
 +#include "ui_wizard.h"
  #include "ui_wizard_ad5x_setup.h"
  #include "ui_wizard_hardware_selector.h"
  
-@@ -381,14 +382,26 @@ static bool ad5x_setup_refused_now() {
+@@ -412,14 +413,26 @@ static bool ad5x_setup_refused_now() {
  }
  
  void SettingsPanel::handle_ad5x_purge_clicked() {
@@ -282,10 +261,31 @@ index cdccd0b..d985442 100644
          return;
      }
      helix::ui::ConfirmOptions opts;
-diff --git a/src/ui/ui_wizard.cpp b/src/ui/ui_wizard.cpp
-index e2f46bf..eca30f2 100644
---- a/src/ui/ui_wizard.cpp
-+++ b/src/ui/ui_wizard.cpp
+diff --git a/src/ui/ui_nav_manager.cpp b/src/ui/ui_nav_manager.cpp
+index 637c88eaf0..5fb8b9d68c 100644
+--- a/src/ui/ui_nav_manager.cpp
++++ b/src/ui/ui_nav_manager.cpp
+@@ -506,6 +506,7 @@ void NavigationManager::switch_to_panel_impl(int panel_id) {
+ 
+             // Screen chrome (the navbar E-stop) and open modals are not overlays.
+             if (child == app_layout_widget_ || helix::ui::is_screen_chrome(child) ||
++                helix::ui::is_kept_screen_layer(child) ||
+                 ModalStack::instance().backdrop_for_backdrop(child)) {
+                 continue;
+             }
+@@ -1659,7 +1660,7 @@ void NavigationManager::go_back_now() {
+                 lv_obj_t* child = lv_obj_get_child(screen, static_cast<int32_t>(i));
+                 if (child == mgr.app_layout_widget_ || child == mgr.backdrop_.primary() ||
+                     child == current_top || child == previous_panel ||
+-                    helix::ui::is_screen_chrome(child) ||
++                    helix::ui::is_screen_chrome(child) || helix::ui::is_kept_screen_layer(child) ||
+                     ModalStack::instance().backdrop_for_backdrop(child)) {
+                     continue;
+                 }
+diff --git a/src/ui/wizard/ui_wizard.cpp b/src/ui/wizard/ui_wizard.cpp
+index 81182b800b..aa1dbc75bd 100644
+--- a/src/ui/wizard/ui_wizard.cpp
++++ b/src/ui/wizard/ui_wizard.cpp
 @@ -3,6 +3,7 @@
  
  #include "ui_wizard.h"
@@ -294,7 +294,7 @@ index e2f46bf..eca30f2 100644
  #include "ui_error_reporting.h"
  #include "ui_keyboard_manager.h"
  #include "ui_nav.h"
-@@ -447,6 +448,7 @@ void ui_wizard_deinit_subjects() {
+@@ -486,6 +487,7 @@ void ui_wizard_deinit_subjects() {
      // in lv_deinit() when those widgets are deleted.
      if (wizard_container && lv_is_initialized()) {
          spdlog::debug("[Wizard] Deleting wizard container during deinit");
@@ -302,7 +302,7 @@ index e2f46bf..eca30f2 100644
          helix::ui::safe_delete(wizard_container);
          current_screen_step.reset();
      }
-@@ -585,6 +587,11 @@ lv_obj_t* ui_wizard_create(lv_obj_t* parent) {
+@@ -557,6 +559,11 @@ lv_obj_t* ui_wizard_create(lv_obj_t* parent) {
      // Update layout to ensure SIZE_CONTENT calculates correctly
      lv_obj_update_layout(wizard_container);
  
@@ -314,12 +314,12 @@ index e2f46bf..eca30f2 100644
      spdlog::debug("[Wizard] Wizard container created successfully");
      return wizard_container;
  }
-@@ -992,6 +999,20 @@ static void ui_wizard_load_screen(helix::wizard::StepId step) {
+@@ -935,6 +942,20 @@ static void ui_wizard_load_screen(helix::wizard::StepId step) {
  // It deliberately does NOT touch config flags, expected-hardware, the
  // post-wizard re-discovery, or the deferred Home navigation — those are
  // completion-mode specific and remain in ui_wizard_complete().
 +bool ui_wizard_reshow() {
-+    if (!wizard_container || !lv_obj_is_valid(wizard_container)) {
++    if (!wizard_container) {
 +        return false;
 +    }
 +    if (lv_obj_has_flag(wizard_container, LV_OBJ_FLAG_HIDDEN)) {
@@ -328,26 +328,26 @@ index e2f46bf..eca30f2 100644
 +    }
 +    // Front of the screen, where it was created: the wizard covers the main
 +    // UI (and its E-stop chrome) until it ends.
-+    lv_obj_move_foreground(wizard_container);
++    helix::ui::bring_to_front(wizard_container);
 +    return true;
 +}
 +
  static void dismiss_wizard_container() {
      // Cleanup current wizard screen
      ui_wizard_cleanup_current_screen();
-@@ -1008,6 +1029,7 @@ static void dismiss_wizard_container() {
+@@ -951,6 +972,7 @@ static void dismiss_wizard_container() {
      // Hide immediately so user sees the app layout underneath without waiting for async delete.
      if (wizard_container) {
          spdlog::debug("[Wizard] Hiding and deleting wizard container (async)");
 +        helix::ui::set_kept_screen_layer(nullptr);
-         lv_obj_add_flag(wizard_container, LV_OBJ_FLAG_HIDDEN);
-         lv_obj_del_async(wizard_container);
+         lv_obj_set_hidden(wizard_container, true);
+         lv_obj_delete_async(wizard_container);
          wizard_container = nullptr;
 diff --git a/tests/unit/test_ams_backend_snapmaker.cpp b/tests/unit/test_ams_backend_snapmaker.cpp
-index 6b7cca0..9ab13c6 100644
+index 6853acfd6d..caa474abf8 100644
 --- a/tests/unit/test_ams_backend_snapmaker.cpp
 +++ b/tests/unit/test_ams_backend_snapmaker.cpp
-@@ -4226,6 +4226,31 @@ TEST_CASE_METHOD(SnapmakerInsertFixture,
+@@ -3754,6 +3754,30 @@ TEST_CASE_METHOD(SnapmakerInsertFixture,
      CHECK(toasts.empty());
  }
  
@@ -356,13 +356,12 @@ index 6b7cca0..9ab13c6 100644
 +                 "[ams][snapmaker][insert_watcher][kiln][wizard]") {
 +    helix::ui::reset_insert_offers_for_test();
 +    FilamentInsertWatcher watcher(nullptr);
-+    SnapmakerTestAccess::handle_status(backend, make_feed_status(0, "wait_insert", false));
++    backend.fire_status(make_feed_status(0, "wait_insert", false));
 +    REQUIRE(judge(watcher, backend) == -1);
 +
 +    // The spool goes in (no tag) while a wizard step is on screen.
-+    SnapmakerTestAccess::handle_status(backend, make_feed_status(0, "wait_insert", true));
-+    SnapmakerTestAccess::handle_status(
-+        backend, make_filament_detect_status(0, "NONE", 0u, "NONE", json::array()));
++    backend.fire_status(make_feed_status(0, "wait_insert", true));
++    backend.fire_status(make_filament_detect_status(0, "NONE", 0u, "NONE", json::array()));
 +    drain();
 +    FilamentInsertContext ctx;
 +    ctx.setting_enabled = true;
@@ -380,7 +379,7 @@ index 6b7cca0..9ab13c6 100644
                   "[ams][snapmaker][insert_watcher][1710]") {
      helix::ui::reset_insert_offers_for_test();
 diff --git a/tests/unit/test_filament_insert_policy.cpp b/tests/unit/test_filament_insert_policy.cpp
-index 6f3c879..dc016c6 100644
+index 6f3c879a02..dc016c6f72 100644
 --- a/tests/unit/test_filament_insert_policy.cpp
 +++ b/tests/unit/test_filament_insert_policy.cpp
 @@ -37,6 +37,10 @@ TEST_CASE("insert policy: every guard suppresses", "[filament][insert_policy]")
@@ -396,7 +395,7 @@ index 6f3c879..dc016c6 100644
  
 diff --git a/tests/unit/test_kiln_wizard_kept_layer.cpp b/tests/unit/test_kiln_wizard_kept_layer.cpp
 new file mode 100644
-index 0000000..b656edb
+index 0000000000..1895805122
 --- /dev/null
 +++ b/tests/unit/test_kiln_wizard_kept_layer.cpp
 @@ -0,0 +1,164 @@
@@ -417,7 +416,7 @@ index 0000000..b656edb
 +#include "ui_effects.h"
 +#include "ui_nav.h"
 +#include "ui_nav_manager.h"
-+#include "ui_update_queue.h"
++#include "core/update_queue.h"
 +#include "ui_wizard.h"
 +
 +#include "../lvgl_ui_test_fixture.h"
@@ -466,7 +465,7 @@ index 0000000..b656edb
 +    }
 +
 +    static void drain() {
-+        ui::UpdateQueueTestAccess::drain_all(ui::UpdateQueue::instance());
++        ui::UpdateQueue::instance().drain();
 +    }
 +
 +    static bool visible(lv_obj_t* obj) {

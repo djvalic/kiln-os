@@ -27,23 +27,19 @@ Upstream: not applicable (AD5X OS specific)
  include/wizard_step.h                    |  12 +-
  src/api/moonraker_discovery_sequence.cpp |   9 +
  src/system/wizard_step.cpp               |   2 +
+ src/ui/settings/ui_panel_settings.cpp    |  16 +-
  src/ui/ui_ad5x_nozzle.cpp                | 370 +++++++++++++++++++++++
- src/ui/ui_panel_settings.cpp             |  16 +-
- src/ui/ui_wizard.cpp                     |  13 +
- src/ui/ui_wizard_ad5x_setup.cpp          | 269 +++++++++++++++-
- src/ui/wizard_step_registry.cpp          |   1 +
+ src/ui/wizard/ui_wizard.cpp              |  12 +
+ src/ui/wizard/ui_wizard_ad5x_setup.cpp   | 269 +++++++++++++++-
+ src/ui/wizard/wizard_step_registry.cpp   |   1 +
  ui_xml/ad5x_nozzle_modal.xml             |  55 ++++
  ui_xml/settings_panel.xml                |   6 +
  ui_xml/wizard_ad5x_nozzle.xml            |  69 +++++
- 15 files changed, 1075 insertions(+), 14 deletions(-)
- create mode 100644 include/ui_ad5x_nozzle.h
- create mode 100644 src/ui/ui_ad5x_nozzle.cpp
- create mode 100644 ui_xml/ad5x_nozzle_modal.xml
- create mode 100644 ui_xml/wizard_ad5x_nozzle.xml
+ 15 files changed, 1074 insertions(+), 14 deletions(-)
 
 diff --git a/include/ui_ad5x_nozzle.h b/include/ui_ad5x_nozzle.h
 new file mode 100644
-index 0000000000..309eca4c49
+index 0000000000..451fe764ba
 --- /dev/null
 +++ b/include/ui_ad5x_nozzle.h
 @@ -0,0 +1,167 @@
@@ -67,8 +63,8 @@ index 0000000000..309eca4c49
 + */
 +
 +#include "ui_modal.h"
-+#include "ui_observer_guard.h"
-+#include "ui_subscription_guard.h"
++#include "core/observer_guard.h"
++#include "subscription_guard.h"
 +
 +#include "async_lifetime_guard.h"
 +#include "json_fwd.h"
@@ -168,8 +164,8 @@ index 0000000000..309eca4c49
 +    void notify();
 +
 +    SubjectManager subjects_;
-+    lv_subject_t size_text_{};
-+    lv_subject_t local_{};
++    helix::Subject size_text_{};
++    helix::Subject local_{};
 +    char size_text_buf_[64] = "";
 +    bool subjects_initialized_ = false;
 +
@@ -215,23 +211,23 @@ index 0000000000..309eca4c49
 +
 +} // namespace helix::ui
 diff --git a/include/ui_panel_settings.h b/include/ui_panel_settings.h
-index fce561fe88..8068762783 100644
+index 045e2b1bf8..309e2bb36c 100644
 --- a/include/ui_panel_settings.h
 +++ b/include/ui_panel_settings.h
-@@ -139,6 +139,8 @@ class SettingsPanel : public PanelBase {
-     lv_subject_t show_ad5x_setup_subject_{};
+@@ -143,6 +143,8 @@ class SettingsPanel : public PanelBase {
+     helix::Subject show_ad5x_setup_subject_{};
      // 1 when the printer has the AD5X plugin object: unhides the printer's "Plugins"
-     lv_subject_t show_ad5x_plugins_subject_{};
+     helix::Subject show_ad5x_plugins_subject_{};
 +    // 1 when the printer has the AD5X nozzle object: unhides "Nozzle Size"
-+    lv_subject_t show_ad5x_nozzle_subject_{};
++    helix::Subject show_ad5x_nozzle_subject_{};
  
      // Live status line shown under each stateful root row (settings_panel.xml),
      // refreshed by refresh_status_lines().
 diff --git a/include/ui_wizard.h b/include/ui_wizard.h
-index e23f8f8bb8..7dc7d3512b 100644
+index 2cb6478eef..f0371d4458 100644
 --- a/include/ui_wizard.h
 +++ b/include/ui_wizard.h
-@@ -109,6 +109,14 @@ lv_obj_t* ui_wizard_create(lv_obj_t* parent);
+@@ -86,6 +86,14 @@ lv_obj_t* ui_wizard_create(lv_obj_t* parent);
   */
  void ui_wizard_navigate_to_step(helix::wizard::StepId step);
  
@@ -247,7 +243,7 @@ index e23f8f8bb8..7dc7d3512b 100644
   * Set wizard title
   *
 diff --git a/include/ui_wizard_ad5x_setup.h b/include/ui_wizard_ad5x_setup.h
-index 9fa918ebe1..9f8840f038 100644
+index 29cae29e26..09a2e251d9 100644
 --- a/include/ui_wizard_ad5x_setup.h
 +++ b/include/ui_wizard_ad5x_setup.h
 @@ -3,12 +3,13 @@
@@ -270,13 +266,13 @@ index 9fa918ebe1..9f8840f038 100644
   * G-code `SETUP_WIZARD_STEP` as fallback) and shows
 @@ -23,6 +24,8 @@
  
- #include "ui_observer_guard.h"
- #include "ui_subscription_guard.h"
-+#include "ui_timer_guard.h"
+ #include "core/observer_guard.h"
+ #include "subscription_guard.h"
++#include "core/timer_guard.h"
 +#include "ui_widget_ref.h"
  
  #include "async_lifetime_guard.h"
- #include "json_fwd.h"
+ #include "hv/json.hpp"
 @@ -32,6 +35,7 @@
  
  #include <array>
@@ -355,8 +351,8 @@ index 9fa918ebe1..9f8840f038 100644
 +    void refresh();
 +
 +    SubjectManager subjects_;
-+    lv_subject_t view_{};
-+    lv_subject_t message_{};
++    helix::Subject view_{};
++    helix::Subject message_{};
 +    char message_buf_[256] = "";
 +    bool subjects_initialized_ = false;
 +
@@ -375,10 +371,10 @@ index 9fa918ebe1..9f8840f038 100644
 +
 +WizardAd5xNozzleStep* get_wizard_ad5x_nozzle_step();
 diff --git a/include/wizard_step.h b/include/wizard_step.h
-index 472918c5bf..59fbe40f8b 100644
+index 43a510c5bc..66bbcbc7bf 100644
 --- a/include/wizard_step.h
 +++ b/include/wizard_step.h
-@@ -22,9 +22,10 @@ enum class StepId {
+@@ -24,9 +24,10 @@ enum class StepId {
      AmsIdentify,
      LedSelect,
      FilamentSensor,
@@ -391,16 +387,16 @@ index 472918c5bf..59fbe40f8b 100644
      Ad5xSelfcheck,
      Ad5xPid,
      Ad5xMesh,
-@@ -37,7 +38,7 @@ enum class StepId {
-     Summary,
+@@ -39,7 +40,7 @@ enum class StepId {
      Telemetry,
+     Calibration,
  };
--inline constexpr int STEP_COUNT = 22;
-+inline constexpr int STEP_COUNT = 23;
+-inline constexpr int STEP_COUNT = 24;
++inline constexpr int STEP_COUNT = 25;
  
  // Plain data needed to decide skips — no LVGL, constructible in tests.
  struct StepContext {
-@@ -66,6 +67,11 @@ class Step {
+@@ -68,6 +69,11 @@ class Step {
      virtual bool is_validated() const {
          return true;
      }
@@ -413,10 +409,10 @@ index 472918c5bf..59fbe40f8b 100644
  
  const char* to_string(StepId); // for logs/debug
 diff --git a/src/api/moonraker_discovery_sequence.cpp b/src/api/moonraker_discovery_sequence.cpp
-index 3ad69f0def..7cca5bee5c 100644
+index d5422411cf..d47d1e7b84 100644
 --- a/src/api/moonraker_discovery_sequence.cpp
 +++ b/src/api/moonraker_discovery_sequence.cpp
-@@ -1530,6 +1530,15 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
+@@ -1585,6 +1585,15 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
          }
      }
  
@@ -433,10 +429,10 @@ index 3ad69f0def..7cca5bee5c 100644
      // Other variables on these macros (slicer args, profile names, etc.) are
      // irrelevant to the start-detection logic.
 diff --git a/src/system/wizard_step.cpp b/src/system/wizard_step.cpp
-index bee685ad99..0b356eb648 100644
+index df96889905..edf9375fff 100644
 --- a/src/system/wizard_step.cpp
 +++ b/src/system/wizard_step.cpp
-@@ -27,6 +27,8 @@ const char* to_string(StepId id) {
+@@ -31,6 +31,8 @@ const char* to_string(StepId id) {
          return "FilamentSensor";
      case StepId::Ad5xTimezone:
          return "Ad5xTimezone";
@@ -445,9 +441,64 @@ index bee685ad99..0b356eb648 100644
      case StepId::Ad5xSelfcheck:
          return "Ad5xSelfcheck";
      case StepId::Ad5xPid:
+diff --git a/src/ui/settings/ui_panel_settings.cpp b/src/ui/settings/ui_panel_settings.cpp
+index a5d1013fdc..2ebf9ed44e 100644
+--- a/src/ui/settings/ui_panel_settings.cpp
++++ b/src/ui/settings/ui_panel_settings.cpp
+@@ -10,6 +10,7 @@
+ #if HELIX_HAS_PLUGINS
+ #include "plugins_overlay.h"
+ #endif
++#include "ui_ad5x_nozzle.h"
+ #include "ui_nav.h"
+ #include "ui_panel_memory_stats.h"
+ #include "ui_printer_manager_overlay.h"
+@@ -152,6 +153,9 @@ void SettingsPanel::init_subjects() {
+     // Set from the live printer on every return to the root (refresh_status_lines())
+     UI_MANAGED_SUBJECT_INT(show_ad5x_setup_subject_, 0, "settings_show_ad5x_setup", subjects_);
+     UI_MANAGED_SUBJECT_INT(show_ad5x_plugins_subject_, 0, "settings_show_ad5x_plugins", subjects_);
++    UI_MANAGED_SUBJECT_INT(show_ad5x_nozzle_subject_, 0, "settings_show_ad5x_nozzle", subjects_);
++    // The Nozzle Size row's line (ad5x_nozzle_size_text) follows the printer's object
++    helix::ad5x_nozzle::model().init_subjects();
+ 
+     // Live status line under each stateful root row; refresh_status_lines()
+     // fills these in, first from setup() and then on every return to the root.
+@@ -240,6 +244,11 @@ void SettingsPanel::refresh_status_lines() {
+     lv_subject_set_int(&show_ad5x_setup_subject_, helix::ad5x_setup::available() ? 1 : 0);
+     lv_subject_set_int(&show_ad5x_plugins_subject_,
+                        helix::settings::Ad5xPluginsOverlay::available() ? 1 : 0);
++    const bool has_nozzle = helix::ad5x_nozzle::available();
++    lv_subject_set_int(&show_ad5x_nozzle_subject_, has_nozzle ? 1 : 0);
++    if (has_nozzle) {
++        helix::ad5x_nozzle::model().start();
++    }
+ 
+     // Formatted here rather than once at init, so it is in the language of the
+     // latest return to the settings root.
+@@ -375,9 +384,9 @@ void SettingsPanel::handle_ad5x_setup_clicked() {
+     opts.owner_token = lifetime_.token();
+     helix::ui::modal_confirm(
+         lv_tr("Run Setup Wizard"),
+-        lv_tr("Asks for the time zone, then runs the self-check and the tuning steps again (PID, "
+-              "bed mesh, vibration, IFS, Z offset). Every step can be skipped. Results are saved "
+-              "at the end and Klipper restarts."),
++        lv_tr("Asks for the time zone and the nozzle size, then runs the self-check and the "
++              "tuning steps again (PID, bed mesh, vibration, IFS, Z offset). Every step can be "
++              "skipped. Results are saved at the end and Klipper restarts."),
+         ModalSeverity::Info, lv_tr("Start"),
+         [this]() { helix::ad5x_setup::launch_targeted(parent_screen_); }, opts);
+ }
+@@ -439,6 +448,7 @@ void register_settings_panel_callbacks() {
+          [](lv_event_t*) { get_global_settings_panel().handle_hardware_health_clicked(); }},
+         {"on_ad5x_setup_clicked",
+          [](lv_event_t*) { get_global_settings_panel().handle_ad5x_setup_clicked(); }},
++        {"on_ad5x_nozzle_clicked", [](lv_event_t*) { helix::ui::Ad5xNozzleModal::show_owned(); }},
+ 
+         // Restart prompt and the shared header back button
+         {"on_restart_later_clicked",
 diff --git a/src/ui/ui_ad5x_nozzle.cpp b/src/ui/ui_ad5x_nozzle.cpp
 new file mode 100644
-index 0000000000..dfa5236bd7
+index 0000000000..2fcfda8396
 --- /dev/null
 +++ b/src/ui/ui_ad5x_nozzle.cpp
 @@ -0,0 +1,370 @@
@@ -464,10 +515,10 @@ index 0000000000..dfa5236bd7
 +#include "json_utils.h"
 +#include "lvgl/src/others/translation/lv_translation.h"
 +#include "macro_executor.h"
-+#include "observer_factory.h"
++#include "core/observer_factory.h"
 +#include "printer_discovery.h"
 +#include "printer_state.h"
-+#include "static_panel_registry.h"
++#include "core/static_panel_registry.h"
 +
 +#include <spdlog/fmt/fmt.h>
 +#include <spdlog/spdlog.h>
@@ -695,7 +746,7 @@ index 0000000000..dfa5236bd7
 +                text = fmt::format(lv_tr("{}, set in local.cfg"), text);
 +            }
 +        }
-+        lv_subject_copy_string(&size_text_, text.c_str());
++        lv_subject_set_string(&size_text_, text.c_str());
 +        lv_subject_set_int(&local_, status_.local ? 1 : 0);
 +    }
 +    notify();
@@ -725,7 +776,7 @@ index 0000000000..dfa5236bd7
 +    spdlog::info("[AD5X nozzle] {}", gcode);
 +    // Armed before sending: Klipper can drop the connection before it answers,
 +    // and a restart nobody announced shows the disconnect and recovery dialogs.
-+    helix::ui::begin_expected_klippy_restart("Changing the nozzle size... Klipper will restart.");
++    helix::ui::begin_expected_klippy_restart("Changing the nozzle size... Klipper will restart.", get_moonraker_api());
 +
 +    const auto token = lifetime_.token();
 +    api->execute_gcode(
@@ -821,74 +872,11 @@ index 0000000000..dfa5236bd7
 +}
 +
 +} // namespace helix::ui
-diff --git a/src/ui/ui_panel_settings.cpp b/src/ui/ui_panel_settings.cpp
-index 3e1fdfadaf..57c2b46995 100644
---- a/src/ui/ui_panel_settings.cpp
-+++ b/src/ui/ui_panel_settings.cpp
-@@ -10,6 +10,7 @@
- #if HELIX_HAS_PLUGINS
- #include "plugins_overlay.h"
- #endif
-+#include "ui_ad5x_nozzle.h"
- #include "ui_nav.h"
- #include "ui_panel_memory_stats.h"
- #include "ui_printer_manager_overlay.h"
-@@ -139,6 +140,9 @@ void SettingsPanel::init_subjects() {
-     // Set from the live printer on every return to the root (refresh_status_lines())
-     UI_MANAGED_SUBJECT_INT(show_ad5x_setup_subject_, 0, "settings_show_ad5x_setup", subjects_);
-     UI_MANAGED_SUBJECT_INT(show_ad5x_plugins_subject_, 0, "settings_show_ad5x_plugins", subjects_);
-+    UI_MANAGED_SUBJECT_INT(show_ad5x_nozzle_subject_, 0, "settings_show_ad5x_nozzle", subjects_);
-+    // The Nozzle Size row's line (ad5x_nozzle_size_text) follows the printer's object
-+    helix::ad5x_nozzle::model().init_subjects();
- 
-     // Live status line under each stateful root row; refresh_status_lines()
-     // fills these in, first from setup() and then on every return to the root.
-@@ -224,6 +228,11 @@ void SettingsPanel::refresh_status_lines() {
-     lv_subject_set_int(&show_ad5x_setup_subject_, helix::ad5x_setup::available() ? 1 : 0);
-     lv_subject_set_int(&show_ad5x_plugins_subject_,
-                        helix::settings::Ad5xPluginsOverlay::available() ? 1 : 0);
-+    const bool has_nozzle = helix::ad5x_nozzle::available();
-+    lv_subject_set_int(&show_ad5x_nozzle_subject_, has_nozzle ? 1 : 0);
-+    if (has_nozzle) {
-+        helix::ad5x_nozzle::model().start();
-+    }
- 
-     // Formatted here rather than once at init, so it is in the language of the
-     // latest return to the settings root.
-@@ -344,9 +353,9 @@ void SettingsPanel::handle_ad5x_setup_clicked() {
-     opts.owner_token = lifetime_.token();
-     helix::ui::modal_confirm(
-         lv_tr("Run Setup Wizard"),
--        lv_tr("Asks for the time zone, then runs the self-check and the tuning steps again (PID, "
--              "bed mesh, vibration, IFS, Z offset). Every step can be skipped. Results are saved "
--              "at the end and Klipper restarts."),
-+        lv_tr("Asks for the time zone and the nozzle size, then runs the self-check and the "
-+              "tuning steps again (PID, bed mesh, vibration, IFS, Z offset). Every step can be "
-+              "skipped. Results are saved at the end and Klipper restarts."),
-         ModalSeverity::Info, lv_tr("Start"),
-         [this]() { helix::ad5x_setup::launch_targeted(parent_screen_); }, opts);
- }
-@@ -410,6 +419,7 @@ void register_settings_panel_callbacks() {
-          [](lv_event_t*) { get_global_settings_panel().handle_hardware_health_clicked(); }},
-         {"on_ad5x_setup_clicked",
-          [](lv_event_t*) { get_global_settings_panel().handle_ad5x_setup_clicked(); }},
-+        {"on_ad5x_nozzle_clicked", [](lv_event_t*) { helix::ui::Ad5xNozzleModal::show_owned(); }},
- 
-         // Restart prompt and the shared header back button
-         {"on_restart_later_clicked",
-diff --git a/src/ui/ui_wizard.cpp b/src/ui/ui_wizard.cpp
-index 5e7e4b2df2..9fa1f2e5cc 100644
---- a/src/ui/ui_wizard.cpp
-+++ b/src/ui/ui_wizard.cpp
-@@ -530,6 +530,7 @@ void ui_wizard_container_register_responsive_constants() {
-         "wizard_ams_identify",
-         "wizard_led_select",
-         "wizard_filament_sensor_select",
-+        "wizard_ad5x_nozzle",
-         "wizard_ad5x_setup",
-         "wizard_input_shaper",
-         "wizard_language_chooser",
-@@ -1239,6 +1240,14 @@ static void on_next_clicked(lv_event_t* e) {
+diff --git a/src/ui/wizard/ui_wizard.cpp b/src/ui/wizard/ui_wizard.cpp
+index 35c8e411c5..ef5be78412 100644
+--- a/src/ui/wizard/ui_wizard.cpp
++++ b/src/ui/wizard/ui_wizard.cpp
+@@ -1195,6 +1195,14 @@ static void on_next_clicked(lv_event_t* e) {
      navigating = true;
      auto current = static_cast<StepId>(lv_subject_get_int(&current_step));
  
@@ -903,7 +891,7 @@ index 5e7e4b2df2..9fa1f2e5cc 100644
      // Targeted (subset) session: advance only within the requested subset; the
      // last subset step finishes via ui_wizard_complete_targeted() (which does
      // NOT set wizard_completed).
-@@ -1329,3 +1338,7 @@ static void on_next_clicked(lv_event_t* e) {
+@@ -1285,3 +1293,7 @@ static void on_next_clicked(lv_event_t* e) {
      schedule_navigate_to_step(*next);
      spdlog::debug("[Wizard] Next button clicked, step: {}", helix::wizard::to_string(*next));
  }
@@ -911,19 +899,19 @@ index 5e7e4b2df2..9fa1f2e5cc 100644
 +void ui_wizard_advance() {
 +    on_next_clicked(nullptr);
 +}
-diff --git a/src/ui/ui_wizard_ad5x_setup.cpp b/src/ui/ui_wizard_ad5x_setup.cpp
-index 60779cbc65..9c152525c9 100644
---- a/src/ui/ui_wizard_ad5x_setup.cpp
-+++ b/src/ui/ui_wizard_ad5x_setup.cpp
-@@ -2,6 +2,7 @@
+diff --git a/src/ui/wizard/ui_wizard_ad5x_setup.cpp b/src/ui/wizard/ui_wizard_ad5x_setup.cpp
+index b8c6d33301..ff5506066c 100644
+--- a/src/ui/wizard/ui_wizard_ad5x_setup.cpp
++++ b/src/ui/wizard/ui_wizard_ad5x_setup.cpp
+@@ -4,6 +4,7 @@
  
- #include "ui_wizard_ad5x_setup.h"
+ #include "ui_wizard_appearance.h"
  
 +#include "ui_ad5x_nozzle.h"
  #include "ui_button.h"
  #include "ui_emergency_stop.h"
  #include "ui_error_reporting.h"
-@@ -144,6 +145,10 @@ const StepSpec* spec_for(wizard::StepId id) {
+@@ -146,6 +147,10 @@ const StepSpec* spec_for(wizard::StepId id) {
  
  std::vector<wizard::StepId> step_ids() {
      std::vector<wizard::StepId> ids = {StepId::Ad5xTimezone};
@@ -934,7 +922,7 @@ index 60779cbc65..9c152525c9 100644
      for (const auto& s : k_specs) {
          ids.push_back(s.id);
      }
-@@ -622,8 +627,8 @@ void Ad5xSetupModel::refresh() {
+@@ -623,8 +628,8 @@ void Ad5xSetupModel::refresh() {
  }
  
  // ============================================================================
@@ -945,7 +933,7 @@ index 60779cbc65..9c152525c9 100644
  // ============================================================================
  
  namespace {
-@@ -632,6 +637,7 @@ struct Ad5xSetupSteps {
+@@ -633,6 +638,7 @@ struct Ad5xSetupSteps {
      Ad5xSetupModel model;
      std::vector<std::unique_ptr<WizardAd5xSetupStep>> steps;
      WizardAd5xTimezoneStep timezone_step;
@@ -953,7 +941,7 @@ index 60779cbc65..9c152525c9 100644
  
      Ad5xSetupSteps() {
          for (const auto& spec : k_specs) {
-@@ -818,3 +824,262 @@ lv_obj_t* WizardAd5xTimezoneStep::create(lv_obj_t* parent) {
+@@ -822,3 +828,262 @@ lv_obj_t* WizardAd5xTimezoneStep::create(lv_obj_t* parent) {
  void WizardAd5xTimezoneStep::cleanup() {
      root_ = nullptr;
  }
@@ -1210,20 +1198,20 @@ index 60779cbc65..9c152525c9 100644
 +        view = View::Waiting;
 +        message = lv_tr("Waiting for Klipper...");
 +    }
-+    lv_subject_copy_string(&message_, message.c_str());
++    lv_subject_set_string(&message_, message.c_str());
 +    lv_subject_set_int(&view_, static_cast<int>(view));
 +    // Skip goes on without a size from Klipper; nothing moves on while it restarts
 +    lv_subject_set_int(&wizard_show_skip, (view == View::Waiting || view == View::Failed) ? 1 : 0);
 +    lv_subject_set_int(&connection_test_passed, view == View::Applying ? 0 : 1);
 +}
-diff --git a/src/ui/wizard_step_registry.cpp b/src/ui/wizard_step_registry.cpp
-index 4fdd84e6e4..9053e4f93e 100644
---- a/src/ui/wizard_step_registry.cpp
-+++ b/src/ui/wizard_step_registry.cpp
-@@ -44,6 +44,7 @@ std::vector<Step*> steps() {
-     v.push_back(get_wizard_led_select_step());                 // LedSelect
-     v.push_back(get_wizard_filament_sensor_select_step());     // FilamentSensor
-     v.push_back(get_wizard_ad5x_timezone_step());              // Ad5xTimezone
+diff --git a/src/ui/wizard/wizard_step_registry.cpp b/src/ui/wizard/wizard_step_registry.cpp
+index 49a96bcff9..348fed64ab 100644
+--- a/src/ui/wizard/wizard_step_registry.cpp
++++ b/src/ui/wizard/wizard_step_registry.cpp
+@@ -48,6 +48,7 @@ std::vector<Step*> steps() {
+     v.push_back(get_wizard_led_select_step());                  // LedSelect
+     v.push_back(get_wizard_filament_sensor_select_step());      // FilamentSensor
+     v.push_back(get_wizard_ad5x_timezone_step());               // Ad5xTimezone
 +    v.push_back(get_wizard_ad5x_nozzle_step());                // Ad5xNozzle
      for (const auto& spec : helix::ad5x_setup::step_specs()) { // Ad5xSelfcheck..Ad5xFinish
          v.push_back(get_wizard_ad5x_setup_step(spec.id));
@@ -1308,7 +1296,7 @@ index 0f16557e7a..184249b4ba 100644
                            label="Plugins" icon="puzzle_outline" callback="on_ad5x_plugins_clicked"
 diff --git a/ui_xml/wizard_ad5x_nozzle.xml b/ui_xml/wizard_ad5x_nozzle.xml
 new file mode 100644
-index 0000000000..21fb8ca9a4
+index 0000000000..4d6120598c
 --- /dev/null
 +++ b/ui_xml/wizard_ad5x_nozzle.xml
 @@ -0,0 +1,69 @@
@@ -1369,7 +1357,7 @@ index 0000000000..21fb8ca9a4
 +              height="content" style_pad_all="0" flex_flow="row" style_flex_main_place="center" style_bg_opa="0"
 +              style_border_width="0" scrollable="false">
 +        <bind_flag_if_not_eq subject="ad5x_nozzle_step_view" flag="hidden" ref_value="3"/>
-+        <ui_button name="btn_ad5x_nozzle_retry" width="#wizard_button_width" height="#button_height" text="Retry">
++        <ui_button name="btn_ad5x_nozzle_retry" width="140" height="#button_height" text="Retry">
 +          <event_cb trigger="clicked" callback="on_ad5x_nozzle_retry"/>
 +        </ui_button>
 +      </lv_obj>
@@ -1381,6 +1369,3 @@ index 0000000000..21fb8ca9a4
 +    </ui_card>
 +  </view>
 +</component>
--- 
-2.56.0
-

@@ -2,8 +2,9 @@
 # Mount the printer's data partition (GPT "userdata", stock /usr/data) at
 # /data, read-write: SSH host keys, the update drop folder, logs. A failed
 # mount gets one e2fsck -p and a second try; without it /data is a tmpfs.
-# Root login: stock's root password (usershare /etc/shadow, bound over our
-# /etc/shadow, as the main OS does); keys in /data/ad5x/ssh/authorized_keys.
+# Root login: the password set with ad5x-passwd, else stock's root password
+# (usershare /etc/shadow), bound over our /etc/shadow as the main OS does
+# (lib/rootpw.sh); keys in /data/ad5x/ssh/authorized_keys.
 . /usr/lib/ad5x-recovery/recovery.sh
 case "$1" in
 start)
@@ -28,14 +29,30 @@ start)
 		hash=$(sed -n 's/^root:\([^:]*\):.*/\1/p' /tmp/usershare/etc/shadow 2>/dev/null)
 		umount /tmp/usershare
 	fi
-	if [ -n "$hash" ] && ! grep -q ' /etc/shadow ' /proc/mounts; then
-		mkdir -p /run/ad5x
-		sed "s|^root:[^:]*:|root:$hash:|" /etc/shadow > /run/ad5x/shadow
-		chmod 600 /run/ad5x/shadow
-		mount --bind /run/ad5x/shadow /etc/shadow
-		echo "data: root password from stock's settings"
+	# The main OS's lib/rootpw.sh: the password set with ad5x-passwd
+	# (/data/ad5x/ssh/root-password) when it is sound, else stock's
+	if [ ! -f /usr/lib/ad5x/rootpw.sh ]; then
+		# Without the library (it shouldn't happen): stock's hash, as
+		# before it, so the rest of this script still runs
+		echo "data: rootpw.sh missing, stock's root password only"
+		# (no stock hash: the image's own /etc/shadow, whose root
+		# password is the default "root" (post-build.sh); the hash
+		# reaches awk through its environment, not its argv)
+		if [ -n "$hash" ] && ! grep -q ' /etc/shadow ' /proc/mounts; then
+			mkdir -p /run/ad5x
+			(umask 077; H=$hash awk -F: -v OFS=: \
+				'$1 == "root" { $2 = ENVIRON["H"] } 1' /etc/shadow > /run/ad5x/shadow)
+			chmod 600 /run/ad5x/shadow
+			mount --bind /run/ad5x/shadow /etc/shadow
+		fi
+	elif . /usr/lib/ad5x/rootpw.sh && rootpw_boot "$hash"; then
+		case $ROOTPW_FROM in
+		kiln) echo "data: root password set with ad5x-passwd" ;;
+		stock) echo "data: root password from stock's settings" ;;
+		default) echo "data: no root password set and no stock one: the default, root" ;;
+		esac
 	else
-		echo "data: no stock root password; SSH by key only (/data/ad5x/ssh/authorized_keys)"
+		echo "data: root password copy not made; the image's own applies (root)"
 	fi
 	# SSH host keys kept on /data (/etc/dropbear -> /var/run/dropbear), the
 	# same keys as the main OS.

@@ -14,8 +14,15 @@ reach too: no swipe onto it, a tap can't add a page, and with one page
 the home screen doesn't swipe. The setting applies when Home is shown
 again. The Kiln tour says where to turn editing on.
 ---
+ src/system/input_settings_manager.cpp | 14 +++++++++++--
+ src/ui/home/ui_panel_home.cpp         | 29 +++++++++++++++++++++++++++
+ src/ui/tour/tour_steps_kiln.cpp       |  3 ++-
+ translations/en.yml                   |  2 +-
+ translations/ru.yml                   |  2 +-
+ 5 files changed, 45 insertions(+), 5 deletions(-)
+
 diff --git a/src/system/input_settings_manager.cpp b/src/system/input_settings_manager.cpp
-index 2bbf5ff..bc4842f 100644
+index 5a4d5868e7..ffd70300bc 100644
 --- a/src/system/input_settings_manager.cpp
 +++ b/src/system/input_settings_manager.cpp
 @@ -13,6 +13,16 @@
@@ -46,25 +53,11 @@ index 2bbf5ff..bc4842f 100644
      {"settings_keypad_layout", "/input/keypad_layout", Scope::Global, false,
       static_cast<int>(KeypadLayout::PHONE), 0, 1, "keypad_layout"},
  };
-diff --git a/src/ui/tour/tour_steps_kiln.cpp b/src/ui/tour/tour_steps_kiln.cpp
-index b8ef5af..cc96631 100644
---- a/src/ui/tour/tour_steps_kiln.cpp
-+++ b/src/ui/tour/tour_steps_kiln.cpp
-@@ -62,7 +62,8 @@ std::vector<TourStep> build_kiln_tour_steps(bool has_ams, int seen_version) {
- 
-     TourStep customize{"fan_stack",
-                        "Customize your home screen",
--                       "Long-press any tile to move, resize, remove or add tiles.",
-+                       "To move, resize, remove or add tiles, turn on Allow Home Screen Editing "
-+                       "in Settings > Touch & Input, then long-press a tile.",
-                        TooltipAnchor::PreferBelow,
-                        {}};
-     customize.fallback_target_name = "print_status";
-diff --git a/src/ui/ui_panel_home.cpp b/src/ui/ui_panel_home.cpp
-index 34d5157..e052bb5 100644
---- a/src/ui/ui_panel_home.cpp
-+++ b/src/ui/ui_panel_home.cpp
-@@ -287,7 +287,16 @@ void HomePanel::apply_edit_swipe_policy() {
+diff --git a/src/ui/home/ui_panel_home.cpp b/src/ui/home/ui_panel_home.cpp
+index 00d3280f03..1299c143dc 100644
+--- a/src/ui/home/ui_panel_home.cpp
++++ b/src/ui/home/ui_panel_home.cpp
+@@ -308,7 +308,16 @@ void HomePanel::apply_edit_swipe_policy() {
      // target, so its tile is within reach whenever the slot exists. A drop that
      // creates a page leaves the session scoped to it, and the carousel resting
      // on it, until the page-set rebuild on the next tick.
@@ -81,7 +74,7 @@ index 34d5157..e052bb5 100644
  }
  
  void HomePanel::build_carousel(int initial_page) {
-@@ -846,6 +855,12 @@ void HomePanel::delete_edit_page(const std::string& page_id) {
+@@ -815,6 +824,12 @@ void HomePanel::delete_edit_page(const std::string& page_id) {
  }
  
  void HomePanel::add_page_from_slot() {
@@ -94,7 +87,7 @@ index 34d5157..e052bb5 100644
      auto& config = helix::PanelWidgetManager::instance().get_widget_config("home");
      helix::PageSetChange change;
      change.page_count = static_cast<int>(config.page_count());
-@@ -1021,6 +1036,20 @@ void HomePanel::repopulate() {
+@@ -990,6 +1005,20 @@ void HomePanel::repopulate() {
  void HomePanel::on_activate() {
      panel_active_ = true;
  
@@ -115,11 +108,25 @@ index 34d5157..e052bb5 100644
      // Notify only the active page's widgets that the panel is visible
      if (active_page_index_ >= 0 && active_page_index_ < static_cast<int>(pages_.size())) {
          for (auto& w : pages_[static_cast<size_t>(active_page_index_)].widgets) {
+diff --git a/src/ui/tour/tour_steps_kiln.cpp b/src/ui/tour/tour_steps_kiln.cpp
+index b8ef5af3fb..cc96631dfa 100644
+--- a/src/ui/tour/tour_steps_kiln.cpp
++++ b/src/ui/tour/tour_steps_kiln.cpp
+@@ -62,7 +62,8 @@ std::vector<TourStep> build_kiln_tour_steps(bool has_ams, int seen_version) {
+ 
+     TourStep customize{"fan_stack",
+                        "Customize your home screen",
+-                       "Long-press any tile to move, resize, remove or add tiles.",
++                       "To move, resize, remove or add tiles, turn on Allow Home Screen Editing "
++                       "in Settings > Touch & Input, then long-press a tile.",
+                        TooltipAnchor::PreferBelow,
+                        {}};
+     customize.fallback_target_name = "print_status";
 diff --git a/translations/en.yml b/translations/en.yml
-index db0b67f..6915b78 100644
+index 41347c53a6..e6e91384fa 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -5018,7 +5018,7 @@ translations:
+@@ -6485,7 +6485,7 @@ translations:
    'The print in progress, or your last print with Reprint Last. During a print, tap it for temperatures, IFS slots, and Pause, Tune and Cancel.': 'The print in progress, or your last print with Reprint Last. During a print, tap it for temperatures, IFS slots, and Pause, Tune and Cancel.'
    'IFS slots': 'IFS slots'
    'The material and colour in each of the four slots. Tap here to open the IFS screen.': 'The material and colour in each of the four slots. Tap here to open the IFS screen.'
@@ -129,10 +136,10 @@ index db0b67f..6915b78 100644
    'Tap a slot to load it or to set its material and colour. With Spoolman, you can link a spool to it.': 'Tap a slot to load it or to set its material and colour. With Spoolman, you can link a spool to it.'
    'Auto-Refill and IFS tools': 'Auto-Refill and IFS tools'
 diff --git a/translations/ru.yml b/translations/ru.yml
-index b30a650..cb2dd04 100644
+index 69c608a053..896f0418ff 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -5163,7 +5163,7 @@ translations:
+@@ -6636,7 +6636,7 @@ translations:
    'The print in progress, or your last print with Reprint Last. During a print, tap it for temperatures, IFS slots, and Pause, Tune and Cancel.': 'Текущая печать или последняя с кнопкой «Перепечатать последнюю». Во время печати нажмите сюда: температуры, слоты IFS, «Пауза», «Настройка» и «Отмена».'
    'IFS slots': 'Слоты IFS'
    'The material and colour in each of the four slots. Tap here to open the IFS screen.': 'Материал и цвет в каждом из четырёх слотов. Нажмите сюда, чтобы открыть экран IFS.'

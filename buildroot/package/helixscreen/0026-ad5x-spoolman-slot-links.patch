@@ -1,17 +1,26 @@
 
 ---
- include/ams_backend_ad5x_ifs.h       |  8 ++++
- src/printer/ams_backend_ad5x_ifs.cpp | 64 +++++++++++++++++++++++++++-
- 2 files changed, 71 insertions(+), 1 deletion(-)
+ include/ams_backend_ad5x_ifs.h       | 14 ++++++-
+ src/printer/ams_backend_ad5x_ifs.cpp | 63 +++++++++++++++++++++++++++-
+ 2 files changed, 75 insertions(+), 2 deletions(-)
 
 diff --git a/include/ams_backend_ad5x_ifs.h b/include/ams_backend_ad5x_ifs.h
-index 0819eacd93..7e8599e87e 100644
+index 24eae86e6a..4aa1543f80 100644
 --- a/include/ams_backend_ad5x_ifs.h
 +++ b/include/ams_backend_ad5x_ifs.h
-@@ -782,6 +782,14 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
-     /// frame). Returns true when something we publish changed. Caller must
-     /// hold mutex_.
-     bool parse_ifs_tool_map_locked(const nlohmann::json& ifs_object);
+@@ -480,7 +480,7 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend,
+     // idle port opens its editor (filament/auto_open_editor), as the stock
+     // screen asks for the new spool's material and colour.
+     [[nodiscard]] bool slot_has_prep_sensor(int slot_index) const override {
+-        return slot_index >= 0 && slot_index < kNumPorts;
++        return valid_slot(slot_index);
+     }
+ 
+     AmsError recover() override;
+@@ -791,6 +791,18 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend,
+     /// the remap capability gate as well. Returns true when something we publish
+     /// changed. Caller must hold mutex_.
+     bool apply_ifs_tool_map_locked(const helix::ad5x::ToolMap& parsed);
 +    /// Fold the kiln-spoolman plugin's `spoolman_slots` object into the slot
 +    /// links. Returns true when a slot's stored link changed. Caller must hold
 +    /// mutex_.
@@ -19,15 +28,19 @@ index 0819eacd93..7e8599e87e 100644
 +    /// Last spool id the plugin sent per slot: -1 before the first frame, 0 for
 +    /// none. Only a change from it links the slot, so a link the user set on
 +    /// the screen survives until the plugin's value changes.
-+    int plugin_spool_seen_[kNumPorts] = {-1, -1, -1, -1};
++    std::array<int, kMaxPorts> plugin_spool_seen_ = [] {
++        std::array<int, kMaxPorts> seen{};
++        seen.fill(-1);
++        return seen;
++    }();
      /// Re-derive each lane's SlotInfo::mapped_tool from tool_map_ — the one
      /// place the reverse direction is projected onto the slot model the UI
      /// reads. Shared by both adapters' edges and set_tool_mapping(). Caller
 diff --git a/src/printer/ams_backend_ad5x_ifs.cpp b/src/printer/ams_backend_ad5x_ifs.cpp
-index d1c8101cf8..796a65a996 100644
+index 819bc40f73..121172fe8d 100644
 --- a/src/printer/ams_backend_ad5x_ifs.cpp
 +++ b/src/printer/ams_backend_ad5x_ifs.cpp
-@@ -267,7 +267,10 @@ AmsBackendAd5xIfs::required_status_objects(const helix::PrinterDiscovery& hw) {
+@@ -313,7 +313,10 @@ AmsBackendAd5xIfs::required_status_objects(const helix::PrinterDiscovery& hw) {
      // Klipper's objects/list only carries objects that implement get_status(),
      // so listing them IS the capability check.
      const auto& available = hw.printer_objects();
@@ -39,7 +52,7 @@ index d1c8101cf8..796a65a996 100644
          if (std::find(available.begin(), available.end(), name) != available.end()) {
              objects.emplace_back(name);
          }
-@@ -555,6 +558,58 @@ void AmsBackendAd5xIfs::request_resync() {
+@@ -602,6 +605,58 @@ void AmsBackendAd5xIfs::request_resync() {
  
  // --- Status parsing ---
  
@@ -55,7 +68,7 @@ index d1c8101cf8..796a65a996 100644
 +    }
 +    const auto& slots = object["slots"];
 +    bool changed = false;
-+    for (int slot = 0; slot < kNumPorts; ++slot) {
++    for (int slot = 0; slot < port_count(); ++slot) {
 +        auto it = slots.find(std::to_string(slot + 1));
 +        const int spool = (it != slots.end() && it->is_number_integer()) ? it->get<int>() : 0;
 +        if (spool <= 0) {
@@ -95,23 +108,19 @@ index d1c8101cf8..796a65a996 100644
 +    return changed;
 +}
 +
- void AmsBackendAd5xIfs::handle_status(const json& status_obj) {
-     const json* status = &status_obj;
- 
-@@ -592,6 +647,13 @@ void AmsBackendAd5xIfs::handle_status(const json& status_obj) {
-         }
+ void AmsBackendAd5xIfs::handle_status(const json& status) {
+     // The parse reads the frame's plugin rows under the prefix already known.
+     std::string known_prefix;
+@@ -636,6 +691,12 @@ void AmsBackendAd5xIfs::handle_status(const json& status) {
+         state_changed = true;
      }
  
 +    // kiln-spoolman's per-slot spool links (absent without the plugin).
-+    if (status->contains("spoolman_slots")) {
-+        if (parse_spoolman_slots_locked((*status)["spoolman_slots"])) {
-+            state_changed = true;
-+        }
++    if (auto it = status.find("spoolman_slots");
++        it != status.end() && parse_spoolman_slots_locked(*it)) {
++        state_changed = true;
 +    }
 +
-     // Parse per-port filament sensors
-     // Leading space in sensor name is intentional — Klipper object naming convention
-     for (int port = 1; port <= kNumPorts; ++port) {
--- 
-2.56.0
-
+     for (int port = 1; port <= kDefaultPorts; ++port) {
+         if (const auto detected = sensors.port_detected[static_cast<size_t>(port - 1)]) {
+             parse_port_sensor(port, *detected);

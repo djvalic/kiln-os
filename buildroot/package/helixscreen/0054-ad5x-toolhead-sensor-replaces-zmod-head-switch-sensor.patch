@@ -28,14 +28,13 @@ Other printers and other builds are unchanged.
 Upstream: not applicable (AD5X OS specific)
 ---
  include/config_migrations.h                 |  15 +++
- src/system/config.cpp                       |  21 ++++
+ src/system/config.cpp                       |  15 +++
  src/system/config_migrations.cpp            | 101 +++++++++++++++
  tests/unit/test_config_kiln_head_sensor.cpp | 128 ++++++++++++++++++++
- 4 files changed, 265 insertions(+)
- create mode 100644 tests/unit/test_config_kiln_head_sensor.cpp
+ 4 files changed, 259 insertions(+)
 
 diff --git a/include/config_migrations.h b/include/config_migrations.h
-index c61c30ee58..74da5d845f 100644
+index 2fb9adf135..19d4b27f8e 100644
 --- a/include/config_migrations.h
 +++ b/include/config_migrations.h
 @@ -36,4 +36,19 @@ int migrated_scroll_throw(int stored, int platform_default);
@@ -59,10 +58,10 @@ index c61c30ee58..74da5d845f 100644
 +
  } // namespace helix::config_detail
 diff --git a/src/system/config.cpp b/src/system/config.cpp
-index d01b68f9f1..c577539eba 100644
+index daf7db7f92..6770c75a6c 100644
 --- a/src/system/config.cpp
 +++ b/src/system/config.cpp
-@@ -1083,6 +1083,14 @@ void Config::init(const std::string& config_path) {
+@@ -1101,6 +1101,14 @@ void Config::init(const std::string& config_path) {
          config_modified = true;
      }
  
@@ -77,38 +76,25 @@ index d01b68f9f1..c577539eba 100644
      // log_level intentionally NOT migrated - absence allows test_mode fallback
  
      // Ensure display section exists with defaults
-@@ -1710,6 +1718,13 @@ bool Config::apply_preset_file(const std::string& preset_name) {
-             spdlog::info("[Config] Wizard completed, skipping preset '{}' merge", preset_name);
-             return false;
+@@ -1662,6 +1670,13 @@ std::optional<json> load_preset(const std::string& preset_name, bool report_fail
          }
-+#if defined(HELIX_KILN_AD5X)
-+        // Kiln OS: the preset's head_switch_sensor is `toolhead` here, or the
-+        // sensor migration below would add it back at every start.
-+        if (preset_name == "ad5x") {
-+            kiln_rename_ad5x_head_sensor(preset_json["printer"]);
-+        }
-+#endif
-         const auto& preset_printer = preset_json["printer"];
-         bool changed = false;
- 
-@@ -1911,6 +1926,12 @@ bool Config::apply_preset_file(const std::string& preset_name) {
-                       preset_path);
-         return false;
+         return std::nullopt;
      }
 +#if defined(HELIX_KILN_AD5X)
-+    // Kiln OS: the preset's head_switch_sensor is `toolhead` here.
-+    if (preset_name == "ad5x" && preset_json.contains("printer")) {
-+        kiln_rename_ad5x_head_sensor(preset_json["printer"]);
++    // Kiln OS: the preset's head_switch_sensor is `toolhead` here, or the
++    // sensor migration would add it back at every start.
++    if (preset_name == "ad5x" && preset.contains("printer") && preset["printer"].is_object()) {
++        kiln_rename_ad5x_head_sensor(preset["printer"]);
 +    }
 +#endif
+     return preset;
+ }
  
-     // Deep-merge the "printer" section (hardware, fans, heaters, input, etc.) into
-     // the active printer subtree. Guarded by wizard_completed above, so this only
 diff --git a/src/system/config_migrations.cpp b/src/system/config_migrations.cpp
-index 9d20edae79..7c2f5e64c0 100644
+index 1dfe9d0c0e..83aa451721 100644
 --- a/src/system/config_migrations.cpp
 +++ b/src/system/config_migrations.cpp
-@@ -1572,4 +1572,105 @@ int migrated_scroll_throw(int stored, int platform_default) {
+@@ -1590,4 +1590,105 @@ int migrated_scroll_throw(int stored, int platform_default) {
      return stored == 25 ? platform_default : stored;
  }
  
@@ -348,6 +334,3 @@ index 0000000000..3bc2e028d9
 +          json::array({"heater_bed", kKiln, "led chamber_light"}));
 +    CHECK_FALSE(kiln_rename_ad5x_head_sensor(preset_printer));
 +}
--- 
-2.56.0
-

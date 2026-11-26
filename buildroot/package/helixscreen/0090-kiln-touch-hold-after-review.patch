@@ -45,21 +45,19 @@ wait_until_release, refused during a capture or by the handler).
 
 Upstream: not applicable (Kiln OS specific)
 ---
- include/touch_calibration_wrapper.h   |  12 +-
- include/touch_hold_gesture.h          | 146 +++++++
- include/ui_settings_touch.h           |   4 +-
- src/api/touch_calibration_wrapper.cpp |  47 +--
- src/application/application.cpp       |  87 +++-
- tests/unit/test_kiln_touch_hold.cpp   | 571 ++++++++++++++++++++++++++
+ include/touch_calibration_wrapper.h           |  12 +-
+ include/touch_hold_gesture.h                  | 146 +++++
+ include/ui_settings_touch.h                   |   4 +-
+ src/application/application.cpp               |  87 ++-
+ .../input/touch_calibration_wrapper.cpp       |  47 +-
+ tests/unit/test_kiln_touch_hold.cpp           | 571 ++++++++++++++++++
  6 files changed, 833 insertions(+), 34 deletions(-)
- create mode 100644 include/touch_hold_gesture.h
- create mode 100644 tests/unit/test_kiln_touch_hold.cpp
 
 diff --git a/include/touch_calibration_wrapper.h b/include/touch_calibration_wrapper.h
-index 43616a9..9f8025a 100644
+index 084be55958..30d976b9fe 100644
 --- a/include/touch_calibration_wrapper.h
 +++ b/include/touch_calibration_wrapper.h
-@@ -88,7 +88,13 @@ inline constexpr int kTransposedGuessCorroboration = 3;
+@@ -90,7 +90,13 @@ inline constexpr int kTransposedGuessCorroboration = 3;
  /// LVGL hands the press to a widget, so it works with any calibration.
  inline constexpr uint32_t kCalibrationHoldMs = 10000;
  /// A release shorter than this inside a hold is digitizer noise, not a lift.
@@ -74,7 +72,7 @@ index 43616a9..9f8025a 100644
  /// After the hold fires, it is armed again only once the panel has reported no
  /// touch for this long, so a panel that reports a touch all the time does not
  /// open calibration over and over.
-@@ -99,6 +105,10 @@ inline constexpr uint32_t kCalibrationHoldRearmMs = 3000;
+@@ -101,6 +107,10 @@ inline constexpr uint32_t kCalibrationHoldRearmMs = 3000;
  /// calibration screen); the press is then ended so the widget under the finger
  /// gets no click. Returns false to leave the press alone (calibration already
  /// open). nullptr turns the gesture off.
@@ -87,7 +85,7 @@ index 43616a9..9f8025a 100644
  /// Read callback wrapper that applies affine touch calibration.
 diff --git a/include/touch_hold_gesture.h b/include/touch_hold_gesture.h
 new file mode 100644
-index 0000000..bc8fcf0
+index 0000000000..bc8fcf0f7b
 --- /dev/null
 +++ b/include/touch_hold_gesture.h
 @@ -0,0 +1,146 @@
@@ -238,10 +236,10 @@ index 0000000..bc8fcf0
 +
 +} // namespace helix
 diff --git a/include/ui_settings_touch.h b/include/ui_settings_touch.h
-index 18f3717..abbfa0a 100644
+index 1d823c932e..cefc0e47a3 100644
 --- a/include/ui_settings_touch.h
 +++ b/include/ui_settings_touch.h
-@@ -36,10 +36,12 @@ class TouchSettingsOverlay : public OverlayBase {
+@@ -40,10 +40,12 @@ class TouchSettingsOverlay : public OverlayBase {
      void deinit_subjects();
      void register_callbacks() override;
      void on_activate() override;
@@ -255,10 +253,130 @@ index 18f3717..abbfa0a 100644
      void show_calibration_status(bool calibrated);
      void handle_touch_calibration_clicked();
  
-diff --git a/src/api/touch_calibration_wrapper.cpp b/src/api/touch_calibration_wrapper.cpp
-index d59e0f6..526880c 100644
---- a/src/api/touch_calibration_wrapper.cpp
-+++ b/src/api/touch_calibration_wrapper.cpp
+diff --git a/src/application/application.cpp b/src/application/application.cpp
+index 5a1f7607e0..6f0a7cbecd 100644
+--- a/src/application/application.cpp
++++ b/src/application/application.cpp
+@@ -152,6 +152,8 @@
+ #include "ui_tile_rung.h"
+ #include "ui_toast_manager.h"
+ #include "touch_calibration_wrapper.h"
++#include "touch_hold_gesture.h"
++#include "ui_settings_touch.h"
+ #include "ui_touch_calibration_overlay.h"
+ #include "ui_unit_art.h"
+ #include "ui_update_notify_modal.h"
+@@ -385,6 +387,28 @@ void notify_loop_from_other_thread() {
+     }
+ }
+ 
++/// Kiln OS: the hold to calibrate closes open dialogs before calibration
++/// opens: NavigationManager keeps modals above every overlay pushed under
++/// them, and the calibration's Accept and Retry would stay covered. Closed as
++/// a system sweep (External), so a dialog that waits for an answer sees a
++/// dismissal (the reinstall offer, patch 0088, asks again at the next start).
++/// As RemoteControlServer's reset: one top dialog at a time, at most 16.
++void close_dialogs_for_touch_calibration() {
++    constexpr int kMaxModalDepth = 16;
++    int closed = 0;
++    while (!ModalStack::instance().empty() && closed < kMaxModalDepth) {
++        lv_obj_t* top = Modal::get_top();
++        if (!top) {
++            break;
++        }
++        Modal::hide(top, ModalCloseReason::External);
++        ++closed;
++    }
++    if (closed > 0) {
++        spdlog::info("[Application] Closed {} dialog(s) for touch calibration", closed);
++    }
++}
++
+ } // namespace
+ 
+ // C bridge functions called from SDL event handler (lv_sdl_window.c)
+@@ -834,20 +858,71 @@ int Application::run(int argc, char** argv) {
+         // the only input, so a calibration that does not fit the panel must be
+         // fixable without hitting anything in particular. Any screen, wizard
+         // included; not while calibration is already open.
++        //
++        // Kiln OS: not while any calibration capture runs (the wizard's step
++        // too, DisplayManager::is_touch_calibration_active). In the setup
++        // wizard the wizard's own touch step opens instead: closing the overlay
++        // would hide the wizard's container (NavigationManager's go_back hides
++        // the screen's other children). Open dialogs are closed first, as a
++        // dismissal: they would sit above the overlay's Accept and Retry.
+         helix::set_calibration_hold_handler([this]() {
+             DisplayManager* dm = DisplayManager::instance();
+-            if (!m_screen || (dm && !dm->supports_touch_calibration()) ||
+-                helix::ui::get_touch_calibration_overlay().is_visible()) {
++            helix::TouchHoldState state;
++            state.has_screen = m_screen != nullptr;
++            state.supports_calibration = !dm || dm->supports_touch_calibration();
++            state.calibrating = dm && dm->is_touch_calibration_active();
++            state.overlay_visible = helix::ui::get_touch_calibration_overlay().is_visible();
++            state.wizard_active = is_wizard_active();
++            state.wizard_targeted = !ui_wizard_active_step_subset().empty();
++            const helix::TouchHoldAction action = helix::touch_hold_action(state);
++            if (action == helix::TouchHoldAction::Refuse) {
++                spdlog::info("[Application] Screen held: touch calibration not opened "
++                             "(calibrating={} overlay={} wizard={} targeted={})",
++                             state.calibrating, state.overlay_visible, state.wizard_active,
++                             state.wizard_targeted);
+                 return false;
+             }
++            if (action == helix::TouchHoldAction::WizardStep) {
++                lv_async_call(
++                    [](void*) {
++                        close_dialogs_for_touch_calibration();
++                        DisplayManager* d = DisplayManager::instance();
++                        if (!is_wizard_active() || !ui_wizard_active_step_subset().empty() ||
++                            (d && d->is_touch_calibration_active())) {
++                            return;
++                        }
++                        // Shown even when a calibration is saved (the step skips
++                        // itself then); commits on Next as at a first start
++                        force_touch_calibration_step(true);
++                        ui_wizard_navigate_to_step(helix::wizard::StepId::TouchCalibration);
++                    },
++                    nullptr);
++                return true;
++            }
+             lv_async_call(
+-                [](void* screen) {
++                [](void* app) {
++                    auto* self = static_cast<Application*>(app);
+                     auto& overlay = helix::ui::get_touch_calibration_overlay();
+-                    if (!overlay.is_visible()) {
+-                        overlay.show(static_cast<lv_obj_t*>(screen), nullptr);
++                    if (overlay.is_visible() || !self->m_screen) {
++                        return;
+                     }
++                    close_dialogs_for_touch_calibration();
++                    // As Settings > Touch & Input and --calibrate-touch do on success
++                    overlay.show(self->m_screen, [self](bool success) {
++                        if (!success) {
++                            return;
++                        }
++                        helix::settings::get_touch_settings_overlay().refresh_calibration_status();
++                        if (self->m_config &&
++                            self->m_config->get<bool>("/input/force_calibration", false)) {
++                            self->m_config->set<bool>("/input/force_calibration", false);
++                            self->m_config->save();
++                            spdlog::info("[Application] Cleared force_calibration config flag "
++                                         "after success");
++                        }
++                    });
+                 },
+-                m_screen);
++                this);
+             return true;
+         });
+ 
+diff --git a/src/platform/input/touch_calibration_wrapper.cpp b/src/platform/input/touch_calibration_wrapper.cpp
+index bf9b0b7554..f848ddf9fd 100644
+--- a/src/platform/input/touch_calibration_wrapper.cpp
++++ b/src/platform/input/touch_calibration_wrapper.cpp
 @@ -6,6 +6,7 @@
  #include "display_backend.h"
  #include "helix_display_telemetry.h"
@@ -346,129 +464,9 @@ index d59e0f6..526880c 100644
  
      // Apply affine calibration if valid (for both PRESSED and RELEASED states)
      if (ctx->calibration.valid) {
-diff --git a/src/application/application.cpp b/src/application/application.cpp
-index 2fce0fb..0562271 100644
---- a/src/application/application.cpp
-+++ b/src/application/application.cpp
-@@ -153,6 +153,8 @@
- #include "ui_tile_rung.h"
- #include "ui_toast_manager.h"
- #include "touch_calibration_wrapper.h"
-+#include "touch_hold_gesture.h"
-+#include "ui_settings_touch.h"
- #include "ui_touch_calibration_overlay.h"
- #include "ui_utils.h"
- #include "ui_wizard.h"
-@@ -396,6 +398,28 @@ void graceful_quit_signal_handler(int sig) {
-     app_request_quit_signal_safe();
- }
- 
-+/// Kiln OS: the hold to calibrate closes open dialogs before calibration
-+/// opens: NavigationManager keeps modals above every overlay pushed under
-+/// them, and the calibration's Accept and Retry would stay covered. Closed as
-+/// a system sweep (External), so a dialog that waits for an answer sees a
-+/// dismissal (the reinstall offer, patch 0088, asks again at the next start).
-+/// As RemoteControlServer's reset: one top dialog at a time, at most 16.
-+void close_dialogs_for_touch_calibration() {
-+    constexpr int kMaxModalDepth = 16;
-+    int closed = 0;
-+    while (!ModalStack::instance().empty() && closed < kMaxModalDepth) {
-+        lv_obj_t* top = Modal::get_top();
-+        if (!top) {
-+            break;
-+        }
-+        Modal::hide(top, ModalCloseReason::External);
-+        ++closed;
-+    }
-+    if (closed > 0) {
-+        spdlog::info("[Application] Closed {} dialog(s) for touch calibration", closed);
-+    }
-+}
-+
- } // namespace
- 
- // C bridge functions called from SDL event handler (lv_sdl_window.c)
-@@ -896,20 +920,71 @@ int Application::run(int argc, char** argv) {
-         // the only input, so a calibration that does not fit the panel must be
-         // fixable without hitting anything in particular. Any screen, wizard
-         // included; not while calibration is already open.
-+        //
-+        // Kiln OS: not while any calibration capture runs (the wizard's step
-+        // too, DisplayManager::is_touch_calibration_active). In the setup
-+        // wizard the wizard's own touch step opens instead: closing the overlay
-+        // would hide the wizard's container (NavigationManager's go_back hides
-+        // the screen's other children). Open dialogs are closed first, as a
-+        // dismissal: they would sit above the overlay's Accept and Retry.
-         helix::set_calibration_hold_handler([this]() {
-             DisplayManager* dm = DisplayManager::instance();
--            if (!m_screen || (dm && !dm->supports_touch_calibration()) ||
--                helix::ui::get_touch_calibration_overlay().is_visible()) {
-+            helix::TouchHoldState state;
-+            state.has_screen = m_screen != nullptr;
-+            state.supports_calibration = !dm || dm->supports_touch_calibration();
-+            state.calibrating = dm && dm->is_touch_calibration_active();
-+            state.overlay_visible = helix::ui::get_touch_calibration_overlay().is_visible();
-+            state.wizard_active = is_wizard_active();
-+            state.wizard_targeted = !ui_wizard_active_step_subset().empty();
-+            const helix::TouchHoldAction action = helix::touch_hold_action(state);
-+            if (action == helix::TouchHoldAction::Refuse) {
-+                spdlog::info("[Application] Screen held: touch calibration not opened "
-+                             "(calibrating={} overlay={} wizard={} targeted={})",
-+                             state.calibrating, state.overlay_visible, state.wizard_active,
-+                             state.wizard_targeted);
-                 return false;
-             }
-+            if (action == helix::TouchHoldAction::WizardStep) {
-+                lv_async_call(
-+                    [](void*) {
-+                        close_dialogs_for_touch_calibration();
-+                        DisplayManager* d = DisplayManager::instance();
-+                        if (!is_wizard_active() || !ui_wizard_active_step_subset().empty() ||
-+                            (d && d->is_touch_calibration_active())) {
-+                            return;
-+                        }
-+                        // Shown even when a calibration is saved (the step skips
-+                        // itself then); commits on Next as at a first start
-+                        force_touch_calibration_step(true);
-+                        ui_wizard_navigate_to_step(helix::wizard::StepId::TouchCalibration);
-+                    },
-+                    nullptr);
-+                return true;
-+            }
-             lv_async_call(
--                [](void* screen) {
-+                [](void* app) {
-+                    auto* self = static_cast<Application*>(app);
-                     auto& overlay = helix::ui::get_touch_calibration_overlay();
--                    if (!overlay.is_visible()) {
--                        overlay.show(static_cast<lv_obj_t*>(screen), nullptr);
-+                    if (overlay.is_visible() || !self->m_screen) {
-+                        return;
-                     }
-+                    close_dialogs_for_touch_calibration();
-+                    // As Settings > Touch & Input and --calibrate-touch do on success
-+                    overlay.show(self->m_screen, [self](bool success) {
-+                        if (!success) {
-+                            return;
-+                        }
-+                        helix::settings::get_touch_settings_overlay().refresh_calibration_status();
-+                        if (self->m_config &&
-+                            self->m_config->get<bool>("/input/force_calibration", false)) {
-+                            self->m_config->set<bool>("/input/force_calibration", false);
-+                            self->m_config->save();
-+                            spdlog::info("[Application] Cleared force_calibration config flag "
-+                                         "after success");
-+                        }
-+                    });
-                 },
--                m_screen);
-+                this);
-             return true;
-         });
- 
 diff --git a/tests/unit/test_kiln_touch_hold.cpp b/tests/unit/test_kiln_touch_hold.cpp
 new file mode 100644
-index 0000000..bb7b04b
+index 0000000000..bb7b04baee
 --- /dev/null
 +++ b/tests/unit/test_kiln_touch_hold.cpp
 @@ -0,0 +1,571 @@
@@ -1043,6 +1041,3 @@ index 0000000..bb7b04b
 +    hold(300, false);
 +    CHECK(handler_calls == 0);
 +}
--- 
-2.56.0
-

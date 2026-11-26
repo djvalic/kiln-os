@@ -247,7 +247,11 @@ Moonraker starts (`ad5x_plugins.py moonraker`, the same code Klipper
 uses), and Klipper rewrites it whenever plugins change. When at least
 one listed part has `[update_manager ...]` sections, the list adds
 `[update_manager]` with `enable_system_updates: False` (this system has
-no package manager). Moonraker reads it at its start, so when a plugin
+no package manager). A plugin installed from the catalog (pinned) is
+listed through its own generated copy in `config/.kiln-pinned/<name>.conf`:
+its `moonraker.conf` without its own `[update_manager]`, relative
+`[include]`s made absolute; one file per plugin, so a section two plugins
+both have is merged by Moonraker as across any two files. Moonraker reads it at its start, so when a plugin
 switch changes what Moonraker loads, Klipper asks the root update agent
 (`S68ad5x-update-agent`) to restart Moonraker, which it does unless a print
 runs (then the change waits for the next Moonraker start or reboot). If you
@@ -390,7 +394,11 @@ or in #plugin-dev on the Kiln OS Discord. A listed plugin:
   in `docs/plugin-api.md`) and doesn't take a name a Kiln plugin uses;
 - may ship its own `[update_manager]` for people who install it by hand.
   When it is installed from the catalog (pinned), Kiln leaves that section
-  out of what Moonraker loads, so Fluidd doesn't move it past the pin;
+  out of what Moonraker loads, so Fluidd doesn't move it past the pin. The
+  section left out is the one whose `path` is the plugin's folder
+  (`~/printer_data/config/plugins/<name>` or `/data/ad5x/plugins/<name>`;
+  `~` is the klipper user's home); other `[update_manager]` sections stay,
+  such as one that keeps a web interface the plugin installs up to date;
 - runs as root only through `root/` scripts (`docs/plugin-root-hooks.md`),
   and its `uninstall.sh` undoes what `install.sh` did;
 - fetches git submodules over https only (plugin API 1.7).

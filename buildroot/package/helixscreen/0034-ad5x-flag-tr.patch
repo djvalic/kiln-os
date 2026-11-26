@@ -4,10 +4,10 @@
  1 file changed, 1 insertion(+)
 
 diff --git a/src/application/asset_manager.cpp b/src/application/asset_manager.cpp
-index 5c69a19858..4f6a863f75 100644
+index 0c5d86b37d..93da29cd22 100644
 --- a/src/application/asset_manager.cpp
 +++ b/src/application/asset_manager.cpp
-@@ -314,6 +314,7 @@ void AssetManager::register_images() {
+@@ -280,6 +280,7 @@ void AssetManager::register_images() {
      reg_img("flag_it", "assets/images/flags/flag_it.bin");
      reg_img("flag_zh", "assets/images/flags/flag_zh.bin");
      reg_img("flag_ja", "assets/images/flags/flag_ja.bin");
@@ -15,6 +15,3 @@ index 5c69a19858..4f6a863f75 100644
  
      s_images_registered = true;
      spdlog::trace("[AssetManager] Images registered successfully");
--- 
-2.56.0
-

@@ -770,7 +770,17 @@ def sync_ifs_mcu(names, found, mcu_dir=IFS_MCU_DIR, flag=IFS_KLIPPER_FLAG,
         os.unlink(link)
     return True
 
-def moonraker_text(names, found, ifs_flag=None):
+def moonraker_text(names, found, ifs_flag=None, pinned_dir=None,
+                   files=None):
+    """The [include] list of the enabled plugins' moonraker.conf files.
+    A pinned plugin's file without its own [update_manager] goes to
+    pinned_dir/<name>.conf (added to files, path -> text) and is included
+    from there: a file of its own, so a section two plugins have (or the
+    [update_manager] below) is merged by Moonraker, not a duplicate."""
+    if pinned_dir is None:
+        pinned_dir = PINNED_MOONRAKER_DIR
+    if files is None:
+        files = {}
     lines = [MOONRAKER_HEADER.rstrip("\n")]
     updates = False
     for name in plan(names, found, ifs_flag=ifs_flag)[0]:
@@ -787,16 +797,73 @@ def moonraker_text(names, found, ifs_flag=None):
             text, info['dir'])
         if pinned is not None and pinned is not False:
             # Pinned from the catalog: without its own update manager
-            lines += ["# %s (pinned: its [update_manager] left out)" % (
-                path,), pinned]
+            own = os.path.join(pinned_dir, name + ".conf")
+            files[own] = pinned
+            lines += ["# %s (pinned: its own [update_manager] left out)"
+                      % (path,), "[include %s]" % (own,)]
+            updates |= any(sect.startswith("update_manager")
+                           for sect, _ in config_sections(pinned)[1:])
             continue
-        updates |= "[update_manager" in text
+        updates |= any(sect.startswith("update_manager")
+                       for sect, _ in config_sections(text)[1:])
         lines.append("[include %s]" % (path,))
     if updates:
         # Plugins kept up to date by Moonraker: this system has no package
         # manager for Moonraker's system updates.
         lines += ["[update_manager]", "enable_system_updates: False"]
     return "\n".join(lines) + "\n"
+
+def write_moonraker(path, names, found, ifs_flag=None):
+    """Write the Moonraker list at path and the pinned plugins' files
+    (moonraker_text) in .kiln-pinned/ next to it, then remove old ones
+    there. Runs as the klipper user (S62moonraker's step drops to it:
+    the folder is klipper's). True if anything changed."""
+    pdir = os.path.join(os.path.dirname(path), PINNED_DIR_NAME)
+    files = {}
+    text = moonraker_text(names, found, ifs_flag, pdir, files)
+    try:
+        st = os.lstat(pdir)
+    except FileNotFoundError:
+        st = None
+    is_dir = st is not None and stat.S_ISDIR(st.st_mode)
+    changed = False
+    if files:
+        if st is None:
+            os.mkdir(pdir, 0o755)
+        elif not is_dir:
+            # Never written through a link (or into something else)
+            raise OSError("%s isn't a folder" % (pdir,))
+        for p, t in sorted(files.items()):
+            changed |= write_if_changed(p, t)
+    # The list before the clean-up: it never names a file already gone
+    changed |= write_if_changed(path, text)
+    if is_dir:
+        for fn in os.listdir(pdir):
+            p = os.path.join(pdir, fn)
+            if fn.endswith(".conf") and p not in files:
+                os.unlink(p)
+                changed = True
+    return changed
+
+def drop_to_owner(folder):
+    """As root, become the owner of folder (its group, no other groups)
+    for good when that isn't root: the Moonraker list step at boot
+    writes into klipper's config folder, and root mustn't follow anything
+    placed there. A link counts as its own owner's (lstat). A root-owned
+    folder (tests, the image check) needs no drop."""
+    if os.geteuid() != 0:
+        return
+    st = os.lstat(folder)
+    if st.st_uid == 0:
+        return
+    os.setgroups([])
+    os.setgid(st.st_gid)
+    os.setuid(st.st_uid)
+    try:
+        import pwd
+        os.environ["HOME"] = pwd.getpwuid(st.st_uid).pw_dir
+    except (ImportError, KeyError):
+        pass
 
 def plugin_paths(names, found, ifs_flag=None):
     """(python dirs, Moonraker component dirs) of the enabled plugins that
@@ -871,29 +938,109 @@ def is_pinned(plugin_dir):
                 return True
     return False
 
-UPDATE_MANAGER_RE = re.compile(r"^\[\s*update_manager(\s[^\]]*)?\]")
 SECTION_RE = re.compile(r"^\[[^\]]+\]")
-INCLUDE_LINE_RE = re.compile(r"^\[\s*include\s+(\S+)\s*\]\s*$")
+# Moonraker's config reader (confighelper.py _parse_file): a section is
+# r"\s*\[([^]]+)\]" after the inline comment (" #" or " ;") is cut
+MOONRAKER_SECTION_RE = re.compile(r"\s*\[([^]]+)\]")
+# Moonraker's user: a "~" in a plugin's moonraker.conf is this home
+MOONRAKER_HOME = "/home/klipper"
+# Next to moonraker-plugins.conf: pinned plugins' moonraker.conf without
+# their own [update_manager], one file each (write_moonraker)
+PINNED_DIR_NAME = ".kiln-pinned"
+PINNED_MOONRAKER_DIR = os.path.join(CONFIG_DIR, PINNED_DIR_NAME)
 
-def without_update_manager(text, plugin_dir):
-    """A pinned plugin's moonraker.conf for Moonraker (plugin API 1.11):
-    its [update_manager ...] sections left out (Moonraker would check out
-    the plugin's branch, past the catalog's commit), relative [include]s
-    made absolute (the text goes inline into the generated file). None
-    when it has no [update_manager]."""
-    if not any(UPDATE_MANAGER_RE.match(l) for l in text.splitlines()):
+def config_sections(text):
+    """A Moonraker config file's sections as Moonraker reads them: a list
+    of (section name, {option: (value, [line numbers])}), the part before
+    the first section first with name "". Comments, inline comments
+    (" #"/" ;" after a space), indented continuation lines and lower-case
+    option names as in Moonraker's _parse_file. Each section also has its
+    line numbers under the key None."""
+    out = [("", {None: []})]
+    opt_indent, last = -1, None
+    for i, raw in enumerate(text.splitlines()):
+        sect, opts = out[-1]
+        if not raw.strip() or raw.lstrip()[0] in "#;":
+            opts[None].append(i)
+            continue
+        line = raw.expandtabs(4)
+        m = re.search(r" +[#;]", line)
+        if m is not None:
+            line = line[:m.start()]
+        line = re.sub(r" \\(#|;)", r" \1", line)
+        indent = len(line) - len(line.lstrip())
+        if opt_indent != -1 and indent > opt_indent:
+            # A value over several lines
+            opts[None].append(i)
+            if last is not None:
+                value, at = opts[last]
+                opts[last] = (value + "\n" + line.strip(), at + [i])
+            continue
+        m = MOONRAKER_SECTION_RE.match(line)
+        if m is not None:
+            opt_indent, last = -1, None
+            # The name as Moonraker has it: "[ include x]" is no include
+            out.append((m.group(1), {None: [i]}))
+            continue
+        opt_indent = indent
+        parts = re.split(r"[:=]", line, 1)
+        key, value = parts[0], parts[1] if len(parts) > 1 else ""
+        last = key.strip().lower()
+        opts[last] = (value.strip(), [i])
+        opts[None].append(i)
+    return out
+
+def moonraker_path(value, home=MOONRAKER_HOME):
+    """A path option as Moonraker's update manager reads it (expanduser
+    for its user: "~" is home, "~name" that user's home), None when it
+    isn't one."""
+    if value.startswith("~"):
+        user, slash, rest = value[1:].partition("/")
+        if user:
+            try:
+                import pwd
+                base = pwd.getpwnam(user).pw_dir
+            except (ImportError, KeyError):
+                return None
+        else:
+            base = home
+        value = base + slash + rest
+    if not value.startswith("/") or "\n" in value:
         return None
-    out, skip = [], False
-    for line in text.splitlines():
-        if SECTION_RE.match(line):
-            skip = bool(UPDATE_MANAGER_RE.match(line))
-            m = INCLUDE_LINE_RE.match(line)
-            if m and not os.path.isabs(m.group(1)):
-                line = "[include %s]" % (os.path.join(plugin_dir,
-                                                      m.group(1)),)
-        if not skip:
-            out.append(line)
-    return "\n".join(out)
+    return value
+
+def own_entry_path(value, plugin_dir, home=MOONRAKER_HOME):
+    """Whether an [update_manager] section's path names the plugin's own
+    folder (config/plugins/NAME is a link to it)."""
+    path = moonraker_path(value, home)
+    return path is not None and (os.path.realpath(path)
+                                 == os.path.realpath(plugin_dir))
+
+def without_update_manager(text, plugin_dir, home=MOONRAKER_HOME):
+    """A pinned plugin's moonraker.conf for Moonraker (plugin API 1.11):
+    the [update_manager ...] section that updates the plugin itself (its
+    path is the plugin's folder) left out, since Moonraker would check out
+    the plugin's branch past the catalog's commit. Its other sections stay,
+    other [update_manager]s too (mainsail-kiln's [update_manager mainsail]
+    updates the Mainsail interface). Relative [include]s are made absolute
+    (the text goes to a file of its own outside the plugin's folder).
+    None when nothing is left out."""
+    lines = text.splitlines()
+    drop, dropped = set(), False
+    for sect, opts in config_sections(text)[1:]:
+        if sect == "update_manager" or sect.startswith("update_manager "):
+            value = opts.get("path", ("", []))[0]
+            if own_entry_path(value, plugin_dir, home):
+                drop.update(opts[None])
+                dropped = True
+        elif sect.startswith("include "):
+            inc = sect[8:].strip()
+            if inc and not inc.startswith("/"):
+                lines[opts[None][0]] = "[include %s]" % (
+                    os.path.join(plugin_dir, inc),)
+    if not dropped:
+        return None
+    return "\n".join(l for i, l in enumerate(lines) if i not in drop) + "\n"
 
 def same_repo(a, b):
     """Whether two git URLs name the same repository (a trailing ".git" or
@@ -1501,9 +1648,8 @@ class AD5XPlugins:
         self._check_root_updates()
     def _write_moonraker(self, names):
         try:
-            return write_if_changed(self.moonraker_file,
-                                    moonraker_text(names, self.found,
-                                                   self.ifs_klipper_flag))
+            return write_moonraker(self.moonraker_file, names, self.found,
+                                   self.ifs_klipper_flag)
         except OSError as e:
             logging.info("ad5x_plugins: can't write %s: %s",
                          self.moonraker_file, e)
@@ -2380,9 +2526,12 @@ def main(argv):
         return 0
     out = argv[3] if len(argv) > 3 else os.path.join(
         CONFIG_DIR, 'moonraker-plugins.conf')
+    # S62moonraker runs this as root: all of it is the config folder's
+    # owner's (klipper's) to do
+    drop_to_owner(os.path.dirname(os.path.abspath(out)))
     names = read_enabled(plugins_file)[0]
     found = scan(SHIPPED_DIR, USER_DIR)
-    write_if_changed(out, moonraker_text(names, found))
+    write_moonraker(out, names, found)
     return 0
 
 if __name__ == '__main__':

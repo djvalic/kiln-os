@@ -12,16 +12,47 @@ were drawn as fixed English text in every language; they now go through
 lv_tr(). Russian: СЕЛЕКТОР and ХАБ, the words ru.yml already uses for
 Selector and Hub. Other languages show them in English as before.
 ---
- src/ui/ui_filament_path_topology.cpp | 7 ++++---
- translations/en.yml                  | 2 ++
- translations/ru.yml                  | 2 ++
- 3 files changed, 8 insertions(+), 3 deletions(-)
+ src/ui/filament/ui_filament_path_glyphs.cpp   | 4 +++-
+ src/ui/filament/ui_filament_path_topology.cpp | 5 +++--
+ translations/en.yml                           | 2 ++
+ translations/ru.yml                           | 2 ++
+ 4 files changed, 10 insertions(+), 3 deletions(-)
 
-diff --git a/src/ui/ui_filament_path_topology.cpp b/src/ui/ui_filament_path_topology.cpp
-index 801fde7acb..5785576a1d 100644
---- a/src/ui/ui_filament_path_topology.cpp
-+++ b/src/ui/ui_filament_path_topology.cpp
-@@ -333,7 +333,7 @@ void render_mixed(lv_obj_t* obj, lv_layer_t* layer, FilamentPathData* data) {
+diff --git a/src/ui/filament/ui_filament_path_glyphs.cpp b/src/ui/filament/ui_filament_path_glyphs.cpp
+index 82c23cae0a..a769734c8c 100644
+--- a/src/ui/filament/ui_filament_path_glyphs.cpp
++++ b/src/ui/filament/ui_filament_path_glyphs.cpp
+@@ -16,6 +16,7 @@
+ #include "hub_buffer_meter.h"
+ #include "nozzle_renderer_dispatch.h"
+ #include "settings_manager.h"
++#include "lvgl/src/others/translation/lv_translation.h"
+ #include "theme_manager.h"
+ 
+ #include <algorithm>
+@@ -117,7 +118,8 @@ int32_t hub_gear_width(const lv_font_t* icon_font) {
+ } // namespace
+ 
+ const char* hub_section_label(const FilamentPathData& data) {
+-    return data.topology == 0 ? "SELECTOR" : "HUB";
++    // Translated: the box label is on screen in every language (Kiln OS, issue #23).
++    return data.topology == 0 ? lv_tr("SELECTOR") : lv_tr("HUB");
+ }
+ 
+ bool hub_section_interactive(const FilamentPathData& data) {
+diff --git a/src/ui/filament/ui_filament_path_topology.cpp b/src/ui/filament/ui_filament_path_topology.cpp
+index 93b1a19d58..cc9a7a3c0a 100644
+--- a/src/ui/filament/ui_filament_path_topology.cpp
++++ b/src/ui/filament/ui_filament_path_topology.cpp
+@@ -28,6 +28,7 @@
+ #include "ui_filament_path_plan.h"
+ 
+ #include "baked_art.h"
++#include "lvgl/src/others/translation/lv_translation.h"
+ #include "helix/ui/text_metrics.h"
+ #include "helix_psram_attr.h"
+ 
+@@ -396,7 +397,7 @@ void render_mixed(lv_obj_t* obj, lv_layer_t* layer, FilamentPathData* data) {
  
      if (f.hub_count > 0) {
          draw_hub_box(ctx, f.hub_cx, f.hub_cy, f.hub_w, f.hub_h, data->theme.color_hub_bg,
@@ -29,31 +60,21 @@ index 801fde7acb..5785576a1d 100644
 +                     data->theme.color_hub_border, lv_tr("HUB"));
      }
      paint_box_bands(layer, plan, pal);
- 
-@@ -416,7 +416,8 @@ void draw_hub_section(const RenderCtx& ctx, const LinearHubFrame& f) {
-     const lv_color_t hub_bg_tinted = hub_tint.bg;
-     const lv_color_t hub_border_final = hub_tint.border;
- 
--    const char* hub_label = (data->topology == 0) ? "SELECTOR" : "HUB";
-+    // Translated: the box label is on screen in every language (Kiln OS, issue #23).
-+    const char* hub_label = (data->topology == 0) ? lv_tr("SELECTOR") : lv_tr("HUB");
- 
-     // For LINEAR topology, hub box spans the full slot area width.
-     // slot_x values are slot centers, so we add half a slot width on each
-@@ -438,7 +439,7 @@ void draw_hub_section(const RenderCtx& ctx, const LinearHubFrame& f) {
-             sel_w = (last_slot_x - first_slot_x) + slot_pad;
+     draw_tools(ToolPass::Badge);
+@@ -590,7 +591,7 @@ void draw_hub_section(const RenderCtx& ctx, const LinearHubFrame& f) {
+             sel_w = draw_fixed_selector(ctx, f.selector_y, sel_w, f.hub_h, hub_tint);
+         } else {
+             sel_w = draw_hub_box(ctx, f.center_x, f.selector_y, sel_w, f.hub_h, hub_bg_tinted,
+-                                 hub_border_final, "SELECTOR", LV_OPA_60,
++                                 hub_border_final, lv_tr("SELECTOR"), LV_OPA_60,
+                                  /*interactive=*/data->hub_callback != nullptr);
          }
-         sel_w = draw_hub_box(ctx, f.center_x, f.selector_y, sel_w, f.hub_h, hub_bg_tinted,
--                             hub_border_final, "SELECTOR", LV_OPA_60,
-+                             hub_border_final, lv_tr("SELECTOR"), LV_OPA_60,
-                              /*interactive=*/data->hub_callback != nullptr);
          // The unit's own box is the management target; the hub on the head is
-         // not a separate control.
 diff --git a/translations/en.yml b/translations/en.yml
-index 3f627b1069..3493bbdb08 100644
+index 7a0b0c6583..4af4cfcf53 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -5087,6 +5087,7 @@ translations:
+@@ -6554,6 +6554,7 @@ translations:
    'Heats the bed to 60 °C and probes the whole bed to measure its shape. Keep the bed clear. The bed stays warm for the Z offset test that follows.': 'Heats the bed to 60 °C and probes the whole bed to measure its shape. Keep the bed clear. The bed stays warm for the Z offset test that follows.'
    'Homing and heating...': 'Homing and heating...'
    'Homing the IFS': 'Homing the IFS'
@@ -61,7 +82,7 @@ index 3f627b1069..3493bbdb08 100644
    'IFS driver error': 'IFS driver error'
    'IFS tuning': 'IFS tuning'
    'Input shaping against ringing': 'Input shaping against ringing'
-@@ -5170,6 +5171,7 @@ translations:
+@@ -6637,6 +6638,7 @@ translations:
    'Selecting a slot': 'Selecting a slot'
    'Selecting the slot': 'Selecting the slot'
    'Selecting {}': 'Selecting {}'
@@ -70,10 +91,10 @@ index 3f627b1069..3493bbdb08 100644
    'Self-check, PID, bed mesh, vibration, IFS, Z offset': 'Self-check, PID, bed mesh, vibration, IFS, Z offset'
    'Short': 'Short'
 diff --git a/translations/ru.yml b/translations/ru.yml
-index 0d09ccbecf..d66ad156ff 100644
+index 1c85b441bb..333512dfbf 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -5258,6 +5258,7 @@ translations:
+@@ -6732,6 +6732,7 @@ translations:
    'Heats the bed to 60 °C and probes the whole bed to measure its shape. Keep the bed clear. The bed stays warm for the Z offset test that follows.': 'Нагревает стол до 60 °C и проходит датчиком по всему столу, чтобы измерить его форму. Стол должен быть пустым. Стол остаётся тёплым для следующего теста смещения по Z.'
    'Homing and heating...': 'Парковка и нагрев...'
    'Homing the IFS': 'Парковка IFS'
@@ -81,7 +102,7 @@ index 0d09ccbecf..d66ad156ff 100644
    'IFS driver error': 'Ошибка драйвера IFS'
    'IFS tuning': 'Настройка IFS'
    'Input shaping against ringing': 'Компенсация вибраций против звона'
-@@ -5341,6 +5342,7 @@ translations:
+@@ -6815,6 +6816,7 @@ translations:
    'Selecting a slot': 'Выбор слота'
    'Selecting the slot': 'Выбор слота'
    'Selecting {}': 'Выбор: {}'
@@ -89,6 +110,3 @@ index 0d09ccbecf..d66ad156ff 100644
    'Self-check': 'Самопроверка'
    'Self-check, PID, bed mesh, vibration, IFS, Z offset': 'Самопроверка, PID, сетка стола, вибрации, IFS, смещение по Z'
    'Short': 'Краткий'
--- 
-2.56.0
-

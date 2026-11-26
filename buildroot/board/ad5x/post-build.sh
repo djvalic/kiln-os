@@ -13,6 +13,11 @@
 set -e
 TARGET=$1
 
+# Root's password in the image: the default "root" instead of an empty one
+# (lib/rootpw.sh, docs/install.md "SSH login and the root password")
+. "$BR2_EXTERNAL_AD5X_PATH/board/ad5x/root-default.sh"
+root_default_shadow "$TARGET"
+
 # Files of earlier builds that packages no longer install: Buildroot never
 # removes anything from the target tree, so drop them here.
 # S07ad5x-stock-helpers (replaced by S07ad5x-board) mounted slot A, now the

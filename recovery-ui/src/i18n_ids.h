@@ -314,15 +314,7 @@ enum rui_str {
 
 typedef enum {
 	LANG_EN,
-	LANG_ZH,
-	LANG_JA,
-	LANG_DE,
-	LANG_ES,
-	LANG_IT,
 	LANG_RU,
-	LANG_PT,
-	LANG_KO,
-	LANG_TR,
 	LANG__COUNT
 } rui_lang;
 

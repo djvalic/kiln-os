@@ -17,19 +17,19 @@ backends keep "Endless Spool".
 
 Upstream: not applicable (AD5X OS specific)
 ---
- src/printer/ams_backend_ad5x_ifs.cpp        |  8 +++--
- src/ui/ui_ams_device_operations_overlay.cpp | 13 ++++++++
- tests/unit/test_ams_ad5x_kiln_ifs.cpp       |  5 ++-
- tests/unit/test_ams_device_ops_rows.cpp     | 35 ++++++++++++++++++++-
- translations/en.yml                         |  2 ++
- translations/ru.yml                         |  2 ++
+ src/printer/ams_backend_ad5x_ifs.cpp          |  8 +++--
+ .../ui_ams_device_operations_overlay.cpp      | 13 +++++++
+ tests/unit/test_ams_ad5x_kiln_ifs.cpp         |  5 ++-
+ tests/unit/test_ams_device_ops_rows.cpp       | 35 ++++++++++++++++++-
+ translations/en.yml                           |  2 ++
+ translations/ru.yml                           |  2 ++
  6 files changed, 61 insertions(+), 4 deletions(-)
 
 diff --git a/src/printer/ams_backend_ad5x_ifs.cpp b/src/printer/ams_backend_ad5x_ifs.cpp
-index 4322546f23..e7b0d2479f 100644
+index fd7b5aeb8f..73981f9c7e 100644
 --- a/src/printer/ams_backend_ad5x_ifs.cpp
 +++ b/src/printer/ams_backend_ad5x_ifs.cpp
-@@ -7197,8 +7197,12 @@ std::vector<helix::printer::DeviceSection> AmsBackendAd5xIfs::get_device_section
+@@ -6773,8 +6773,12 @@ std::vector<helix::printer::DeviceSection> AmsBackendAd5xIfs::get_device_section
          return sections;
      }
      if (kiln_refill_live_locked()) {
@@ -44,11 +44,11 @@ index 4322546f23..e7b0d2479f 100644
      }
      if (kiln_info_.map_mode.has_value()) {
          sections.push_back(
-diff --git a/src/ui/ui_ams_device_operations_overlay.cpp b/src/ui/ui_ams_device_operations_overlay.cpp
-index 6f343bd899..fc77fdc9e8 100644
---- a/src/ui/ui_ams_device_operations_overlay.cpp
-+++ b/src/ui/ui_ams_device_operations_overlay.cpp
-@@ -457,6 +457,19 @@ void AmsDeviceOperationsOverlay::update_from_backend() {
+diff --git a/src/ui/filament/ui_ams_device_operations_overlay.cpp b/src/ui/filament/ui_ams_device_operations_overlay.cpp
+index 02e9638295..b386fd8d76 100644
+--- a/src/ui/filament/ui_ams_device_operations_overlay.cpp
++++ b/src/ui/filament/ui_ams_device_operations_overlay.cpp
+@@ -694,6 +694,19 @@ void AmsDeviceOperationsOverlay::update_from_backend() {
      lv_subject_set_int(&can_reset_endless_spool_subject_,
                         backend->get_endless_spool_capabilities().editable() ? 1 : 0);
  
@@ -85,10 +85,10 @@ index 486fc84b7b..3e92cf1dde 100644
          CHECK(ids == std::vector<std::string>{"endless_spool", "setup", "calibration", "feeder"});
          // Every action sits in a declared section.
 diff --git a/tests/unit/test_ams_device_ops_rows.cpp b/tests/unit/test_ams_device_ops_rows.cpp
-index 7ec3e3fad2..d62b3b936e 100644
+index 348d372862..df2e3def07 100644
 --- a/tests/unit/test_ams_device_ops_rows.cpp
 +++ b/tests/unit/test_ams_device_ops_rows.cpp
-@@ -43,6 +43,14 @@ class SwitchableEndlessMock : public AmsBackendMock {
+@@ -41,6 +41,14 @@ class SwitchableEndlessMock : public AmsBackendMock {
          on_ = on;
      }
  
@@ -103,7 +103,7 @@ index 7ec3e3fad2..d62b3b936e 100644
      [[nodiscard]] helix::printer::EndlessSpoolCapabilities
      get_endless_spool_capabilities() const override {
          auto caps = AmsBackendMock::get_endless_spool_capabilities();
-@@ -80,6 +88,7 @@ class SwitchableEndlessMock : public AmsBackendMock {
+@@ -78,6 +86,7 @@ class SwitchableEndlessMock : public AmsBackendMock {
      EventCallback listener_;
      bool switchable_ = false;
      bool on_ = false;
@@ -111,7 +111,7 @@ index 7ec3e3fad2..d62b3b936e 100644
  };
  
  class DeviceOpsRowsFixture : public LVGLUITestFixture {
-@@ -104,7 +113,9 @@ class DeviceOpsRowsFixture : public LVGLUITestFixture {
+@@ -102,7 +111,9 @@ class DeviceOpsRowsFixture : public LVGLUITestFixture {
      }
  
      /// Install @p backend, build the overlay through show(), and return it.
@@ -122,7 +122,7 @@ index 7ec3e3fad2..d62b3b936e 100644
          owned->set_operation_delay(0);
          REQUIRE(owned->start().success());
          SwitchableEndlessMock* raw = owned.get();
-@@ -196,6 +207,28 @@ TEST_CASE_METHOD(DeviceOpsRowsFixture, "one Endless Spool switch follows the cap
+@@ -194,6 +205,28 @@ TEST_CASE_METHOD(DeviceOpsRowsFixture, "one Endless Spool switch follows the cap
      }
  }
  
@@ -152,10 +152,10 @@ index 7ec3e3fad2..d62b3b936e 100644
                   "[ams][device-ops][rows]") {
      show_with(std::make_unique<SwitchableEndlessMock>(false, false));
 diff --git a/translations/en.yml b/translations/en.yml
-index dc8e338304..3f627b1069 100644
+index b55df21688..7a0b0c6583 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -5026,6 +5026,8 @@ translations:
+@@ -6493,6 +6493,8 @@ translations:
    'Asks for the time zone and the nozzle size, then runs the self-check and the tuning steps again (PID, bed mesh, vibration, IFS, Z offset). Every step can be skipped. Results are saved at the end and Klipper restarts.': 'Asks for the time zone and the nozzle size, then runs the self-check and the tuning steps again (PID, bed mesh, vibration, IFS, Z offset). Every step can be skipped. Results are saved at the end and Klipper restarts.'
    'Auto colour': 'Auto colour'
    'Auto-refill': 'Auto-refill'
@@ -165,10 +165,10 @@ index dc8e338304..3f627b1069 100644
    'Auto-refill is on and {} is a backup, but it did not take over.': 'Auto-refill is on and {} is a backup, but it did not take over.'
    'Auto-refill is on, but no slot holds a backup for this spool.': 'Auto-refill is on, but no slot holds a backup for this spool.'
 diff --git a/translations/ru.yml b/translations/ru.yml
-index b6cb33f27a..0d09ccbecf 100644
+index 651ea042e8..1c85b441bb 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -5197,6 +5197,8 @@ translations:
+@@ -6671,6 +6671,8 @@ translations:
    'Asks for the time zone and the nozzle size, then runs the self-check and the tuning steps again (PID, bed mesh, vibration, IFS, Z offset). Every step can be skipped. Results are saved at the end and Klipper restarts.': 'Запрашивает часовой пояс и размер сопла, затем снова выполняет самопроверку и шаги настройки (PID, сетка стола, вибрации, IFS, смещение по Z). Любой шаг можно пропустить. В конце результаты сохраняются, и Klipper перезапускается.'
    'Auto colour': 'Авто по цвету'
    'Auto-refill': 'Автозамена'
@@ -177,6 +177,3 @@ index b6cb33f27a..0d09ccbecf 100644
    'Auto-refill is off, so no backup spool takes over.': 'Автозамена выключена, поэтому резервная катушка не подключится.'
    'Auto-refill is on and {} is a backup, but it did not take over.': 'Автозамена включена и {} — резерв, но замена не произошла.'
    'Auto-refill is on, but no slot holds a backup for this spool.': 'Автозамена включена, но ни в одном слоте нет резерва для этой катушки.'
--- 
-2.56.0
-

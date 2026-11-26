@@ -58,20 +58,20 @@ Upstream: not applicable (AD5X OS specific)
  include/ad5x_ifs_firmware_view.h         |  31 +-
  include/ui_panel_settings.h              |   2 -
  include/ui_settings_ad5x_ifs_firmware.h  | 226 ++++++---
- src/api/moonraker_discovery_sequence.cpp |  16 +-
+ src/api/moonraker_discovery_sequence.cpp |  15 +-
  src/application/discovery_steps.cpp      |  34 +-
  src/ui/ad5x_ifs_firmware_view.cpp        |  51 +-
- src/ui/ui_panel_settings.cpp             |  12 +-
+ src/ui/settings/ui_panel_settings.cpp    |  12 +-
  src/ui/ui_settings_ad5x_ifs_firmware.cpp | 612 +++++++++++------------
  tests/unit/test_ad5x_ifs_firmware.cpp    | 411 +++++++++++++--
  tests/unit/test_job_holds_machine.cpp    |   3 +
  translations/en.yml                      |  36 ++
  translations/ru.yml                      |  36 ++
  ui_xml/settings_hardware_overlay.xml     |   6 +-
- 13 files changed, 983 insertions(+), 493 deletions(-)
+ 13 files changed, 982 insertions(+), 493 deletions(-)
 
 diff --git a/include/ad5x_ifs_firmware_view.h b/include/ad5x_ifs_firmware_view.h
-index 9ac3a53f..4e1c9a43 100644
+index 9ac3a53ff2..4e1c9a4382 100644
 --- a/include/ad5x_ifs_firmware_view.h
 +++ b/include/ad5x_ifs_firmware_view.h
 @@ -6,12 +6,13 @@
@@ -131,20 +131,20 @@ index 9ac3a53f..4e1c9a43 100644
  using Translator = const char* (*)(const char*);
  void set_translator(Translator tr);
 diff --git a/include/ui_panel_settings.h b/include/ui_panel_settings.h
-index f3284f70..992b6333 100644
+index 7b806914fb..aa0c8a80a3 100644
 --- a/include/ui_panel_settings.h
 +++ b/include/ui_panel_settings.h
-@@ -145,8 +145,6 @@ class SettingsPanel : public PanelBase {
-     lv_subject_t show_ad5x_soak_subject_{};
+@@ -149,8 +149,6 @@ class SettingsPanel : public PanelBase {
+     helix::Subject show_ad5x_soak_subject_{};
      // 1 when the printer has the IFS (`ifs` object): unhides "Filament Auto-Refill"
-     lv_subject_t show_ad5x_refill_subject_{};
+     helix::Subject show_ad5x_refill_subject_{};
 -    // 1 when the printer has the `ifs_firmware` object: unhides Devices > "IFS firmware"
--    lv_subject_t show_ad5x_ifs_firmware_subject_{};
+-    helix::Subject show_ad5x_ifs_firmware_subject_{};
  
      // Live status line shown under each stateful root row (settings_panel.xml),
      // refreshed by refresh_status_lines().
 diff --git a/include/ui_settings_ad5x_ifs_firmware.h b/include/ui_settings_ad5x_ifs_firmware.h
-index cc65f364..e2b9b8b4 100644
+index d965febcf7..ac71e894bc 100644
 --- a/include/ui_settings_ad5x_ifs_firmware.h
 +++ b/include/ui_settings_ad5x_ifs_firmware.h
 @@ -2,18 +2,43 @@
@@ -205,9 +205,9 @@ index cc65f364..e2b9b8b4 100644
 @@ -22,7 +47,6 @@
  #pragma once
  
- #include "ui_observer_guard.h"
--#include "ui_subscription_guard.h"
- #include "ui_timer_guard.h"
+ #include "core/observer_guard.h"
+-#include "subscription_guard.h"
+ #include "core/timer_guard.h"
  
  #include "ad5x_ifs_firmware_view.h"
 @@ -34,25 +58,67 @@
@@ -360,8 +360,8 @@ index cc65f364..e2b9b8b4 100644
 +    void mark_alive();
  
      SubjectManager subjects_;
-+    lv_subject_t available_{};
-     lv_subject_t text_{};
++    helix::Subject available_{};
+     helix::Subject text_{};
      char text_buf_[32] = "";
      bool subjects_initialized_ = false;
  
@@ -439,7 +439,7 @@ index cc65f364..e2b9b8b4 100644
 -    void mark_alive();
  
      SubjectManager subjects_;
-     lv_subject_t kind_subject_{};
+     helix::Subject kind_subject_{};
 @@ -169,24 +265,6 @@ class Ad5xIfsFirmwareOverlay : public OverlayBase {
      char title_buf_[128] = "";
      char body_buf_[512] = "";
@@ -466,7 +466,7 @@ index cc65f364..e2b9b8b4 100644
  };
  
 diff --git a/src/api/moonraker_discovery_sequence.cpp b/src/api/moonraker_discovery_sequence.cpp
-index 239acbbb..22c2e311 100644
+index 746b593fb4..4c8ad506c3 100644
 --- a/src/api/moonraker_discovery_sequence.cpp
 +++ b/src/api/moonraker_discovery_sequence.cpp
 @@ -5,6 +5,7 @@
@@ -475,22 +475,21 @@ index 239acbbb..22c2e311 100644
  #include "ui_notification.h"
 +#include "ui_settings_ad5x_ifs_firmware.h"
  #include "ui_settings_kiln_memory.h"
+ #include "accel_sensor_manager.h"
+ #include "ams_backend.h"
+@@ -748,6 +749,11 @@ void MoonrakerDiscoverySequence::on_server_info(uint64_t seq, const json& info_r
+         // notice) from kiln_os, on every run like the warnings
+         helix::ui::queue_update("kiln_memory::fetch",
+                                 []() { helix::kiln_memory::model().fetch(); });
++        // Kiln OS: the IFS firmware switch (the Settings > Devices row) from
++        // kiln_os, on every run: Klipper's restart after a switch brings the
++        // firmware it found
++        helix::ui::queue_update("ad5x_ifs_firmware::fetch",
++                                []() { helix::ad5x_ifs_firmware::model().fetch(); });
+         apply_server_info(seq, *result);
+     }
  
- #include "ui_update_queue.h"
-@@ -704,6 +705,12 @@ void MoonrakerDiscoverySequence::continue_discovery_objects(uint64_t seq) {
-                     // bell notice) from kiln_os, on every run like the warnings
-                     helix::ui::queue_update("kiln_memory::fetch",
-                                             []() { helix::kiln_memory::model().fetch(); });
-+                    // Kiln OS: the IFS firmware switch (the Settings > Devices
-+                    // row) from kiln_os, on every run: Klipper's restart after a
-+                    // switch brings the firmware it found
-+                    helix::ui::queue_update("ad5x_ifs_firmware::fetch", []() {
-+                        helix::ad5x_ifs_firmware::model().fetch();
-+                    });
- #endif
-                     std::string klippy_version = result.value("klippy_version", "unknown");
-                     auto moonraker_version = result.value("moonraker_version", "unknown");
-@@ -1592,15 +1599,6 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
+@@ -1645,15 +1651,6 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
          }
      }
  
@@ -507,7 +506,7 @@ index 239acbbb..22c2e311 100644
      // auto_refill, refill_match, refill_backups and refill_notice, which the
      // Settings screen and the "No backup spool" pop-up read; `ifs_materials`
 diff --git a/src/application/discovery_steps.cpp b/src/application/discovery_steps.cpp
-index 412b1dc2..788f9b47 100644
+index 1b908d36d1..f9582431b1 100644
 --- a/src/application/discovery_steps.cpp
 +++ b/src/application/discovery_steps.cpp
 @@ -33,6 +33,8 @@
@@ -560,7 +559,7 @@ index 412b1dc2..788f9b47 100644
  }
  
 diff --git a/src/ui/ad5x_ifs_firmware_view.cpp b/src/ui/ad5x_ifs_firmware_view.cpp
-index dd78cbd4..4eec4720 100644
+index dd78cbd4f6..4eec4720df 100644
 --- a/src/ui/ad5x_ifs_firmware_view.cpp
 +++ b/src/ui/ad5x_ifs_firmware_view.cpp
 @@ -4,6 +4,9 @@
@@ -690,11 +689,11 @@ index dd78cbd4..4eec4720 100644
          IfsFirmwareView v;
          v.kind = IfsFirmwareViewKind::Progress;
          v.title = tr("Switching IFS firmware…");
-diff --git a/src/ui/ui_panel_settings.cpp b/src/ui/ui_panel_settings.cpp
-index 2be06982..cdccd0b0 100644
---- a/src/ui/ui_panel_settings.cpp
-+++ b/src/ui/ui_panel_settings.cpp
-@@ -152,9 +152,8 @@ void SettingsPanel::init_subjects() {
+diff --git a/src/ui/settings/ui_panel_settings.cpp b/src/ui/settings/ui_panel_settings.cpp
+index b87cb03618..dde207faf0 100644
+--- a/src/ui/settings/ui_panel_settings.cpp
++++ b/src/ui/settings/ui_panel_settings.cpp
+@@ -165,9 +165,8 @@ void SettingsPanel::init_subjects() {
      UI_MANAGED_SUBJECT_INT(show_ad5x_refill_subject_, 0, "settings_show_ad5x_refill", subjects_);
      // The Filament Auto-Refill row's line (ad5x_refill_summary) follows the `ifs` object
      helix::ad5x_refill::model().init_subjects();
@@ -706,7 +705,7 @@ index 2be06982..cdccd0b0 100644
      helix::ad5x_ifs_firmware::model().init_subjects();
  
      // Live status line under each stateful root row; refresh_status_lines()
-@@ -256,11 +255,8 @@ void SettingsPanel::refresh_status_lines() {
+@@ -272,11 +271,8 @@ void SettingsPanel::refresh_status_lines() {
      if (has_refill) {
          helix::ad5x_refill::model().start();
      }
@@ -721,7 +720,7 @@ index 2be06982..cdccd0b0 100644
      // Formatted here rather than once at init, so it is in the language of the
      // latest return to the settings root.
 diff --git a/src/ui/ui_settings_ad5x_ifs_firmware.cpp b/src/ui/ui_settings_ad5x_ifs_firmware.cpp
-index e7de37c9..8d4ba6ae 100644
+index b9d6376b50..732b9f8a03 100644
 --- a/src/ui/ui_settings_ad5x_ifs_firmware.cpp
 +++ b/src/ui/ui_settings_ad5x_ifs_firmware.cpp
 @@ -5,44 +5,79 @@
@@ -729,7 +728,7 @@ index e7de37c9..8d4ba6ae 100644
  #include "ui_emergency_stop.h"
  #include "ui_modal.h"
 +#include "ui_settings_kiln_recovery.h"
- #include "ui_update_queue.h"
+ #include "core/update_queue.h"
  
  #include "app_globals.h"
 -#include "i_moonraker_api.h"
@@ -738,7 +737,7 @@ index e7de37c9..8d4ba6ae 100644
 +#include "klippy_state.h"
  #include "lvgl/src/others/translation/lv_translation.h"
 +#include "moonraker_error.h"
- #include "observer_factory.h"
+ #include "core/observer_factory.h"
  #include "printer_state.h"
  
  #include <spdlog/spdlog.h>
@@ -874,7 +873,7 @@ index e7de37c9..8d4ba6ae 100644
 +    }
 +    lv_subject_set_int(&available_, available() ? 1 : 0);
 +    const std::string label = state_ ? ifs_firmware_label(state_->firmware) : std::string();
-+    lv_subject_copy_string(&text_, label.empty() ? "" : lv_tr(label.c_str()));
++    lv_subject_set_string(&text_, label.empty() ? "" : lv_tr(label.c_str()));
 +}
 +
 +IMoonrakerClient* Ad5xIfsFirmwareModel::client() const {
@@ -1115,7 +1114,7 @@ index e7de37c9..8d4ba6ae 100644
      }
 -    if (subjects_initialized_) {
 -        const std::string label = ifs_firmware_label(status_.firmware);
--        lv_subject_copy_string(&text_, lv_tr(label.c_str()));
+-        lv_subject_set_string(&text_, lv_tr(label.c_str()));
 +    update_watch();
 +    notify();
 +}
@@ -1298,8 +1297,8 @@ index e7de37c9..8d4ba6ae 100644
 -        fw::ifs_firmware_view(effective_status(), fw::model().klippy_ready(), seconds_waiting());
 +    const fw::IfsFirmwareView v = current_view();
      lv_subject_set_int(&kind_subject_, static_cast<int>(v.kind));
-     lv_subject_copy_string(&title_subject_, v.title.c_str());
-     lv_subject_copy_string(&body_subject_, v.body.c_str());
+     lv_subject_set_string(&title_subject_, v.title.c_str());
+     lv_subject_set_string(&body_subject_, v.body.c_str());
      lv_subject_set_int(&offer_stock_subject_, v.offer_stock ? 1 : 0);
      lv_subject_set_int(&offer_klipper_subject_, v.offer_klipper ? 1 : 0);
      lv_subject_set_int(&choice_enabled_subject_,
@@ -1477,7 +1476,7 @@ index e7de37c9..8d4ba6ae 100644
  
  } // namespace helix::settings
 diff --git a/tests/unit/test_ad5x_ifs_firmware.cpp b/tests/unit/test_ad5x_ifs_firmware.cpp
-index 0b2f8185..5fd1d5d3 100644
+index 0b2f81851c..e3501686e4 100644
 --- a/tests/unit/test_ad5x_ifs_firmware.cpp
 +++ b/tests/unit/test_ad5x_ifs_firmware.cpp
 @@ -1,18 +1,37 @@
@@ -1492,7 +1491,7 @@ index 0b2f8185..5fd1d5d3 100644
  #include "ad5x_ifs_firmware_view.h"
 +#include "ui_emergency_stop.h"
 +#include "ui_settings_ad5x_ifs_firmware.h"
-+#include "ui_update_queue.h"
++#include "core/update_queue.h"
 +
 +#include "../fake_moonraker_client.h"
 +#include "../lvgl_ui_test_fixture.h"
@@ -2013,10 +2012,10 @@ index 0b2f8185..5fd1d5d3 100644
 +    CHECK(ifs_firmware_view(model().status(), true, 0).kind == IfsFirmwareViewKind::Choose);
 +}
 diff --git a/tests/unit/test_job_holds_machine.cpp b/tests/unit/test_job_holds_machine.cpp
-index 5d2eaa62..36bc5acd 100644
+index 60ff4b52f7..62ca12c28c 100644
 --- a/tests/unit/test_job_holds_machine.cpp
 +++ b/tests/unit/test_job_holds_machine.cpp
-@@ -699,6 +699,9 @@ constexpr const char* kNoMachineControlFiles[] = {
+@@ -820,6 +820,9 @@ constexpr const char* kNoMachineControlFiles[] = {
      "ui_xml/ad5x_refill_notice_modal.xml",
      "ui_xml/components/ad5x_sound_event_row.xml",
      "ui_xml/settings_ad5x_refill_overlay.xml",
@@ -2027,10 +2026,10 @@ index 5d2eaa62..36bc5acd 100644
      "ui_xml/wizard_ad5x_setup.xml",
      "ui_xml/wizard_ad5x_timezone.xml",
 diff --git a/translations/en.yml b/translations/en.yml
-index 04034582..1f9ac5a0 100644
+index 26ae939e53..33ce7a0ab4 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -5032,6 +5032,42 @@ translations:
+@@ -6499,6 +6499,42 @@ translations:
    'Shut down the printer?': 'Shut down the printer?'
    'The printer can''t be used until it has started again.': 'The printer can''t be used until it has started again.'
    'The printer stays off until you switch it on again.': 'The printer stays off until you switch it on again.'
@@ -2074,10 +2073,10 @@ index 04034582..1f9ac5a0 100644
    'Welcome to Kiln OS': 'Welcome to Kiln OS'
    'Here''s a quick tour of the screen, so you can find things fast.': 'Here''s a quick tour of the screen, so you can find things fast.'
 diff --git a/translations/ru.yml b/translations/ru.yml
-index b525d3ff..5b88dbfd 100644
+index 5cbc22c052..bece058c78 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -5189,6 +5189,42 @@ translations:
+@@ -6662,6 +6662,42 @@ translations:
    'Shut down the printer?': 'Выключить принтер?'
    'The printer can''t be used until it has started again.': 'Принтером нельзя пользоваться, пока он не запустится снова.'
    'The printer stays off until you switch it on again.': 'Принтер останется выключенным, пока вы снова его не включите.'
@@ -2121,7 +2120,7 @@ index b525d3ff..5b88dbfd 100644
    'IFS not detected': 'IFS не обнаружен'
    'IFS Active: ': 'IFS активен: '
 diff --git a/ui_xml/settings_hardware_overlay.xml b/ui_xml/settings_hardware_overlay.xml
-index 911397b3..3903fd08 100644
+index b9de8bc393..06fddd2e53 100644
 --- a/ui_xml/settings_hardware_overlay.xml
 +++ b/ui_xml/settings_hardware_overlay.xml
 @@ -75,11 +75,13 @@
@@ -2140,6 +2139,3 @@ index 911397b3..3903fd08 100644
          </setting_action_row>
          <!-- ================================================================== -->
          <!-- POWER DEVICES (hidden when no power devices discovered) -->
--- 
-2.56.0
-

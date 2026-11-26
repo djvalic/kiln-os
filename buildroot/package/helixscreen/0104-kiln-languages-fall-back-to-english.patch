@@ -1,0 +1,168 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 20:00:00 -0500
+Subject: [PATCH] kiln: a saved language that is no longer offered starts in
+ English
+
+Patch 0033 cuts the language list to English and Russian, and the Kiln OS
+image installs only their packs. A printer saved in another language (de,
+zh, tr, ...) came up with the settings at English but lv_translation set
+to the saved code: the pack is missing, so the text fell back to English
+keys, while the locale, the date order and clock defaults and the
+wizard's language step still followed the saved code (and zh or ja
+loaded the CJK fonts, which the image no longer has).
+
+SystemSettingsManager::startup_language() reads /language and, when the
+list doesn't have it, writes "en" back and saves, so everything that
+reads the setting afterwards agrees with the screen. init_translations()
+starts from it, and init_subjects() sets the locale from the list's code.
+With "en" saved, a wizard run shows the language step again. Tests: a
+dropped code reads and saves as English (one write), en and ru are kept
+with no write, and the settings subjects start in English.
+---
+ include/system_settings_manager.h           | 13 +++++++
+ src/application/application_startup.cpp     |  5 ++-
+ src/system/system_settings_manager.cpp      | 16 +++++++-
+ tests/unit/test_system_settings_manager.cpp | 41 +++++++++++++++++++++
+ 4 files changed, 73 insertions(+), 2 deletions(-)
+
+diff --git a/include/system_settings_manager.h b/include/system_settings_manager.h
+index 86e52952dd..f56854b4f4 100644
+--- a/include/system_settings_manager.h
++++ b/include/system_settings_manager.h
+@@ -12,6 +12,8 @@
+ 
+ namespace helix {
+ 
++class Config;
++
+ /**
+  * @brief Domain-specific manager for system-level settings
+  *
+@@ -84,6 +86,17 @@ class SystemSettingsManager {
+     /** @brief Get dropdown index for language code */
+     static int language_code_to_index(const std::string& code);
+ 
++    /**
++     * @brief The language the screen starts in (Kiln OS)
++     *
++     * The saved /language when the language list has it, else English. A
++     * printer saved in a language this build no longer offers (Kiln OS keeps
++     * English and Russian) gets "en" written back and saved, so the screen,
++     * the date and clock defaults and the wizard's language step all read
++     * English instead of a mix.
++     */
++    static std::string startup_language(Config& config);
++
+     // UPDATE CHANNEL SETTINGS
+ 
+     /** @brief Get current update channel (0=Stable, 1=Beta, 2=Dev) */
+diff --git a/src/application/application_startup.cpp b/src/application/application_startup.cpp
+index 1c921d9177..9c8009ee0b 100644
+--- a/src/application/application_startup.cpp
++++ b/src/application/application_startup.cpp
+@@ -64,6 +64,7 @@
+ #include "system/crash_history.h"
+ #include "system/telemetry_manager.h"
+ #include "system/update_checker.h"
++#include "system_settings_manager.h"
+ #include "translation_loader.h"
+ #include "wifi_link_monitor.h"
+ #include "wifi_manager.h"
+@@ -163,7 +164,9 @@ bool Application::init_translations() {
+     // heap in lv_translation_pack_t. Loading a single locale uses ~60-80 KB,
+     // and other locales load on demand when the user switches language.
+     // See helix::ui::ensure_translation_loaded().
+-    std::string lang = m_config->get_language();
++    // A saved language whose pack this build doesn't ship starts in English
++    // (and is saved as English) instead of a blank or mixed screen.
++    std::string lang = SystemSettingsManager::startup_language(*m_config);
+     helix::ui::ensure_translation_loaded(lang);
+ 
+     // Set initial language. When no pack is loaded for a language — which is
+diff --git a/src/system/system_settings_manager.cpp b/src/system/system_settings_manager.cpp
+index e14ffebe25..7bfe8ab0dc 100644
+--- a/src/system/system_settings_manager.cpp
++++ b/src/system/system_settings_manager.cpp
+@@ -89,7 +89,9 @@ void SystemSettingsManager::init_subjects() {
+     Config* config = Config::get_instance();
+ 
+     // Language (default: "en" = English, index 0)
+-    std::string lang_code = config->get_language();
++    // A code the list lacks reads as English here too, so the locale's
++    // number and date formats match the English screen.
++    std::string lang_code = language_index_to_code(language_code_to_index(config->get_language()));
+     int lang_index = language_code_to_index(lang_code);
+     UI_MANAGED_SUBJECT_INT(language_subject_, lang_index, "settings_language", subjects_);
+     spdlog::debug("[SystemSettingsManager] Language initialized to {} (index {})", lang_code,
+@@ -279,6 +281,18 @@ int SystemSettingsManager::language_code_to_index(const std::string& code) {
+     return 0; // Default to English (index 0)
+ }
+ 
++std::string SystemSettingsManager::startup_language(Config& config) {
++    const std::string saved = config.get_language();
++    const std::string lang = language_index_to_code(language_code_to_index(saved));
++    if (lang != saved) {
++        spdlog::info("[SystemSettingsManager] Saved language '{}' is not offered, using '{}'",
++                     saved, lang);
++        config.set_language(lang);
++        config.save();
++    }
++    return lang;
++}
++
+ // UPDATE CHANNEL SETTINGS
+ 
+ void SystemSettingsManager::set_update_channel(int channel) {
+diff --git a/tests/unit/test_system_settings_manager.cpp b/tests/unit/test_system_settings_manager.cpp
+index de6bcc40de..d40188d5b5 100644
+--- a/tests/unit/test_system_settings_manager.cpp
++++ b/tests/unit/test_system_settings_manager.cpp
+@@ -74,6 +74,47 @@ TEST_CASE_METHOD(LVGLTestFixture, "SystemSettingsManager language index/code con
+     }
+ }
+ 
++// Kiln OS (patch 0104): a printer saved in a language Kiln OS no longer ships
++// starts in English, and English is saved.
++TEST_CASE_METHOD(LVGLTestFixture, "SystemSettingsManager startup language falls back to English",
++                 "[system_settings][kiln]") {
++    Config& cfg = *Config::get_instance();
++    const std::string before = cfg.get_language();
++
++    SECTION("a dropped language reads as English and is saved as English") {
++        for (const char* gone : {"de", "zh", "ja", "tr", "fr", "en-GB", "xx"}) {
++            CAPTURE(gone);
++            cfg.set_language(gone);
++            ScopedConfigWriteCounter counter;
++            REQUIRE(SystemSettingsManager::startup_language(cfg) == "en");
++            CHECK(cfg.get_language() == "en");
++            CHECK(counter.writes() == 1);
++        }
++    }
++
++    SECTION("English and Russian are kept, with no write") {
++        for (const char* kept : {"en", "ru"}) {
++            CAPTURE(kept);
++            cfg.set_language(kept);
++            ScopedConfigWriteCounter counter;
++            REQUIRE(SystemSettingsManager::startup_language(cfg) == kept);
++            CHECK(cfg.get_language() == kept);
++            CHECK(counter.writes() == 0);
++        }
++    }
++
++    SECTION("the settings subjects start in English for a dropped language") {
++        cfg.set_language("de");
++        SystemSettingsManager::instance().init_subjects();
++        CHECK(SystemSettingsManager::instance().get_language() == "en");
++        CHECK(SystemSettingsManager::instance().get_language_index() == 0);
++        CHECK(SystemSettingsManager::instance().get_language_display_name() == "English");
++        SystemSettingsManager::instance().deinit_subjects();
++    }
++
++    cfg.set_language(before);
++}
++
+ TEST_CASE_METHOD(LVGLTestFixture, "SystemSettingsManager update channel set/get",
+                  "[system_settings]") {
+     Config::get_instance();

@@ -12,13 +12,13 @@ with Ethernet even after the adapter worked again. A switch-on that
 fails with the backend still not running reached no radio: neither
 WiFiManager nor the Network Settings overlay saves anything for it.
 ---
- include/wifi_manager.h                 | 15 +++++++++++++++
- src/api/wifi_manager.cpp               | 16 +++++++++++++---
- src/ui/ui_overlay_network_settings.cpp |  8 +++++++-
+ include/wifi_manager.h                          | 15 +++++++++++++++
+ src/network/wifi_manager.cpp                    | 16 +++++++++++++---
+ src/ui/settings/ui_overlay_network_settings.cpp |  8 +++++++-
  3 files changed, 35 insertions(+), 4 deletions(-)
 
 diff --git a/include/wifi_manager.h b/include/wifi_manager.h
-index 881bb825a0..c7869699c3 100644
+index 73f2a28d2d..492ac1a05b 100644
 --- a/include/wifi_manager.h
 +++ b/include/wifi_manager.h
 @@ -11,6 +11,7 @@
@@ -29,7 +29,7 @@ index 881bb825a0..c7869699c3 100644
  #include <chrono>
  #include <condition_variable>
  #include <cstdint>
-@@ -456,7 +457,21 @@ class WiFiManager {
+@@ -487,7 +488,21 @@ class WiFiManager {
       */
      bool has_non_wifi_fallback();
  
@@ -51,11 +51,11 @@ index 881bb825a0..c7869699c3 100644
      // Grants the auth-failure-debounce regression test direct access to the
      // connection handlers and grace-timer state (helixscreen#1050).
      friend class WiFiManagerTestAccess;
-diff --git a/src/api/wifi_manager.cpp b/src/api/wifi_manager.cpp
-index 84bcc0e799..65d710c1e0 100644
---- a/src/api/wifi_manager.cpp
-+++ b/src/api/wifi_manager.cpp
-@@ -1226,6 +1226,9 @@ void WiFiManager::persist_radio_expectation(bool requested, bool success, bool a
+diff --git a/src/network/wifi_manager.cpp b/src/network/wifi_manager.cpp
+index 53864a4ee6..99d782e4bd 100644
+--- a/src/network/wifi_manager.cpp
++++ b/src/network/wifi_manager.cpp
+@@ -1217,6 +1217,9 @@ void WiFiManager::persist_radio_expectation(bool requested, bool success, bool a
  void WiFiManager::set_enabled_async(bool enabled, helix::LifetimeToken token,
                                      helix::SharedCallback<void(bool, bool)> on_complete) {
      spdlog::debug("[WiFiManager] set_enabled_async({})", enabled);
@@ -65,7 +65,7 @@ index 84bcc0e799..65d710c1e0 100644
  
      if (!backend_) {
          // Still answer off the call stack, so callers see one async contract.
-@@ -1263,14 +1266,21 @@ void WiFiManager::set_enabled_async(bool enabled, helix::LifetimeToken token,
+@@ -1254,14 +1257,21 @@ void WiFiManager::set_enabled_async(bool enabled, helix::LifetimeToken token,
          [this, enabled, answer]() -> helix::Callback<void()> {
              WiFiError result = apply_radio_enabled(enabled);
              const bool success = result.success();
@@ -90,11 +90,11 @@ index 84bcc0e799..65d710c1e0 100644
                  answer(success, actual);
              };
          },
-diff --git a/src/ui/ui_overlay_network_settings.cpp b/src/ui/ui_overlay_network_settings.cpp
-index ebb83106bf..e76fbe08bf 100644
---- a/src/ui/ui_overlay_network_settings.cpp
-+++ b/src/ui/ui_overlay_network_settings.cpp
-@@ -1090,7 +1090,13 @@ void NetworkSettingsOverlay::finish_wlan_toggle(bool requested, bool success, bo
+diff --git a/src/ui/settings/ui_overlay_network_settings.cpp b/src/ui/settings/ui_overlay_network_settings.cpp
+index f88d0deb1a..101bed3b8b 100644
+--- a/src/ui/settings/ui_overlay_network_settings.cpp
++++ b/src/ui/settings/ui_overlay_network_settings.cpp
+@@ -1067,7 +1067,13 @@ void NetworkSettingsOverlay::finish_wlan_toggle(bool requested, bool success, bo
      // switch. This save also flushes the expectation WiFiManager stages for the
      // same toggle: it queues that write ahead of this callback, so the pair
      // still costs one write.
@@ -107,8 +107,5 @@ index ebb83106bf..e76fbe08bf 100644
 +        SystemSettingsManager::instance().set_wifi_enabled(outcome.enabled);
 +    }
  
-     // Update combined network status
      update_any_network_connected();
--- 
-2.56.0
-
+ }

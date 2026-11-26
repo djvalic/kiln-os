@@ -11,23 +11,30 @@ opens the AD5X setup steps when Klipper prints
 
 Upstream: not applicable (AD5X OS specific)
 ---
- src/application/application.cpp | 24 +++++++++++++++++++++++-
+ src/application/application_startup.cpp | 24 +++++++++++++++++++++++-
  1 file changed, 23 insertions(+), 1 deletion(-)
 
-diff --git a/src/application/application.cpp b/src/application/application.cpp
-index d9773e3e6e..9fa45e298a 100644
---- a/src/application/application.cpp
-+++ b/src/application/application.cpp
-@@ -210,6 +210,8 @@
- #include "action_prompt_manager.h"
- #include "action_prompt_modal.h"
- #include "app_globals.h"
+diff --git a/src/application/application_startup.cpp b/src/application/application_startup.cpp
+index f5742c1565..1c921d9177 100644
+--- a/src/application/application_startup.cpp
++++ b/src/application/application_startup.cpp
+@@ -31,6 +31,7 @@
+ #include "ui_unit_art.h"
+ #include "ui_update_notify_modal.h"
+ #include "ui_wizard.h"
 +#include "ui_wizard_ad5x_setup.h"
+ #include "ui_wizard_language_chooser.h"
+ #include "ui_wizard_touch_calibration.h"
+ 
+@@ -45,6 +46,7 @@
+ #include "core/http_executor.h"
+ #include "core/update_queue.h"
+ #include "display_manager.h"
 +#include "helix_fs.h"
- #include "detection_manager.h"
- #include "filament_sensor_manager.h"
- #include "gcode_file_modifier.h"
-@@ -1818,8 +1820,24 @@ bool Application::init_translations() {
+ #include "helix_sparkline.h"
+ #include "lvgl_log_handler.h"
+ #include "main_loop_heartbeat.h"
+@@ -180,8 +182,24 @@ bool Application::init_translations() {
  }
  
  bool Application::run_wizard() {
@@ -53,7 +60,7 @@ index d9773e3e6e..9fa45e298a 100644
  
      if (!wizard_required) {
          return false;
-@@ -1872,6 +1890,10 @@ bool Application::run_wizard() {
+@@ -233,6 +251,10 @@ bool Application::run_wizard() {
          spdlog::error("[Application] Failed to create wizard");
          return false;
      }
@@ -64,6 +71,3 @@ index d9773e3e6e..9fa45e298a 100644
  
      // Determine initial wizard step (step 0 = touch calibration, auto-skipped if not needed)
      int initial_step = (m_args.wizard_step >= 0) ? m_args.wizard_step : 0;
--- 
-2.56.0
-

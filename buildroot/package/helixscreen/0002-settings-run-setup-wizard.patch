@@ -9,25 +9,25 @@ wizard_completed or the preset.
 
 Upstream: not applicable (AD5X OS specific)
 ---
- include/ui_panel_settings.h  |  5 +++++
- src/ui/ui_panel_settings.cpp | 23 +++++++++++++++++++++++
- ui_xml/settings_panel.xml    |  6 ++++++
- 3 files changed, 34 insertions(+)
+ include/ui_panel_settings.h           |  5 +++++
+ src/ui/settings/ui_panel_settings.cpp | 22 ++++++++++++++++++++++
+ ui_xml/settings_panel.xml             |  6 ++++++
+ 3 files changed, 33 insertions(+)
 
 diff --git a/include/ui_panel_settings.h b/include/ui_panel_settings.h
-index 011fb2e90a..e132344a4a 100644
+index ed24a2dc5b..355944fb7e 100644
 --- a/include/ui_panel_settings.h
 +++ b/include/ui_panel_settings.h
-@@ -135,6 +135,8 @@ class SettingsPanel : public PanelBase {
-     lv_subject_t updates_unavailable_subject_{};
+@@ -139,6 +139,8 @@ class SettingsPanel : public PanelBase {
      // 1 once a plugin host exists: unhides the Plugins row (settings_panel.xml)
-     lv_subject_t plugins_available_subject_{};
+     helix::Subject plugins_available_subject_{};
+     helix::Subject firmware_update_subject_{};
 +    // 1 when the printer has the AD5X setup steps: unhides "Run Setup Wizard"
-+    lv_subject_t show_ad5x_setup_subject_{};
++    helix::Subject show_ad5x_setup_subject_{};
  
      // Live status line shown under each stateful root row (settings_panel.xml),
      // refreshed by refresh_status_lines().
-@@ -179,6 +181,9 @@ class SettingsPanel : public PanelBase {
+@@ -185,6 +187,9 @@ class SettingsPanel : public PanelBase {
      /// Opens the Hardware Health overlay; also the target of the hardware-issue toast action.
      void handle_hardware_health_clicked();
  
@@ -37,29 +37,28 @@ index 011fb2e90a..e132344a4a 100644
      // The root rows' callback table lives in register_settings_panel_callbacks()
      // and reaches the handlers above.
      friend void register_settings_panel_callbacks();
-diff --git a/src/ui/ui_panel_settings.cpp b/src/ui/ui_panel_settings.cpp
-index fb61624ca0..681b526b57 100644
---- a/src/ui/ui_panel_settings.cpp
-+++ b/src/ui/ui_panel_settings.cpp
-@@ -31,6 +31,7 @@
+diff --git a/src/ui/settings/ui_panel_settings.cpp b/src/ui/settings/ui_panel_settings.cpp
+index bed8bc4d90..71f0380b98 100644
+--- a/src/ui/settings/ui_panel_settings.cpp
++++ b/src/ui/settings/ui_panel_settings.cpp
+@@ -33,6 +33,7 @@
+ #include "ui_snake_game.h"
  #include "ui_toast_manager.h"
- #include "ui_update_queue.h"
  #include "ui_utils.h"
 +#include "ui_wizard_ad5x_setup.h"
  #include "ui_wizard_hardware_selector.h"
  
  #include "app_globals.h"
-@@ -134,6 +135,9 @@ void SettingsPanel::init_subjects() {
-     // stays hidden until there is something to show
-     UI_MANAGED_SUBJECT_INT(plugins_available_subject_, 0, "settings_plugins_available", subjects_);
- 
+@@ -147,6 +148,8 @@ void SettingsPanel::init_subjects() {
+ #endif
+     UI_MANAGED_SUBJECT_INT(firmware_update_subject_, firmware_update_page,
+                            "settings_firmware_update", subjects_);
 +    // Set from the live printer on every return to the root (refresh_status_lines())
 +    UI_MANAGED_SUBJECT_INT(show_ad5x_setup_subject_, 0, "settings_show_ad5x_setup", subjects_);
-+
+ 
      // Live status line under each stateful root row; refresh_status_lines()
      // fills these in, first from setup() and then on every return to the root.
-     UI_MANAGED_SUBJECT_STRING(settings_status_display_subject_, settings_status_display_buf_, "",
-@@ -215,6 +219,8 @@ std::string status_string_subject(const char* name, const char* fallback) {
+@@ -232,6 +235,8 @@ std::string status_string_subject(const char* name, const char* fallback) {
  void SettingsPanel::refresh_status_lines() {
      using namespace helix::settings::status;
  
@@ -67,8 +66,8 @@ index fb61624ca0..681b526b57 100644
 +
      // Formatted here rather than once at init, so it is in the language of the
      // latest return to the settings root.
-     lv_subject_copy_string(&settings_status_display_subject_,
-@@ -326,6 +332,21 @@ void SettingsPanel::handle_hardware_health_clicked() {
+     lv_subject_set_string(&settings_status_display_subject_,
+@@ -358,6 +363,21 @@ void SettingsPanel::handle_hardware_health_clicked() {
      overlay.show(parent_screen_);
  }
  
@@ -87,10 +86,10 @@ index fb61624ca0..681b526b57 100644
 +        [this]() { helix::ad5x_setup::launch_targeted(parent_screen_); }, opts);
 +}
 +
- // ============================================================================
  // GLOBAL INSTANCE
- // ============================================================================
-@@ -382,6 +403,8 @@ void register_settings_panel_callbacks() {
+ 
+ SettingsPanel& get_global_settings_panel() {
+@@ -412,6 +432,8 @@ void register_settings_panel_callbacks() {
          // Devices page
          {"on_hardware_health_clicked",
           [](lv_event_t*) { get_global_settings_panel().handle_hardware_health_clicked(); }},
@@ -116,6 +115,3 @@ index 55af05a536..f6cb809b94 100644
      </setting_group>
      <setting_group name="group_helixscreen">
        <setting_group_header title="HELIXSCREEN"/>
--- 
-2.56.0
-

@@ -1,0 +1,1043 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 15:10:00 -0500
+Subject: [PATCH] kiln: the IFS error texts say slot
+
+HelixScreen 1.2's wording for the Flashforge IFS errors
+(flashforge_error_wording.cpp) says lane: "No filament in IFS lane 3",
+"Filament stalled in IFS lane 2", "Check the lane's tube...". The AD5X
+calls these positions slots, on its screen and in Kiln's docs, so the
+texts now say slot: "No filament in IFS slot {1}", "Filament stalled in
+IFS slot {1}", "Insert filament into slot {1}...", "...that slot's
+tube...", and the toolhead runout texts likewise. English is the
+identity locale (1.2 loads no en pack), so the source strings change;
+the msgids in every catalog change with them, translations kept
+(Turkish "yuva"). Test: the IFS error texts carry no "lane".
+
+Upstream: not applicable (AD5X OS specific)
+---
+ src/printer/flashforge_error_wording.cpp  | 21 ++++-----
+ tests/unit/test_kiln_ifs_slot_wording.cpp | 52 +++++++++++++++++++++++
+ translations/de.yml                       | 20 ++++-----
+ translations/en-GB.yml                    | 20 ++++-----
+ translations/en.yml                       | 26 ++++++------
+ translations/es.yml                       | 20 ++++-----
+ translations/fr.yml                       | 26 ++++++------
+ translations/it.yml                       | 24 +++++------
+ translations/ja.yml                       | 20 ++++-----
+ translations/pt.yml                       | 20 ++++-----
+ translations/ru.yml                       | 20 ++++-----
+ translations/zh.yml                       | 20 ++++-----
+ 12 files changed, 171 insertions(+), 118 deletions(-)
+
+diff --git a/src/printer/flashforge_error_wording.cpp b/src/printer/flashforge_error_wording.cpp
+index a352a368c7..13fbe68078 100644
+--- a/src/printer/flashforge_error_wording.cpp
++++ b/src/printer/flashforge_error_wording.cpp
+@@ -55,12 +55,13 @@ constexpr const char* kExtractCause =
+ constexpr const char* kExtractFix =
+     TR_NOOP("Heat the nozzle, pull the filament out by hand at the toolhead and check the cutter "
+             "blade, then try again.");
+-constexpr const char* kNoFilamentSummary = TR_NOOP("No filament in IFS lane {1}");
++// Kiln OS: the AD5X calls its IFS positions slots, as its screen and docs do
++constexpr const char* kNoFilamentSummary = TR_NOOP("No filament in IFS slot {1}");
+ constexpr const char* kNoFilamentCause =
+-    TR_NOOP("Lane {1}'s sensor lost the filament while feeding: the spool is empty, the filament "
++    TR_NOOP("Slot {1}'s sensor lost the filament while feeding: the spool is empty, the filament "
+             "broke, or it never went in past the sensor.");
+ constexpr const char* kNoFilamentFix =
+-    TR_NOOP("Insert filament into lane {1} until the IFS grabs it, then load again.");
++    TR_NOOP("Insert filament into slot {1} until the IFS grabs it, then load again.");
+ constexpr const char* kNoReplySummary = TR_NOOP("The IFS did not answer");
+ constexpr const char* kNoReplyCause =
+     TR_NOOP("The IFS board did not reply in time: a cable problem, a board that hung, or the "
+@@ -71,9 +72,9 @@ constexpr const char* kNoReplyFix =
+ constexpr const char* kStateTimeoutSummary = TR_NOOP("The IFS did not finish moving filament");
+ constexpr const char* kStateTimeoutCause =
+     TR_NOOP("The IFS did not reach the state it was waiting for in time, so the filament is not "
+-            "moving: usually a jam in that lane's tube or at the toolhead entry.");
++            "moving: usually a jam in that slot's tube or at the toolhead entry.");
+ constexpr const char* kStateTimeoutFix =
+-    TR_NOOP("Check the lane's tube and the toolhead entry for a jam. For a load, check that the "
++    TR_NOOP("Check the slot's tube and the toolhead entry for a jam. For a load, check that the "
+             "toolhead sensor works.");
+ constexpr const char* kNozzleHitSummary = TR_NOOP("The nozzle hit the print or the bed");
+ constexpr const char* kResumeHotSummary = TR_NOOP("Heat the nozzle before resuming");
+@@ -134,10 +135,10 @@ constexpr Row kZmodRows[] = {
+     {"FF-I2", "Нет прутка ", " в IFS", "^Нет прутка (\\d+) в IFS", false, C::Filament,
+      S::FollowPrint, kNoFilamentSummary, kNoFilamentCause, kNoFilamentFix},
+     {"FF-I3", "Filament ", " stalled in IFS", "^Filament (\\d+) stalled in IFS", false, C::Filament,
+-     S::FollowPrint, TR_NOOP("Filament stalled in IFS lane {1}"),
+-     TR_NOOP("Lane {1}'s motor turns but its motion sensor sees no movement: a tangle on the "
++     S::FollowPrint, TR_NOOP("Filament stalled in IFS slot {1}"),
++     TR_NOOP("Slot {1}'s motor turns but its motion sensor sees no movement: a tangle on the "
+              "spool, a kinked PTFE tube, or a slipping drive roller."),
+-     TR_NOOP("Check that the spool turns freely and lane {1}'s tube is not kinked, and clear "
++     TR_NOOP("Check that the spool turns freely and slot {1}'s tube is not kinked, and clear "
+              "debris from the pinch roller.")},
+     {"FF-I6", "IFS driver failure", nullptr, nullptr, false, C::Filament, S::FollowPrint,
+      TR_NOOP("IFS driver failure"),
+@@ -154,9 +155,9 @@ constexpr Row kZmodRows[] = {
+      S::FollowPrint, kStateTimeoutSummary, kStateTimeoutCause, kStateTimeoutFix},
+     {"FF-I17", "Filament runout detected (Head)", nullptr, nullptr, false, C::Filament,
+      S::FollowPrint, TR_NOOP("Filament ran out at the toolhead"),
+-     TR_NOOP("The toolhead sensor went empty, and no other lane holds the same type and color, "
++     TR_NOOP("The toolhead sensor went empty, and no other slot holds the same type and color, "
+              "or backup is off."),
+-     TR_NOOP("Load filament into the empty lane or another one, then resume.")},
++     TR_NOOP("Load filament into the empty slot or another one, then resume.")},
+     {"FF-Z7", "Filament runout detected T", nullptr, "^Filament runout detected T(\\d+)", false,
+      C::Filament, S::FollowPrint, TR_NOOP("Filament ran out on head T{1}"),
+      TR_NOOP("Head T{1}'s filament sensor went empty."),
+diff --git a/tests/unit/test_kiln_ifs_slot_wording.cpp b/tests/unit/test_kiln_ifs_slot_wording.cpp
+new file mode 100644
+index 0000000000..3d24a8d1bb
+--- /dev/null
++++ b/tests/unit/test_kiln_ifs_slot_wording.cpp
+@@ -0,0 +1,52 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//
++// Kiln OS: the AD5X calls the IFS's four positions slots, on its screen and in
++// its docs. The Flashforge IFS error texts (flashforge_error_wording.cpp) say
++// slot too, in English (the identity locale shows a source string as written)
++// and in every catalog, whose keys follow the source.
++
++#include "error_wording.h"
++#include "printer_discovery.h"
++
++#include <string>
++
++#include "../catch_amalgamated.hpp"
++#include "../lvgl_test_fixture.h"
++#include "hv/json.hpp"
++
++using namespace helix;
++
++namespace {
++
++PrinterDiscovery ad5x_ifs() {
++    PrinterDiscovery hw;
++    hw.parse_objects(nlohmann::json{"zmod_ifs", "zmod_color", "extruder"});
++    return hw;
++}
++
++bool says_lane(const std::string& text) {
++    return text.find("lane") != std::string::npos || text.find("Lane") != std::string::npos;
++}
++
++} // namespace
++
++TEST_CASE_METHOD(LVGLTestFixture, "Kiln OS: the IFS error texts say slot, not lane",
++                 "[error-wording][flashforge][kiln]") {
++    const PrinterDiscovery hw = ad5x_ifs();
++    for (const char* line : {"No filament 3 in IFS", "Нет прутка 3 в IFS",
++                             "Filament 2 stalled in IFS",
++                             "IFS: Timeout waiting for status 11|5, received 3",
++                             "Filament runout detected (Head)"}) {
++        CAPTURE(line);
++        const auto c = error_wording::classify(line, &hw);
++        REQUIRE(c.has_value());
++        const auto w = error_wording::word(*c);
++        REQUIRE(w.has_value());
++        CHECK_FALSE(says_lane(w->summary));
++        CHECK_FALSE(says_lane(w->cause));
++        CHECK_FALSE(says_lane(w->fix));
++    }
++    const auto c = error_wording::classify("No filament 3 in IFS", &hw);
++    REQUIRE(c.has_value());
++    CHECK(error_wording::word(*c)->summary == "No filament in IFS slot 3");
++}
+diff --git a/translations/de.yml b/translations/de.yml
+index 16e0f9bfa2..9243202cd3 100644
+--- a/translations/de.yml
++++ b/translations/de.yml
+@@ -943,7 +943,7 @@ translations:
+   ? Check that the model fits the bed and that the slicer's bed size matches this printer, and check macros that park or purge.
+   : Prüfen, ob das Modell auf das Bett passt und die Bettgröße im Slicer zu diesem Drucker passt, und Makros prüfen, die parken oder spülen.
+   Check that the printer is powered on and connected to the network: Prüfen Sie, ob der Drucker eingeschaltet und mit dem Netzwerk verbunden ist
+-  Check that the spool turns freely and lane {1}'s tube is not kinked, and clear debris from the pinch roller.: Prüfen, ob sich die Spule frei dreht und der Schlauch von Spur {1} nicht geknickt ist, und Schmutz von der Andruckrolle entfernen.
++  Check that the spool turns freely and slot {1}'s tube is not kinked, and clear debris from the pinch roller.: Prüfen, ob sich die Spule frei dreht und der Schlauch von Spur {1} nicht geknickt ist, und Schmutz von der Andruckrolle entfernen.
+   Check that the toolhead is really empty, then resume.: Prüfen, ob der Werkzeugkopf wirklich leer ist, dann fortsetzen.
+   Check the CAN wiring and bitrate and the host's load, then home again.: CAN-Verkabelung, Bitrate und die Auslastung des Hosts prüfen, dann erneut referenzieren.
+   Check the IFS cable, make sure the native screen is off, and power the printer off and on.: IFS-Kabel prüfen, sicherstellen, dass der native Bildschirm aus ist, und den Drucker aus- und wieder einschalten.
+@@ -970,7 +970,7 @@ translations:
+   Check the filament path and try again.: Prüfen Sie den Filamentpfad und versuchen Sie es erneut.
+   ? Check the heater and thermistor wiring and that the thermistor is seated, keep fans off the heater block and run PID tuning again, then restart the firmware.
+   : Verkabelung von Heizung und Thermistor prüfen und ob der Thermistor richtig sitzt, Lüfter vom Heizblock fernhalten und die PID-Kalibrierung erneut ausführen, dann die Firmware neu starten.
+-  Check the lane's tube and the toolhead entry for a jam. For a load, check that the toolhead sensor works.: Schlauch der Spur und Eingang des Werkzeugkopfs auf eine Blockade prüfen. Beim Laden prüfen, ob der Werkzeugkopfsensor funktioniert.
++  Check the slot's tube and the toolhead entry for a jam. For a load, check that the toolhead sensor works.: Schlauch der Spur und Eingang des Werkzeugkopfs auf eine Blockade prüfen. Beim Laden prüfen, ob der Werkzeugkopfsensor funktioniert.
+   Check the motor cable, the driver's cooling and the motor power, then restart the firmware.: Motorkabel, Kühlung des Treibers und Motorstromversorgung prüfen, dann die Firmware neu starten.
+   Check the nozzle temperature in the slicer's filament profile.: 'Düsentemperatur im Filamentprofil des Slicers prüfen.'
+   ? Check the path from the slot to the hub for a tangle or drag. If the slot feeds freely, the hub sensor or the feeder motor may have failed
+@@ -2050,7 +2050,7 @@ translations:
+   Filament slot menu: 'Filament-Slot-Menü'
+   Filament snapped inside CFS: Filament ist im CFS gebrochen
+   Filament stalled between CFS hub and extruder sensor: Filament steckt zwischen CFS-Hub und Extruder-Sensor fest
+-  Filament stalled in IFS lane {1}: Filament in IFS-Spur {1} steckt fest
++  Filament stalled in IFS slot {1}: Filament in IFS-Spur {1} steckt fest
+   Filament still feeding: 'Filament wird noch zugeführt'
+   Filament stuck in connector during unload: Filament beim Entladen im Anschluss verklemmt
+   Filament stuck in the extruder: Filament steckt im Extruder fest
+@@ -2485,7 +2485,7 @@ translations:
+   Insert a USB stick with the {} firmware file in its top folder.: 'Stecke einen USB-Stick mit der {}-Firmwaredatei im obersten Ordner ein.'
+   Insert filament: 'Filament einführen'
+   Insert filament before resuming: Filament einlegen vor dem Fortsetzen
+-  Insert filament into lane {1} until the IFS grabs it, then load again.: Filament in Spur {1} einführen, bis das IFS es greift, dann erneut laden.
++  Insert filament into slot {1} until the IFS grabs it, then load again.: Filament in Spur {1} einführen, bis das IFS es greift, dann erneut laden.
+   Insert filament into this head's feeder until it grabs, then load the head again.: 'Filament in die Zuführung dieses Kopfs einführen, bis es greift, dann den Kopf erneut laden.'
+   Insert the filament again and read the tag again.: Filament erneut einführen und den Tag erneut lesen.
+   Inspecting bed...: Bett inspizieren...
+@@ -2683,9 +2683,9 @@ translations:
+   Lane Settings: Spur-Einstellungen
+   Lane name contains invalid characters: 'Der Spurname enthält ungültige Zeichen'
+   Lane tests and motor resets: 'Spurtests und Motor-Rücksetzungen'
+-  ? "Lane {1}'s motor turns but its motion sensor sees no movement: a tangle on the spool, a kinked PTFE tube, or a slipping drive roller."
++  ? 'Slot {1}''s motor turns but its motion sensor sees no movement: a tangle on the spool, a kinked PTFE tube, or a slipping drive roller.'
+   : 'Der Motor von Spur {1} dreht sich, aber ihr Bewegungssensor erkennt keine Bewegung: Verheddern auf der Spule, ein geknickter PTFE-Schlauch oder eine durchrutschende Antriebsrolle.'
+-  ? "Lane {1}'s sensor lost the filament while feeding: the spool is empty, the filament broke, or it never went in past the sensor."
++  ? 'Slot {1}''s sensor lost the filament while feeding: the spool is empty, the filament broke, or it never went in past the sensor.'
+   : 'Der Sensor von Spur {1} hat beim Zuführen das Filament verloren: Die Spule ist leer, das Filament ist gerissen oder es wurde nie am Sensor vorbei eingeführt.'
+   Lanes: Spuren
+   Language: Sprache
+@@ -2790,7 +2790,7 @@ translations:
+   Load filament by hand and resume.: Filament von Hand laden und fortsetzen.
+   Load filament first: Laden Sie zuerst Filament
+   Load filament into head T{1}, then resume.: Filament in Kopf T{1} laden, dann fortsetzen.
+-  Load filament into the empty lane or another one, then resume.: Filament in die leere oder eine andere Spur laden, dann fortsetzen.
++  Load filament into the empty slot or another one, then resume.: Filament in die leere oder eine andere Spur laden, dann fortsetzen.
+   Load filament into this head, then resume. If filament is there, check for a break between the spool and the head.: 'Filament in diesen Kopf laden, dann fortsetzen. Ist Filament vorhanden, auf einen Bruch zwischen Spule und Kopf prüfen.'
+   Load filament into {}, then resume.: Filament in {} laden, dann fortsetzen.
+   Load filament or clear the jam, then resume. For false alarms, tune detection_length (8 to 17).: Filament laden oder den Stau beseitigen, dann fortsetzen. Bei Fehlalarmen detection_length anpassen (8 bis 17).
+@@ -3189,7 +3189,7 @@ translations:
+   No feeder attached: "Keine Zuführung angeschlossen"
+   No filament: Kein Filament
+   No filament environment sensors: Keine Filament-Umgebungssensoren
+-  No filament in IFS lane {1}: Kein Filament in IFS-Spur {1}
++  No filament in IFS slot {1}: Kein Filament in IFS-Spur {1}
+   No filament loaded: Kein Filament geladen
+   No filament loaded to unload: Kein Filament zum Entladen geladen
+   No filament sensor detected: 'Kein Filamentsensor erkannt'
+@@ -4980,7 +4980,7 @@ translations:
+   The IFS board reported a driver error on every retry.: Die IFS-Platine hat bei jedem Wiederholungsversuch einen Treiberfehler gemeldet.
+   The IFS did not answer: Das IFS hat nicht geantwortet
+   The IFS did not finish moving filament: Das IFS hat die Filamentbewegung nicht abgeschlossen
+-  ? "The IFS did not reach the state it was waiting for in time, so the filament is not moving: usually a jam in that lane's tube or at the toolhead entry."
++  ? 'The IFS did not reach the state it was waiting for in time, so the filament is not moving: usually a jam in that slot''s tube or at the toolhead entry.'
+   : 'Das IFS hat den erwarteten Zustand nicht rechtzeitig erreicht, daher bewegt sich das Filament nicht: meist ein Stau im Schlauch dieser Spur oder am Eingang des Werkzeugkopfs.'
+   ? 'The IFS motion sensor saw no filament movement while printing: a tangled spool, a kinked tube, the wrong slot recorded as loaded, or old filament still in the head.'
+   : 'Der IFS-Bewegungssensor hat während des Drucks keine Filamentbewegung erkannt: eine verhedderte Spule, ein geknickter Schlauch, der falsche Slot als geladen gespeichert oder altes Filament noch im Kopf.'
+@@ -5348,7 +5348,7 @@ translations:
+   : 'Der Werkzeugkopf fährt mit Geschwindigkeiten von 20 bis 300 mm/s hin und her, während der Beschleunigungssensor misst, wie stark jeder Motor vibriert. Das dauert etwa {0} Minuten und ist laut. Von den Geschwindigkeiten mit der stärksten Vibration solltest du deine Außenwände fernhalten.'
+   The toolhead sensor indicates filament is already loaded. Proceed with load anyway?: Der Werkzeugkopfsensor zeigt an, dass Filament bereits geladen ist. Trotzdem mit dem Laden fortfahren?
+   The toolhead sensor indicates no filament is present. Proceed with unload anyway?: Der Werkzeugkopfsensor zeigt an, dass kein Filament vorhanden ist. Trotzdem mit dem Entladen fortfahren?
+-  The toolhead sensor went empty, and no other lane holds the same type and color, or backup is off.: Der Werkzeugkopfsensor meldet leer, und keine andere Spur enthält denselben Typ und dieselbe Farbe, oder die Ersatzfunktion ist aus.
++  The toolhead sensor went empty, and no other slot holds the same type and color, or backup is off.: Der Werkzeugkopfsensor meldet leer, und keine andere Spur enthält denselben Typ und dieselbe Farbe, oder die Ersatzfunktion ist aus.
+   The toolhead this lane loads into: 'Der Werkzeugkopf, in den diese Spur lädt'
+   The toolhead's pogo pins are not making contact.: 'Die Pogo-Pins des Werkzeugkopfs haben keinen Kontakt.'
+   The toolheads have changed enough times since their last maintenance.: 'Die Werkzeugköpfe wurden seit der letzten Wartung oft genug gewechselt.'
+diff --git a/translations/en-GB.yml b/translations/en-GB.yml
+index 4ffbf7e41d..d810a0af6d 100644
+--- a/translations/en-GB.yml
++++ b/translations/en-GB.yml
+@@ -953,7 +953,7 @@ translations:
+   ? Check that the model fits the bed and that the slicer's bed size matches this printer, and check macros that park or purge.
+   : ''
+   Check that the printer is powered on and connected to the network: ''
+-  Check that the spool turns freely and lane {1}'s tube is not kinked, and clear debris from the pinch roller.: ''
++  Check that the spool turns freely and slot {1}'s tube is not kinked, and clear debris from the pinch roller.: ''
+   Check that the toolhead is really empty, then resume.: ''
+   Check the CAN wiring and bitrate and the host's load, then home again.: ''
+   Check the IFS cable, make sure the native screen is off, and power the printer off and on.: ''
+@@ -980,7 +980,7 @@ translations:
+   Check the filament path and try again.: ''
+   ? Check the heater and thermistor wiring and that the thermistor is seated, keep fans off the heater block and run PID tuning again, then restart the firmware.
+   : ''
+-  Check the lane's tube and the toolhead entry for a jam. For a load, check that the toolhead sensor works.: ''
++  Check the slot's tube and the toolhead entry for a jam. For a load, check that the toolhead sensor works.: ''
+   Check the motor cable, the driver's cooling and the motor power, then restart the firmware.: ''
+   Check the nozzle temperature in the slicer's filament profile.: ''
+   ? Check the path from the slot to the hub for a tangle or drag. If the slot feeds freely, the hub sensor or the feeder motor may have failed
+@@ -2047,7 +2047,7 @@ translations:
+   Filament slot menu: ''
+   Filament snapped inside CFS: ''
+   Filament stalled between CFS hub and extruder sensor: ''
+-  Filament stalled in IFS lane {1}: ''
++  Filament stalled in IFS slot {1}: ''
+   Filament still feeding: ''
+   Filament stuck in connector during unload: ''
+   Filament stuck in the extruder: ''
+@@ -2479,7 +2479,7 @@ translations:
+   Insert a USB stick with the {} firmware file in its top folder.: ''
+   Insert filament: ''
+   Insert filament before resuming: ''
+-  Insert filament into lane {1} until the IFS grabs it, then load again.: ''
++  Insert filament into slot {1} until the IFS grabs it, then load again.: ''
+   Insert filament into this head's feeder until it grabs, then load the head again.: ''
+   Insert the filament again and read the tag again.: ''
+   'Inspecting bed...': ''
+@@ -2675,9 +2675,9 @@ translations:
+   Lane Settings: ''
+   Lane name contains invalid characters: ''
+   Lane tests and motor resets: ''
+-  ? "Lane {1}'s motor turns but its motion sensor sees no movement: a tangle on the spool, a kinked PTFE tube, or a slipping drive roller."
++  ? 'Slot {1}''s motor turns but its motion sensor sees no movement: a tangle on the spool, a kinked PTFE tube, or a slipping drive roller.'
+   : ''
+-  ? "Lane {1}'s sensor lost the filament while feeding: the spool is empty, the filament broke, or it never went in past the sensor."
++  ? 'Slot {1}''s sensor lost the filament while feeding: the spool is empty, the filament broke, or it never went in past the sensor.'
+   : ''
+   Lanes: ''
+   Language: ''
+@@ -2772,7 +2772,7 @@ translations:
+   Load filament by hand and resume.: ''
+   Load filament first: ''
+   Load filament into head T{1}, then resume.: ''
+-  Load filament into the empty lane or another one, then resume.: ''
++  Load filament into the empty slot or another one, then resume.: ''
+   Load filament into this head, then resume. If filament is there, check for a break between the spool and the head.: ''
+   Load filament into {}, then resume.: ''
+   Load filament or clear the jam, then resume. For false alarms, tune detection_length (8 to 17).: ''
+@@ -3173,7 +3173,7 @@ translations:
+   No feeder attached: ''
+   No filament: ''
+   No filament environment sensors: ''
+-  No filament in IFS lane {1}: ''
++  No filament in IFS slot {1}: ''
+   No filament loaded: ''
+   No filament loaded to unload: ''
+   No filament sensor detected: ''
+@@ -4955,7 +4955,7 @@ translations:
+   The IFS board reported a driver error on every retry.: ''
+   The IFS did not answer: ''
+   The IFS did not finish moving filament: ''
+-  ? "The IFS did not reach the state it was waiting for in time, so the filament is not moving: usually a jam in that lane's tube or at the toolhead entry."
++  ? 'The IFS did not reach the state it was waiting for in time, so the filament is not moving: usually a jam in that slot''s tube or at the toolhead entry.'
+   : ''
+   ? 'The IFS motion sensor saw no filament movement while printing: a tangled spool, a kinked tube, the wrong slot recorded as loaded, or old filament still in the head.'
+   : ''
+@@ -5318,7 +5318,7 @@ translations:
+   : ''
+   The toolhead sensor indicates filament is already loaded. Proceed with load anyway?: ''
+   The toolhead sensor indicates no filament is present. Proceed with unload anyway?: ''
+-  The toolhead sensor went empty, and no other lane holds the same type and color, or backup is off.: ''
++  The toolhead sensor went empty, and no other slot holds the same type and color, or backup is off.: ''
+   The toolhead this lane loads into: ''
+   The toolhead's pogo pins are not making contact.: ''
+   The toolheads have changed enough times since their last maintenance.: ''
+diff --git a/translations/en.yml b/translations/en.yml
+index 9aa63b1204..093d2aec3f 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -950,7 +950,7 @@ translations:
+   ? Check that the model fits the bed and that the slicer's bed size matches this printer, and check macros that park or purge.
+   : Check that the model fits the bed and that the slicer's bed size matches this printer, and check macros that park or purge.
+   Check that the printer is powered on and connected to the network: Check that the printer is powered on and connected to the network
+-  Check that the spool turns freely and lane {1}'s tube is not kinked, and clear debris from the pinch roller.: Check that the spool turns freely and lane {1}'s tube is not kinked, and clear debris from the pinch roller.
++  Check that the spool turns freely and slot {1}'s tube is not kinked, and clear debris from the pinch roller.: Check that the spool turns freely and slot {1}'s tube is not kinked, and clear debris from the pinch roller.
+   Check that the toolhead is really empty, then resume.: Check that the toolhead is really empty, then resume.
+   Check the CAN wiring and bitrate and the host's load, then home again.: Check the CAN wiring and bitrate and the host's load, then home again.
+   Check the IFS cable, make sure the native screen is off, and power the printer off and on.: Check the IFS cable, make sure the native screen is off, and power the printer off and on.
+@@ -977,7 +977,7 @@ translations:
+   Check the filament path and try again.: Check the filament path and try again.
+   ? Check the heater and thermistor wiring and that the thermistor is seated, keep fans off the heater block and run PID tuning again, then restart the firmware.
+   : Check the heater and thermistor wiring and that the thermistor is seated, keep fans off the heater block and run PID tuning again, then restart the firmware.
+-  Check the lane's tube and the toolhead entry for a jam. For a load, check that the toolhead sensor works.: Check the lane's tube and the toolhead entry for a jam. For a load, check that the toolhead sensor works.
++  Check the slot's tube and the toolhead entry for a jam. For a load, check that the toolhead sensor works.: Check the slot's tube and the toolhead entry for a jam. For a load, check that the toolhead sensor works.
+   Check the motor cable, the driver's cooling and the motor power, then restart the firmware.: Check the motor cable, the driver's cooling and the motor power, then restart the firmware.
+   Check the nozzle temperature in the slicer's filament profile.: Check the nozzle temperature in the slicer's filament profile.
+   ? Check the path from the slot to the hub for a tangle or drag. If the slot feeds freely, the hub sensor or the feeder motor may have failed
+@@ -2044,7 +2044,7 @@ translations:
+   Filament slot menu: Filament slot menu
+   Filament snapped inside CFS: Filament snapped inside CFS
+   Filament stalled between CFS hub and extruder sensor: Filament stalled between CFS hub and extruder sensor
+-  Filament stalled in IFS lane {1}: Filament stalled in IFS lane {1}
++  Filament stalled in IFS slot {1}: Filament stalled in IFS slot {1}
+   Filament still feeding: Filament still feeding
+   Filament stuck in connector during unload: Filament stuck in connector during unload
+   Filament stuck in the extruder: Filament stuck in the extruder
+@@ -2476,7 +2476,7 @@ translations:
+   Insert a USB stick with the {} firmware file in its top folder.: Insert a USB stick with the {} firmware file in its top folder.
+   Insert filament: Insert filament
+   Insert filament before resuming: Insert filament before resuming
+-  Insert filament into lane {1} until the IFS grabs it, then load again.: Insert filament into lane {1} until the IFS grabs it, then load again.
++  Insert filament into slot {1} until the IFS grabs it, then load again.: Insert filament into slot {1} until the IFS grabs it, then load again.
+   Insert filament into this head's feeder until it grabs, then load the head again.: Insert filament into this head's feeder until it grabs, then load the head again.
+   Insert the filament again and read the tag again.: Insert the filament again and read the tag again.
+   'Inspecting bed...': 'Inspecting bed...'
+@@ -2672,10 +2672,10 @@ translations:
+   Lane Settings: Lane Settings
+   Lane name contains invalid characters: Lane name contains invalid characters
+   Lane tests and motor resets: Lane tests and motor resets
+-  ? "Lane {1}'s motor turns but its motion sensor sees no movement: a tangle on the spool, a kinked PTFE tube, or a slipping drive roller."
+-  : "Lane {1}'s motor turns but its motion sensor sees no movement: a tangle on the spool, a kinked PTFE tube, or a slipping drive roller."
+-  ? "Lane {1}'s sensor lost the filament while feeding: the spool is empty, the filament broke, or it never went in past the sensor."
+-  : "Lane {1}'s sensor lost the filament while feeding: the spool is empty, the filament broke, or it never went in past the sensor."
++  ? 'Slot {1}''s motor turns but its motion sensor sees no movement: a tangle on the spool, a kinked PTFE tube, or a slipping drive roller.'
++  : 'Slot {1}''s motor turns but its motion sensor sees no movement: a tangle on the spool, a kinked PTFE tube, or a slipping drive roller.'
++  ? 'Slot {1}''s sensor lost the filament while feeding: the spool is empty, the filament broke, or it never went in past the sensor.'
++  : 'Slot {1}''s sensor lost the filament while feeding: the spool is empty, the filament broke, or it never went in past the sensor.'
+   Lanes: Lanes
+   Language: Language
+   Language & Time: Language & Time
+@@ -2769,7 +2769,7 @@ translations:
+   Load filament by hand and resume.: Load filament by hand and resume.
+   Load filament first: Load filament first
+   Load filament into head T{1}, then resume.: Load filament into head T{1}, then resume.
+-  Load filament into the empty lane or another one, then resume.: Load filament into the empty lane or another one, then resume.
++  Load filament into the empty slot or another one, then resume.: Load filament into the empty slot or another one, then resume.
+   Load filament into this head, then resume. If filament is there, check for a break between the spool and the head.: Load filament into this head, then resume. If filament is there, check for a break between the spool and the head.
+   Load filament into {}, then resume.: Load filament into {}, then resume.
+   Load filament or clear the jam, then resume. For false alarms, tune detection_length (8 to 17).: Load filament or clear the jam, then resume. For false alarms, tune detection_length (8 to 17).
+@@ -3170,7 +3170,7 @@ translations:
+   No feeder attached: No feeder attached
+   No filament: No filament
+   No filament environment sensors: No filament environment sensors
+-  No filament in IFS lane {1}: No filament in IFS lane {1}
++  No filament in IFS slot {1}: No filament in IFS slot {1}
+   No filament loaded: No filament loaded
+   No filament loaded to unload: No filament loaded to unload
+   No filament sensor detected: No filament sensor detected
+@@ -4952,8 +4952,8 @@ translations:
+   The IFS board reported a driver error on every retry.: The IFS board reported a driver error on every retry.
+   The IFS did not answer: The IFS did not answer
+   The IFS did not finish moving filament: The IFS did not finish moving filament
+-  ? "The IFS did not reach the state it was waiting for in time, so the filament is not moving: usually a jam in that lane's tube or at the toolhead entry."
+-  : "The IFS did not reach the state it was waiting for in time, so the filament is not moving: usually a jam in that lane's tube or at the toolhead entry."
++  ? 'The IFS did not reach the state it was waiting for in time, so the filament is not moving: usually a jam in that slot''s tube or at the toolhead entry.'
++  : 'The IFS did not reach the state it was waiting for in time, so the filament is not moving: usually a jam in that slot''s tube or at the toolhead entry.'
+   ? 'The IFS motion sensor saw no filament movement while printing: a tangled spool, a kinked tube, the wrong slot recorded as loaded, or old filament still in the head.'
+   : 'The IFS motion sensor saw no filament movement while printing: a tangled spool, a kinked tube, the wrong slot recorded as loaded, or old filament still in the head.'
+   The IFS state file can't be read.: The IFS state file can't be read.
+@@ -5315,7 +5315,7 @@ translations:
+   : The toolhead runs back and forth at speeds from 20 to 300 mm/s while the accelerometer measures how hard each motor shakes. It takes about {0} minutes and it is loud. The speeds that shake most are the ones to keep your outer walls away from.
+   The toolhead sensor indicates filament is already loaded. Proceed with load anyway?: The toolhead sensor indicates filament is already loaded. Proceed with load anyway?
+   The toolhead sensor indicates no filament is present. Proceed with unload anyway?: The toolhead sensor indicates no filament is present. Proceed with unload anyway?
+-  The toolhead sensor went empty, and no other lane holds the same type and color, or backup is off.: The toolhead sensor went empty, and no other lane holds the same type and color, or backup is off.
++  The toolhead sensor went empty, and no other slot holds the same type and color, or backup is off.: The toolhead sensor went empty, and no other slot holds the same type and color, or backup is off.
+   The toolhead this lane loads into: The toolhead this lane loads into
+   The toolhead's pogo pins are not making contact.: The toolhead's pogo pins are not making contact.
+   The toolheads have changed enough times since their last maintenance.: The toolheads have changed enough times since their last maintenance.
+diff --git a/translations/es.yml b/translations/es.yml
+index 732e5501a5..0a4d0f91b7 100644
+--- a/translations/es.yml
++++ b/translations/es.yml
+@@ -943,7 +943,7 @@ translations:
+   ? Check that the model fits the bed and that the slicer's bed size matches this printer, and check macros that park or purge.
+   : Comprueba que el modelo quepa en la cama y que el tamaño de cama del laminador coincida con esta impresora, y revisa las macros de aparcado o purga.
+   Check that the printer is powered on and connected to the network: Compruebe que la impresora esté encendida y conectada a la red
+-  Check that the spool turns freely and lane {1}'s tube is not kinked, and clear debris from the pinch roller.: Comprueba que la bobina gire libremente y que el tubo del carril {1} no esté doblado, y limpia la suciedad del rodillo de presión.
++  Check that the spool turns freely and slot {1}'s tube is not kinked, and clear debris from the pinch roller.: Comprueba que la bobina gire libremente y que el tubo del carril {1} no esté doblado, y limpia la suciedad del rodillo de presión.
+   Check that the toolhead is really empty, then resume.: Comprueba que el cabezal esté realmente vacío y reanuda.
+   Check the CAN wiring and bitrate and the host's load, then home again.: Revisa el cableado CAN, la velocidad de bits y la carga del host, y vuelve a referenciar.
+   Check the IFS cable, make sure the native screen is off, and power the printer off and on.: Revisa el cable del IFS, asegúrate de que la pantalla original esté apagada, y apaga y enciende la impresora.
+@@ -970,7 +970,7 @@ translations:
+   Check the filament path and try again.: Verifique la ruta del filamento e intente de nuevo.
+   ? Check the heater and thermistor wiring and that the thermistor is seated, keep fans off the heater block and run PID tuning again, then restart the firmware.
+   : Revisa el cableado del calentador y del termistor y que el termistor esté bien asentado, aleja los ventiladores del bloque calefactor y vuelve a hacer la calibración PID, y reinicia el firmware.
+-  Check the lane's tube and the toolhead entry for a jam. For a load, check that the toolhead sensor works.: Revisa si hay un atasco en el tubo del carril y en la entrada del cabezal. Si es una carga, comprueba que el sensor del cabezal funcione.
++  Check the slot's tube and the toolhead entry for a jam. For a load, check that the toolhead sensor works.: Revisa si hay un atasco en el tubo del carril y en la entrada del cabezal. Si es una carga, comprueba que el sensor del cabezal funcione.
+   Check the motor cable, the driver's cooling and the motor power, then restart the firmware.: Revisa el cable del motor, la refrigeración del driver y la alimentación de los motores, y reinicia el firmware.
+   Check the nozzle temperature in the slicer's filament profile.: 'Revisa la temperatura de la boquilla en el perfil de filamento del laminador.'
+   ? Check the path from the slot to the hub for a tangle or drag. If the slot feeds freely, the hub sensor or the feeder motor may have failed
+@@ -2050,7 +2050,7 @@ translations:
+   Filament slot menu: 'Menú de ranura de filamento'
+   Filament snapped inside CFS: El filamento se rompió dentro del CFS
+   Filament stalled between CFS hub and extruder sensor: El filamento se detuvo entre el concentrador del CFS y el sensor del extrusor
+-  Filament stalled in IFS lane {1}: El filamento se detuvo en el carril {1} del IFS
++  Filament stalled in IFS slot {1}: El filamento se detuvo en el carril {1} del IFS
+   Filament still feeding: 'El filamento sigue alimentándose'
+   Filament stuck in connector during unload: Filamento atascado en el conector durante la descarga
+   Filament stuck in the extruder: Filamento atascado en el extrusor
+@@ -2485,7 +2485,7 @@ translations:
+   Insert a USB stick with the {} firmware file in its top folder.: 'Inserta una memoria USB con el archivo de firmware de {} en su carpeta principal.'
+   Insert filament: 'Insertar filamento'
+   Insert filament before resuming: Inserte filamento antes de reanudar
+-  Insert filament into lane {1} until the IFS grabs it, then load again.: Introduce filamento en el carril {1} hasta que el IFS lo agarre, y vuelve a cargar.
++  Insert filament into slot {1} until the IFS grabs it, then load again.: Introduce filamento en el carril {1} hasta que el IFS lo agarre, y vuelve a cargar.
+   Insert filament into this head's feeder until it grabs, then load the head again.: 'Introduce filamento en el alimentador de este cabezal hasta que lo agarre, y vuelve a cargar el cabezal.'
+   Insert the filament again and read the tag again.: Vuelve a introducir el filamento y vuelve a leer la etiqueta.
+   Inspecting bed...: Inspeccionando cama...
+@@ -2683,9 +2683,9 @@ translations:
+   Lane Settings: Ajustes del carril
+   Lane name contains invalid characters: 'El nombre del carril contiene caracteres no válidos'
+   Lane tests and motor resets: 'Pruebas de carril y reinicios de motor'
+-  ? "Lane {1}'s motor turns but its motion sensor sees no movement: a tangle on the spool, a kinked PTFE tube, or a slipping drive roller."
++  ? 'Slot {1}''s motor turns but its motion sensor sees no movement: a tangle on the spool, a kinked PTFE tube, or a slipping drive roller.'
+   : 'El motor del carril {1} gira pero su sensor de movimiento no detecta movimiento: un enredo en la bobina, un tubo PTFE doblado o un rodillo de arrastre que patina.'
+-  ? "Lane {1}'s sensor lost the filament while feeding: the spool is empty, the filament broke, or it never went in past the sensor."
++  ? 'Slot {1}''s sensor lost the filament while feeding: the spool is empty, the filament broke, or it never went in past the sensor.'
+   : 'El sensor del carril {1} perdió el filamento al alimentar: la bobina está vacía, el filamento se rompió o nunca pasó del sensor.'
+   Lanes: Carriles
+   Language: Idioma
+@@ -2790,7 +2790,7 @@ translations:
+   Load filament by hand and resume.: Carga filamento a mano y reanuda.
+   Load filament first: Cargue filamento primero
+   Load filament into head T{1}, then resume.: Carga filamento en el cabezal T{1} y reanuda.
+-  Load filament into the empty lane or another one, then resume.: Carga filamento en el carril vacío o en otro, y reanuda.
++  Load filament into the empty slot or another one, then resume.: Carga filamento en el carril vacío o en otro, y reanuda.
+   Load filament into this head, then resume. If filament is there, check for a break between the spool and the head.: 'Carga filamento en este cabezal y reanuda. Si ya hay filamento, busca una rotura entre la bobina y el cabezal.'
+   Load filament into {}, then resume.: Carga filamento en {} y reanuda.
+   Load filament or clear the jam, then resume. For false alarms, tune detection_length (8 to 17).: Carga filamento o despeja el atasco, y reanuda. Para falsas alarmas, ajusta detection_length (8 a 17).
+@@ -3189,7 +3189,7 @@ translations:
+   No feeder attached: "Ningún alimentador conectado"
+   No filament: Sin filamento
+   No filament environment sensors: Sin sensores ambientales de filamento
+-  No filament in IFS lane {1}: No hay filamento en el carril {1} del IFS
++  No filament in IFS slot {1}: No hay filamento en el carril {1} del IFS
+   No filament loaded: No hay filamento cargado
+   No filament loaded to unload: No hay filamento cargado para descargar
+   No filament sensor detected: 'No se detectó sensor de filamento'
+@@ -4980,7 +4980,7 @@ translations:
+   The IFS board reported a driver error on every retry.: La placa del IFS informó de un error de driver en cada reintento.
+   The IFS did not answer: El IFS no respondió
+   The IFS did not finish moving filament: El IFS no terminó de mover el filamento
+-  ? "The IFS did not reach the state it was waiting for in time, so the filament is not moving: usually a jam in that lane's tube or at the toolhead entry."
++  ? 'The IFS did not reach the state it was waiting for in time, so the filament is not moving: usually a jam in that slot''s tube or at the toolhead entry.'
+   : 'El IFS no alcanzó a tiempo el estado que esperaba, así que el filamento no se mueve: normalmente un atasco en el tubo de ese carril o en la entrada del cabezal.'
+   ? 'The IFS motion sensor saw no filament movement while printing: a tangled spool, a kinked tube, the wrong slot recorded as loaded, or old filament still in the head.'
+   : 'El sensor de movimiento del IFS no detectó movimiento del filamento durante la impresión: una bobina enredada, un tubo doblado, la ranura equivocada registrada como cargada o filamento antiguo aún en el cabezal.'
+@@ -5348,7 +5348,7 @@ translations:
+   : 'El cabezal se mueve de un lado a otro a velocidades de 20 a 300 mm/s mientras el acelerómetro mide cuánto vibra cada motor. Tarda unos {0} minutos y hace ruido. Las velocidades que más vibran son las que debes evitar en tus paredes exteriores.'
+   The toolhead sensor indicates filament is already loaded. Proceed with load anyway?: El sensor del cabezal indica que ya hay filamento cargado. ¿Continuar con la carga de todos modos?
+   The toolhead sensor indicates no filament is present. Proceed with unload anyway?: El sensor del cabezal indica que no hay filamento presente. ¿Continuar con la descarga de todos modos?
+-  The toolhead sensor went empty, and no other lane holds the same type and color, or backup is off.: El sensor del cabezal quedó vacío, y ningún otro carril tiene el mismo tipo y color, o el respaldo está desactivado.
++  The toolhead sensor went empty, and no other slot holds the same type and color, or backup is off.: El sensor del cabezal quedó vacío, y ningún otro carril tiene el mismo tipo y color, o el respaldo está desactivado.
+   The toolhead this lane loads into: 'El cabezal en el que carga este carril'
+   The toolhead's pogo pins are not making contact.: 'Los pines pogo del cabezal no hacen contacto.'
+   The toolheads have changed enough times since their last maintenance.: 'Los cabezales han cambiado suficientes veces desde su último mantenimiento.'
+diff --git a/translations/fr.yml b/translations/fr.yml
+index 5b7a7e9cf4..cbbc3888d9 100644
+--- a/translations/fr.yml
++++ b/translations/fr.yml
+@@ -955,7 +955,7 @@ translations:
+   ? Check that the model fits the bed and that the slicer's bed size matches this printer, and check macros that park or purge.
+   : Vérifiez que le modèle tient sur le plateau et que la taille de plateau du trancheur correspond à cette imprimante, et vérifiez les macros de stationnement ou de purge.
+   Check that the printer is powered on and connected to the network: Vérifiez que l'imprimante est allumée et connectée au réseau
+-  Check that the spool turns freely and lane {1}'s tube is not kinked, and clear debris from the pinch roller.: Vérifiez que la bobine tourne librement et que le tube de la voie {1} n'est pas plié, et retirez les débris du galet presseur.
++  Check that the spool turns freely and slot {1}'s tube is not kinked, and clear debris from the pinch roller.: Vérifiez que la bobine tourne librement et que le tube de la voie {1} n'est pas plié, et retirez les débris du galet presseur.
+   Check that the toolhead is really empty, then resume.: Vérifiez que la tête d'outil est vraiment vide, puis reprenez.
+   Check the CAN wiring and bitrate and the host's load, then home again.: Vérifiez le câblage CAN, son débit et la charge de l'hôte, puis refaites la prise d'origine.
+   Check the IFS cable, make sure the native screen is off, and power the printer off and on.: Vérifiez le câble de l'IFS, assurez-vous que l'écran d'origine est éteint, puis éteignez et rallumez l'imprimante.
+@@ -982,7 +982,7 @@ translations:
+   Check the filament path and try again.: Vérifiez le chemin du filament et réessayez.
+   ? Check the heater and thermistor wiring and that the thermistor is seated, keep fans off the heater block and run PID tuning again, then restart the firmware.
+   : Vérifiez le câblage du chauffage et de la thermistance et que la thermistance est bien en place, éloignez les ventilateurs du bloc de chauffe et relancez le réglage PID, puis redémarrez le firmware.
+-  Check the lane's tube and the toolhead entry for a jam. For a load, check that the toolhead sensor works.: Vérifiez que le tube de la voie et l'entrée de la tête d'outil ne sont pas bouchés. Pour un chargement, vérifiez que le capteur de la tête d'outil fonctionne.
++  Check the slot's tube and the toolhead entry for a jam. For a load, check that the toolhead sensor works.: Vérifiez que le tube de la voie et l'entrée de la tête d'outil ne sont pas bouchés. Pour un chargement, vérifiez que le capteur de la tête d'outil fonctionne.
+   Check the motor cable, the driver's cooling and the motor power, then restart the firmware.: Vérifiez le câble du moteur, le refroidissement du pilote et l'alimentation des moteurs, puis redémarrez le firmware.
+   Check the nozzle temperature in the slicer's filament profile.: 'Vérifiez la température de la buse dans le profil de filament du trancheur.'
+   ? Check the path from the slot to the hub for a tangle or drag. If the slot feeds freely, the hub sensor or the feeder motor may have failed
+@@ -2062,7 +2062,7 @@ translations:
+   Filament slot menu: 'Menu du slot de filament'
+   Filament snapped inside CFS: Le filament s'est cassé dans le CFS
+   Filament stalled between CFS hub and extruder sensor: Le filament est bloqué entre le hub CFS et le capteur d'extrudeur
+-  Filament stalled in IFS lane {1}: Filament bloqué dans la voie IFS {1}
++  Filament stalled in IFS slot {1}: Filament bloqué dans la voie IFS {1}
+   Filament still feeding: 'Alimentation du filament en cours'
+   Filament stuck in connector during unload: Filament coincé dans le connecteur pendant le déchargement
+   Filament stuck in the extruder: Filament coincé dans l'extrudeur
+@@ -2497,7 +2497,7 @@ translations:
+   Insert a USB stick with the {} firmware file in its top folder.: 'Insérez une clé USB contenant le fichier firmware {} dans son dossier racine.'
+   Insert filament: 'Insérer le filament'
+   Insert filament before resuming: Insérez le filament avant de reprendre
+-  Insert filament into lane {1} until the IFS grabs it, then load again.: Insérez le filament dans la voie {1} jusqu'à ce que l'IFS le saisisse, puis relancez le chargement.
++  Insert filament into slot {1} until the IFS grabs it, then load again.: Insérez le filament dans la voie {1} jusqu'à ce que l'IFS le saisisse, puis relancez le chargement.
+   Insert filament into this head's feeder until it grabs, then load the head again.: 'Insérez le filament dans l''alimentateur de cette tête jusqu''à ce qu''il l''entraîne, puis rechargez la tête.'
+   Insert the filament again and read the tag again.: Réinsérez le filament et relisez l'étiquette.
+   Inspecting bed...: Inspection du plateau...
+@@ -2695,10 +2695,10 @@ translations:
+   Lane Settings: Paramètres de la voie
+   Lane name contains invalid characters: 'Le nom de la voie contient des caractères non valides'
+   Lane tests and motor resets: 'Tests de voie et réinitialisations moteur'
+-  ? "Lane {1}'s motor turns but its motion sensor sees no movement: a tangle on the spool, a kinked PTFE tube, or a slipping drive roller."
+-  : "Le moteur de la voie {1} tourne mais son capteur de mouvement ne détecte aucun mouvement : un nœud sur la bobine, un tube PTFE plié, ou un galet d'entraînement qui patine."
+-  ? "Lane {1}'s sensor lost the filament while feeding: the spool is empty, the filament broke, or it never went in past the sensor."
+-  : "Le capteur de la voie {1} a perdu le filament pendant l'alimentation : la bobine est vide, le filament s'est cassé, ou il n'a jamais dépassé le capteur."
++  ? 'Slot {1}''s motor turns but its motion sensor sees no movement: a tangle on the spool, a kinked PTFE tube, or a slipping drive roller.'
++  : 'Le moteur de la voie {1} tourne mais son capteur de mouvement ne détecte aucun mouvement : un nœud sur la bobine, un tube PTFE plié, ou un galet d''entraînement qui patine.'
++  ? 'Slot {1}''s sensor lost the filament while feeding: the spool is empty, the filament broke, or it never went in past the sensor.'
++  : 'Le capteur de la voie {1} a perdu le filament pendant l''alimentation : la bobine est vide, le filament s''est cassé, ou il n''a jamais dépassé le capteur.'
+   Lanes: Voies
+   Language: Langue
+   Language & Time: Langue et heure
+@@ -2802,7 +2802,7 @@ translations:
+   Load filament by hand and resume.: Chargez le filament à la main et reprenez.
+   Load filament first: Chargez d'abord du filament
+   Load filament into head T{1}, then resume.: Chargez du filament dans la tête T{1}, puis reprenez.
+-  Load filament into the empty lane or another one, then resume.: Chargez du filament dans la voie vide ou dans une autre, puis reprenez.
++  Load filament into the empty slot or another one, then resume.: Chargez du filament dans la voie vide ou dans une autre, puis reprenez.
+   Load filament into this head, then resume. If filament is there, check for a break between the spool and the head.: 'Chargez du filament dans cette tête, puis reprenez. Si le filament est présent, cherchez une rupture entre la bobine et la tête.'
+   Load filament into {}, then resume.: Chargez du filament dans {}, puis reprenez.
+   Load filament or clear the jam, then resume. For false alarms, tune detection_length (8 to 17).: Chargez du filament ou supprimez le bourrage, puis reprenez. En cas de fausses alertes, ajustez detection_length (8 à 17).
+@@ -3201,7 +3201,7 @@ translations:
+   No feeder attached: "Aucun alimentateur connecté"
+   No filament: Pas de filament
+   No filament environment sensors: Aucun capteur d'environnement de filament
+-  No filament in IFS lane {1}: Aucun filament dans la voie IFS {1}
++  No filament in IFS slot {1}: Aucun filament dans la voie IFS {1}
+   No filament loaded: Aucun filament chargé
+   No filament loaded to unload: Aucun filament chargé à décharger
+   No filament sensor detected: 'Aucun capteur de filament détecté'
+@@ -4992,8 +4992,8 @@ translations:
+   The IFS board reported a driver error on every retry.: La carte IFS a signalé une erreur de pilote à chaque tentative.
+   The IFS did not answer: L'IFS n'a pas répondu
+   The IFS did not finish moving filament: L'IFS n'a pas fini de déplacer le filament
+-  ? "The IFS did not reach the state it was waiting for in time, so the filament is not moving: usually a jam in that lane's tube or at the toolhead entry."
+-  : "L'IFS n'a pas atteint à temps l'état qu'il attendait, le filament ne bouge donc pas : généralement un bourrage dans le tube de cette voie ou à l'entrée de la tête d'outil."
++  ? 'The IFS did not reach the state it was waiting for in time, so the filament is not moving: usually a jam in that slot''s tube or at the toolhead entry.'
++  : 'L''IFS n''a pas atteint à temps l''état qu''il attendait, le filament ne bouge donc pas : généralement un bourrage dans le tube de cette voie ou à l''entrée de la tête d''outil.'
+   ? 'The IFS motion sensor saw no filament movement while printing: a tangled spool, a kinked tube, the wrong slot recorded as loaded, or old filament still in the head.'
+   : "Le capteur de mouvement de l'IFS n'a détecté aucun mouvement du filament pendant l'impression : une bobine emmêlée, un tube plié, le mauvais slot enregistré comme chargé, ou un ancien filament encore dans la tête."
+   The IFS state file can't be read.: "Le fichier d'état de l'IFS ne peut pas être lu."
+@@ -5360,7 +5360,7 @@ translations:
+   : 'La tête d''outil fait des allers-retours à des vitesses de 20 à 300 mm/s pendant que l''accéléromètre mesure la vibration de chaque moteur. Cela prend environ {0} minutes et c''est bruyant. Les vitesses qui vibrent le plus sont celles dont il faut éloigner vos parois externes.'
+   The toolhead sensor indicates filament is already loaded. Proceed with load anyway?: Le capteur de la tête d'outil indique que du filament est déjà chargé. Procéder au chargement quand même ?
+   The toolhead sensor indicates no filament is present. Proceed with unload anyway?: Le capteur de la tête d'outil indique qu'aucun filament n'est présent. Procéder au déchargement quand même ?
+-  The toolhead sensor went empty, and no other lane holds the same type and color, or backup is off.: Le capteur de la tête d'outil est passé à vide, et aucune autre voie ne contient le même type et la même couleur, ou le secours est désactivé.
++  The toolhead sensor went empty, and no other slot holds the same type and color, or backup is off.: Le capteur de la tête d'outil est passé à vide, et aucune autre voie ne contient le même type et la même couleur, ou le secours est désactivé.
+   The toolhead this lane loads into: 'La tête d''outil que cette voie alimente'
+   The toolhead's pogo pins are not making contact.: 'Les pogo pins de la tête d''outil ne font pas contact.'
+   The toolheads have changed enough times since their last maintenance.: 'Les têtes d''outil ont été changées assez de fois depuis leur dernier entretien.'
+diff --git a/translations/it.yml b/translations/it.yml
+index ce231a9316..66c72c1997 100644
+--- a/translations/it.yml
++++ b/translations/it.yml
+@@ -943,7 +943,7 @@ translations:
+   ? Check that the model fits the bed and that the slicer's bed size matches this printer, and check macros that park or purge.
+   : Verifica che il modello entri nel piano e che la dimensione del piano nello slicer corrisponda a questa stampante, e controlla le macro di parcheggio o di spurgo.
+   Check that the printer is powered on and connected to the network: Verifica che la stampante sia accesa e connessa alla rete
+-  Check that the spool turns freely and lane {1}'s tube is not kinked, and clear debris from the pinch roller.: Verifica che la bobina giri liberamente e che il tubo della corsia {1} non sia piegato, e rimuovi i detriti dal rullo pressore.
++  Check that the spool turns freely and slot {1}'s tube is not kinked, and clear debris from the pinch roller.: Verifica che la bobina giri liberamente e che il tubo della corsia {1} non sia piegato, e rimuovi i detriti dal rullo pressore.
+   Check that the toolhead is really empty, then resume.: Verifica che la testina sia davvero vuota, poi riprendi.
+   Check the CAN wiring and bitrate and the host's load, then home again.: Controlla il cablaggio e il bitrate CAN e il carico dell'host, poi esegui di nuovo l'homing.
+   Check the IFS cable, make sure the native screen is off, and power the printer off and on.: Controlla il cavo dell'IFS, assicurati che lo schermo nativo sia spento e spegni e riaccendi la stampante.
+@@ -970,7 +970,7 @@ translations:
+   Check the filament path and try again.: Controllare il percorso del filamento e riprovare.
+   ? Check the heater and thermistor wiring and that the thermistor is seated, keep fans off the heater block and run PID tuning again, then restart the firmware.
+   : Controlla il cablaggio del riscaldatore e del termistore e che il termistore sia ben inserito, tieni le ventole lontane dal blocco riscaldante ed esegui di nuovo la taratura PID, poi riavvia il firmware.
+-  Check the lane's tube and the toolhead entry for a jam. For a load, check that the toolhead sensor works.: Controlla che non ci siano inceppamenti nel tubo della corsia e all'ingresso della testina. Per un caricamento, verifica che il sensore della testina funzioni.
++  Check the slot's tube and the toolhead entry for a jam. For a load, check that the toolhead sensor works.: Controlla che non ci siano inceppamenti nel tubo della corsia e all'ingresso della testina. Per un caricamento, verifica che il sensore della testina funzioni.
+   Check the motor cable, the driver's cooling and the motor power, then restart the firmware.: Controlla il cavo del motore, il raffreddamento del driver e l'alimentazione dei motori, poi riavvia il firmware.
+   Check the nozzle temperature in the slicer's filament profile.: 'Controlla la temperatura dell''ugello nel profilo filamento dello slicer.'
+   ? Check the path from the slot to the hub for a tangle or drag. If the slot feeds freely, the hub sensor or the feeder motor may have failed
+@@ -2050,7 +2050,7 @@ translations:
+   Filament slot menu: 'Menu dello slot filamento'
+   Filament snapped inside CFS: Il filamento si è spezzato nel CFS
+   Filament stalled between CFS hub and extruder sensor: Il filamento si è fermato tra l'hub CFS e il sensore dell'estrusore
+-  Filament stalled in IFS lane {1}: Filamento bloccato nella corsia IFS {1}
++  Filament stalled in IFS slot {1}: Filamento bloccato nella corsia IFS {1}
+   Filament still feeding: 'Alimentazione filamento ancora in corso'
+   Filament stuck in connector during unload: Filamento bloccato nel connettore durante lo scaricamento
+   Filament stuck in the extruder: Filamento bloccato nell'estrusore
+@@ -2485,7 +2485,7 @@ translations:
+   Insert a USB stick with the {} firmware file in its top folder.: 'Inserisci una chiavetta USB con il file firmware {} nella cartella principale.'
+   Insert filament: 'Inserisci filamento'
+   Insert filament before resuming: Inserire filamento prima di riprendere
+-  Insert filament into lane {1} until the IFS grabs it, then load again.: Inserisci il filamento nella corsia {1} finché l'IFS non lo afferra, poi carica di nuovo.
++  Insert filament into slot {1} until the IFS grabs it, then load again.: Inserisci il filamento nella corsia {1} finché l'IFS non lo afferra, poi carica di nuovo.
+   Insert filament into this head's feeder until it grabs, then load the head again.: 'Inserisci il filamento nell''alimentatore di questa testina finché non fa presa, poi carica di nuovo la testina.'
+   Insert the filament again and read the tag again.: Inserisci di nuovo il filamento e rileggi il tag.
+   Inspecting bed...: Ispezione piano...
+@@ -2683,10 +2683,10 @@ translations:
+   Lane Settings: Impostazioni corsia
+   Lane name contains invalid characters: 'Il nome della corsia contiene caratteri non validi'
+   Lane tests and motor resets: 'Test delle corsie e ripristini motore'
+-  ? "Lane {1}'s motor turns but its motion sensor sees no movement: a tangle on the spool, a kinked PTFE tube, or a slipping drive roller."
++  ? 'Slot {1}''s motor turns but its motion sensor sees no movement: a tangle on the spool, a kinked PTFE tube, or a slipping drive roller.'
+   : 'Il motore della corsia {1} gira ma il suo sensore di movimento non rileva movimento: un groviglio sulla bobina, un tubo PTFE piegato o un rullo di trascinamento che slitta.'
+-  ? "Lane {1}'s sensor lost the filament while feeding: the spool is empty, the filament broke, or it never went in past the sensor."
+-  : "Il sensore della corsia {1} ha perso il filamento durante l'alimentazione: la bobina è vuota, il filamento si è rotto oppure non è mai entrato oltre il sensore."
++  ? 'Slot {1}''s sensor lost the filament while feeding: the spool is empty, the filament broke, or it never went in past the sensor.'
++  : 'Il sensore della corsia {1} ha perso il filamento durante l''alimentazione: la bobina è vuota, il filamento si è rotto oppure non è mai entrato oltre il sensore.'
+   Lanes: Corsie
+   Language: Lingua
+   Language & Time: Lingua e ora
+@@ -2790,7 +2790,7 @@ translations:
+   Load filament by hand and resume.: Carica il filamento a mano e riprendi.
+   Load filament first: Prima carica il filamento
+   Load filament into head T{1}, then resume.: Carica il filamento nella testina T{1}, poi riprendi.
+-  Load filament into the empty lane or another one, then resume.: Carica il filamento nella corsia vuota o in un'altra, poi riprendi.
++  Load filament into the empty slot or another one, then resume.: Carica il filamento nella corsia vuota o in un'altra, poi riprendi.
+   Load filament into this head, then resume. If filament is there, check for a break between the spool and the head.: 'Carica il filamento in questa testina, poi riprendi. Se il filamento c''è, controlla che non sia rotto tra la bobina e la testina.'
+   Load filament into {}, then resume.: Carica il filamento in {}, poi riprendi.
+   Load filament or clear the jam, then resume. For false alarms, tune detection_length (8 to 17).: Carica il filamento o elimina l'inceppamento, poi riprendi. Per i falsi allarmi, regola detection_length (da 8 a 17).
+@@ -3189,7 +3189,7 @@ translations:
+   No feeder attached: "Nessun alimentatore collegato"
+   No filament: Nessun filamento
+   No filament environment sensors: Nessun sensore ambientale del filamento
+-  No filament in IFS lane {1}: Nessun filamento nella corsia IFS {1}
++  No filament in IFS slot {1}: Nessun filamento nella corsia IFS {1}
+   No filament loaded: Nessun filamento caricato
+   No filament loaded to unload: Nessun filamento caricato da scaricare
+   No filament sensor detected: 'Nessun sensore filamento rilevato'
+@@ -4980,8 +4980,8 @@ translations:
+   The IFS board reported a driver error on every retry.: La scheda IFS ha segnalato un errore del driver a ogni tentativo.
+   The IFS did not answer: L'IFS non ha risposto
+   The IFS did not finish moving filament: L'IFS non ha finito di muovere il filamento
+-  ? "The IFS did not reach the state it was waiting for in time, so the filament is not moving: usually a jam in that lane's tube or at the toolhead entry."
+-  : "L'IFS non ha raggiunto in tempo lo stato che attendeva, quindi il filamento non si muove: di solito un inceppamento nel tubo di quella corsia o all'ingresso della testina."
++  ? 'The IFS did not reach the state it was waiting for in time, so the filament is not moving: usually a jam in that slot''s tube or at the toolhead entry.'
++  : 'L''IFS non ha raggiunto in tempo lo stato che attendeva, quindi il filamento non si muove: di solito un inceppamento nel tubo di quella corsia o all''ingresso della testina.'
+   ? 'The IFS motion sensor saw no filament movement while printing: a tangled spool, a kinked tube, the wrong slot recorded as loaded, or old filament still in the head.'
+   : 'Il sensore di movimento IFS non ha rilevato movimento del filamento durante la stampa: una bobina aggrovigliata, un tubo piegato, lo slot sbagliato registrato come caricato o vecchio filamento ancora nella testina.'
+   The IFS state file can't be read.: "Impossibile leggere il file di stato dell'IFS."
+@@ -5348,7 +5348,7 @@ translations:
+   : 'La testina si muove avanti e indietro a velocità da 20 a 300 mm/s mentre l''accelerometro misura quanto vibra ogni motore. Richiede circa {0} minuti ed è rumoroso. Le velocità che vibrano di più sono quelle da cui tenere lontane le pareti esterne.'
+   The toolhead sensor indicates filament is already loaded. Proceed with load anyway?: Il sensore della testina indica che il filamento è già caricato. Procedere comunque con il caricamento?
+   The toolhead sensor indicates no filament is present. Proceed with unload anyway?: Il sensore della testina indica che nessun filamento è presente. Procedere comunque con lo scaricamento?
+-  The toolhead sensor went empty, and no other lane holds the same type and color, or backup is off.: Il sensore della testina risulta vuoto e nessun'altra corsia contiene lo stesso tipo e colore, oppure il backup è disattivato.
++  The toolhead sensor went empty, and no other slot holds the same type and color, or backup is off.: Il sensore della testina risulta vuoto e nessun'altra corsia contiene lo stesso tipo e colore, oppure il backup è disattivato.
+   The toolhead this lane loads into: 'La testina in cui carica questa corsia'
+   The toolhead's pogo pins are not making contact.: 'I pin pogo della testina non fanno contatto.'
+   The toolheads have changed enough times since their last maintenance.: 'Le testine sono state cambiate abbastanza volte dall''ultima manutenzione.'
+diff --git a/translations/ja.yml b/translations/ja.yml
+index 1f9bac2d72..67be13b745 100644
+--- a/translations/ja.yml
++++ b/translations/ja.yml
+@@ -943,7 +943,7 @@ translations:
+   ? Check that the model fits the bed and that the slicer's bed size matches this printer, and check macros that park or purge.
+   : モデルがベッドに収まること、スライサーのベッドサイズがこのプリンターと一致することを確認し、パークやパージを行うマクロも確認してください。
+   Check that the printer is powered on and connected to the network: プリンターの電源が入っていて、ネットワークに接続されているか確認してください
+-  Check that the spool turns freely and lane {1}'s tube is not kinked, and clear debris from the pinch roller.: スプールがスムーズに回ること、レーン {1} のチューブが折れていないことを確認し、ピンチローラーのゴミを取り除いてください。
++  Check that the spool turns freely and slot {1}'s tube is not kinked, and clear debris from the pinch roller.: スプールがスムーズに回ること、レーン {1} のチューブが折れていないことを確認し、ピンチローラーのゴミを取り除いてください。
+   Check that the toolhead is really empty, then resume.: ツールヘッドが本当に空であることを確認してから再開してください。
+   Check the CAN wiring and bitrate and the host's load, then home again.: CAN の配線とビットレート、ホストの負荷を確認してから、再度ホーミングしてください。
+   Check the IFS cable, make sure the native screen is off, and power the printer off and on.: IFS のケーブルを確認し、純正画面がオフであることを確かめてから、プリンターの電源を入れ直してください。
+@@ -970,7 +970,7 @@ translations:
+   Check the filament path and try again.: フィラメント経路を確認して、もう一度お試しください。
+   ? Check the heater and thermistor wiring and that the thermistor is seated, keep fans off the heater block and run PID tuning again, then restart the firmware.
+   : ヒーターとサーミスターの配線、サーミスターの取り付けを確認し、ファンの風がヒーターブロックに当たらないようにして PID チューニングをやり直してから、ファームウェアを再起動してください。
+-  Check the lane's tube and the toolhead entry for a jam. For a load, check that the toolhead sensor works.: レーンのチューブとツールヘッドの入口に詰まりがないか確認してください。装填の場合は、ツールヘッドセンサーが動作することを確認してください。
++  Check the slot's tube and the toolhead entry for a jam. For a load, check that the toolhead sensor works.: レーンのチューブとツールヘッドの入口に詰まりがないか確認してください。装填の場合は、ツールヘッドセンサーが動作することを確認してください。
+   Check the motor cable, the driver's cooling and the motor power, then restart the firmware.: モーターケーブル、ドライバーの冷却、モーター電源を確認してから、ファームウェアを再起動してください。
+   Check the nozzle temperature in the slicer's filament profile.: 'スライサーのフィラメントプロファイルのノズル温度を確認してください。'
+   ? Check the path from the slot to the hub for a tangle or drag. If the slot feeds freely, the hub sensor or the feeder motor may have failed
+@@ -2050,7 +2050,7 @@ translations:
+   Filament slot menu: 'フィラメントスロットのメニュー'
+   Filament snapped inside CFS: CFS 内でフィラメントが折れました
+   Filament stalled between CFS hub and extruder sensor: CFS ハブとエクストルーダーセンサーの間でフィラメントが止まりました
+-  Filament stalled in IFS lane {1}: IFS レーン {1} でフィラメントが止まりました
++  Filament stalled in IFS slot {1}: IFS レーン {1} でフィラメントが止まりました
+   Filament still feeding: 'フィラメント供給中です'
+   Filament stuck in connector during unload: アンロード中にコネクター内でフィラメントが詰まりました
+   Filament stuck in the extruder: フィラメントがエクストルーダーに詰まっています
+@@ -2485,7 +2485,7 @@ translations:
+   Insert a USB stick with the {} firmware file in its top folder.: '{} のファームウェアファイルを最上位フォルダーに入れたUSBメモリを挿入してください。'
+   Insert filament: 'フィラメントを差し込む'
+   Insert filament before resuming: 再開前にフィラメントを挿入してください
+-  Insert filament into lane {1} until the IFS grabs it, then load again.: IFS がつかむまでレーン {1} にフィラメントを差し込んでから、もう一度装填してください。
++  Insert filament into slot {1} until the IFS grabs it, then load again.: IFS がつかむまでレーン {1} にフィラメントを差し込んでから、もう一度装填してください。
+   Insert filament into this head's feeder until it grabs, then load the head again.: 'このヘッドのフィーダーがつかむまでフィラメントを挿入してから、再度装填してください。'
+   Insert the filament again and read the tag again.: フィラメントを差し込み直して、タグをもう一度読み取ってください。
+   Inspecting bed...: ベッドを検査中...
+@@ -2683,9 +2683,9 @@ translations:
+   Lane Settings: レーン設定
+   Lane name contains invalid characters: 'レーン名に無効な文字が含まれています'
+   Lane tests and motor resets: 'レーンテストとモーターリセット'
+-  ? "Lane {1}'s motor turns but its motion sensor sees no movement: a tangle on the spool, a kinked PTFE tube, or a slipping drive roller."
++  ? 'Slot {1}''s motor turns but its motion sensor sees no movement: a tangle on the spool, a kinked PTFE tube, or a slipping drive roller.'
+   : 'レーン {1} のモーターは回っていますが、モーションセンサーが動きを検出しません: スプールの絡まり、PTFE チューブの折れ、または駆動ローラーの滑りです。'
+-  ? "Lane {1}'s sensor lost the filament while feeding: the spool is empty, the filament broke, or it never went in past the sensor."
++  ? 'Slot {1}''s sensor lost the filament while feeding: the spool is empty, the filament broke, or it never went in past the sensor.'
+   : '送り中にレーン {1} のセンサーがフィラメントを見失いました: スプールが空、フィラメントが切れた、またはセンサーの先まで入っていません。'
+   Lanes: レーン
+   Language: 言語
+@@ -2790,7 +2790,7 @@ translations:
+   Load filament by hand and resume.: フィラメントを手動で装填して再開してください。
+   Load filament first: 先にフィラメントを装填してください
+   Load filament into head T{1}, then resume.: ヘッド T{1} にフィラメントを装填してから、再開してください。
+-  Load filament into the empty lane or another one, then resume.: 空のレーンまたは別のレーンにフィラメントを装填してから、再開してください。
++  Load filament into the empty slot or another one, then resume.: 空のレーンまたは別のレーンにフィラメントを装填してから、再開してください。
+   Load filament into this head, then resume. If filament is there, check for a break between the spool and the head.: 'このヘッドにフィラメントを装填してから再開してください。フィラメントがある場合は、スプールとヘッドの間で切れていないか確認してください。'
+   Load filament into {}, then resume.: '{} にフィラメントを装填してから、再開してください。'
+   Load filament or clear the jam, then resume. For false alarms, tune detection_length (8 to 17).: フィラメントを装填するか詰まりを取り除いてから、再開してください。誤検出の場合は detection_length を調整してください（8～17）。
+@@ -3189,7 +3189,7 @@ translations:
+   No feeder attached: "フィーダーが接続されていません"
+   No filament: フィラメントなし
+   No filament environment sensors: フィラメント環境センサーがありません
+-  No filament in IFS lane {1}: IFS レーン {1} にフィラメントがありません
++  No filament in IFS slot {1}: IFS レーン {1} にフィラメントがありません
+   No filament loaded: フィラメントが装填されていません
+   No filament loaded to unload: 取出すフィラメントが装填されていません
+   No filament sensor detected: 'フィラメントセンサーが検出されません'
+@@ -4980,7 +4980,7 @@ translations:
+   The IFS board reported a driver error on every retry.: IFS ボードが再試行のたびにドライバーエラーを報告しました。
+   The IFS did not answer: IFS が応答しませんでした
+   The IFS did not finish moving filament: IFS がフィラメントの移動を完了しませんでした
+-  ? "The IFS did not reach the state it was waiting for in time, so the filament is not moving: usually a jam in that lane's tube or at the toolhead entry."
++  ? 'The IFS did not reach the state it was waiting for in time, so the filament is not moving: usually a jam in that slot''s tube or at the toolhead entry.'
+   : 'IFS が待機中の状態に時間内に到達しなかったため、フィラメントが動いていません: 通常、そのレーンのチューブまたはツールヘッド入口の詰まりが原因です。'
+   ? 'The IFS motion sensor saw no filament movement while printing: a tangled spool, a kinked tube, the wrong slot recorded as loaded, or old filament still in the head.'
+   : '印刷中に IFS モーションセンサーがフィラメントの動きを検出しませんでした: スプールの絡まり、チューブの折れ、装填済みとして記録されたスロットの誤り、またはヘッドに古いフィラメントが残っています。'
+@@ -5348,7 +5348,7 @@ translations:
+   : 'ツールヘッドが 20 から 300 mm/s の速度で往復し、その間に加速度センサーが各モーターの揺れの強さを測定します。所要時間は約 {0} 分で、大きな音がします。最も揺れる速度が、外壁で避けるべき速度です。'
+   The toolhead sensor indicates filament is already loaded. Proceed with load anyway?: ツールヘッドセンサーがフィラメント装填済みを検出しました。それでも装填を続行しますか？
+   The toolhead sensor indicates no filament is present. Proceed with unload anyway?: ツールヘッドセンサーがフィラメント未検出を報告しました。それでもアンロードを続行しますか？
+-  The toolhead sensor went empty, and no other lane holds the same type and color, or backup is off.: ツールヘッドセンサーが空になりましたが、同じ種類と色のレーンが他にないか、予備がオフです。
++  The toolhead sensor went empty, and no other slot holds the same type and color, or backup is off.: ツールヘッドセンサーが空になりましたが、同じ種類と色のレーンが他にないか、予備がオフです。
+   The toolhead this lane loads into: 'このレーンが装填するツールヘッド'
+   The toolhead's pogo pins are not making contact.: 'ツールヘッドのポゴピンが接触していません。'
+   The toolheads have changed enough times since their last maintenance.: '前回のメンテナンス以降、ツールヘッドの交換回数が規定に達しました。'
+diff --git a/translations/pt.yml b/translations/pt.yml
+index 081ffe170f..9a905af2aa 100644
+--- a/translations/pt.yml
++++ b/translations/pt.yml
+@@ -943,7 +943,7 @@ translations:
+   ? Check that the model fits the bed and that the slicer's bed size matches this printer, and check macros that park or purge.
+   : Verifique se o modelo cabe na mesa e se o tamanho da mesa no fatiador corresponde a esta impressora, e verifique as macros que estacionam ou purgam.
+   Check that the printer is powered on and connected to the network: Verifique se a impressora está ligada e conectada à rede
+-  Check that the spool turns freely and lane {1}'s tube is not kinked, and clear debris from the pinch roller.: Verifique se o carretel gira livremente e se o tubo da lane {1} não está dobrado, e remova detritos do rolete de pressão.
++  Check that the spool turns freely and slot {1}'s tube is not kinked, and clear debris from the pinch roller.: Verifique se o carretel gira livremente e se o tubo da lane {1} não está dobrado, e remova detritos do rolete de pressão.
+   Check that the toolhead is really empty, then resume.: Verifique se o cabeçote está realmente vazio e retome.
+   Check the CAN wiring and bitrate and the host's load, then home again.: Verifique a fiação e o bitrate CAN e a carga do host, e faça home novamente.
+   Check the IFS cable, make sure the native screen is off, and power the printer off and on.: Verifique o cabo do IFS, certifique-se de que a tela nativa está desligada e desligue e ligue a impressora.
+@@ -970,7 +970,7 @@ translations:
+   Check the filament path and try again.: Verifique o caminho do filamento e tente novamente.
+   ? Check the heater and thermistor wiring and that the thermistor is seated, keep fans off the heater block and run PID tuning again, then restart the firmware.
+   : Verifique a fiação do aquecedor e do termistor e se o termistor está assentado, mantenha as ventoinhas longe do bloco aquecedor e refaça a calibração PID, e reinicie o firmware.
+-  Check the lane's tube and the toolhead entry for a jam. For a load, check that the toolhead sensor works.: Verifique se há obstrução no tubo da lane e na entrada do cabeçote. Para um carregamento, verifique se o sensor do cabeçote funciona.
++  Check the slot's tube and the toolhead entry for a jam. For a load, check that the toolhead sensor works.: Verifique se há obstrução no tubo da lane e na entrada do cabeçote. Para um carregamento, verifique se o sensor do cabeçote funciona.
+   Check the motor cable, the driver's cooling and the motor power, then restart the firmware.: Verifique o cabo do motor, o resfriamento do driver e a alimentação do motor, e reinicie o firmware.
+   Check the nozzle temperature in the slicer's filament profile.: 'Verifique a temperatura do bico no perfil de filamento do fatiador.'
+   ? Check the path from the slot to the hub for a tangle or drag. If the slot feeds freely, the hub sensor or the feeder motor may have failed
+@@ -2050,7 +2050,7 @@ translations:
+   Filament slot menu: 'Menu do slot de filamento'
+   Filament snapped inside CFS: O filamento partiu dentro do CFS
+   Filament stalled between CFS hub and extruder sensor: O filamento parou entre o hub do CFS e o sensor do extrusor
+-  Filament stalled in IFS lane {1}: O filamento parou na lane {1} do IFS
++  Filament stalled in IFS slot {1}: O filamento parou na lane {1} do IFS
+   Filament still feeding: 'Filamento ainda alimentando'
+   Filament stuck in connector during unload: Filamento preso no conector durante a descarga
+   Filament stuck in the extruder: Filamento preso no extrusor
+@@ -2485,7 +2485,7 @@ translations:
+   Insert a USB stick with the {} firmware file in its top folder.: 'Insira um pendrive com o arquivo de firmware da {} na pasta principal.'
+   Insert filament: 'Inserir filamento'
+   Insert filament before resuming: Insira filamento antes de retomar
+-  Insert filament into lane {1} until the IFS grabs it, then load again.: Insira o filamento na lane {1} até o IFS pegá-lo e carregue novamente.
++  Insert filament into slot {1} until the IFS grabs it, then load again.: Insira o filamento na lane {1} até o IFS pegá-lo e carregue novamente.
+   Insert filament into this head's feeder until it grabs, then load the head again.: 'Insira o filamento no alimentador deste cabeçote até ele prender e carregue o cabeçote novamente.'
+   Insert the filament again and read the tag again.: Insira o filamento novamente e leia a etiqueta de novo.
+   Inspecting bed...: Inspecionando a mesa...
+@@ -2683,9 +2683,9 @@ translations:
+   Lane Settings: Configurações da Lane
+   Lane name contains invalid characters: 'O nome do lane contém caracteres inválidos'
+   Lane tests and motor resets: 'Testes de lane e reinícios de motor'
+-  ? "Lane {1}'s motor turns but its motion sensor sees no movement: a tangle on the spool, a kinked PTFE tube, or a slipping drive roller."
++  ? 'Slot {1}''s motor turns but its motion sensor sees no movement: a tangle on the spool, a kinked PTFE tube, or a slipping drive roller.'
+   : 'O motor da lane {1} gira, mas o sensor de movimento não detecta movimento: um embaraço no carretel, um tubo PTFE dobrado ou um rolete de tração patinando.'
+-  ? "Lane {1}'s sensor lost the filament while feeding: the spool is empty, the filament broke, or it never went in past the sensor."
++  ? 'Slot {1}''s sensor lost the filament while feeding: the spool is empty, the filament broke, or it never went in past the sensor.'
+   : 'O sensor da lane {1} perdeu o filamento durante a alimentação: o carretel está vazio, o filamento quebrou ou nunca passou do sensor.'
+   Lanes: Lanes
+   Language: Idioma
+@@ -2790,7 +2790,7 @@ translations:
+   Load filament by hand and resume.: Carregue filamento à mão e retome.
+   Load filament first: Carregue filamento primeiro
+   Load filament into head T{1}, then resume.: Carregue filamento no cabeçote T{1} e retome.
+-  Load filament into the empty lane or another one, then resume.: Carregue filamento na lane vazia ou em outra, e retome.
++  Load filament into the empty slot or another one, then resume.: Carregue filamento na lane vazia ou em outra, e retome.
+   Load filament into this head, then resume. If filament is there, check for a break between the spool and the head.: 'Carregue filamento neste cabeçote e retome. Se houver filamento, verifique se ele rompeu entre o carretel e o cabeçote.'
+   Load filament into {}, then resume.: Carregue filamento em {} e retome.
+   Load filament or clear the jam, then resume. For false alarms, tune detection_length (8 to 17).: Carregue filamento ou desobstrua, e retome. Para alarmes falsos, ajuste detection_length (8 a 17).
+@@ -3189,7 +3189,7 @@ translations:
+   No feeder attached: "Nenhum alimentador conectado"
+   No filament: Sem filamento
+   No filament environment sensors: Nenhum sensor ambiental de filamento
+-  No filament in IFS lane {1}: Sem filamento na lane {1} do IFS
++  No filament in IFS slot {1}: Sem filamento na lane {1} do IFS
+   No filament loaded: Nenhum filamento carregado
+   No filament loaded to unload: Nenhum filamento carregado para descarregar
+   No filament sensor detected: 'Nenhum sensor de filamento detectado'
+@@ -4980,7 +4980,7 @@ translations:
+   The IFS board reported a driver error on every retry.: A placa do IFS relatou um erro de driver em todas as tentativas.
+   The IFS did not answer: O IFS não respondeu
+   The IFS did not finish moving filament: O IFS não terminou de mover o filamento
+-  ? "The IFS did not reach the state it was waiting for in time, so the filament is not moving: usually a jam in that lane's tube or at the toolhead entry."
++  ? 'The IFS did not reach the state it was waiting for in time, so the filament is not moving: usually a jam in that slot''s tube or at the toolhead entry.'
+   : 'O IFS não chegou a tempo ao estado que esperava, então o filamento não está se movendo: geralmente uma obstrução no tubo dessa lane ou na entrada do cabeçote.'
+   ? 'The IFS motion sensor saw no filament movement while printing: a tangled spool, a kinked tube, the wrong slot recorded as loaded, or old filament still in the head.'
+   : 'O sensor de movimento do IFS não detectou movimento do filamento durante a impressão: um carretel embaraçado, um tubo dobrado, o slot errado registrado como carregado ou filamento antigo ainda no cabeçote.'
+@@ -5348,7 +5348,7 @@ translations:
+   : 'O cabeçote se move para frente e para trás em velocidades de 20 a 300 mm/s enquanto o acelerômetro mede o quanto cada motor vibra. Leva cerca de {0} minutos e é barulhento. As velocidades que mais vibram são as que suas paredes externas devem evitar.'
+   The toolhead sensor indicates filament is already loaded. Proceed with load anyway?: O sensor do cabeçote indica que o filamento já está carregado. Prosseguir com o carregamento mesmo assim?
+   The toolhead sensor indicates no filament is present. Proceed with unload anyway?: O sensor do cabeçote indica que não há filamento presente. Prosseguir com o descarregamento mesmo assim?
+-  The toolhead sensor went empty, and no other lane holds the same type and color, or backup is off.: O sensor do cabeçote ficou vazio, e nenhuma outra lane tem o mesmo tipo e cor, ou a reserva está desligada.
++  The toolhead sensor went empty, and no other slot holds the same type and color, or backup is off.: O sensor do cabeçote ficou vazio, e nenhuma outra lane tem o mesmo tipo e cor, ou a reserva está desligada.
+   The toolhead this lane loads into: 'O cabeçote em que esta lane carrega'
+   The toolhead's pogo pins are not making contact.: 'Os pinos pogo do cabeçote não estão fazendo contato.'
+   The toolheads have changed enough times since their last maintenance.: 'Os cabeçotes já trocaram vezes suficientes desde a última manutenção.'
+diff --git a/translations/ru.yml b/translations/ru.yml
+index 9f0faad1eb..dc97e186b5 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -1001,7 +1001,7 @@ translations:
+   ? Check that the model fits the bed and that the slicer's bed size matches this printer, and check macros that park or purge.
+   : Убедитесь, что модель помещается на столе и что размер стола в слайсере совпадает с этим принтером, и проверьте макросы парковки и прочистки.
+   Check that the printer is powered on and connected to the network: Проверьте, что принтер включён и подключён к сети
+-  Check that the spool turns freely and lane {1}'s tube is not kinked, and clear debris from the pinch roller.: Убедитесь, что катушка вращается свободно, а трубка слота {1} не пережата, и очистите прижимной ролик от мусора.
++  Check that the spool turns freely and slot {1}'s tube is not kinked, and clear debris from the pinch roller.: Убедитесь, что катушка вращается свободно, а трубка слота {1} не пережата, и очистите прижимной ролик от мусора.
+   Check that the toolhead is really empty, then resume.: Убедитесь, что печатающая головка действительно пуста, затем продолжите.
+   Check the CAN wiring and bitrate and the host's load, then home again.: Проверьте проводку CAN, скорость шины и нагрузку на хост, затем снова выполните парковку.
+   Check the IFS cable, make sure the native screen is off, and power the printer off and on.: Проверьте кабель IFS, убедитесь, что родной экран выключен, и выключите и включите принтер.
+@@ -1028,7 +1028,7 @@ translations:
+   Check the filament path and try again.: Проверьте путь филамента и попробуйте снова.
+   ? Check the heater and thermistor wiring and that the thermistor is seated, keep fans off the heater block and run PID tuning again, then restart the firmware.
+   : Проверьте проводку нагревателя и термистора и посадку термистора, не направляйте вентиляторы на нагревательный блок и снова выполните калибровку PID, затем перезапустите прошивку.
+-  Check the lane's tube and the toolhead entry for a jam. For a load, check that the toolhead sensor works.: Проверьте трубку слота и вход в печатающую головку на засор. При загрузке убедитесь, что датчик печатающей головки работает.
++  Check the slot's tube and the toolhead entry for a jam. For a load, check that the toolhead sensor works.: Проверьте трубку слота и вход в печатающую головку на засор. При загрузке убедитесь, что датчик печатающей головки работает.
+   Check the motor cable, the driver's cooling and the motor power, then restart the firmware.: Проверьте кабель мотора, охлаждение драйвера и питание моторов, затем перезапустите прошивку.
+   Check the nozzle temperature in the slicer's filament profile.: 'Проверьте температуру сопла в профиле филамента в слайсере.'
+   ? Check the path from the slot to the hub for a tangle or drag. If the slot feeds freely, the hub sensor or the feeder motor may have failed
+@@ -2113,7 +2113,7 @@ translations:
+   Filament slot menu: 'Меню слота филамента'
+   Filament snapped inside CFS: Филамент сломался внутри CFS
+   Filament stalled between CFS hub and extruder sensor: Филамент остановился между хабом CFS и датчиком экструдера
+-  Filament stalled in IFS lane {1}: Филамент застрял в слоте IFS {1}
++  Filament stalled in IFS slot {1}: Филамент застрял в слоте IFS {1}
+   Filament still feeding: 'Филамент ещё подаётся'
+   Filament stuck in connector during unload: Филамент застрял в разъёме при выгрузке
+   Filament stuck in the extruder: Филамент застрял в экструдере
+@@ -2553,7 +2553,7 @@ translations:
+   Insert a USB stick with the {} firmware file in its top folder.: 'Вставьте USB-накопитель с файлом прошивки {} в корневой папке.'
+   Insert filament: 'Вставить филамент'
+   Insert filament before resuming: Вставьте филамент перед возобновлением
+-  Insert filament into lane {1} until the IFS grabs it, then load again.: Вставьте филамент в слот {1}, пока IFS его не захватит, затем загрузите снова.
++  Insert filament into slot {1} until the IFS grabs it, then load again.: Вставьте филамент в слот {1}, пока IFS его не захватит, затем загрузите снова.
+   Insert filament into this head's feeder until it grabs, then load the head again.: 'Вставьте филамент в фидер этой головки до захвата, затем снова загрузите головку.'
+   Insert the filament again and read the tag again.: Вставьте филамент снова и ещё раз прочитайте метку.
+   Inspecting bed...: Осмотр стола...
+@@ -2751,9 +2751,9 @@ translations:
+   Lane Settings: Настройки канала
+   Lane name contains invalid characters: 'Имя канала содержит недопустимые символы'
+   Lane tests and motor resets: 'Тесты каналов и сброс моторов'
+-  ? 'Lane {1}''s motor turns but its motion sensor sees no movement: a tangle on the spool, a kinked PTFE tube, or a slipping drive roller.'
++  ? 'Slot {1}''s motor turns but its motion sensor sees no movement: a tangle on the spool, a kinked PTFE tube, or a slipping drive roller.'
+   : 'Мотор слота {1} вращается, но его датчик движения не видит движения: филамент запутался на катушке, трубка PTFE пережата или проскальзывает приводной ролик.'
+-  ? 'Lane {1}''s sensor lost the filament while feeding: the spool is empty, the filament broke, or it never went in past the sensor.'
++  ? 'Slot {1}''s sensor lost the filament while feeding: the spool is empty, the filament broke, or it never went in past the sensor.'
+   : 'Датчик слота {1} потерял филамент при подаче: катушка пуста, филамент оборвался или не прошёл дальше датчика.'
+   Lanes: Каналы
+   Language: Язык
+@@ -2858,7 +2858,7 @@ translations:
+   Load filament by hand and resume.: Загрузите филамент вручную и продолжите.
+   Load filament first: Сначала загрузите филамент
+   Load filament into head T{1}, then resume.: Загрузите филамент в головку T{1}, затем продолжите.
+-  Load filament into the empty lane or another one, then resume.: Загрузите филамент в пустой или другой слот, затем продолжите.
++  Load filament into the empty slot or another one, then resume.: Загрузите филамент в пустой или другой слот, затем продолжите.
+   Load filament into this head, then resume. If filament is there, check for a break between the spool and the head.: 'Загрузите филамент в эту головку, затем продолжите. Если филамент есть, проверьте, нет ли обрыва между катушкой и головкой.'
+   Load filament into {}, then resume.: Загрузите филамент в {}, затем продолжите.
+   Load filament or clear the jam, then resume. For false alarms, tune detection_length (8 to 17).: Загрузите филамент или устраните замятие, затем продолжите. При ложных срабатываниях настройте detection_length (от 8 до 17).
+@@ -3257,7 +3257,7 @@ translations:
+   No feeder attached: "Фидер не подключён"
+   No filament: Нет филамента
+   No filament environment sensors: Нет датчиков среды филамента
+-  No filament in IFS lane {1}: Нет филамента в слоте IFS {1}
++  No filament in IFS slot {1}: Нет филамента в слоте IFS {1}
+   No filament loaded: Филамент не загружен
+   No filament loaded to unload: Нет загруженного филамента для выгрузки
+   No filament sensor detected: 'Датчик филамента не обнаружен'
+@@ -5071,7 +5071,7 @@ translations:
+   The IFS board reported a driver error on every retry.: Плата IFS сообщала об ошибке драйвера при каждой повторной попытке.
+   The IFS did not answer: IFS не ответил
+   The IFS did not finish moving filament: IFS не завершил перемещение филамента
+-  ? 'The IFS did not reach the state it was waiting for in time, so the filament is not moving: usually a jam in that lane''s tube or at the toolhead entry.'
++  ? 'The IFS did not reach the state it was waiting for in time, so the filament is not moving: usually a jam in that slot''s tube or at the toolhead entry.'
+   : 'IFS не перешёл вовремя в ожидаемое состояние, поэтому филамент не движется: обычно это засор в трубке этого слота или на входе в печатающую головку.'
+   ? 'The IFS motion sensor saw no filament movement while printing: a tangled spool, a kinked tube, the wrong slot recorded as loaded, or old filament still in the head.'
+   : 'Датчик движения IFS не видел движения филамента во время печати: катушка запуталась, трубка пережата, записан неверный загруженный слот или в головке остался старый филамент.'
+@@ -5438,7 +5438,7 @@ translations:
+   : 'Печатающая головка движется взад и вперёд на скоростях от 20 до 300 mm/s, а акселерометр измеряет, насколько сильно трясёт каждый мотор. Это займёт около {0} минут и будет шумно. Скорости с самой сильной тряской и есть те, которых следует избегать для внешних стенок.'
+   The toolhead sensor indicates filament is already loaded. Proceed with load anyway?: Датчик печатающей головки показывает, что филамент уже загружен. Всё равно продолжить загрузку?
+   The toolhead sensor indicates no filament is present. Proceed with unload anyway?: Датчик печатающей головки показывает, что филамент отсутствует. Всё равно продолжить выгрузку?
+-  The toolhead sensor went empty, and no other lane holds the same type and color, or backup is off.: Датчик печатающей головки показывает пусто, а другого слота с тем же типом и цветом нет или резерв выключен.
++  The toolhead sensor went empty, and no other slot holds the same type and color, or backup is off.: Датчик печатающей головки показывает пусто, а другого слота с тем же типом и цветом нет или резерв выключен.
+   The toolhead this lane loads into: 'Печатающая головка, в которую подаёт этот канал'
+   The toolhead's pogo pins are not making contact.: 'Пого-контакты печатающей головки не замыкаются.'
+   The toolheads have changed enough times since their last maintenance.: 'С последнего обслуживания печатающие головки сменились достаточно раз.'
+diff --git a/translations/zh.yml b/translations/zh.yml
+index eca1bc6dff..39f651d1fd 100644
+--- a/translations/zh.yml
++++ b/translations/zh.yml
+@@ -943,7 +943,7 @@ translations:
+   ? Check that the model fits the bed and that the slicer's bed size matches this printer, and check macros that park or purge.
+   : 请检查模型是否能放在热床上、切片软件的热床尺寸是否与本打印机一致，并检查用于停放或排料的宏。
+   Check that the printer is powered on and connected to the network: 请检查打印机是否已开机并连接到网络
+-  Check that the spool turns freely and lane {1}'s tube is not kinked, and clear debris from the pinch roller.: 请检查料盘转动顺畅、耗材通道 {1} 的料管没有弯折，并清除压轮上的杂物。
++  Check that the spool turns freely and slot {1}'s tube is not kinked, and clear debris from the pinch roller.: 请检查料盘转动顺畅、耗材通道 {1} 的料管没有弯折，并清除压轮上的杂物。
+   Check that the toolhead is really empty, then resume.: 请确认工具头确实为空，然后恢复。
+   Check the CAN wiring and bitrate and the host's load, then home again.: 请检查 CAN 接线和波特率以及主机负载，然后重新归位。
+   Check the IFS cable, make sure the native screen is off, and power the printer off and on.: 请检查 IFS 线缆，确保原厂屏幕已关闭，然后将打印机断电重启。
+@@ -970,7 +970,7 @@ translations:
+   Check the filament path and try again.: 检查耗材路径并重试。
+   ? Check the heater and thermistor wiring and that the thermistor is seated, keep fans off the heater block and run PID tuning again, then restart the firmware.
+   : 请检查加热器和热敏电阻接线以及热敏电阻是否安装到位，避免风扇吹向加热块，重新进行 PID 校准，然后重启固件。
+-  Check the lane's tube and the toolhead entry for a jam. For a load, check that the toolhead sensor works.: 请检查该耗材通道的料管和工具头入口是否堵塞。如果是加载，请检查工具头传感器是否正常。
++  Check the slot's tube and the toolhead entry for a jam. For a load, check that the toolhead sensor works.: 请检查该耗材通道的料管和工具头入口是否堵塞。如果是加载，请检查工具头传感器是否正常。
+   Check the motor cable, the driver's cooling and the motor power, then restart the firmware.: 请检查电机线缆、驱动散热和电机电源，然后重启固件。
+   Check the nozzle temperature in the slicer's filament profile.: '请检查切片软件耗材配置中的喷嘴温度。'
+   ? Check the path from the slot to the hub for a tangle or drag. If the slot feeds freely, the hub sensor or the feeder motor may have failed
+@@ -2050,7 +2050,7 @@ translations:
+   Filament slot menu: '耗材槽位操作'
+   Filament snapped inside CFS: 耗材在 CFS 内断裂
+   Filament stalled between CFS hub and extruder sensor: 耗材停滞在 CFS 集线器与挤出机传感器之间
+-  Filament stalled in IFS lane {1}: IFS 耗材通道 {1} 中耗材停滞
++  Filament stalled in IFS slot {1}: IFS 耗材通道 {1} 中耗材停滞
+   Filament still feeding: '仍在送料'
+   Filament stuck in connector during unload: 退料时耗材卡在接头内
+   Filament stuck in the extruder: 耗材卡在挤出机中
+@@ -2485,7 +2485,7 @@ translations:
+   Insert a USB stick with the {} firmware file in its top folder.: '请插入在顶层文件夹中存有 {} 固件文件的 U 盘。'
+   Insert filament: '插入耗材'
+   Insert filament before resuming: 恢复前请插入耗材
+-  Insert filament into lane {1} until the IFS grabs it, then load again.: 请将耗材插入耗材通道 {1}，直到 IFS 夹住它，然后重新加载。
++  Insert filament into slot {1} until the IFS grabs it, then load again.: 请将耗材插入耗材通道 {1}，直到 IFS 夹住它，然后重新加载。
+   Insert filament into this head's feeder until it grabs, then load the head again.: '请将耗材插入此工具头的送料器直到被咬住，然后重新装载。'
+   Insert the filament again and read the tag again.: 请重新插入耗材并再次读取标签。
+   Inspecting bed...: 正在检查热床...
+@@ -2683,9 +2683,9 @@ translations:
+   Lane Settings: 耗材通道设置
+   Lane name contains invalid characters: '耗材通道名称包含无效字符'
+   Lane tests and motor resets: '耗材通道测试与电机重置'
+-  ? "Lane {1}'s motor turns but its motion sensor sees no movement: a tangle on the spool, a kinked PTFE tube, or a slipping drive roller."
++  ? 'Slot {1}''s motor turns but its motion sensor sees no movement: a tangle on the spool, a kinked PTFE tube, or a slipping drive roller.'
+   : 耗材通道 {1} 的电机在转动，但运动传感器检测不到移动：料盘缠绕、PTFE 管弯折，或驱动轮打滑。
+-  ? "Lane {1}'s sensor lost the filament while feeding: the spool is empty, the filament broke, or it never went in past the sensor."
++  ? 'Slot {1}''s sensor lost the filament while feeding: the spool is empty, the filament broke, or it never went in past the sensor.'
+   : 耗材通道 {1} 的传感器在送料时失去了耗材：料盘已空、耗材断裂，或耗材从未越过传感器。
+   Lanes: 耗材通道
+   Language: 语言
+@@ -2790,7 +2790,7 @@ translations:
+   Load filament by hand and resume.: 请手动加载耗材后恢复。
+   Load filament first: 请先装载耗材
+   Load filament into head T{1}, then resume.: 请为工具头 T{1} 加载耗材，然后恢复。
+-  Load filament into the empty lane or another one, then resume.: 请将耗材加载到空的耗材通道或其他通道，然后恢复。
++  Load filament into the empty slot or another one, then resume.: 请将耗材加载到空的耗材通道或其他通道，然后恢复。
+   Load filament into this head, then resume. If filament is there, check for a break between the spool and the head.: '请为此工具头装载耗材，然后恢复。如已有耗材，请检查料盘与工具头之间是否断料。'
+   Load filament into {}, then resume.: 请将耗材加载到 {}，然后恢复。
+   Load filament or clear the jam, then resume. For false alarms, tune detection_length (8 to 17).: 请加载耗材或清除卡料，然后恢复。如果是误报，请调整 detection_length（8 至 17）。
+@@ -3189,7 +3189,7 @@ translations:
+   No feeder attached: "未连接送料器"
+   No filament: 无耗材
+   No filament environment sensors: 无耗材环境传感器
+-  No filament in IFS lane {1}: IFS 耗材通道 {1} 中没有耗材
++  No filament in IFS slot {1}: IFS 耗材通道 {1} 中没有耗材
+   No filament loaded: 未加载耗材
+   No filament loaded to unload: 没有已加载的耗材可卸载
+   No filament sensor detected: '未检测到耗材传感器'
+@@ -4980,7 +4980,7 @@ translations:
+   The IFS board reported a driver error on every retry.: IFS 板在每次重试时都报告驱动错误。
+   The IFS did not answer: IFS 无响应
+   The IFS did not finish moving filament: IFS 未完成耗材移动
+-  ? "The IFS did not reach the state it was waiting for in time, so the filament is not moving: usually a jam in that lane's tube or at the toolhead entry."
++  ? 'The IFS did not reach the state it was waiting for in time, so the filament is not moving: usually a jam in that slot''s tube or at the toolhead entry.'
+   : IFS 未能及时达到等待的状态，因此耗材没有移动：通常是该耗材通道的料管或工具头入口堵塞。
+   ? 'The IFS motion sensor saw no filament movement while printing: a tangled spool, a kinked tube, the wrong slot recorded as loaded, or old filament still in the head.'
+   : 打印时 IFS 运动传感器检测不到耗材移动：料盘缠绕、料管弯折、记录的已加载槽位有误，或工具头中仍有旧耗材。
+@@ -5348,7 +5348,7 @@ translations:
+   : '工具头以 20 到 300 mm/s 的速度来回移动，同时加速度传感器测量每个电机的抖动强度。大约需要 {0} 分钟，并且噪音较大。抖动最强的速度就是外墙应避开的速度。'
+   The toolhead sensor indicates filament is already loaded. Proceed with load anyway?: 工具头传感器显示耗材已装载。仍要继续装载吗？
+   The toolhead sensor indicates no filament is present. Proceed with unload anyway?: 工具头传感器显示无耗材。仍要继续卸载吗？
+-  The toolhead sensor went empty, and no other lane holds the same type and color, or backup is off.: 工具头传感器显示为空，且没有其他耗材通道装有相同类型和颜色的耗材，或备用功能已关闭。
++  The toolhead sensor went empty, and no other slot holds the same type and color, or backup is off.: 工具头传感器显示为空，且没有其他耗材通道装有相同类型和颜色的耗材，或备用功能已关闭。
+   The toolhead this lane loads into: '此耗材通道装载到的工具头'
+   The toolhead's pogo pins are not making contact.: '工具头的弹簧针接触不良。'
+   The toolheads have changed enough times since their last maintenance.: '自上次维护以来，工具头切换次数已达上限。'

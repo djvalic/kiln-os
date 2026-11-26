@@ -100,7 +100,7 @@ if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
 	# A publish of this staged build tried before and tagged the staged
 	# commit: it goes on from there (Gitea and GitHub reuse what is there)
 	if [ -n "$STAGED" ] && [ -f "$STAGED/publish.state" ] &&
-		[ "$(git rev-parse "$VERSION^{commit}")" = "$(staged commit)" ]; then
+		[ "$(git rev-parse "refs/tags/$VERSION^{commit}")" = "$(staged commit)" ]; then
 		TAGGED=1
 		echo "release: tag $VERSION is there from an earlier try of this publish: not tagged again"
 	else
@@ -297,10 +297,12 @@ fi
 # still names the released commit
 BR=$(git branch --show-current)
 git fetch -q origin
+# refs/tags/: a release branch can have the version's name (v1.0.1-rc3), and
+# then "git push origin v1.0.1-rc3" fails ("matches more than one")
 if git merge-base --is-ancestor "$COMMIT" "origin/$BR" 2>/dev/null; then
-	git push -q origin "$VERSION"
+	git push -q origin "refs/tags/$VERSION"
 else
-	git push -q origin "$COMMIT:refs/heads/$BR" "$VERSION" ||
+	git push -q origin "$COMMIT:refs/heads/$BR" "refs/tags/$VERSION" ||
 		die "push failed: origin/$BR has commits this release lacks (rebase, then release again)"
 fi
 # Then the CHANGELOG commit. The release stands without it: when the branch

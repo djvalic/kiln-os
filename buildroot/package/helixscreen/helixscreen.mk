@@ -7,8 +7,8 @@
 # HELIXSCREEN_COMMIT: the tag's commit (tools/bump_upstream.py keeps both
 # current). Git with submodules: LVGL, libhv, spdlog/fmt, libnl,
 # wpa_supplicant's client, Lua, helix-xml etc. are vendored there.
-HELIXSCREEN_VERSION = v1.1.0-rc.1
-HELIXSCREEN_COMMIT = 5304009b264f2f325350666e1da767531865242e
+HELIXSCREEN_VERSION = v1.2.0-alpha.1
+HELIXSCREEN_COMMIT = f8c0c57687429f73c10b5f0a74297c10739febdc
 HELIXSCREEN_SITE = https://github.com/prestonbrown/helixscreen.git
 HELIXSCREEN_SITE_METHOD = git
 HELIXSCREEN_GIT_SUBMODULES = YES
@@ -34,8 +34,9 @@ define HELIXSCREEN_GIT_INIT
 endef
 HELIXSCREEN_POST_EXTRACT_HOOKS += HELIXSCREEN_GIT_INIT
 
-# Binary flag images that a text patch cannot carry (the Turkish flag, used by
-# the language picker, patch 0034). Copied into the source after the patches.
+# Binary flag images that a text patch cannot carry (the Turkish flag, patch
+# 0034). Copied into the source after the patches, so the source stays whole;
+# the image leaves it out with the other languages' flags (below).
 define HELIXSCREEN_KILN_FLAGS
 	cp $(HELIXSCREEN_PKGDIR)/flags/flag_tr.bin $(HELIXSCREEN_PKGDIR)/flags/flag_tr.png \
 		$(@D)/assets/images/flags/
@@ -122,6 +123,30 @@ define HELIXSCREEN_INSTALL_TARGET_CMDS
 	rm -f "$(HELIXSCREEN_INSTDIR)/assets/images/orcaslicer test cube.PNG"
 	find $(HELIXSCREEN_INSTDIR)/assets/images/printers -maxdepth 1 -name '*.png' \
 		! -name 'flashforge-*' ! -name 'generic-corexy.png' -delete
+	# HelixScreen 1.2's pictures of other filament units (AMS, Box Turtle,
+	# ERCF, ...): an AD5X only ever shows its IFS (about 20 MB saved)
+	find $(HELIXSCREEN_INSTDIR)/assets/images/units -mindepth 1 -maxdepth 1 \
+		! -name 'ad5x_ifs' -exec rm -rf {} +
+	# The CJK glyphs (all of assets/fonts/cjk: about 9.5 MB for print file
+	# names, 3.8 MB for the screen's Chinese and Japanese text). The screen
+	# offers English and Russian only (patch 0033; Russian is in the linked
+	# Noto Sans faces), and a saved zh or ja starts in English (patch 0104),
+	# so the language bins never load. HelixScreen skips a missing file-name
+	# bin ("no bin, skipped"): Chinese or Japanese file names show boxes
+	rm -rf $(HELIXSCREEN_INSTDIR)/assets/fonts/cjk
+	# Language packs: English and Russian only, the two the picker offers
+	# (patch 0033). translations.xml (all languages in one, about 3 MB) is a
+	# build step's output: HelixScreen loads ui_xml/translations/<lang>.xml
+	# only. The other languages' translations/*.yml stay in the source, so
+	# one can come back by adding it to the picker and keeping its pack here
+	find $(HELIXSCREEN_INSTDIR)/ui_xml/translations -name '*.xml' \
+		! -name en.xml ! -name ru.xml -delete
+	# The flags of the languages left out (the picker shows en and ru)
+	find $(HELIXSCREEN_INSTDIR)/assets/images/flags -name 'flag_*' \
+		! -name 'flag_en.*' ! -name 'flag_ru.*' -delete
+	# The 3D splash logos (about 2 MB): the splash falls back to the flat
+	# helixscreen-logo.png (splash_asset_choice.cpp)
+	rm -f $(HELIXSCREEN_INSTDIR)/assets/images/helixscreen-logo-3d-*.png
 	ln -sf ../lib/helixscreen/bin/helix-screen $(TARGET_DIR)/usr/bin/helix-screen
 	# What HelixScreen's update checker expects of an install (asset_name as
 	# its platform key: mips). Without it, each start tried to write one into

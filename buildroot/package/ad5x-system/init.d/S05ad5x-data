@@ -45,16 +45,33 @@ start)
 		[ -n "$us" ] && mount -t ext4 -o ro "/dev/$us" /tmp/usershare \
 			&& us_mounted=1
 	fi
-	# Root login: the same password as stock's (its /etc/shadow on
-	# usershare), so SSH works as before without a password in the image.
+	# Root login: the password set with ad5x-passwd (its hash in
+	# /data/ad5x/ssh/root-password), else the same password as stock's
+	# (its /etc/shadow on usershare), so SSH works as before without a
+	# password in the image (lib/rootpw.sh, shared with the recovery OS).
 	# SSH keys: /data/ad5x/ssh/authorized_keys.
 	hash=$(sed -n 's/^root:\([^:]*\):.*/\1/p' /tmp/usershare/etc/shadow 2>/dev/null)
-	if [ -n "$hash" ] && ! grep -q ' /etc/shadow ' /proc/mounts; then
-		mkdir -p /run/ad5x
-		(umask 077; sed "s|^root:[^:]*:|root:$hash:|" /etc/shadow > /run/ad5x/shadow)
-		chmod 600 /run/ad5x/shadow
-		mount --bind /run/ad5x/shadow /etc/shadow
-		echo "ad5x-data: root password from stock's settings"
+	if [ -f /usr/lib/ad5x/rootpw.sh ]; then
+		. /usr/lib/ad5x/rootpw.sh
+		rootpw_boot "$hash" && case $ROOTPW_FROM in
+			kiln) echo "ad5x-data: root password set with ad5x-passwd" ;;
+			stock) echo "ad5x-data: root password from stock's settings" ;;
+			default) echo "ad5x-data: no root password set and no stock one: the default, root" ;;
+		esac
+	else
+		# Without the library (it shouldn't happen): stock's hash, as
+		# before it, so the rest of this script still runs
+		echo "ad5x-data: rootpw.sh missing, stock's root password only"
+		# (no stock hash: the image's own /etc/shadow, whose root
+		# password is the default "root" (post-build.sh); the hash
+		# reaches awk through its environment, not its argv)
+		if [ -n "$hash" ] && ! grep -q ' /etc/shadow ' /proc/mounts; then
+			mkdir -p /run/ad5x
+			(umask 077; H=$hash awk -F: -v OFS=: \
+				'$1 == "root" { $2 = ENVIRON["H"] } 1' /etc/shadow > /run/ad5x/shadow)
+			chmod 600 /run/ad5x/shadow
+			mount --bind /run/ad5x/shadow /etc/shadow
+		fi
 	fi
 	# Per-printer calibration from the stock settings file, once; stock
 	# defaults without it.

@@ -45,10 +45,10 @@ Upstream: not applicable (AD5X OS specific)
  5 files changed, 155 insertions(+), 30 deletions(-)
 
 diff --git a/include/ams_backend_ad5x_ifs.h b/include/ams_backend_ad5x_ifs.h
-index da149b5..50306ad 100644
+index 8cc07dcd86..09ac778161 100644
 --- a/include/ams_backend_ad5x_ifs.h
 +++ b/include/ams_backend_ad5x_ifs.h
-@@ -1129,6 +1129,10 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
+@@ -1116,6 +1116,10 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend,
      /// Cutting filament". Caller holds mutex_.
      [[nodiscard]] std::string kiln_step_detail_locked() const;
  
@@ -59,7 +59,7 @@ index da149b5..50306ad 100644
      /// Z-Mod's change macro keeps the target tool in
      /// `gcode_macro END_CHANGE_FILAMENT`.last_data.channel from the start of a
      /// filament change to its end, and 99 otherwise. Its runout auto-swap and
-@@ -1353,8 +1357,9 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
+@@ -1350,8 +1354,9 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend,
      // rule and locking as finalize_op_after_macro().
      void fail_op_after_macro(bool is_unload, const MoonrakerError& err);
      // Home if needed, then send a load macro that finalizes or fails the op on
@@ -72,10 +72,10 @@ index da149b5..50306ad 100644
      int find_first_tool_for_port(int port_1based) const;
  
 diff --git a/src/printer/ams_backend_ad5x_ifs.cpp b/src/printer/ams_backend_ad5x_ifs.cpp
-index e7b0d24..1df0d31 100644
+index 73981f9c7e..49454dd5fe 100644
 --- a/src/printer/ams_backend_ad5x_ifs.cpp
 +++ b/src/printer/ams_backend_ad5x_ifs.cpp
-@@ -226,6 +226,13 @@ bool AmsBackendAd5xIfs::owns_filament_sensor(const std::string& bare_name,
+@@ -272,6 +272,13 @@ bool AmsBackendAd5xIfs::owns_filament_sensor(const std::string& bare_name,
  }
  
  namespace {
@@ -89,7 +89,7 @@ index e7b0d24..1df0d31 100644
  /// Z-Mod's change macro; its last_data.channel is the change in flight.
  constexpr const char* kZmodChangeMacro = "gcode_macro END_CHANGE_FILAMENT";
  /// last_data.channel when no change is running.
-@@ -1907,12 +1914,17 @@ AmsError AmsBackendAd5xIfs::do_load_filament(int slot_index) {
+@@ -1813,12 +1820,17 @@ AmsError AmsBackendAd5xIfs::do_load_filament(int slot_index) {
          // unload whichever lane is seated, feed to the toolhead sensor, then
          // the colour-distance-scaled purge. Same ack-finalize contract as the
          // zmod macro below: the ack fires only after the purge fully ran.
@@ -110,7 +110,7 @@ index e7b0d24..1df0d31 100644
      auto token = lifetime_.token();
      return ensure_homed_then(
          std::move(gcode), [this]() { finalize_op_after_macro(/*is_unload=*/false); },
-@@ -1920,7 +1932,7 @@ AmsError AmsBackendAd5xIfs::dispatch_load_macro(std::string gcode) {
+@@ -1826,7 +1838,7 @@ AmsError AmsBackendAd5xIfs::dispatch_load_macro(std::string gcode) {
              token.defer("Ad5xIfsBackend::load_macro_failed",
                          [this, err]() { fail_op_after_macro(/*is_unload=*/false, err); });
          },
@@ -119,7 +119,7 @@ index e7b0d24..1df0d31 100644
          // The firmware's own `!!` error is the user-facing report; this
          // callback only moves the op to ERROR.
          /*caller_surfaces_errors=*/false);
-@@ -2163,12 +2175,15 @@ AmsError AmsBackendAd5xIfs::do_unload_filament(int slot_index) {
+@@ -2069,12 +2081,15 @@ AmsError AmsBackendAd5xIfs::do_unload_filament(int slot_index) {
      } else if (module_live) {
          // Standalone module: IFS_UNLOAD takes the nozzle contents back into the
          // lane and leaves it threaded (70 mm), resolving the heat from the
@@ -136,7 +136,7 @@ index e7b0d24..1df0d31 100644
          result = execute_gcode(std::move(cmd), on_complete, on_error);
      } else {
          // _IFS_REMOVE_CURRENT_PRUTOK unloads the lane in FFMInfo.channel and
-@@ -2426,8 +2441,11 @@ AmsError AmsBackendAd5xIfs::eject_lane(int slot_index) {
+@@ -2333,8 +2348,11 @@ AmsError AmsBackendAd5xIfs::eject_lane(int slot_index) {
          // is the loaded one. One command, one ack.
          spdlog::info("{} Eject lane {} (port {}) -> IFS_EJECT", backend_log_tag(), slot_index,
                       port);
@@ -149,7 +149,7 @@ index e7b0d24..1df0d31 100644
      } else {
          spdlog::info("{} Cold eject lane {} (port {}, material '{}') -> IFS_F24 / IFS_F11 LEN={} "
                       "SPEED={} / IFS_F39",
-@@ -5265,6 +5283,11 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+@@ -4980,6 +4998,11 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
              kiln_step_.operation = *operation;
          }
          if (phase) {
@@ -161,7 +161,7 @@ index e7b0d24..1df0d31 100644
              kiln_step_.phase = *phase;
          }
          if (target_channel) {
-@@ -5274,6 +5297,13 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+@@ -4989,6 +5012,13 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
              kiln_step_.activity_channel = *activity_channel;
          }
          action_changed = apply_kiln_step_locked();
@@ -175,7 +175,7 @@ index e7b0d24..1df0d31 100644
      }
  
      // Kiln OS's auto-refill: the endless-spool capabilities read it, so a
-@@ -5389,7 +5419,8 @@ AmsBackendAd5xIfs::KilnStepView AmsBackendAd5xIfs::kiln_step_view(const std::str
+@@ -5131,7 +5161,8 @@ AmsBackendAd5xIfs::KilnStepView AmsBackendAd5xIfs::kiln_step_view(const std::str
          v.op = op;
          v.phase_index = index;
      };
@@ -185,7 +185,7 @@ index e7b0d24..1df0d31 100644
          set(AmsAction::HEATING, operation == "load" ? load_op : StepOperationType::UNLOAD, 0);
      } else if (phase == "cutting") {
          set(AmsAction::CUTTING, StepOperationType::UNLOAD, 1);
-@@ -5486,6 +5517,8 @@ std::string AmsBackendAd5xIfs::kiln_step_detail_locked() const {
+@@ -5228,6 +5259,8 @@ std::string AmsBackendAd5xIfs::kiln_step_detail_locked() const {
          step = lv_tr("Retracting filament");
      } else if (s.phase == "homing") {
          step = lv_tr("Homing the IFS");
@@ -194,20 +194,20 @@ index e7b0d24..1df0d31 100644
      } else if (s.phase == "selecting") {
          step = lv_tr("Selecting the slot");
      } else if (s.phase == "feeding") {
-@@ -6735,6 +6768,11 @@ bool AmsBackendAd5xIfs::apply_phase_action_locked() {
-     default:
+@@ -6300,6 +6333,11 @@ bool AmsBackendAd5xIfs::apply_phase_action_locked() {
+         set_operation_detail_locked("");
          break;
      }
 +    // Kiln's module homes the printer before our op moves anything (HOME=1):
 +    // say that rather than the heating, which only starts meanwhile.
 +    if (kiln_homing_first_locked()) {
-+        detail = lv_tr("Homing first...");
++        set_operation_detail_locked(TR_NOOP("Homing first..."));
 +    }
  
      bool changed = false;
      if (system_info_.action != synth) {
-@@ -6762,6 +6800,10 @@ void AmsBackendAd5xIfs::set_operation_detail_locked(std::string detail) {
-     system_info_.operation_detail = std::move(detail);
+@@ -6339,6 +6377,10 @@ void AmsBackendAd5xIfs::refresh_translated_texts() {
+     }
  }
  
 +bool AmsBackendAd5xIfs::kiln_homing_first_locked() const {
@@ -217,7 +217,7 @@ index e7b0d24..1df0d31 100644
  void AmsBackendAd5xIfs::detect_load_unload_completion(bool head_detected) {
      // Phase-tracker-driven operations (load/unload WE started) advance phases
      // via on_head_transition_locked rather than completing here — the head
-@@ -7341,7 +7383,8 @@ AmsError AmsBackendAd5xIfs::do_execute_device_action(const std::string& action_i
+@@ -6917,7 +6959,8 @@ AmsError AmsBackendAd5xIfs::do_execute_device_action(const std::string& action_i
                                     : fmt::format("IFS_MAP_MODE MODE={}", name));
      }
      if (action_id == "kiln_tune") {
@@ -228,10 +228,10 @@ index e7b0d24..1df0d31 100644
      if (action_id.rfind(kKilnPrefeedPrefix, 0) == 0) {
          const auto channel =
 diff --git a/tests/unit/test_ams_ad5x_ifs_module.cpp b/tests/unit/test_ams_ad5x_ifs_module.cpp
-index 25a3cc7..0dec7e2 100644
+index 9aa87e28f1..52b6d5dadf 100644
 --- a/tests/unit/test_ams_ad5x_ifs_module.cpp
 +++ b/tests/unit/test_ams_ad5x_ifs_module.cpp
-@@ -592,7 +592,7 @@ TEST_CASE("AD5X IFS module's own lane record outranks the remembered seated lane
+@@ -602,7 +602,7 @@ TEST_CASE("AD5X IFS module's own lane record outranks the remembered seated lane
  
      backend.captured_gcodes.clear();
      REQUIRE(backend.unload_filament(-1).success());
@@ -240,7 +240,7 @@ index 25a3cc7..0dec7e2 100644
      CHECK_FALSE(backend.has_gcode_containing("SLOT=4"));
  }
  
-@@ -613,7 +613,7 @@ TEST_CASE("AD5X IFS module with nothing recorded does not seat the remembered la
+@@ -622,7 +622,7 @@ TEST_CASE("AD5X IFS module with nothing recorded does not seat the remembered la
      CHECK_FALSE(Ad5xIfsTestAccess::persisted_seated_slot(backend).has_value());
      backend.captured_gcodes.clear();
      REQUIRE(backend.unload_filament(-1).success());
@@ -249,7 +249,7 @@ index 25a3cc7..0dec7e2 100644
  }
  
  TEST_CASE("AD5X IFS module with no lane record keeps the remembered-lane fallback",
-@@ -629,7 +629,7 @@ TEST_CASE("AD5X IFS module with no lane record keeps the remembered-lane fallbac
+@@ -637,7 +637,7 @@ TEST_CASE("AD5X IFS module with no lane record keeps the remembered-lane fallbac
      CHECK(Ad5xIfsTestAccess::seated_chan(backend) == 4);
      backend.captured_gcodes.clear();
      REQUIRE(backend.unload_filament(-1).success());
@@ -258,7 +258,7 @@ index 25a3cc7..0dec7e2 100644
  }
  
  TEST_CASE("AD5X IFS module ignores an ifs_loaded that names no real lane",
-@@ -670,7 +670,7 @@ TEST_CASE("AD5X IFS module keeps the ifs_loaded lane while another lane's eject
+@@ -674,7 +674,7 @@ TEST_CASE("AD5X IFS module keeps the ifs_loaded lane while another lane's eject
      CHECK(backend.get_current_slot() == 1);
      backend.captured_gcodes.clear();
      REQUIRE(backend.unload_filament(-1).success());
@@ -267,7 +267,7 @@ index 25a3cc7..0dec7e2 100644
      CHECK_FALSE(backend.has_gcode_containing("SLOT=3"));
  }
  
-@@ -741,24 +741,24 @@ TEST_CASE("AD5X IFS module eject of its loaded lane names a temperature when the
+@@ -743,23 +743,23 @@ TEST_CASE("AD5X IFS module eject of its loaded lane names a temperature when the
          record(3);
          REQUIRE(Ad5xIfsTestAccess::seated_chan(backend) == 3);
          REQUIRE(backend.unload_filament(-1).success());
@@ -276,8 +276,7 @@ index 25a3cc7..0dec7e2 100644
      }
      SECTION("a nozzle the user already heated keeps its target") {
          record(3);
-         Ad5xIfsTestAccess::handle_status(
-             backend, json{{"extruder", {{"target", 255.0}, {"temperature", 30.0}}}});
+         backend.fire_status(json{{"extruder", {{"target", 255.0}, {"temperature", 30.0}}}});
          REQUIRE(backend.unload_filament(-1).success());
 -        CHECK(backend.captured_gcodes == std::vector<std::string>{"IFS_EJECT SLOT=3 TEMP=255"});
 +        CHECK(backend.captured_gcodes == std::vector<std::string>{"IFS_EJECT SLOT=3 TEMP=255 HOME=1"});
@@ -296,7 +295,7 @@ index 25a3cc7..0dec7e2 100644
      }
  }
  
-@@ -811,8 +811,8 @@ TEST_CASE("AD5X IFS module slotless unload names a lane the module can retract",
+@@ -853,8 +853,8 @@ TEST_CASE("AD5X IFS module slotless unload names a lane the module can retract",
          Ad5xIfsTestAccess::set_persisted_seated_slot(backend, 1);
          CHECK(backend.unload_lane_question().lanes.empty());
          REQUIRE(backend.unload_filament(-1).success());
@@ -307,7 +306,7 @@ index 25a3cc7..0dec7e2 100644
      }
      SECTION("with no remembered lane the present lanes are offered and nothing is sent") {
          Ad5xIfsTestAccess::set_persisted_seated_slot(backend, std::nullopt);
-@@ -831,7 +831,7 @@ TEST_CASE("AD5X IFS module slotless unload names a lane the module can retract",
+@@ -873,7 +873,7 @@ TEST_CASE("AD5X IFS module slotless unload names a lane the module can retract",
      SECTION("an explicit lane is sent as given") {
          Ad5xIfsTestAccess::set_persisted_seated_slot(backend, std::nullopt);
          REQUIRE(backend.unload_filament(0).success());
@@ -316,7 +315,7 @@ index 25a3cc7..0dec7e2 100644
      }
  }
  
-@@ -950,7 +950,7 @@ TEST_CASE("AD5X IFS module unloads the lane holding the hub without asking",
+@@ -990,7 +990,7 @@ TEST_CASE("AD5X IFS module unloads the lane holding the hub without asking",
  
      CHECK(backend.unload_lane_question().lanes.empty());
      REQUIRE(backend.unload_filament(-1).success());
@@ -324,8 +323,8 @@ index 25a3cc7..0dec7e2 100644
 +    CHECK(backend.captured_gcodes == std::vector<std::string>{"IFS_UNLOAD SLOT=2 HOME=1"});
  
      SECTION("an at-hub lane that has emptied asks instead") {
-         TestableModuleBackend emptied;
-@@ -975,7 +975,7 @@ TEST_CASE("AD5X IFS module asks to confirm the one lane holding filament",
+         helix::test::StartedBackend<TestableModuleBackend> emptied;
+@@ -1015,7 +1015,7 @@ TEST_CASE("AD5X IFS module asks to confirm the one lane holding filament",
  
      SECTION("a confirmed lane is unloaded by number") {
          REQUIRE(backend.unload_filament(2).success());
@@ -334,7 +333,7 @@ index 25a3cc7..0dec7e2 100644
      }
  }
  
-@@ -1036,6 +1036,36 @@ TEST_CASE("AD5X IFS module clears the extruder alone when no lane can be named",
+@@ -1074,6 +1074,36 @@ TEST_CASE("AD5X IFS module clears the extruder alone when no lane can be named",
      }
  }
  
@@ -371,7 +370,7 @@ index 25a3cc7..0dec7e2 100644
  TEST_CASE("AD5X IFS module never sends a bare IFS_UNLOAD", "[ams][ad5x_ifs][ifs_module][1324]") {
      // Bare, the module's IFS_UNLOAD falls back on its own records; Helix always
      // names the lane or sends the explicit clear, in every row of the table.
-@@ -1091,21 +1121,21 @@ TEST_CASE("AD5X IFS module ops dispatch the module's macros", "[ams][ad5x_ifs][i
+@@ -1126,21 +1156,21 @@ TEST_CASE("AD5X IFS module ops dispatch the module's macros", "[ams][ad5x_ifs][i
  
      SECTION("load") {
          REQUIRE(backend.load_filament(2).success());
@@ -398,7 +397,7 @@ index 25a3cc7..0dec7e2 100644
      }
      SECTION("tool change uses the slicer spelling") {
 diff --git a/tests/unit/test_ams_ad5x_kiln_ifs.cpp b/tests/unit/test_ams_ad5x_kiln_ifs.cpp
-index 3e92cf1..1f888c4 100644
+index 3e92cf1dde..1f888c4929 100644
 --- a/tests/unit/test_ams_ad5x_kiln_ifs.cpp
 +++ b/tests/unit/test_ams_ad5x_kiln_ifs.cpp
 @@ -100,6 +100,19 @@ TEST_CASE("AD5X IFS maps Kiln's operation and phase onto steps", "[ams][ad5x_ifs
@@ -472,7 +471,7 @@ index 3e92cf1..1f888c4 100644
          CHECK_FALSE(backend.execute_device_action("kiln_prefeed_1").success());
          CHECK_FALSE(
 diff --git a/tests/unit/test_unload_lane_choice.cpp b/tests/unit/test_unload_lane_choice.cpp
-index 133cc48..82002c8 100644
+index 19531e7ce6..05be562eb7 100644
 --- a/tests/unit/test_unload_lane_choice.cpp
 +++ b/tests/unit/test_unload_lane_choice.cpp
 @@ -159,7 +159,7 @@ TEST_CASE_METHOD(UnloadLaneSidebarFixture,
@@ -484,7 +483,7 @@ index 133cc48..82002c8 100644
      }
      SECTION("the same lane from the context menu is still nothing loaded") {
          sidebar_->handle_unload(2);
-@@ -308,7 +308,7 @@ TEST_CASE_METHOD(UnloadLaneSidebarFixture,
+@@ -302,7 +302,7 @@ TEST_CASE_METHOD(UnloadLaneSidebarFixture,
          REQUIRE(find_on_screen("extra_choice") != nullptr);
          // The lane rows come in slot order; the first is slot 1.
          tap(find_on_screen("filament_picker_row_0"));

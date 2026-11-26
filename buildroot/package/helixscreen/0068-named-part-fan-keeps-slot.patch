@@ -19,10 +19,10 @@ and pcb_fan as aux.
  2 files changed, 26 insertions(+)
 
 diff --git a/src/printer/printer_fan_state.cpp b/src/printer/printer_fan_state.cpp
-index cf5aabbb..c4334bb9 100644
+index 278951a7ad..c2942a393e 100644
 --- a/src/printer/printer_fan_state.cpp
 +++ b/src/printer/printer_fan_state.cpp
-@@ -338,6 +338,14 @@ std::string PrinterFanState::resolve_part_fan(const std::string& configured) con
+@@ -360,6 +360,14 @@ std::string PrinterFanState::resolve_part_fan(const std::string& configured) con
      if (!configured.empty() && has_run(configured))
          return configured; // (1) the configured part fan proved itself
  
@@ -38,10 +38,10 @@ index cf5aabbb..c4334bb9 100644
      for (const auto& fan : fans_) {
          if (!is_fan_controllable(fan.type) || fan.object_name == configured)
 diff --git a/tests/unit/test_print_status_fan_section.cpp b/tests/unit/test_print_status_fan_section.cpp
-index 0d5514ca..bc131c9b 100644
+index dfecab1f3b..0accebf1ca 100644
 --- a/tests/unit/test_print_status_fan_section.cpp
 +++ b/tests/unit/test_print_status_fan_section.cpp
-@@ -204,6 +204,24 @@ TEST_CASE_METHOD(HelixTestFixture,
+@@ -202,6 +202,24 @@ TEST_CASE_METHOD(HelixTestFixture,
      REQUIRE(state.classify_primary_fans().part == "fan");
  }
  
@@ -66,6 +66,3 @@ index 0d5514ca..bc131c9b 100644
  TEST_CASE_METHOD(HelixTestFixture,
                   "classify_primary_fans: stale bare 'fan' yields to a RUNNING commandable fan "
                   "(#1124)",
--- 
-2.56.0
-

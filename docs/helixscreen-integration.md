@@ -4,7 +4,7 @@ What HelixScreen (touch UI, github.com/prestonbrown/helixscreen) needs from
 Klipper/Moonraker to run on an AD5X with an IFS, and how we close the gap.
 Section 0 is what is implemented (option (a2) below); sections 1-4 are the
 research it is based on, describing our stack before the change. Kiln OS
-now runs HelixScreen v1.1.0-rc.1 with its patches on every printer; the
+now runs HelixScreen v1.2.0-alpha.1 with its patches on every printer; the
 sections below keep the state of the day they were written.
 
 Sources (read 2026-10-15):
@@ -23,9 +23,10 @@ for `LW` `https://github.com/Hrybmo/lesswaste/blob/3d42421a6ed020baaa7563c94a56a
 
 ## Our patches
 
-`buildroot/package/helixscreen/*.patch` on HelixScreen v1.1.0-rc.1: 92
-files, `0001` to `0100` (the missing numbers were dropped because upstream
-has them). `docs/setup-wizard.md` ("HelixScreen side") lists `0001` to
+`buildroot/package/helixscreen/*.patch` on HelixScreen v1.2.0-alpha.1: 93
+files, `0001` to `0103` (the missing numbers were dropped because upstream
+has them, or with the move to 1.2: 0061, the Z offset arrows, whose buttons
+1.2 names for what moves, and 0073, a test fix 1.2 has). `docs/setup-wizard.md` ("HelixScreen side") lists `0001` to
 `0019` with what each does: among them the AD5X setup steps (0001, 0002,
 0003, 0006 time zone), the IFS port sensors (0004), Settings > Plugins
 (0005, `docs/plugins.md`) and the speaker with Settings > Sound > Printer
@@ -544,3 +545,172 @@ G-code) is solved on the Klipper side: steps run in the background and the
 screen sends every action through `printer.ad5x_setup.control`, which is not
 behind the G-code lock. Homing, `BED_MESH_CALIBRATE` and `SHAPER_CALIBRATE`
 still finish their current command before an abort ends the step.
+
+## Root password reset (implemented: HelixScreen patch 0103)
+
+Kiln OS's side: `S68ad5x-update-agent`, `ad5x-passwd`, `lib/rootpw.sh`,
+`ad5x-fbstream`; user docs in [install.md](install.md), "SSH login and the
+root password". The screen's side: patch
+`0103-kiln-root-password-reset.patch` (`include/ui_settings_kiln_rootpw.h`,
+`src/ui/ui_settings_kiln_rootpw.cpp`, the System page's XML and
+`ui_settings_system.cpp`). It does two things. Both are Kiln OS builds only
+(`HELIX_KILN_AD5X`; other builds show nothing and their factory reset is
+upstream's).
+
+### The request (the same for both)
+
+HelixScreen runs as root. It talks to the root agent through files in
+`/run/ad5x/screen-request/` (root's, 0700; the agent makes it at start), never
+through Moonraker, Klipper or a G-code: those are reachable from the network,
+the folder is not.
+
+1. Delete `root-password-default.status` if it is there.
+2. Write `root-password-default` with one line, `KIND STAMP`:
+   - KIND `reset` (the button) or `factory-reset` (the factory reset);
+   - STAMP the seconds since boot, `CLOCK_BOOTTIME` (the same clock as
+     `/proc/uptime`), as a whole number with no leading zeros, taken **when
+     the press began**: the button, the press that starts the 5 s hold; the
+     factory reset, the press on the confirmation's Reset button
+     (`LV_EVENT_PRESSED` on its `btn_primary`; with none seen, when the
+     reset runs). Not the time of writing.
+
+   Example: `reset 4182`. A new regular file (`.s.XXXXXX` by `mkstemp` in
+   the folder, then renamed), mode 0600. No folder (or a link in its place):
+   nothing is written, "Could not send the request to the system".
+3. Wait for `root-password-default.status`, looked for every 250 ms. The
+   agent's screen loop looks every second, apart from its main loop, so a
+   long job (an update's checksum, a plugin's root script) never delays it.
+   After 10 s the screen gives up: it deletes `root-password-default` if it
+   is still there, so a late reset can't land, and says "No answer from the
+   system, try again". One request at a time: a new one ends the waiting one
+   as unanswered.
+4. Its one line: `done`, or `refused: <reason>` / `failed: <reason>`. The
+   reasons the screen translates:
+   - `refused: password reset is locked (turned off over SSH)`
+   - `refused: the screen was used from a browser; touch it on the printer itself and try again in 30 seconds`
+   - `refused: a print is running`
+   - `refused: the request came too late; try again`
+   - `failed: bad request`
+   - `failed: <ad5x-passwd's message>` is shown as it is (English: it comes
+     from the OS), as is any other line.
+
+The agent judges the request by STAMP, not by when it reads it: refused when
+the press began more than 10 s ago (or in the future), checked again just
+before the password changes, and when the browser screen view
+(`/run/ad5x/remote-touch`) touched the screen at or after STAMP - 30 s, or
+holds it now. A missing or malformed STAMP is a bad request. Moonraker gets
+2 s to say whether a print runs; no answer counts as not printing (a reset
+can't harm a print, a broken Moonraker shouldn't lock the owner out, and a
+slow answer only makes the request too old).
+
+`done` means root's password is now `root`, already in use (no restart).
+
+### The button: Settings > System > Reset root password
+
+- Just above Boot into recovery. Shown only when
+  `/run/ad5x/screen-request/root-password-reset.state` exists (a plain file,
+  not a link); it holds `unlocked` or `locked` (the agent rewrites it within
+  3 s of a change). The screen reads it when the System page first opens, every
+  2 s after that, at each press and after each answer.
+  - `unlocked`: the row "Reset root password" with an open lock icon and the
+    hint "Hold 5 seconds: SSH login root / root" (shown at every screen size).
+    Greyed while a print is active (`print_active`).
+  - `locked` (or anything other than `unlocked`): a greyed row with a closed
+    lock, "Reset root password", and "Turned off over SSH (ad5x-passwd
+    --unlock-reset)". It takes no press.
+  - Missing (no agent): neither row.
+- A 5 s hold, not a tap. The row's `LV_EVENT_PRESSED` starts it, only when
+  `lv_indev_active()` is DisplayManager's own pointer
+  (`DisplayManager::pointer_input()`): not HelixScreen's remote pointer
+  (`helix::remote::RemotePointer`, a second indev) and not an event made
+  without an input device (`ctl click`, a Lua plugin's events). The
+  remote-control server is compiled out (`ENABLE_REMOTE_CONTROL=no`); the
+  check is there anyway. Touches from Kiln's own browser screen view
+  (`ad5x-fbstream`, nginx `/screen/`) arrive on the panel's own evdev node and
+  can't be told apart here; the agent refuses those from its record
+  (`/run/ad5x/remote-touch`). HelixScreen 1.2's Lua plugins run inside its
+  process, and this check is what keeps them out: besides the indev, the
+  panel must be down on the row when the press arrives, and the hold follows
+  the panel's own state (below), not events, so an event sent from inside
+  HelixScreen starts and keeps nothing.
+- The hold itself is not LVGL's (whose long press comes after 300-1500 ms): an
+  `lv_timer` every 50 ms looks at the panel's pointer, pressed, on the row,
+  the row not greyed and nothing scrolling (`ResetHold`, no LVGL, tested on its
+  own). A lift of up to 200 ms (`kCalibrationHoldGapMs`, as the hold to
+  calibrate in `touch_hold_gesture.h`) from the last pressed reading does not
+  end it; a longer one, a slide off the row, a scroll or the lock turned on
+  during the hold ends it with nothing sent. It fires on a pressed reading 5 s
+  after the press. The hold to calibrate opens calibration after 10 s anywhere;
+  if the finger stays on, it covers the answer dialog (harmless).
+- The hold fires once per press. After it fires, no new hold starts until
+  the panel has been let go for more than 200 ms (looked at anywhere on the
+  panel: the answer's dialog may be under the finger by then), so a finger
+  kept down, or a press LVGL sees again after a short lift, never sends a
+  second request. A new press starts a new hold with its own stamp.
+- While held: a bar under the row fills over the 5 s, with "Keep holding...".
+  At 5 s the request goes out with `reset` and the press's stamp, and the line
+  says "Resetting...".
+  The answer opens a dialog titled "Reset root password" with OK: `done` ->
+  "Root password reset. Log in over SSH as root with the password root, then
+  run passwd to choose your own." (Info); a refusal, failure or no answer ->
+  its reason (Warning). The row is ready for another hold after that.
+
+### The factory reset: Settings > System > Factory reset
+
+`SystemSettingsOverlay::perform_factory_reset()` (`src/ui/settings/ui_settings_system.cpp`
+in 1.2): after `config->reset_to_defaults(); config->save();` it writes the
+request with `factory-reset` and the stamp of the press on the
+confirmation's Reset button (`kiln_rootpw::request_factory_reset()`), shows
+"Resetting..." while it waits (up to 10 s), then the answer's toast for 4 s,
+and only then `app_request_restart_service()` (upstream restarts at once,
+which leaves no time to read a toast). Only this function writes
+`factory-reset`, and only on its own run (no other code path, button, `ctl`
+command or plugin API writes it; a test reads the sources for that). The
+request goes out whatever the state file says. The agent applies it whatever
+the lock says and removes the lock (`FACTORY_RESET_HONOURS_LOCK=no` in the
+agent): whoever locked themselves out can get back in, at the cost of the
+screen's settings. It still refuses while a browser uses the screen and while
+printing; the factory reset itself goes on then.
+
+- The confirmation text gets one line: "The root password also becomes
+  root."
+- Toast: `done` -> "Settings reset to defaults. Root password is root.
+  Restarting..." (Success); otherwise "Settings reset to defaults. The root
+  password was not reset: <reason>. Restarting..." (Warning), the reason
+  translated as above.
+
+### Texts
+
+The row, its hint, the locked hint, "Keep holding...", the result, the
+reasons above, "No answer from the system, try again", "Could not send the
+request to the system", "The request came too late; try again", the confirmation line and both toasts are in
+`translations/en.yml`, `en-GB.yml` (empty: English) and de, es, fr, it, ja,
+ko, pt, ru, tr, zh (the image ships the en and ru packs only, see
+`docs/setup-wizard.md`, "Language"). "Resetting..." and "OK" were already there. Russian:
+«Сбросить пароль root», «вход по SSH».
+
+### Tests
+
+`tests/unit/test_settings_kiln_rootpw.cpp`: the row's three states from the
+state file (and a link refused), the status line and the texts for each
+answer, the request file's content (with the press's stamp, CLOCK_BOOTTIME)
+and mode with the old answer deleted and no
+temporary file left, the 10 s timeout taking the request back, no folder, the
+hold (5 s fires, an early lift cancels, a 150 ms lift doesn't, 200 ms is the
+limit, the tick wrapping), the indev check (remote pointer and no indev
+refused), the row from unlocked through holding and waiting to an answer done
+or refused, locked (and locked during the hold), the answer's dialog, one
+press sending one request (a finger kept down or pressed again after a
+short lift sends no second one; a new press after letting go does, with its
+own stamp), the factory reset writing `factory-reset` while locked, its
+stamp from the press on Reset, that only
+`perform_factory_reset` writes it (the sources), and the texts in every
+language (Russian only Russian). `tests/unit/test_settings_system_callbacks.cpp`:
+the System page's rows hidden, unlocked (greyed during a print), locked, the
+bar and the line, and the press callback attached.
+
+The tests drive the module's `lv_timer`s themselves (`pump()` in the test):
+HelixScreen's test pump runs no periodic timer. `perform_factory_reset()`
+itself is not run in a test (it resets the shared config and asks for a
+restart); its request is `request_factory_reset()`, tested above, and the
+source check pins the one call to it.

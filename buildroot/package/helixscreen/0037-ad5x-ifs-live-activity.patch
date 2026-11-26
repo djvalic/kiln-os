@@ -31,17 +31,16 @@ An older driver without these fields keeps the plain activity mapping
 Upstream: not applicable (AD5X OS specific)
 ---
  include/ams_backend_ad5x_ifs.h            |  49 +++
- src/printer/ams_backend_ad5x_ifs.cpp      | 368 ++++++++++++++++++++--
- tests/test_helpers/ad5x_ifs_test_access.h |   9 +
+ src/printer/ams_backend_ad5x_ifs.cpp      | 377 +++++++++++++++++++---
+ tests/test_helpers/ad5x_ifs_test_access.h |  19 ++
  tests/unit/test_ams_ad5x_kiln_ifs.cpp     | 294 +++++++++++++++++
- 4 files changed, 687 insertions(+), 33 deletions(-)
- create mode 100644 tests/unit/test_ams_ad5x_kiln_ifs.cpp
+ 4 files changed, 703 insertions(+), 36 deletions(-)
 
 diff --git a/include/ams_backend_ad5x_ifs.h b/include/ams_backend_ad5x_ifs.h
-index 7e8599e87e..4c0a0df22b 100644
+index 4aa1543f80..62f32989ea 100644
 --- a/include/ams_backend_ad5x_ifs.h
 +++ b/include/ams_backend_ad5x_ifs.h
-@@ -596,6 +596,27 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
+@@ -657,6 +657,27 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend,
      [[nodiscard]] OperationStepModel get_operation_step_model(StepOperationType op) const override;
      [[nodiscard]] lv_subject_t* get_operation_step_index_subject(StepOperationType op) override;
  
@@ -69,7 +68,7 @@ index 7e8599e87e..4c0a0df22b 100644
      // User-initiated state refresh. Re-reads Adventurer5M.json (the JSON poll
      // is the primary truth source on both old and new zmod) and schedules a
      // GET_ZCOLOR SILENT=1 follow-up to refresh the active-slot view. Both
-@@ -1066,6 +1087,16 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
+@@ -1053,6 +1074,16 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend,
      /// @return true if the frame carried either object.
      bool apply_ifs_module_objects(const nlohmann::json& status);
  
@@ -86,7 +85,7 @@ index 7e8599e87e..4c0a0df22b 100644
      /// Z-Mod's change macro keeps the target tool in
      /// `gcode_macro END_CHANGE_FILAMENT`.last_data.channel from the start of a
      /// filament change to its end, and 99 otherwise. Its runout auto-swap and
-@@ -1729,6 +1760,24 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
+@@ -1739,6 +1770,24 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend,
      /// none), re-supplied into Ports-only diff frames for the same reason
      /// zmod_last_chan_ exists. Guarded by mutex_.
      std::optional<int> module_last_chan_;
@@ -112,10 +111,10 @@ index 7e8599e87e..4c0a0df22b 100644
      /// apply_zmod_change_macro, so only that source clears it. Guarded by mutex_.
      bool zmod_change_owns_action_ = false;
 diff --git a/src/printer/ams_backend_ad5x_ifs.cpp b/src/printer/ams_backend_ad5x_ifs.cpp
-index 796a65a996..c5c2f43aab 100644
+index 121172fe8d..1d064d9ec7 100644
 --- a/src/printer/ams_backend_ad5x_ifs.cpp
 +++ b/src/printer/ams_backend_ad5x_ifs.cpp
-@@ -783,6 +783,13 @@ void AmsBackendAd5xIfs::handle_status(const json& status_obj) {
+@@ -787,6 +787,13 @@ void AmsBackendAd5xIfs::handle_status(const json& status) {
              if (system_info_.action != before || system_info_.operation_detail != detail_before) {
                  state_changed = true;
              }
@@ -129,7 +128,7 @@ index 796a65a996..c5c2f43aab 100644
          }
      }
  
-@@ -2613,6 +2620,11 @@ AmsError AmsBackendAd5xIfs::cancel() {
+@@ -2555,6 +2562,11 @@ AmsError AmsBackendAd5xIfs::cancel() {
          } else {
              system_info_.operation_phase = -1;
          }
@@ -141,7 +140,7 @@ index 796a65a996..c5c2f43aab 100644
      }
      return execute_gcode(cancel_cmd);
  }
-@@ -5021,6 +5033,12 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+@@ -4751,6 +4763,12 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
      bool saw_module_content = false;
      std::string activity;
      std::string error_text;
@@ -153,34 +152,38 @@ index 796a65a996..c5c2f43aab 100644
 +    std::optional<int> activity_channel;
  
      if (auto it = status.find("ifs"); it != status.end() && it->is_object()) {
-         const auto& obj = *it;
-@@ -5063,6 +5081,25 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+         auto obj = ad5x::parse_ifs_module_object(*it);
+@@ -4774,6 +4792,29 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
          }
-         if (auto e = obj.find("error"); e != obj.end() && e->is_string()) {
-             error_text = e->get<std::string>();
+         if (obj.error) {
+             error_text = std::move(*obj.error);
 +            error_field = error_text;
 +            saw_module_content = true;
-+        } else if (e != obj.end() && e->is_null()) {
++        }
++        // Kiln OS's driver: read from the raw object (the shared parse keeps
++        // the fields every module has).
++        const json& raw = *it;
++        if (auto e = raw.find("error"); e != raw.end() && e->is_null()) {
 +            error_field = std::string(); // null: no error
 +        }
-+        if (auto o = obj.find("operation"); o != obj.end() && o->is_string()) {
++        if (auto o = raw.find("operation"); o != raw.end() && o->is_string()) {
 +            operation = o->get<std::string>();
 +            saw_module_content = true;
 +        }
-+        if (auto p = obj.find("phase"); p != obj.end() && p->is_string()) {
++        if (auto p = raw.find("phase"); p != raw.end() && p->is_string()) {
 +            phase = p->get<std::string>();
 +            saw_module_content = true;
 +        }
-+        if (auto t = obj.find("target_channel"); t != obj.end() && t->is_number_integer()) {
++        if (auto t = raw.find("target_channel"); t != raw.end() && t->is_number_integer()) {
 +            target_channel = t->get<int>();
 +            saw_module_content = true;
 +        }
-+        if (auto m = obj.find("activity_channel"); m != obj.end() && m->is_number_integer()) {
++        if (auto m = raw.find("activity_channel"); m != raw.end() && m->is_number_integer()) {
 +            activity_channel = m->get<int>();
              saw_module_content = true;
          }
      }
-@@ -5131,48 +5168,290 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
+@@ -4841,45 +4882,37 @@ bool AmsBackendAd5xIfs::apply_ifs_module_objects(const json& status) {
      // freshly pushed-in lane. Those set no tracker and install no ack callback;
      // the board's activity is the only Moonraker-visible signal they produce.
      // Transitions are deliberately one-directional per frame (busy only from
@@ -199,9 +202,42 @@ index 796a65a996..c5c2f43aab 100644
 +    if (!activity.empty() || operation || phase || target_channel || activity_channel) {
          std::lock_guard<std::mutex> lock(mutex_);
 -        const AmsAction before = system_info_.action;
+-        module_driver_fault_ = activity == "driver_error";
+-        if (activity == "loading") {
+-            if (!phase_tracker_.active && system_info_.action == AmsAction::IDLE) {
+-                system_info_.action = AmsAction::LOADING;
+-                action_start_time_ = std::chrono::steady_clock::now();
+-                set_operation_detail_locked(TR_NOOP("IFS: loading"));
+-            }
+-        } else if (activity == "unloading") {
+-            if (!phase_tracker_.active && system_info_.action == AmsAction::IDLE) {
+-                system_info_.action = AmsAction::UNLOADING;
+-                action_start_time_ = std::chrono::steady_clock::now();
+-                set_operation_detail_locked(TR_NOOP("IFS: unloading"));
+-            }
+-        } else if (activity == "ready" || activity == "polling") {
+-            if (!phase_tracker_.active && (system_info_.action == AmsAction::LOADING ||
+-                                           system_info_.action == AmsAction::UNLOADING)) {
+-                system_info_.action = AmsAction::IDLE;
+-                set_operation_detail_locked("");
+-            }
+-        } else if (activity == "driver_error") {
+-            // The board's stepper driver faulted. Report it unless a fault with
+-            // richer state (the runout detector) already holds ERROR - and
+-            // never clear it from here; the module's IFS_RESET_DRIVER recovery
+-            // path owns that.
+-            if (system_info_.action != AmsAction::ERROR && !runout_active_) {
+-                system_info_.action = AmsAction::ERROR;
+-                set_operation_detail_locked(error_text.empty() ? TR_NOOP("IFS driver error")
+-                                                               : error_text);
+-            }
 +        if (!activity.empty()) {
++            module_driver_fault_ = activity == "driver_error";
 +            kiln_step_.activity = activity;
-+        }
+         }
+-        // clamped / unclamping are sub-second transitional states of a load or
+-        // unload already covered above; mapping them would guess a direction.
+-        action_changed = system_info_.action != before;
 +        if (error_field) {
 +            kiln_step_.error = *error_field;
 +        }
@@ -218,13 +254,13 @@ index 796a65a996..c5c2f43aab 100644
 +            kiln_step_.activity_channel = *activity_channel;
 +        }
 +        action_changed = apply_kiln_step_locked();
-+    }
-+    if (action_changed) {
-+        emit_event(EVENT_STATE_CHANGED);
-+    }
-+    return true;
-+}
-+
+     }
+     if (action_changed) {
+         emit_event(EVENT_STATE_CHANGED);
+@@ -4914,6 +4947,255 @@ bool AmsBackendAd5xIfs::apply_port_count_locked(int count) {
+     return true;
+ }
+ 
 +namespace {
 +
 +/// An `activity` that moves something: an older driver's only busy signal.
@@ -235,7 +271,7 @@ index 796a65a996..c5c2f43aab 100644
 +
 +/// 0-based slot of a 1-based driver channel, -1 for none.
 +int kiln_channel_slot(int channel) {
-+    return channel >= 1 && channel <= AmsBackendAd5xIfs::kNumPorts ? channel - 1 : -1;
++    return channel >= 1 && channel <= AmsBackendAd5xIfs::kMaxPorts ? channel - 1 : -1;
 +}
 +
 +} // namespace
@@ -247,16 +283,9 @@ index 796a65a996..c5c2f43aab 100644
 +    if (operation.empty()) {
 +        // An older driver, or no operation running: the activity alone, with
 +        // no step (the sidebar guesses the operation as before).
-         if (activity == "loading") {
--            if (!phase_tracker_.active && system_info_.action == AmsAction::IDLE) {
--                system_info_.action = AmsAction::LOADING;
--                action_start_time_ = std::chrono::steady_clock::now();
--                set_operation_detail_locked("IFS: loading");
--            }
++        if (activity == "loading") {
 +            v.action = AmsAction::LOADING;
-         } else if (activity == "unloading") {
--            if (!phase_tracker_.active && system_info_.action == AmsAction::IDLE) {
--                system_info_.action = AmsAction::UNLOADING;
++        } else if (activity == "unloading") {
 +            v.action = AmsAction::UNLOADING;
 +        } else if (activity == "homing" || activity == "selecting") {
 +            v.action = AmsAction::SELECTING;
@@ -364,11 +393,11 @@ index 796a65a996..c5c2f43aab 100644
 +        const int temp_deci = last_extruder_temp_deci_;
 +        if (target_deci > 0 && temp_deci > 0) {
 +            step = fmt::format(lv_tr("Heating nozzle to {}°C ({}°C)"),
-+                               helix::ui::temperature::deci_to_degrees(target_deci),
-+                               helix::ui::temperature::deci_to_degrees(temp_deci));
++                               helix::temperature_rules::deci_to_degrees(target_deci),
++                               helix::temperature_rules::deci_to_degrees(temp_deci));
 +        } else if (target_deci > 0) {
 +            step = fmt::format(lv_tr("Heating nozzle to {}°C"),
-+                               helix::ui::temperature::deci_to_degrees(target_deci));
++                               helix::temperature_rules::deci_to_degrees(target_deci));
 +        } else {
 +            step = lv_tr("Heating nozzle");
 +        }
@@ -447,23 +476,8 @@ index 796a65a996..c5c2f43aab 100644
 +            const KilnStepView view = kiln_step_view(operation, s.phase, s.activity);
 +            if (view.action != system_info_.action ||
 +                view.phase_index != system_info_.operation_phase) {
-                 action_start_time_ = std::chrono::steady_clock::now();
--                set_operation_detail_locked("IFS: unloading");
--            }
--        } else if (activity == "ready" || activity == "polling") {
--            if (!phase_tracker_.active && (system_info_.action == AmsAction::LOADING ||
--                                           system_info_.action == AmsAction::UNLOADING)) {
--                system_info_.action = AmsAction::IDLE;
--                set_operation_detail_locked("");
-             }
--        } else if (activity == "driver_error") {
--            // The board's stepper driver faulted. Report it unless a fault with
--            // richer state (the runout detector) already holds ERROR - and
--            // never clear it from here; the module's IFS_RESET_DRIVER recovery
--            // path owns that.
--            if (system_info_.action != AmsAction::ERROR && !runout_active_) {
--                system_info_.action = AmsAction::ERROR;
--                set_operation_detail_locked(error_text.empty() ? "IFS driver error" : error_text);
++                action_start_time_ = std::chrono::steady_clock::now();
++            }
 +            system_info_.action = view.action;
 +            system_info_.operation_phase = view.phase_index;
 +            set_operation_detail_locked(kiln_step_detail_locked());
@@ -482,29 +496,24 @@ index 796a65a996..c5c2f43aab 100644
 +            if (kiln_owns_action_ && head_switch_seen_ && !head_switch_present_ &&
 +                print_is_paused() && !runout_active_) {
 +                head_empty_since_ = std::chrono::steady_clock::now();
-             }
++            }
 +            system_info_.action = AmsAction::IDLE;
 +            system_info_.operation_phase = -1;
 +            set_operation_detail_locked("");
-         }
--        // clamped / unclamping are sub-second transitional states of a load or
--        // unload already covered above; mapping them would guess a direction.
--        action_changed = system_info_.action != before;
++        }
 +        kiln_owns_action_ = false;
-     }
--    if (action_changed) {
--        emit_event(EVENT_STATE_CHANGED);
--    }
--    return true;
++    }
 +
 +    return system_info_.action != action_before || system_info_.operation_detail != detail_before ||
 +           system_info_.operation_phase != phase_before ||
 +           system_info_.pending_target_slot != target_before ||
 +           system_info_.operation_working_slot != working_before;
- }
- 
++}
++
  void AmsBackendAd5xIfs::apply_zcolor_result(const ZColorSilentResult& result) {
-@@ -6124,6 +6403,8 @@ void AmsBackendAd5xIfs::begin_phase_tracking_locked(bool is_unload) {
+     // The port count comes first: every reading below is indexed by it.
+     if (result.port_count) {
+@@ -5704,6 +5986,8 @@ void AmsBackendAd5xIfs::begin_phase_tracking_locked(bool is_unload) {
      phase_tracker_ = IfsPhaseTracker{};
      phase_tracker_.active = true;
      phase_tracker_.is_unload = is_unload;
@@ -513,7 +522,7 @@ index 796a65a996..c5c2f43aab 100644
      // Seed the indeterminate detector: op just started, so the no-progress clock
      // starts now and the last-progress temp baseline is cleared so the first real
      // extruder frame counts as a value change (#1065 row 14).
-@@ -6146,6 +6427,16 @@ void AmsBackendAd5xIfs::on_klipper_restarted() {
+@@ -5726,6 +6010,16 @@ void AmsBackendAd5xIfs::on_klipper_restarted() {
              end_phase_tracking_locked();
          }
          system_info_.operation_indeterminate = false;
@@ -530,7 +539,7 @@ index 796a65a996..c5c2f43aab 100644
      }
      AmsSubscriptionBackend::on_klipper_restarted();
  }
-@@ -6343,6 +6634,11 @@ void AmsBackendAd5xIfs::detect_load_unload_completion(bool head_detected) {
+@@ -5917,6 +6211,11 @@ void AmsBackendAd5xIfs::detect_load_unload_completion(bool head_detected) {
      if (phase_tracker_.active) {
          return;
      }
@@ -542,7 +551,7 @@ index 796a65a996..c5c2f43aab 100644
  
      // Legacy / external / firmware-initiated path: a head transition completes
      // the operation directly. Preserved exactly for backward compatibility.
-@@ -6798,6 +7094,12 @@ void AmsBackendAd5xIfs::check_action_timeout(bool zmod_change_ending) {
+@@ -6371,6 +6670,12 @@ void AmsBackendAd5xIfs::check_action_timeout(bool zmod_change_ending) {
          }
      }
  
@@ -556,10 +565,10 @@ index 796a65a996..c5c2f43aab 100644
      // Cover every non-idle operation phase: the legacy LOADING/UNLOADING plus
      // the synthesized HEATING/CUTTING/PURGING the phase tracker drives. Without
 diff --git a/tests/test_helpers/ad5x_ifs_test_access.h b/tests/test_helpers/ad5x_ifs_test_access.h
-index 59998eb28f..93fe66bf96 100644
+index a525d1e12f..e2228c71d8 100644
 --- a/tests/test_helpers/ad5x_ifs_test_access.h
 +++ b/tests/test_helpers/ad5x_ifs_test_access.h
-@@ -120,6 +120,15 @@ class Ad5xIfsTestAccess {
+@@ -97,6 +97,15 @@ class Ad5xIfsTestAccess {
          b.system_info_.action = a;
          b.action_start_time_ = std::chrono::steady_clock::now();
      }
@@ -575,6 +584,30 @@ index 59998eb28f..93fe66bf96 100644
      // Flip running_ so check_preconditions() passes without a live Moonraker
      // connection (mirrors TestableAfcBackend::set_running). Required by any test
      // exercising a public action method (load/unload/eject) that runs the
+@@ -334,6 +343,12 @@ class Ad5xIfsTestAccess {
+         b.refresh_lane_records();
+     }
+     // A status frame through the subscription's own entry point.
++    // Kiln OS's tests: one status frame straight into the backend, as a
++    // subscription delivers it.
++    static void handle_status(AmsBackendAd5xIfs& b, const nlohmann::json& status) {
++        b.handle_status(status);
++    }
++
+     static void status_frame(AmsBackendAd5xIfs& b) {
+         b.handle_status_update(
+             nlohmann::json{{"params", nlohmann::json::array({nlohmann::json::object()})}});
+@@ -594,6 +609,10 @@ class Ad5xIfsTestAccess {
+         std::lock_guard<std::mutex> lock(b.mutex_);
+         return b.evaluate_runout_locked();
+     }
++    static bool runout_active(const AmsBackendAd5xIfs& b) {
++        std::lock_guard<std::mutex> lock(b.mutex_);
++        return b.runout_active_;
++    }
+     static int runout_slot(const AmsBackendAd5xIfs& b) {
+         std::lock_guard<std::mutex> lock(b.mutex_);
+         return b.runout_slot_;
 diff --git a/tests/unit/test_ams_ad5x_kiln_ifs.cpp b/tests/unit/test_ams_ad5x_kiln_ifs.cpp
 new file mode 100644
 index 0000000000..177bdcabea
@@ -875,6 +908,3 @@ index 0000000000..177bdcabea
 +    CHECK_FALSE(Ad5xIfsTestAccess::runout_active(backend));
 +    CHECK(Ad5xIfsTestAccess::action(backend) == AmsAction::HEATING);
 +}
--- 
-2.56.0
-

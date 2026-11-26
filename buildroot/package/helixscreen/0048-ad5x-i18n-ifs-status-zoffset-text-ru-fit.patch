@@ -14,30 +14,16 @@ Content-Transfer-Encoding: 8bit
 - Russian: "Сохр. и рестарт"; the vibration and Z offset wizard titles
   shortened to fit; "Смена филамента".
 ---
- src/printer/ams_backend_ad5x_ifs.cpp | 2 +-
- src/ui/ui_wizard_ad5x_setup.cpp      | 2 +-
- translations/en.yml                  | 3 ++-
- translations/ru.yml                  | 9 +++++----
- 4 files changed, 9 insertions(+), 7 deletions(-)
+ src/ui/wizard/ui_wizard_ad5x_setup.cpp | 2 +-
+ translations/en.yml                    | 3 ++-
+ translations/ru.yml                    | 9 +++++----
+ 3 files changed, 8 insertions(+), 6 deletions(-)
 
-diff --git a/src/printer/ams_backend_ad5x_ifs.cpp b/src/printer/ams_backend_ad5x_ifs.cpp
-index 807ba0f30a..4322546f23 100644
---- a/src/printer/ams_backend_ad5x_ifs.cpp
-+++ b/src/printer/ams_backend_ad5x_ifs.cpp
-@@ -2576,7 +2576,7 @@ void AmsBackendAd5xIfs::apply_zmod_change_macro(const json& status) {
-                 system_info_.action == AmsAction::IDLE) {
-                 system_info_.action = AmsAction::SELECTING;
-                 action_start_time_ = std::chrono::steady_clock::now();
--                set_operation_detail_locked("Changing filament");
-+                set_operation_detail_locked(lv_tr("Changing filament"));
-                 zmod_change_owns_action_ = true;
-                 zmod_change_in_job_ = in_job;
-                 zmod_change_saw_busy_ = klipper_busy_now();
-diff --git a/src/ui/ui_wizard_ad5x_setup.cpp b/src/ui/ui_wizard_ad5x_setup.cpp
-index 1a323beb4f..4f7c831024 100644
---- a/src/ui/ui_wizard_ad5x_setup.cpp
-+++ b/src/ui/ui_wizard_ad5x_setup.cpp
-@@ -80,7 +80,7 @@ const std::vector<StepSpec> k_specs = {
+diff --git a/src/ui/wizard/ui_wizard_ad5x_setup.cpp b/src/ui/wizard/ui_wizard_ad5x_setup.cpp
+index 27b1d98fc1..78c4371a06 100644
+--- a/src/ui/wizard/ui_wizard_ad5x_setup.cpp
++++ b/src/ui/wizard/ui_wizard_ad5x_setup.cpp
+@@ -82,7 +82,7 @@ const std::vector<StepSpec> k_specs = {
       false},
      {StepId::Ad5xZoffset, "zoffset", "wizard_ad5x_zoffset",
       "Prints a 30 mm test patch. While it prints, press Closer or Away until the lines are "
@@ -47,10 +33,10 @@ index 1a323beb4f..4f7c831024 100644
      {StepId::Ad5xSoak, "soak", "wizard_ad5x_soak",
       "Calibrates the bed heat soak: how long the bed keeps warming after it reaches 60 \xC2\xB0"
 diff --git a/translations/en.yml b/translations/en.yml
-index bed02f2938..fc40209837 100644
+index 2c3532af5b..6b80a9e341 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -5050,6 +5050,7 @@ translations:
+@@ -6517,6 +6517,7 @@ translations:
    'Calibration stopped. Heaters off, nothing saved.': 'Calibration stopped. Heaters off, nothing saved.'
    'Can''t calibrate now': 'Can''t calibrate now'
    'Change the nozzle size to {}?': 'Change the nozzle size to {}?'
@@ -58,7 +44,7 @@ index bed02f2938..fc40209837 100644
    'Changing the nozzle size... Klipper will restart.': 'Changing the nozzle size... Klipper will restart.'
    'Check that every part of the printer answers': 'Check that every part of the printer answers'
    'Check the nozzle is over the trash bin': 'Check the nozzle is over the trash bin'
-@@ -5149,7 +5150,7 @@ translations:
+@@ -6616,7 +6617,7 @@ translations:
    'PRINTER SOUNDS': 'PRINTER SOUNDS'
    'Printer Sounds': 'Printer Sounds'
    'Printer Volume': 'Printer Volume'
@@ -68,19 +54,19 @@ index bed02f2938..fc40209837 100644
    'Purge box': 'Purge box'
    'Remove {}?': 'Remove {}?'
 diff --git a/translations/ru.yml b/translations/ru.yml
-index 182df14382..3956c52e03 100644
+index 90a88265a8..a761683c35 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -3572,7 +3572,7 @@ translations:
-   Samples: Образцы
+@@ -4377,7 +4377,7 @@ translations:
    Samples Tolerance: Допуск образцов
+   Saturation: Насыщенность
    Save: Сохранить
 -  Save & Restart: Сохранить
 +  Save & Restart: 'Сохр. и рестарт'
    Save As New: Сохранить как новый
+   Save Autotuned Rotation: "Сохранять автоподбор вращения"
    Save Hardware: Сохранить оборудование
-   Save Printer Configuration: Сохранить конфигурацию принтера
-@@ -5221,6 +5221,7 @@ translations:
+@@ -6695,6 +6695,7 @@ translations:
    'Calibration stopped. Heaters off, nothing saved.': 'Калибровка остановлена. Нагреватели выключены, ничего не сохранено.'
    'Can''t calibrate now': 'Сейчас калибровка невозможна'
    'Change the nozzle size to {}?': 'Изменить размер сопла на {}?'
@@ -88,7 +74,7 @@ index 182df14382..3956c52e03 100644
    'Changing the nozzle size... Klipper will restart.': 'Смена размера сопла... Klipper перезапустится.'
    'Check that every part of the printer answers': 'Проверка, что все узлы принтера отвечают'
    'Check the nozzle is over the trash bin': 'Проверьте, что сопло над лотком для отходов'
-@@ -5315,12 +5316,12 @@ translations:
+@@ -6789,12 +6790,12 @@ translations:
    'Printer Setup: Save': 'Настройка принтера: сохранение'
    'Printer Setup: Self-Check': 'Настройка принтера: самопроверка'
    'Printer Setup: Summary': 'Настройка принтера: итоги'
@@ -104,6 +90,3 @@ index 182df14382..3956c52e03 100644
    'Purge Box': 'Лоток для отходов'
    'Purge box': 'Лоток для отходов'
    'Remove {}?': 'Удалить {}?'
--- 
-2.56.0
-

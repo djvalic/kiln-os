@@ -13,18 +13,17 @@ AD5X steps are.
 
 Upstream: not applicable (AD5X OS specific)
 ---
- include/ui_wizard_ad5x_setup.h  | 43 ++++++++++++++++++++++++++---
- include/wizard_step.h           |  6 ++--
- src/system/wizard_step.cpp      |  2 ++
- src/ui/ui_panel_settings.cpp    |  6 ++--
- src/ui/ui_wizard_ad5x_setup.cpp | 49 +++++++++++++++++++++++++++++++--
- src/ui/wizard_step_registry.cpp |  5 ++--
- ui_xml/wizard_ad5x_timezone.xml | 28 +++++++++++++++++++
- 7 files changed, 126 insertions(+), 13 deletions(-)
- create mode 100644 ui_xml/wizard_ad5x_timezone.xml
+ include/ui_wizard_ad5x_setup.h         | 43 ++++++++++++++++++--
+ include/wizard_step.h                  |  6 ++-
+ src/system/wizard_step.cpp             |  2 +
+ src/ui/settings/ui_panel_settings.cpp  |  6 +--
+ src/ui/wizard/ui_wizard_ad5x_setup.cpp | 55 +++++++++++++++++++++++++-
+ src/ui/wizard/wizard_step_registry.cpp |  5 ++-
+ ui_xml/wizard_ad5x_timezone.xml        | 28 +++++++++++++
+ 7 files changed, 132 insertions(+), 13 deletions(-)
 
 diff --git a/include/ui_wizard_ad5x_setup.h b/include/ui_wizard_ad5x_setup.h
-index 18787541ad..9fa918ebe1 100644
+index 9094aa45be..29cae29e26 100644
 --- a/include/ui_wizard_ad5x_setup.h
 +++ b/include/ui_wizard_ad5x_setup.h
 @@ -3,10 +3,13 @@
@@ -90,10 +89,10 @@ index 18787541ad..9fa918ebe1 100644
 +
 +WizardAd5xTimezoneStep* get_wizard_ad5x_timezone_step();
 diff --git a/include/wizard_step.h b/include/wizard_step.h
-index 5b223c5797..472918c5bf 100644
+index 9704305729..43a510c5bc 100644
 --- a/include/wizard_step.h
 +++ b/include/wizard_step.h
-@@ -22,7 +22,9 @@ enum class StepId {
+@@ -24,7 +24,9 @@ enum class StepId {
      AmsIdentify,
      LedSelect,
      FilamentSensor,
@@ -104,20 +103,20 @@ index 5b223c5797..472918c5bf 100644
      Ad5xSelfcheck,
      Ad5xPid,
      Ad5xMesh,
-@@ -35,7 +37,7 @@ enum class StepId {
-     Summary,
+@@ -37,7 +39,7 @@ enum class StepId {
      Telemetry,
+     Calibration,
  };
--inline constexpr int STEP_COUNT = 21;
-+inline constexpr int STEP_COUNT = 22;
+-inline constexpr int STEP_COUNT = 23;
++inline constexpr int STEP_COUNT = 24;
  
  // Plain data needed to decide skips — no LVGL, constructible in tests.
  struct StepContext {
 diff --git a/src/system/wizard_step.cpp b/src/system/wizard_step.cpp
-index 5dbe78a577..bee685ad99 100644
+index 33350d7ec6..df96889905 100644
 --- a/src/system/wizard_step.cpp
 +++ b/src/system/wizard_step.cpp
-@@ -25,6 +25,8 @@ const char* to_string(StepId id) {
+@@ -29,6 +29,8 @@ const char* to_string(StepId id) {
          return "LedSelect";
      case StepId::FilamentSensor:
          return "FilamentSensor";
@@ -126,11 +125,11 @@ index 5dbe78a577..bee685ad99 100644
      case StepId::Ad5xSelfcheck:
          return "Ad5xSelfcheck";
      case StepId::Ad5xPid:
-diff --git a/src/ui/ui_panel_settings.cpp b/src/ui/ui_panel_settings.cpp
-index c9827bf55a..3e1fdfadaf 100644
---- a/src/ui/ui_panel_settings.cpp
-+++ b/src/ui/ui_panel_settings.cpp
-@@ -344,9 +344,9 @@ void SettingsPanel::handle_ad5x_setup_clicked() {
+diff --git a/src/ui/settings/ui_panel_settings.cpp b/src/ui/settings/ui_panel_settings.cpp
+index 9427168df7..a5d1013fdc 100644
+--- a/src/ui/settings/ui_panel_settings.cpp
++++ b/src/ui/settings/ui_panel_settings.cpp
+@@ -375,9 +375,9 @@ void SettingsPanel::handle_ad5x_setup_clicked() {
      opts.owner_token = lifetime_.token();
      helix::ui::modal_confirm(
          lv_tr("Run Setup Wizard"),
@@ -143,16 +142,23 @@ index c9827bf55a..3e1fdfadaf 100644
          ModalSeverity::Info, lv_tr("Start"),
          [this]() { helix::ad5x_setup::launch_targeted(parent_screen_); }, opts);
  }
-diff --git a/src/ui/ui_wizard_ad5x_setup.cpp b/src/ui/ui_wizard_ad5x_setup.cpp
-index c8333e7ac3..60779cbc65 100644
---- a/src/ui/ui_wizard_ad5x_setup.cpp
-+++ b/src/ui/ui_wizard_ad5x_setup.cpp
-@@ -7,11 +7,13 @@
+diff --git a/src/ui/wizard/ui_wizard_ad5x_setup.cpp b/src/ui/wizard/ui_wizard_ad5x_setup.cpp
+index 5f642ce9c9..b8c6d33301 100644
+--- a/src/ui/wizard/ui_wizard_ad5x_setup.cpp
++++ b/src/ui/wizard/ui_wizard_ad5x_setup.cpp
+@@ -2,16 +2,20 @@
+ 
+ #include "ui_wizard_ad5x_setup.h"
+ 
++#include "ui_wizard_appearance.h"
++
+ #include "ui_button.h"
+ #include "ui_emergency_stop.h"
  #include "ui_error_reporting.h"
  #include "ui_event_safety.h"
  #include "ui_modal.h"
 +#include "ui_settings_language_time.h"
- #include "ui_update_queue.h"
+ #include "core/update_queue.h"
  #include "ui_wizard.h"
  
  #include "app_globals.h"
@@ -161,15 +167,15 @@ index c8333e7ac3..60779cbc65 100644
  #include "helix_fs.h"
  #include "i_moonraker_api.h"
  #include "i_moonraker_client.h"
-@@ -20,6 +22,7 @@
+@@ -20,6 +24,7 @@
  #include "printer_discovery.h"
  #include "printer_state.h"
- #include "static_panel_registry.h"
+ #include "core/static_panel_registry.h"
 +#include "ui/ui_widget_helpers.h"
  
  #include <spdlog/fmt/fmt.h>
  #include <spdlog/spdlog.h>
-@@ -140,7 +143,7 @@ const StepSpec* spec_for(wizard::StepId id) {
+@@ -140,7 +145,7 @@ const StepSpec* spec_for(wizard::StepId id) {
  }
  
  std::vector<wizard::StepId> step_ids() {
@@ -178,7 +184,7 @@ index c8333e7ac3..60779cbc65 100644
      for (const auto& s : k_specs) {
          ids.push_back(s.id);
      }
-@@ -619,7 +622,8 @@ void Ad5xSetupModel::refresh() {
+@@ -618,7 +623,8 @@ void Ad5xSetupModel::refresh() {
  }
  
  // ============================================================================
@@ -188,7 +194,7 @@ index c8333e7ac3..60779cbc65 100644
  // ============================================================================
  
  namespace {
-@@ -627,6 +631,7 @@ namespace {
+@@ -626,6 +632,7 @@ namespace {
  struct Ad5xSetupSteps {
      Ad5xSetupModel model;
      std::vector<std::unique_ptr<WizardAd5xSetupStep>> steps;
@@ -196,7 +202,7 @@ index c8333e7ac3..60779cbc65 100644
  
      Ad5xSetupSteps() {
          for (const auto& spec : k_specs) {
-@@ -773,3 +778,43 @@ void WizardAd5xSetupStep::cleanup() {
+@@ -771,3 +778,47 @@ void WizardAd5xSetupStep::cleanup() {
      model().deactivate();
      root_ = nullptr;
  }
@@ -210,7 +216,11 @@ index c8333e7ac3..60779cbc65 100644
 +}
 +
 +bool WizardAd5xTimezoneStep::should_skip(const helix::wizard::StepContext& ctx) const {
-+    return !helix::ad5x_setup::available(ctx);
++    // HelixScreen 1.2's Appearance step has a time zone row of its own: the full
++    // wizard asks it there. A targeted session (Settings > Run Setup Wizard)
++    // shows every step it is given, this one included.
++    return !helix::ad5x_setup::available(ctx) ||
++           !helix::wizard::get_wizard_appearance_step()->should_skip(ctx);
 +}
 +
 +void WizardAd5xTimezoneStep::register_callbacks() {
@@ -240,22 +250,22 @@ index c8333e7ac3..60779cbc65 100644
 +void WizardAd5xTimezoneStep::cleanup() {
 +    root_ = nullptr;
 +}
-diff --git a/src/ui/wizard_step_registry.cpp b/src/ui/wizard_step_registry.cpp
-index 58c83b5299..4fdd84e6e4 100644
---- a/src/ui/wizard_step_registry.cpp
-+++ b/src/ui/wizard_step_registry.cpp
-@@ -43,8 +43,9 @@ std::vector<Step*> steps() {
-     v.push_back(get_wizard_ams_identify_step());               // AmsIdentify
-     v.push_back(get_wizard_led_select_step());                 // LedSelect
-     v.push_back(get_wizard_filament_sensor_select_step());     // FilamentSensor
+diff --git a/src/ui/wizard/wizard_step_registry.cpp b/src/ui/wizard/wizard_step_registry.cpp
+index 4727d22c10..49a96bcff9 100644
+--- a/src/ui/wizard/wizard_step_registry.cpp
++++ b/src/ui/wizard/wizard_step_registry.cpp
+@@ -47,8 +47,9 @@ std::vector<Step*> steps() {
+     v.push_back(get_wizard_ams_identify_step());                // AmsIdentify
+     v.push_back(get_wizard_led_select_step());                  // LedSelect
+     v.push_back(get_wizard_filament_sensor_select_step());      // FilamentSensor
 -    for (StepId id : helix::ad5x_setup::step_ids()) {           // Ad5xSelfcheck..Ad5xFinish
 -        v.push_back(get_wizard_ad5x_setup_step(id));
-+    v.push_back(get_wizard_ad5x_timezone_step());              // Ad5xTimezone
++    v.push_back(get_wizard_ad5x_timezone_step());               // Ad5xTimezone
 +    for (const auto& spec : helix::ad5x_setup::step_specs()) { // Ad5xSelfcheck..Ad5xFinish
 +        v.push_back(get_wizard_ad5x_setup_step(spec.id));
      }
-     v.push_back(get_wizard_input_shaper_step());               // InputShaper
-     v.push_back(helix::wizard::get_wizard_preferences_step()); // Preferences
+     v.push_back(helix::wizard::get_wizard_preferences_step());  // Preferences
+     v.push_back(get_wizard_summary_step());                     // Summary
 diff --git a/ui_xml/wizard_ad5x_timezone.xml b/ui_xml/wizard_ad5x_timezone.xml
 new file mode 100644
 index 0000000000..bf9cdf2556
@@ -290,6 +300,3 @@ index 0000000000..bf9cdf2556
 +    </ui_card>
 +  </view>
 +</component>
--- 
-2.56.0
-

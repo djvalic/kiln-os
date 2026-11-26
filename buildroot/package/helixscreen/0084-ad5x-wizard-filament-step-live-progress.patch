@@ -67,20 +67,18 @@ from XML with its dropdowns, the clear_bed panel hides the adjust
 buttons and the pick_slot panel names each slot);
 test_wizard_step_logic counts the new step.
 ---
- include/ui_wizard_ad5x_setup.h        | 191 ++++++-
- include/wizard_step.h                 |   3 +-
- src/system/wizard_step.cpp            |   2 +
- src/ui/ui_wizard_ad5x_setup.cpp       | 744 +++++++++++++++++++++++++-
- tests/unit/test_wizard_ad5x_setup.cpp | 327 +++++++++++
- tests/unit/test_wizard_step_logic.cpp |   5 +-
- ui_xml/wizard_ad5x_filament.xml       |  16 +
- ui_xml/wizard_ad5x_setup.xml          | 224 +++++++-
- 8 files changed, 1476 insertions(+), 36 deletions(-)
- create mode 100644 tests/unit/test_wizard_ad5x_setup.cpp
- create mode 100644 ui_xml/wizard_ad5x_filament.xml
+ include/ui_wizard_ad5x_setup.h         | 191 ++++++-
+ include/wizard_step.h                  |   3 +-
+ src/system/wizard_step.cpp             |   2 +
+ src/ui/wizard/ui_wizard_ad5x_setup.cpp | 744 ++++++++++++++++++++++++-
+ tests/unit/test_wizard_ad5x_setup.cpp  | 326 +++++++++++
+ tests/unit/test_wizard_step_logic.cpp  |   5 +-
+ ui_xml/wizard_ad5x_filament.xml        |  16 +
+ ui_xml/wizard_ad5x_setup.xml           | 224 +++++++-
+ 8 files changed, 1475 insertions(+), 36 deletions(-)
 
 diff --git a/include/ui_wizard_ad5x_setup.h b/include/ui_wizard_ad5x_setup.h
-index cfbfd94..97b6ba1 100644
+index 4d03add1d5..a49748ec91 100644
 --- a/include/ui_wizard_ad5x_setup.h
 +++ b/include/ui_wizard_ad5x_setup.h
 @@ -4,8 +4,8 @@
@@ -289,21 +287,21 @@ index cfbfd94..97b6ba1 100644
 +    json filament_step_options() const;
  
      SubjectManager subjects_;
-     lv_subject_t view_{};
+     helix::Subject view_{};
 @@ -143,7 +288,21 @@ class Ad5xSetupModel {
-     lv_subject_t is_trash_{};
-     lv_subject_t can_accept_{};
-     lv_subject_t estimate_avail_{};
-+    lv_subject_t is_filament_{};
-+    lv_subject_t prompt_{};
-+    lv_subject_t prompt_wait_{};
-+    lv_subject_t show_head_{};
-+    std::array<lv_subject_t, kFilamentSlots> pick_offer_{};
-+    lv_subject_t action_{};
-+    lv_subject_t live_{};
-+    lv_subject_t plan_{};
-+    lv_subject_t head_{};
-+    std::array<lv_subject_t, kFilamentSlots> slot_present_{};
+     helix::Subject is_trash_{};
+     helix::Subject can_accept_{};
+     helix::Subject estimate_avail_{};
++    helix::Subject is_filament_{};
++    helix::Subject prompt_{};
++    helix::Subject prompt_wait_{};
++    helix::Subject show_head_{};
++    std::array<helix::Subject, kFilamentSlots> pick_offer_{};
++    helix::Subject action_{};
++    helix::Subject live_{};
++    helix::Subject plan_{};
++    helix::Subject head_{};
++    std::array<helix::Subject, kFilamentSlots> slot_present_{};
      bool estimate_once_ = false;
 +    char action_buf_[128] = "";
 +    char live_buf_[128] = "";
@@ -340,10 +338,10 @@ index cfbfd94..97b6ba1 100644
      ObserverGuard klippy_observer_;
      AsyncLifetimeGuard lifetime_;
 diff --git a/include/wizard_step.h b/include/wizard_step.h
-index a8da568..9155076 100644
+index 2515c488bd..a411b4dad3 100644
 --- a/include/wizard_step.h
 +++ b/include/wizard_step.h
-@@ -30,6 +30,7 @@ enum class StepId {
+@@ -32,6 +32,7 @@ enum class StepId {
      Ad5xPid,
      Ad5xMesh,
      Ad5xShaper,
@@ -351,20 +349,20 @@ index a8da568..9155076 100644
      Ad5xIfs,
      Ad5xTrash,
      Ad5xZoffset,
-@@ -41,7 +42,7 @@ enum class StepId {
-     Summary,
+@@ -43,7 +44,7 @@ enum class StepId {
      Telemetry,
+     Calibration,
  };
--inline constexpr int STEP_COUNT = 26;
-+inline constexpr int STEP_COUNT = 27;
+-inline constexpr int STEP_COUNT = 28;
++inline constexpr int STEP_COUNT = 29;
  
  // Plain data needed to decide skips — no LVGL, constructible in tests.
  struct StepContext {
 diff --git a/src/system/wizard_step.cpp b/src/system/wizard_step.cpp
-index 74b5d23..f2c632b 100644
+index 98e72877b3..db6ac16f1b 100644
 --- a/src/system/wizard_step.cpp
 +++ b/src/system/wizard_step.cpp
-@@ -37,6 +37,8 @@ const char* to_string(StepId id) {
+@@ -41,6 +41,8 @@ const char* to_string(StepId id) {
          return "Ad5xMesh";
      case StepId::Ad5xShaper:
          return "Ad5xShaper";
@@ -373,12 +371,12 @@ index 74b5d23..f2c632b 100644
      case StepId::Ad5xIfs:
          return "Ad5xIfs";
      case StepId::Ad5xTrash:
-diff --git a/src/ui/ui_wizard_ad5x_setup.cpp b/src/ui/ui_wizard_ad5x_setup.cpp
-index 8049f25..28be544 100644
---- a/src/ui/ui_wizard_ad5x_setup.cpp
-+++ b/src/ui/ui_wizard_ad5x_setup.cpp
-@@ -12,7 +12,9 @@
- #include "ui_update_queue.h"
+diff --git a/src/ui/wizard/ui_wizard_ad5x_setup.cpp b/src/ui/wizard/ui_wizard_ad5x_setup.cpp
+index 51e0e6e541..9099de2efe 100644
+--- a/src/ui/wizard/ui_wizard_ad5x_setup.cpp
++++ b/src/ui/wizard/ui_wizard_ad5x_setup.cpp
+@@ -14,7 +14,9 @@
+ #include "core/update_queue.h"
  #include "ui_wizard.h"
  
 +#include "ams_backend_ad5x_ifs.h"
@@ -387,7 +385,7 @@ index 8049f25..28be544 100644
  #include "config.h"
  #include "display_settings_manager.h"
  #include "helix_fs.h"
-@@ -30,8 +32,11 @@
+@@ -32,8 +34,11 @@
  #include <spdlog/spdlog.h>
  
  #include <algorithm>
@@ -398,8 +396,8 @@ index 8049f25..28be544 100644
 +#include <ctime>
  
  // Wizard footer subjects (defined in ui_wizard.cpp)
- extern lv_subject_t wizard_show_skip;
-@@ -71,6 +76,10 @@ const std::vector<StepSpec> k_specs = {
+ extern helix::Subject wizard_show_skip;
+@@ -73,6 +78,10 @@ const std::vector<StepSpec> k_specs = {
       "Measures the frame's vibrations with the toolhead accelerometer and sets vibration "
       "compensation. The printer is loud for a few minutes.",
       false},
@@ -410,7 +408,7 @@ index 8049f25..28be544 100644
      {StepId::Ad5xIfs, "ifs", "wizard_ad5x_ifs",
       "Tunes filament swaps for every loaded IFS slot: the fastest reliable feed speed and the "
       "load and unload distances. Load filament into the slots you use first.",
-@@ -111,7 +120,8 @@ struct ResultLabel {
+@@ -113,7 +122,8 @@ struct ResultLabel {
  constexpr ResultLabel k_result_labels[] = {
      {"selfcheck", "Self-check"},      {"pid", "PID"},
      {"mesh", "Bed mesh"},             {"shaper", "Vibration compensation"},
@@ -420,7 +418,7 @@ index 8049f25..28be544 100644
      {"zoffset", "Z offset"},          {"estimate", "Load cell estimate"},
      {"soak", "Bed soak"},             {"finish", "Save"},
  };
-@@ -147,6 +157,354 @@ void set_if_changed(lv_subject_t* subject, int value) {
+@@ -149,6 +159,354 @@ void set_if_changed(lv_subject_t* subject, int value) {
      }
  }
  
@@ -775,7 +773,7 @@ index 8049f25..28be544 100644
  } // namespace
  
  const std::vector<StepSpec>& step_specs() {
-@@ -228,6 +586,7 @@ View view_for(const std::string& key, const std::string& status_step,
+@@ -230,6 +588,7 @@ View view_for(const std::string& key, const std::string& status_step,
  
  Ad5xSetupModel::~Ad5xSetupModel() {
      lifetime_.invalidate();
@@ -783,7 +781,7 @@ index 8049f25..28be544 100644
      subscription_.reset();
      klippy_observer_.reset();
      subjects_.deinit_all();
-@@ -248,6 +607,22 @@ void Ad5xSetupModel::init_subjects() {
+@@ -250,6 +609,22 @@ void Ad5xSetupModel::init_subjects() {
      UI_MANAGED_SUBJECT_STRING(message_, message_buf_, "", "ad5x_setup_message", subjects_);
      UI_MANAGED_SUBJECT_STRING(results_, results_buf_, "", "ad5x_setup_results", subjects_);
      UI_MANAGED_SUBJECT_STRING(zoffset_, zoffset_buf_, "", "ad5x_setup_zoffset", subjects_);
@@ -806,7 +804,7 @@ index 8049f25..28be544 100644
      subjects_initialized_ = true;
  }
  
-@@ -255,6 +630,19 @@ void Ad5xSetupModel::activate(const StepSpec* spec) {
+@@ -257,6 +632,19 @@ void Ad5xSetupModel::activate(const StepSpec* spec) {
      active_ = spec;
      start_in_flight_ = false;
      local_error_.clear();
@@ -826,7 +824,7 @@ index 8049f25..28be544 100644
  
      IMoonrakerAPI* api = get_moonraker_api();
      if (api) {
-@@ -270,12 +658,30 @@ void Ad5xSetupModel::activate(const StepSpec* spec) {
+@@ -272,12 +660,30 @@ void Ad5xSetupModel::activate(const StepSpec* spec) {
                  return;
              }
              auto obj = status.find("ad5x_setup");
@@ -860,7 +858,7 @@ index 8049f25..28be544 100644
                  refresh();
              });
          });
-@@ -303,6 +709,7 @@ void Ad5xSetupModel::activate(const StepSpec* spec) {
+@@ -305,6 +711,7 @@ void Ad5xSetupModel::activate(const StepSpec* spec) {
                          lv_tr(hotend_only ? k_pid_hotend_explanation : spec->explanation));
          set_if_changed(&is_zoffset_, std::strcmp(spec->key, "zoffset") == 0 ? 1 : 0);
          set_if_changed(&is_trash_, std::strcmp(spec->key, "trash") == 0 ? 1 : 0);
@@ -868,7 +866,7 @@ index 8049f25..28be544 100644
          set_if_changed(&can_accept_, (std::strcmp(spec->key, "zoffset") == 0 ||
                                        std::strcmp(spec->key, "trash") == 0) ? 1 : 0);
      }
-@@ -324,6 +731,22 @@ void Ad5xSetupModel::deactivate() {
+@@ -326,6 +733,22 @@ void Ad5xSetupModel::deactivate() {
      start_in_flight_ = false;
      local_error_.clear();
      subscription_.reset();
@@ -891,7 +889,7 @@ index 8049f25..28be544 100644
      lv_subject_set_int(&wizard_show_skip, 0);
      lv_subject_set_int(&connection_test_passed, 1);
  }
-@@ -336,6 +759,10 @@ json Ad5xSetupModel::step_options() const {
+@@ -338,6 +761,10 @@ json Ad5xSetupModel::step_options() const {
      if (estimate_once_ && std::strcmp(active_->key, "zoffset") == 0) {
          options["estimate"] = 1;
      }
@@ -902,7 +900,7 @@ index 8049f25..28be544 100644
      // The mesh step keeps the bed hot when the Z offset test comes next.
      if (std::strcmp(active_->key, "mesh") == 0) {
          const auto& ids = ui_wizard_active_step_subset();
-@@ -374,11 +801,12 @@ std::string Ad5xSetupModel::session_param(const char* key, const char* name) con
+@@ -376,11 +803,12 @@ std::string Ad5xSetupModel::session_param(const char* key, const char* name) con
      return str_field(*it, name);
  }
  
@@ -917,7 +915,7 @@ index 8049f25..28be544 100644
      const bool is_start = action == "start";
      IMoonrakerClient* client = get_moonraker_client();
      if (!client || client->get_connection_state() != ConnectionState::CONNECTED) {
-@@ -394,8 +822,9 @@ void Ad5xSetupModel::send(const std::string& action, double delta) {
+@@ -396,8 +824,9 @@ void Ad5xSetupModel::send(const std::string& action, double delta) {
      if (action == "adjust") {
          params["delta"] = delta;
      }
@@ -928,7 +926,7 @@ index 8049f25..28be544 100644
          for (auto it = options.begin(); it != options.end(); ++it) {
              params[it.key()] = it.value();
          }
-@@ -414,23 +843,23 @@ void Ad5xSetupModel::send(const std::string& action, double delta) {
+@@ -416,23 +845,23 @@ void Ad5xSetupModel::send(const std::string& action, double delta) {
                  refresh();
              });
          },
@@ -956,7 +954,7 @@ index 8049f25..28be544 100644
                          local_error_ = message.empty() ? std::string(lv_tr("Failed")) : message;
                      }
                  } else {
-@@ -445,7 +874,7 @@ void Ad5xSetupModel::send(const std::string& action, double delta) {
+@@ -447,7 +876,7 @@ void Ad5xSetupModel::send(const std::string& action, double delta) {
  }
  
  void Ad5xSetupModel::send_gcode(const std::string& key, const std::string& action,
@@ -965,7 +963,7 @@ index 8049f25..28be544 100644
      IMoonrakerAPI* api = get_moonraker_api();
      if (!api) {
          return;
-@@ -455,11 +884,13 @@ void Ad5xSetupModel::send_gcode(const std::string& key, const std::string& actio
+@@ -457,11 +886,13 @@ void Ad5xSetupModel::send_gcode(const std::string& key, const std::string& actio
          cmd += fmt::format(" DELTA={:.3f}", delta);
      }
      if (action == "start") {
@@ -981,7 +979,7 @@ index 8049f25..28be544 100644
          }
      }
      spdlog::info("[AD5X setup] {}", cmd);
-@@ -481,7 +912,7 @@ void Ad5xSetupModel::send_gcode(const std::string& key, const std::string& actio
+@@ -483,7 +914,7 @@ void Ad5xSetupModel::send_gcode(const std::string& key, const std::string& actio
              token.defer("Ad5xSetupModel::gcode_error", [this, is_start, key, message]() {
                  if (is_start) {
                      start_in_flight_ = false;
@@ -990,7 +988,7 @@ index 8049f25..28be544 100644
                          local_error_ = message;
                      }
                  }
-@@ -509,9 +940,11 @@ void Ad5xSetupModel::start() {
+@@ -510,9 +941,11 @@ void Ad5xSetupModel::start() {
      }
      start_in_flight_ = true;
      local_error_.clear();
@@ -1002,7 +1000,7 @@ index 8049f25..28be544 100644
  }
  
  void Ad5xSetupModel::start_estimate() {
-@@ -566,7 +999,9 @@ void Ad5xSetupModel::query_status() {
+@@ -567,7 +1000,9 @@ void Ad5xSetupModel::query_status() {
          return;
      }
      const auto token = lifetime_.token();
@@ -1013,7 +1011,7 @@ index 8049f25..28be544 100644
      client->send_jsonrpc(
          "printer.objects.query", params,
          [this, token](const json& response) {
-@@ -583,8 +1018,13 @@ void Ad5xSetupModel::query_status() {
+@@ -584,8 +1019,13 @@ void Ad5xSetupModel::query_status() {
                  return;
              }
              json full = *obj;
@@ -1028,7 +1026,7 @@ index 8049f25..28be544 100644
                  refresh();
              });
          },
-@@ -675,13 +1115,26 @@ void Ad5xSetupModel::update_footer(View view) {
+@@ -676,13 +1116,26 @@ void Ad5xSetupModel::update_footer(View view) {
                         (view == View::Running || view == View::WaitingUser) ? 0 : 1);
  }
  
@@ -1056,7 +1054,7 @@ index 8049f25..28be544 100644
      const bool mine = st_step == key;
  
      View view = view_for(key, st_step, st_state, start_in_flight_, !local_error_.empty());
-@@ -721,12 +1174,245 @@ void Ad5xSetupModel::refresh() {
+@@ -722,12 +1175,245 @@ void Ad5xSetupModel::refresh() {
      }
      set_if_changed(&estimate_avail_, estimate_avail);
  
@@ -1347,10 +1345,10 @@ index 8049f25..28be544 100644
  
 diff --git a/tests/unit/test_wizard_ad5x_setup.cpp b/tests/unit/test_wizard_ad5x_setup.cpp
 new file mode 100644
-index 0000000..c8b3d0f
+index 0000000000..4745926ccb
 --- /dev/null
 +++ b/tests/unit/test_wizard_ad5x_setup.cpp
-@@ -0,0 +1,327 @@
+@@ -0,0 +1,326 @@
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +
 +// The AD5X setup steps' card texts: the live view of a running step, the
@@ -1602,7 +1600,6 @@ index 0000000..c8b3d0f
 +TEST_CASE_METHOD(LVGLUITestFixture, "AD5X setup: the filament step's card loads from XML",
 +                 "[ad5x_setup][ui]") {
 +    ui_wizard_init_subjects();
-+    ui_wizard_container_register_responsive_constants();
 +    WizardAd5xSetupStep* step = get_wizard_ad5x_setup_step(helix::wizard::StepId::Ad5xFilament);
 +    REQUIRE(step->id() == helix::wizard::StepId::Ad5xFilament);
 +    step->init_subjects();
@@ -1679,10 +1676,10 @@ index 0000000..c8b3d0f
 +    lv_obj_delete(root);
 +}
 diff --git a/tests/unit/test_wizard_step_logic.cpp b/tests/unit/test_wizard_step_logic.cpp
-index 08afacc..f52496e 100644
+index ae570d2876..680e3b3fb0 100644
 --- a/tests/unit/test_wizard_step_logic.cpp
 +++ b/tests/unit/test_wizard_step_logic.cpp
-@@ -34,7 +34,8 @@ static void skip_ad5x(std::vector<helix::StepSkip>& v) {
+@@ -32,7 +32,8 @@ static void skip_ad5x(std::vector<helix::StepSkip>& v) {
      // The AD5X tuning steps are for the AD5X preset only
      for (StepId s : {StepId::Ad5xTimezone, StepId::Ad5xNozzle, StepId::Ad5xSelfcheck,
                       StepId::Ad5xPid, StepId::Ad5xMesh, StepId::Ad5xShaper,
@@ -1694,7 +1691,7 @@ index 08afacc..f52496e 100644
  }
 @@ -277,7 +278,7 @@ TEST_CASE("id-nav: non-contiguous skips are honored", "[wizard][step_logic][idna
      REQUIRE(helix::wizard_next(StepId::PrinterIdentify, v) == StepId::FanSelect);
-     REQUIRE(helix::wizard_next(StepId::FanSelect, v) == StepId::LedSelect);
+     REQUIRE(helix::wizard_next(StepId::FanSelect, v) == StepId::FilamentSensor);
      REQUIRE(helix::wizard_next(StepId::FilamentSensor, v) == StepId::Preferences);
 -    REQUIRE(helix::wizard_visible_count(v) == helix::wizard::STEP_COUNT - 15); // 3 + 12 AD5X
 +    REQUIRE(helix::wizard_visible_count(v) == helix::wizard::STEP_COUNT - 16); // 3 + 13 AD5X
@@ -1703,7 +1700,7 @@ index 08afacc..f52496e 100644
  TEST_CASE("id-nav: last visible step reports done", "[wizard][step_logic][idnav]") {
 diff --git a/ui_xml/wizard_ad5x_filament.xml b/ui_xml/wizard_ad5x_filament.xml
 new file mode 100644
-index 0000000..fc618ae
+index 0000000000..fc618aeb23
 --- /dev/null
 +++ b/ui_xml/wizard_ad5x_filament.xml
 @@ -0,0 +1,16 @@
@@ -1724,7 +1721,7 @@ index 0000000..fc618ae
 +  </view>
 +</component>
 diff --git a/ui_xml/wizard_ad5x_setup.xml b/ui_xml/wizard_ad5x_setup.xml
-index 888bbfc..e25b80f 100644
+index 39af9ec5c6..841f0897ab 100644
 --- a/ui_xml/wizard_ad5x_setup.xml
 +++ b/ui_xml/wizard_ad5x_setup.xml
 @@ -2,11 +2,16 @@
@@ -1861,14 +1858,14 @@ index 888bbfc..e25b80f 100644
 +        <text_body width="100%"
 +                   text="The Z offset is saved. Take the test print off the bed so the next steps don't probe or print on it, then tap Done."
 +                   long_mode="wrap" style_text_align="center"/>
-+        <ui_button name="btn_ad5x_clear_bed_done" width="#wizard_button_width" height="#button_height" text="Done"
++        <ui_button name="btn_ad5x_clear_bed_done" width="140" height="#button_height" text="Done"
 +                   variant="success">
 +          <event_cb trigger="clicked" callback="on_ad5x_setup_accept"/>
 +        </ui_button>
 +      </lv_obj>
 +
 +      <!-- A prompt this screen doesn't know, waiting for the user: the message above, Done -->
-+      <ui_button name="btn_ad5x_prompt_done" width="#wizard_button_width" height="#button_height" text="Done"
++      <ui_button name="btn_ad5x_prompt_done" width="140" height="#button_height" text="Done"
 +                 variant="success">
 +        <bind_flag_if_not_eq subject="ad5x_setup_prompt" flag="hidden" ref_value="4"/>
 +        <event_cb trigger="clicked" callback="on_ad5x_setup_accept"/>
@@ -1972,19 +1969,19 @@ index 888bbfc..e25b80f 100644
          <lv_obj width="100%"
                  height="content" style_pad_all="0" style_pad_gap="#space_sm" style_bg_opa="0" style_border_width="0"
 @@ -106,17 +312,17 @@
-         <ui_button name="btn_ad5x_another" width="#wizard_button_width" height="#button_height"
+         <ui_button name="btn_ad5x_another" width="140" height="#button_height"
                     text="New Patch" variant="secondary">
            <event_cb trigger="clicked" callback="on_ad5x_setup_start"/>
 -          <bind_flag_if cond="ad5x_setup_is_zoffset eq 0 or ad5x_setup_view ne 2" flag="hidden"/>
 +          <bind_flag_if cond="ad5x_setup_is_zoffset eq 0 or ad5x_setup_view ne 2 or ad5x_setup_prompt_wait eq 1" flag="hidden"/>
          </ui_button>
-         <ui_button name="btn_ad5x_accept" width="#wizard_button_width" height="#button_height" text="Accept"
+         <ui_button name="btn_ad5x_accept" width="140" height="#button_height" text="Accept"
                     variant="success">
            <event_cb trigger="clicked" callback="on_ad5x_setup_accept"/>
 -          <bind_flag_if cond="ad5x_setup_can_accept eq 0 or ad5x_setup_view ne 2" flag="hidden"/>
 +          <bind_flag_if cond="ad5x_setup_can_accept eq 0 or ad5x_setup_view ne 2 or ad5x_setup_prompt_wait eq 1" flag="hidden"/>
          </ui_button>
-         <ui_button name="btn_ad5x_abort" width="#wizard_button_width" height="#button_height" text="Abort"
+         <ui_button name="btn_ad5x_abort" width="140" height="#button_height" text="Abort"
                     variant="danger">
            <event_cb trigger="clicked" callback="on_ad5x_setup_abort"/>
 -          <bind_flag_if cond="ad5x_setup_view ne 1 and ad5x_setup_view ne 2" flag="hidden"/>

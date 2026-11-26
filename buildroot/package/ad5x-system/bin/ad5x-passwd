@@ -1,0 +1,182 @@
+#!/bin/sh
+# Root's password, kept across restarts and updates (docs/install.md,
+# "SSH login and the root password"). Main OS and recovery OS, as root:
+#   ad5x-passwd            set a new password (asked twice, not shown)
+#   ad5x-passwd --default  password "root" (the touch screen's reset)
+#   ad5x-passwd --stock    back to stock's password (Kiln's saved one is
+#                          deleted); with no stock password, the default
+#                          "root"
+#   ad5x-passwd --status   which password applies: kiln, stock or none;
+#                          and whether the touch screen's reset is locked
+#   ad5x-passwd --lock-reset    turn off the touch screen's "reset root
+#                          password" (Settings > System); kept on /data
+#   ad5x-passwd --unlock-reset  turn it on again (the default)
+#   (the two lock commands only from an SSH session or a terminal)
+# A new password is saved as a SHA-512 hash in /data/ad5x/ssh/root-password
+# (root's, 0600) and used at once; S05ad5x-data uses it at every start of
+# both OSes. Without that file (or with a broken one) stock's applies.
+# Plain "passwd" runs this. Not in the log: passwords or hashes.
+# Without a terminal it reads the password twice from stdin (one line
+# each).
+set -f
+. ${AD5X_LIB:-/usr/lib/ad5x}/rootpw.sh
+
+die() { echo "ad5x-passwd: $*" >&2; exit 1; }
+
+# AD5X_PASSWD_TEST lets the laptop test run this as a normal user
+if [ "$(id -u)" != 0 ] && [ -z "$AD5X_PASSWD_TEST" ]; then
+	die "must run as root"
+fi
+
+# hash PASSWORD: SHA-512 crypt from BusyBox's mkpasswd (the password on
+# its stdin, never on the command line); MD5, stock's kind, if this
+# BusyBox has no SHA-512
+hash() {
+	for m in sha512 md5; do
+		h=$(printf '%s\n' "$1" | mkpasswd -m $m 2>/dev/null)
+		rootpw_valid "$h" && { printf '%s\n' "$h"; return 0; }
+	done
+	return 1
+}
+
+# One change at a time (an SSH session and the touch screen's reset)
+# (BusyBox's flock has no -w: -n, up to 30 tries a second apart)
+serialize() {
+	mkdir -p "$ROOTPW_RUN" && exec 9> "$ROOTPW_RUN/.passwd.lock" ||
+		die "no lock file in $ROOTPW_RUN"
+	n=0
+	until flock -n 9; do
+		n=$((n + 1))
+		[ $n -lt 30 ] || die "another password change is running; try again"
+		sleep 1
+	done
+	# A deadline from the caller (the update agent: the press's time + 10 s,
+	# in seconds since boot), checked with the lock held, so a wait for it
+	# can't let a late change through
+	if [ -n "${AD5X_PASSWD_NOT_AFTER:-}" ]; then
+		case $AD5X_PASSWD_NOT_AFTER in *[!0-9]*) die "bad deadline" ;; esac
+		[ "$(cut -d. -f1 "${AD5X_UPTIME:-/proc/uptime}")" -le "$AD5X_PASSWD_NOT_AFTER" ] ||
+			die "too late: the request is older than its deadline; nothing changed"
+	fi
+}
+
+# set_hash HASH WHAT: save, apply, log
+set_hash() {
+	serialize
+	rootpw_save "$1" || die "could not write $ROOTPW_FILE"
+	rootpw_apply "$1" || die "saved, but /etc/shadow could not be updated: it applies from the next start"
+	rootpw_log "root password $2"
+}
+
+ask() {	# PROMPT: one line, not echoed on a terminal
+	if [ -t 0 ]; then
+		printf '%s' "$1" >&2
+		stty -echo 2>/dev/null
+		IFS= read -r a
+		r=$?
+		stty echo 2>/dev/null
+		echo >&2
+	else
+		IFS= read -r a
+		r=$?
+	fi
+	[ $r = 0 ] || [ -n "$a" ] || return 1
+	printf '%s\n' "$a"
+}
+
+# status: which password the running system uses (from its /etc/shadow
+# entry: empty, locked or set) and where it came from
+status() {
+	src=none
+	if rootpw_saved > /dev/null; then src=kiln
+	elif rootpw_stock_hash > /dev/null; then src=stock
+	fi
+	case $(rootpw_live)/$src in
+	empty/*)
+		echo "empty: root has no password at all (S05 did not set one); run passwd now" ;;
+	default/none)
+		echo "default (root): no password set and no stock one, so root's password is root; run passwd to choose your own" ;;
+	*/kiln)
+		echo "kiln: the password set with ad5x-passwd ($ROOTPW_FILE)" ;;
+	locked/stock)
+		echo "stock: stock's root password, which is locked: no password logs in; SSH keys only, or run passwd" ;;
+	*/stock)
+		echo "stock: stock's root password" ;;
+	*)
+		echo "locked: root has no usable password; SSH keys only (/data/ad5x/ssh/authorized_keys), or run passwd" ;;
+	esac
+	if rootpw_reset_locked; then
+		echo "touch screen reset: locked (ad5x-passwd --unlock-reset turns it on)"
+	else
+		echo "touch screen reset: allowed (ad5x-passwd --lock-reset turns it off)"
+	fi
+}
+
+# The lock is the owner's, set by hand: not from the touch screen's
+# process or a service, which have neither
+by_hand() {
+	[ -n "$SSH_CONNECTION" ] || [ -n "$SSH_CLIENT" ] || [ -t 0 ] ||
+		die "$1 only from an SSH session or a terminal"
+}
+
+case "$1" in
+'')
+	trap 'stty echo 2>/dev/null' EXIT INT TERM
+	p1=$(ask "New root password: ") || die "no password given"
+	[ -n "$p1" ] || die "an empty password is not allowed"
+	p2=$(ask "Again: ") || die "no password given"
+	[ "$p1" = "$p2" ] || die "the two passwords differ; nothing changed"
+	h=$(hash "$p1") || die "could not make the password hash (mkpasswd)"
+	set_hash "$h" "set (ad5x-passwd)"
+	echo "Root password changed. It stays after restarts and updates."
+	echo "Back to stock's: ad5x-passwd --stock"
+	;;
+--default)
+	h=$(hash root) || die "could not make the password hash (mkpasswd)"
+	set_hash "$h" "set to the default (${AD5X_PASSWD_WHO:-ad5x-passwd --default})"
+	echo "Root password is now: root"
+	;;
+--stock)
+	serialize
+	rootpw_stock
+	case $? in
+	0) ;;
+	2) rootpw_log "root password back to the default root (ad5x-passwd --stock, no stock password)"
+		echo "No stock password was found at this start, so root's password is now the default: root"
+		exit 0 ;;
+	*) die "could not go back to stock's password" ;;
+	esac
+	rootpw_log "root password back to stock's (ad5x-passwd --stock)"
+	echo "Back to stock's root password. $(status)"
+	;;
+--status)
+	status
+	;;
+--lock-reset)
+	by_hand --lock-reset
+	l=$ROOTPW_RESET_LOCK
+	[ -d "$l" ] && [ ! -L "$l" ] && die "$l is a folder; remove it by hand"
+	mkdir -p "${l%/*}" && chmod 700 "${l%/*}" || die "no folder for $l"
+	rm -f "$l.new"
+	(umask 077; echo "locked $(date '+%F %T')" > "$l.new") && chmod 600 "$l.new" &&
+		mv -f "$l.new" "$l" && sync || die "could not write $l"
+	rootpw_log "touch screen password reset locked (ad5x-passwd --lock-reset)"
+	echo "The touch screen can no longer reset the root password."
+	echo "Turn it on again: ad5x-passwd --unlock-reset"
+	;;
+--unlock-reset)
+	by_hand --unlock-reset
+	l=$ROOTPW_RESET_LOCK
+	[ -d "$l" ] && [ ! -L "$l" ] && die "$l is a folder; remove it by hand"
+	rm -f "$l" && sync || die "could not remove $l"
+	rootpw_log "touch screen password reset unlocked (ad5x-passwd --unlock-reset)"
+	echo "The touch screen can reset the root password to \"root\" again (a 5 s hold)."
+	;;
+-h|--help)
+	sed -n '2,19p' "$0"
+	;;
+*)
+	sed -n '2,19p' "$0" >&2
+	exit 2
+	;;
+esac

@@ -39,13 +39,36 @@ catalog has the IFS keys, translated and without AMS.
 
 Upstream: not applicable (AD5X OS specific)
 ---
+ include/ams_error.h                           |  11 +
+ include/print_start_checks.h                  |   3 +
+ src/printer/ams_subscription_backend.cpp      |  17 +-
+ src/printer/hardware_validator.cpp            |   8 +-
+ src/printer/print_start_checks.cpp            |  37 ++-
+ src/ui/print/ui_print_start_controller.cpp    |   2 +
+ .../settings/ui_settings_telemetry_data.cpp   |   8 +-
+ tests/unit/test_kiln_ifs_wording.cpp          | 211 ++++++++++++++++++
+ translations/de.yml                           |   7 +
+ translations/en.yml                           |   6 +
+ translations/es.yml                           |   7 +
+ translations/fr.yml                           |   7 +
+ translations/it.yml                           |   7 +
+ translations/ja.yml                           |   7 +
+ translations/ko.yml                           |   7 +
+ translations/pt.yml                           |   7 +
+ translations/ru.yml                           |  14 +-
+ translations/tr.yml                           |   7 +
+ translations/zh.yml                           |   7 +
+ 19 files changed, 358 insertions(+), 22 deletions(-)
+
 diff --git a/include/ams_error.h b/include/ams_error.h
+index 7d65b407f9..6597efff10 100644
 --- a/include/ams_error.h
 +++ b/include/ams_error.h
-@@ -354,6 +354,17 @@
+@@ -356,6 +356,17 @@ class AmsErrorHelper {
+                         lv_tr("AMS is busy"), lv_tr("Wait for the current operation to complete"));
      }
  
-     /**
++    /**
 +     * @brief busy() for the AD5X IFS (Kiln OS): the unit is named IFS there.
 +     * @param current_op Description of the current operation
 +     * @return AmsError configured for UI display
@@ -56,14 +79,14 @@ diff --git a/include/ams_error.h b/include/ams_error.h
 +        return err;
 +    }
 +
-+    /**
+     /**
       * @brief Create a "print in progress" refusal for toolhead-motion ops.
       *
-      * PRINTING is refused for every backend. PAUSED is refused only when the
 diff --git a/include/print_start_checks.h b/include/print_start_checks.h
+index 46634fad6b..487200887e 100644
 --- a/include/print_start_checks.h
 +++ b/include/print_start_checks.h
-@@ -123,6 +123,9 @@
+@@ -125,6 +125,9 @@ struct PrintStartContext {
      bool has_active_backend = false;      ///< AmsState::get_backend() != nullptr
      bool any_auto_unload_backend = false; ///< any backend->auto_unloads_after_print()
      bool any_bypass_active = false;       ///< AmsState::any_bypass_active()
@@ -74,6 +97,7 @@ diff --git a/include/print_start_checks.h b/include/print_start_checks.h
      /// (AmsState::collect_firmware_routing().chosen_at_print).
      bool lanes_picked_at_print = false;
 diff --git a/src/printer/ams_subscription_backend.cpp b/src/printer/ams_subscription_backend.cpp
+index 6e1e9dd828..6380cfec37 100644
 --- a/src/printer/ams_subscription_backend.cpp
 +++ b/src/printer/ams_subscription_backend.cpp
 @@ -19,6 +19,15 @@
@@ -92,7 +116,7 @@ diff --git a/src/printer/ams_subscription_backend.cpp b/src/printer/ams_subscrip
  AmsSubscriptionBackend::AmsSubscriptionBackend(IMoonrakerAPI* api, helix::IMoonrakerClient* client)
      : api_(api), client_(client) {
      // Common defaults -- derived constructors set type-specific fields
-@@ -804,7 +813,7 @@
+@@ -878,7 +887,7 @@ AmsError AmsSubscriptionBackend::claim_filament_op(FilamentOp op, bool check_sta
          }
      }
      if (filament_op_in_flight_) {
@@ -101,7 +125,7 @@ diff --git a/src/printer/ams_subscription_backend.cpp b/src/printer/ams_subscrip
      }
      filament_op_in_flight_ = true;
      filament_op_claimed_action_ = pending;
-@@ -907,12 +916,12 @@
+@@ -981,12 +990,12 @@ AmsError AmsSubscriptionBackend::state_preconditions_unlocked() const {
                                               " backend not started");
      }
      if (system_info_.is_busy()) {
@@ -116,7 +140,7 @@ diff --git a/src/printer/ams_subscription_backend.cpp b/src/printer/ams_subscrip
      }
      return AmsErrorHelper::success();
  }
-@@ -1073,7 +1082,7 @@
+@@ -1147,7 +1156,7 @@ AmsError AmsSubscriptionBackend::device_action_refusal(const std::string& action
      }
      if (it->moves_machine) {
          if (tracked_run_active_.load()) {
@@ -126,9 +150,10 @@ diff --git a/src/printer/ams_subscription_backend.cpp b/src/printer/ams_subscrip
          return it->allowed_while_paused ? refuse_if_printing() : refuse_motion_if_printing();
      }
 diff --git a/src/printer/hardware_validator.cpp b/src/printer/hardware_validator.cpp
+index eefbff442f..8f833b50d5 100644
 --- a/src/printer/hardware_validator.cpp
 +++ b/src/printer/hardware_validator.cpp
-@@ -644,8 +644,12 @@
+@@ -673,8 +673,12 @@ void HardwareValidator::validate_configured_hardware(Config* config,
                  if (ams_type != AmsType::NONE) {
                      if (!hardware.has_filament_system(ams_type) &&
                          !is_hardware_optional(config, hw_name)) {
@@ -144,9 +169,10 @@ diff --git a/src/printer/hardware_validator.cpp b/src/printer/hardware_validator
                                        hw_name);
                      }
 diff --git a/src/printer/print_start_checks.cpp b/src/printer/print_start_checks.cpp
+index 306dcc5494..3f409d8dcb 100644
 --- a/src/printer/print_start_checks.cpp
 +++ b/src/printer/print_start_checks.cpp
-@@ -212,11 +212,16 @@
+@@ -212,11 +212,16 @@ CheckResult gate_bypass_engaged_lane_print(const PrintStartContext& ctx) {
      if (!ctx.any_bypass_active || !ctx.ams_available || print_lane_requirement(ctx) <= 1) {
          return pass_result();
      }
@@ -166,7 +192,7 @@ diff --git a/src/printer/print_start_checks.cpp b/src/printer/print_start_checks
          lv_tr("Start Anyway"));
  }
  
-@@ -237,14 +242,24 @@
+@@ -237,14 +242,24 @@ CheckResult gate_unaccounted_toolhead_filament(const PrintStartContext& ctx) {
          // printer would do itself, and it is aimed at a hot toolhead. Where no
          // such path exists, a manual pull IS the answer, so that wording stays.
          const bool clearable = i < ctx.toolhead_clearable.size() && ctx.toolhead_clearable[i];
@@ -199,10 +225,11 @@ diff --git a/src/printer/print_start_checks.cpp b/src/printer/print_start_checks
      }
      return pass_result();
  }
-diff --git a/src/ui/ui_print_start_controller.cpp b/src/ui/ui_print_start_controller.cpp
---- a/src/ui/ui_print_start_controller.cpp
-+++ b/src/ui/ui_print_start_controller.cpp
-@@ -828,6 +828,8 @@
+diff --git a/src/ui/print/ui_print_start_controller.cpp b/src/ui/print/ui_print_start_controller.cpp
+index 49b0699ef7..a0ded50ea4 100644
+--- a/src/ui/print/ui_print_start_controller.cpp
++++ b/src/ui/print/ui_print_start_controller.cpp
+@@ -1053,6 +1053,8 @@ helix::PrintStartContext PrintStartController::gather_print_start_context() cons
      ctx.external_spool = ams.get_external_spool_info();
      ctx.filament_diameter_mm = printer_state_.get_discovery().filament_diameter_mm();
      ctx.has_active_backend = ams.get_backend() != nullptr;
@@ -211,36 +238,38 @@ diff --git a/src/ui/ui_print_start_controller.cpp b/src/ui/ui_print_start_contro
      ctx.multiple_toolheads = helix::ToolState::instance().has_multiple_toolheads();
      for (int i = 0; i < ams.backend_count(); ++i) {
          if (auto* backend = ams.get_backend(i)) {
-diff --git a/src/ui/ui_settings_telemetry_data.cpp b/src/ui/ui_settings_telemetry_data.cpp
---- a/src/ui/ui_settings_telemetry_data.cpp
-+++ b/src/ui/ui_settings_telemetry_data.cpp
-@@ -12,6 +12,8 @@
- #include "ui_toast_manager.h"
+diff --git a/src/ui/settings/ui_settings_telemetry_data.cpp b/src/ui/settings/ui_settings_telemetry_data.cpp
+index 2c04bd5fd3..812fce191d 100644
+--- a/src/ui/settings/ui_settings_telemetry_data.cpp
++++ b/src/ui/settings/ui_settings_telemetry_data.cpp
+@@ -13,6 +13,8 @@
  #include "ui_utils.h"
  
+ #include "helix-xml/src/xml/lv_xml.h"
 +#include "ams_backend.h"
 +#include "ams_state.h"
  #include "i18n_plural.h"
- #include "lvgl/src/others/translation/lv_translation.h"
- #include "system/telemetry_manager.h"
-@@ -614,8 +616,11 @@
-             add_field_str("slicer", lv_tr("Slicer"));
-             add_field_num("tool_count_used", lv_tr("Tools Used"), "");
-             if (event.contains("ams_active") && event["ams_active"].is_boolean()) {
-+                // Kiln OS: on the AD5X IFS the filament unit is named IFS.
-+                const AmsBackend* backend = AmsState::instance().get_backend();
-+                const bool ifs = backend && backend->get_type() == AmsType::AD5X_IFS;
-                 make_label(card,
--                           std::string(lv_tr("AMS Active: ")) +
-+                           std::string(ifs ? lv_tr("IFS Active: ") : lv_tr("AMS Active: ")) +
-                                (event["ams_active"].get<bool>() ? lv_tr("Yes") : lv_tr("No")),
-                            "text_subtle");
-             }
+ #include "json_utils.h"
+ #include "lvgl.h"
+@@ -548,7 +550,11 @@ std::vector<TelemetryEventLine> describe_telemetry_event(const nlohmann::json& e
+         add_field_str("slicer", lv_tr("Slicer"));
+         add_field_num("tool_count_used", lv_tr("Tools Used"), "");
+         if (auto ams_active = read_field<bool>(event, "ams_active")) {
+-            add(std::string(lv_tr("AMS Active: ")) + (*ams_active ? lv_tr("Yes") : lv_tr("No")),
++            // Kiln OS: on the AD5X IFS the filament unit is named IFS.
++            const AmsBackend* backend = AmsState::instance().get_backend();
++            const bool ifs = backend && backend->get_type() == AmsType::AD5X_IFS;
++            add(std::string(ifs ? lv_tr("IFS Active: ") : lv_tr("AMS Active: ")) +
++                    (*ams_active ? lv_tr("Yes") : lv_tr("No")),
+                 "text_subtle");
+         }
+     } else if (type_str == "error_encountered") {
 diff --git a/tests/unit/test_kiln_ifs_wording.cpp b/tests/unit/test_kiln_ifs_wording.cpp
 new file mode 100644
+index 0000000000..d0233149ee
 --- /dev/null
 +++ b/tests/unit/test_kiln_ifs_wording.cpp
-@@ -0,0 +1,208 @@
+@@ -0,0 +1,211 @@
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +//
 +// Kiln OS: the AD5X's filament unit is the IFS. English is the identity
@@ -255,7 +284,7 @@ new file mode 100644
 +#include "ams_error.h"
 +#include "ams_types.h"
 +#include "config.h"
-+#include "data_root_resolver.h"
++#include "core/data_root_resolver.h"
 +#include "hardware_validator.h"
 +#include "moonraker_client_mock.h"
 +#include "print_start_checks.h"
@@ -431,6 +460,9 @@ new file mode 100644
 +        }
 +        ++catalogs;
 +        const std::string locale = entry.path().stem().string();
++        if (locale == "en-GB") {
++            continue; // a regional variant: an empty value inherits en (HelixScreen 1.2)
++        }
 +        std::ifstream in(entry.path());
 +        const std::string yml((std::istreambuf_iterator<char>(in)),
 +                              std::istreambuf_iterator<char>());
@@ -450,9 +482,10 @@ new file mode 100644
 +    CHECK(catalogs >= 11); // de en es fr it ja ko pt ru tr zh
 +}
 diff --git a/translations/de.yml b/translations/de.yml
+index f823328019..cbe62464fb 100644
 --- a/translations/de.yml
 +++ b/translations/de.yml
-@@ -5133,3 +5133,10 @@
+@@ -6531,3 +6531,10 @@ translations:
    RUNNING: "LÄUFT"
    NOT AVAILABLE HERE: "HIER NICHT VERFÜGBAR"
    The plugin didn't say why.: "Das Plugin hat keinen Grund genannt."
@@ -464,9 +497,10 @@ diff --git a/translations/de.yml b/translations/de.yml
 +  'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': 'Im Werkzeugkopf befindet sich Filament, aber kein IFS-Slot meldet es als geladen. Der Drucker verweigert möglicherweise das Laden eines Slots, bis er geleert ist. Trotzdem starten?'
 +  'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?': 'Im Werkzeugkopf befindet sich Filament, aber kein IFS-Slot meldet es als geladen. Ziehen Sie es vor dem Drucken manuell heraus. Trotzdem starten?'
 diff --git a/translations/en.yml b/translations/en.yml
+index e6e91384fa..6a96fae4f1 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -5005,6 +5005,12 @@
+@@ -6472,6 +6472,12 @@ translations:
    NOT AVAILABLE HERE: "NOT AVAILABLE HERE"
    The plugin didn't say why.: "The plugin didn't say why."
    # Kiln OS (AD5X) strings from the Kiln HelixScreen patches
@@ -480,9 +514,10 @@ diff --git a/translations/en.yml b/translations/en.yml
    'Cancel sent. The printer stops its start sequence at the next safe point.': 'Cancel sent. The printer stops its start sequence at the next safe point.'
    # Moonraker's warnings on the screen (patch 0059)
 diff --git a/translations/es.yml b/translations/es.yml
+index a7ee31b2ec..e67d9f94fb 100644
 --- a/translations/es.yml
 +++ b/translations/es.yml
-@@ -5123,3 +5123,10 @@
+@@ -6531,3 +6531,10 @@ translations:
    RUNNING: "EN MARCHA"
    NOT AVAILABLE HERE: "NO DISPONIBLE AQUÍ"
    The plugin didn't say why.: "El plugin no indicó el motivo."
@@ -494,9 +529,10 @@ diff --git a/translations/es.yml b/translations/es.yml
 +  'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': 'El cabezal tiene filamento, pero ninguna ranura del IFS informa que esté cargado. La impresora puede negarse a cargar una ranura hasta que se vacíe. ¿Iniciar de todos modos?'
 +  'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?': 'El cabezal tiene filamento, pero ninguna ranura del IFS informa que esté cargado. Retírelo manualmente antes de imprimir. ¿Iniciar de todos modos?'
 diff --git a/translations/fr.yml b/translations/fr.yml
+index 5d377737bb..46e88a9687 100644
 --- a/translations/fr.yml
 +++ b/translations/fr.yml
-@@ -5159,3 +5159,10 @@
+@@ -6543,3 +6543,10 @@ translations:
    RUNNING: "ACTIF"
    NOT AVAILABLE HERE: "NON DISPONIBLE ICI"
    The plugin didn't say why.: "Le plugin n'a pas donné de raison."
@@ -508,9 +544,10 @@ diff --git a/translations/fr.yml b/translations/fr.yml
 +  'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': 'La tête d''outil contient du filament mais aucun slot de l''IFS ne le signale comme chargé. L''imprimante peut refuser de charger un slot tant qu''il n''est pas vidé. Démarrer quand même ?'
 +  'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?': 'La tête d''outil contient du filament mais aucun slot de l''IFS ne le signale comme chargé. Retirez-le manuellement avant d''imprimer. Démarrer quand même ?'
 diff --git a/translations/it.yml b/translations/it.yml
+index 565ddb75bf..0ef512044a 100644
 --- a/translations/it.yml
 +++ b/translations/it.yml
-@@ -5124,3 +5124,10 @@
+@@ -6531,3 +6531,10 @@ translations:
    RUNNING: "IN ESECUZIONE"
    NOT AVAILABLE HERE: "NON DISPONIBILE QUI"
    The plugin didn't say why.: "Il plugin non ha indicato il motivo."
@@ -522,9 +559,10 @@ diff --git a/translations/it.yml b/translations/it.yml
 +  'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': 'La testina contiene filamento ma nessuno slot IFS lo riporta come caricato. La stampante potrebbe rifiutare il caricamento di uno slot finché non viene svuotata. Avviare comunque?'
 +  'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?': 'La testina contiene filamento ma nessuno slot IFS lo riporta come caricato. Estrailo manualmente prima di stampare. Avviare comunque?'
 diff --git a/translations/ja.yml b/translations/ja.yml
+index fbd25ed395..dc32f7c9f6 100644
 --- a/translations/ja.yml
 +++ b/translations/ja.yml
-@@ -4867,3 +4867,10 @@
+@@ -6531,3 +6531,10 @@ translations:
    RUNNING: "動作中"
    NOT AVAILABLE HERE: "この環境では利用不可"
    The plugin didn't say why.: "プラグインは理由を示していません。"
@@ -536,9 +574,10 @@ diff --git a/translations/ja.yml b/translations/ja.yml
 +  'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': 'ツールヘッドにフィラメントがありますが、装填済みと報告しているIFSスロットはありません。取り除くまで、プリンターがスロットの装填を拒否する場合があります。それでも印刷を開始しますか？'
 +  'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?': 'ツールヘッドにフィラメントがありますが、装填済みと報告しているIFSスロットはありません。印刷前に手動で引き抜いてください。それでも印刷を開始しますか？'
 diff --git a/translations/ko.yml b/translations/ko.yml
+index ce19ddb20c..8620e5ae05 100644
 --- a/translations/ko.yml
 +++ b/translations/ko.yml
-@@ -4664,3 +4664,10 @@
+@@ -4664,3 +4664,10 @@ translations:
    Basic: 기본
    Recycled: 재활용
    ~{:.1f} Hz / turn: ~{:.1f} Hz / 회전
@@ -550,9 +589,10 @@ diff --git a/translations/ko.yml b/translations/ko.yml
 +  'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': '툴헤드에 필라멘트가 있지만 어떤 IFS 슬롯도 로드되었다고 보고하지 않습니다. 비우기 전까지 프린터가 슬롯 로드를 거부할 수 있습니다. 그래도 시작할까요?'
 +  'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?': '툴헤드에 필라멘트가 있지만 어떤 IFS 슬롯도 로드되었다고 보고하지 않습니다. 출력 전에 수동으로 빼내세요. 그래도 시작할까요?'
 diff --git a/translations/pt.yml b/translations/pt.yml
+index b2ef3da0bb..7586834786 100644
 --- a/translations/pt.yml
 +++ b/translations/pt.yml
-@@ -5127,3 +5127,10 @@
+@@ -6531,3 +6531,10 @@ translations:
    RUNNING: "EM EXECUÇÃO"
    NOT AVAILABLE HERE: "NÃO DISPONÍVEL AQUI"
    The plugin didn't say why.: "O plugin não informou o motivo."
@@ -564,27 +604,28 @@ diff --git a/translations/pt.yml b/translations/pt.yml
 +  'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': 'O cabeçote tem filamento, mas nenhum slot IFS o reporta como carregado. A impressora pode não conseguir carregar um slot até que ele seja esvaziado. Iniciar mesmo assim?'
 +  'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?': 'O cabeçote tem filamento, mas nenhum slot IFS o reporta como carregado. Retire-o manualmente antes de imprimir. Iniciar mesmo assim?'
 diff --git a/translations/ru.yml b/translations/ru.yml
+index 896f0418ff..a72ea8df0b 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -1676,7 +1676,7 @@
-   ? Filament ran out and the CFS found no matching spool to switch to. Load a spool of the same material and color, then resume.
-   : 'Филамент закончился, и CFS не нашла подходящей катушки для замены. Загрузите катушку того же материала и цвета и продолжите печать.'
+@@ -2097,7 +2097,7 @@ translations:
    Filament ran out at the toolhead: 'Филамент закончился у печатающей головки'
+   Filament ran out on head T{1}: Закончился филамент в головке T{1}
+   Filament ran out or jammed: Филамент закончился или застрял
 -  Filament ran out. Auto-Refill is off, so the CFS will not switch spools on its own. Load filament, then resume.: 'Филамент закончился. Автопополнение выключено, поэтому CFS не сменит катушку сам. Загрузите филамент и продолжите печать.'
 +  Filament ran out. Auto-Refill is off, so the CFS will not switch spools on its own. Load filament, then resume.: 'Филамент закончился. Автозамена выключена, поэтому CFS не сменит катушку сам. Загрузите филамент и продолжите печать.'
    Filament ran out. The CFS knows which spools match, but those slots are empty. Load one of them, then resume.: Филамент закончился. CFS знает, какие катушки подходят, но эти слоты пусты. Загрузите одну из них, затем продолжите печать.
    Filament reload failed: Не удалось повторно подать филамент
    Filament runout: Окончание филамента
-@@ -2276,7 +2276,7 @@
-   Load Failed: 'Не удалось загрузить'
+@@ -2842,7 +2842,7 @@ translations:
    Load Filament: Загрузить филамент
    Load a filament first before trying to unload: Сначала загрузите филамент, прежде чем пытаться его выгрузить
+   Load a matching spool, or load any slot by hand and resume.: Загрузите подходящую катушку или вручную загрузите любой слот и продолжите.
 -  Load a new spool in this slot, or turn on Auto-Refill to switch to a matching one: Установите новую катушку в этот слот или включите автопополнение для переключения на подходящую
 +  Load a new spool in this slot, or turn on Auto-Refill to switch to a matching one: Установите новую катушку в этот слот или включите автозамену для переключения на подходящую
    Load and unload filament at the tool by hand: 'Загружайте и выгружайте филамент вручную на инструменте'
    'Load canceled: nozzle target dropped': 'Загрузка отменена: цель сопла снижена'
-   Load complete: 'Загрузка завершена'
-@@ -3274,7 +3274,7 @@
+   'Load canceled: the active tool changed': 'Загрузка отменена: активный инструмент сменился'
+@@ -4017,7 +4017,7 @@ translations:
    'RFCOMM connect failed: ': 'Не удалось подключиться по RFCOMM: '
    RFID reader malfunction (left): Неисправность RFID-считывателя (левый)
    RFID reader malfunction (right): Неисправность RFID-считывателя (правый)
@@ -593,7 +634,7 @@ diff --git a/translations/ru.yml b/translations/ru.yml
    RFID, nozzle and link care: 'RFID, уход за соплом и связью'
    RH: RH
    RSS: RSS
-@@ -4488,7 +4488,7 @@
+@@ -5678,7 +5678,7 @@ translations:
    Toggle: Переключить
    Toggle (fire-and-forget): Переключение (без отслеживания)
    Toggle AFC LED strip: 'Переключить LED-ленту AFC'
@@ -602,7 +643,7 @@ diff --git a/translations/ru.yml b/translations/ru.yml
    Toggle Quiet Mode: 'Переключить тихий режим'
    Toggle external spool bypass: Переключить байпас внешней катушки
    Toggle this tool's toolhead LED: "Переключить LED печатающей головки этого инструмента"
-@@ -5172,6 +5172,12 @@
+@@ -6645,6 +6645,12 @@ translations:
    'Screen, sound, connection, and the printer''s own settings: Run Setup Wizard, Nozzle Size, Filament Auto-Refill, Plugins. Replay this tour from Help & About.': 'Экран, звук, соединение и настройки принтера: «Запустить мастер настройки», «Размер сопла», «Автозамена филамента», «Плагины». Повторить тур: «Помощь и о программе».'
    'Printer warning': 'Предупреждение принтера'
    'Cancel sent. The printer stops its start sequence at the next safe point.': 'Отмена отправлена. Принтер остановит стартовую последовательность в ближайшей безопасной точке.'
@@ -613,12 +654,13 @@ diff --git a/translations/ru.yml b/translations/ru.yml
 +  'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': 'В печатающей головке есть филамент, но ни один слот IFS не сообщает о его загрузке. Принтер может отказаться загружать слот, пока она не будет очищена. Всё равно начать?'
 +  'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?': 'В печатающей головке есть филамент, но ни один слот IFS не сообщает о его загрузке. Извлеките его вручную перед печатью. Всё равно начать?'
    'More': 'Ещё'
+   Price per kWh: "Цена за кВт·ч"
    'Price, location, lot, notes': 'Цена, место, партия, заметки'
-   'Product': 'Продукт'
 diff --git a/translations/tr.yml b/translations/tr.yml
+index 2bdc8ecbed..9ce98226ba 100644
 --- a/translations/tr.yml
 +++ b/translations/tr.yml
-@@ -4664,3 +4664,10 @@
+@@ -4664,3 +4664,10 @@ translations:
    Basic: Temel
    Recycled: Geri dönüştürülmüş
    ~{:.1f} Hz / turn: ~{:.1f} Hz / tur
@@ -630,9 +672,10 @@ diff --git a/translations/tr.yml b/translations/tr.yml
 +  'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': 'Takım kafasında filament var ama hiçbir IFS yuvası yüklü olduğunu bildirmiyor. Temizlenene kadar yazıcı bir yuvayı yüklemeyi reddedebilir. Yine de başlatılsın mı?'
 +  'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?': 'Takım kafasında filament var ama hiçbir IFS yuvası yüklü olduğunu bildirmiyor. Baskıdan önce elle çıkarın. Yine de başlatılsın mı?'
 diff --git a/translations/zh.yml b/translations/zh.yml
+index 260b945c47..6ff42b6f72 100644
 --- a/translations/zh.yml
 +++ b/translations/zh.yml
-@@ -4857,3 +4857,10 @@
+@@ -6531,3 +6531,10 @@ translations:
    RUNNING: "运行中"
    NOT AVAILABLE HERE: "此处不可用"
    The plugin didn't say why.: "插件未说明原因。"

@@ -31,7 +31,7 @@ Upstream: not applicable (AD5X OS specific)
  3 files changed, 7 insertions(+), 8 deletions(-)
 
 diff --git a/src/ui/ui_settings_kiln_recovery.cpp b/src/ui/ui_settings_kiln_recovery.cpp
-index d893f002..43d52fe3 100644
+index a8555f6eb2..b2013d1d8b 100644
 --- a/src/ui/ui_settings_kiln_recovery.cpp
 +++ b/src/ui/ui_settings_kiln_recovery.cpp
 @@ -150,8 +150,7 @@ void confirm_and_request() {
@@ -45,10 +45,10 @@ index d893f002..43d52fe3 100644
  }
  
 diff --git a/translations/en.yml b/translations/en.yml
-index f98776b3..8d6e64cd 100644
+index b7b97bf69d..6b8cca7387 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -5295,7 +5295,7 @@ translations:
+@@ -6762,7 +6762,7 @@ translations:
    'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.': 'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.'
    'The nozzle size can''t change during a print': 'The nozzle size can''t change during a print'
    'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.'
@@ -58,10 +58,10 @@ index f98776b3..8d6e64cd 100644
    'The results so far, before Save': 'The results so far, before Save'
    'The temperature to measure, from a cold bed': 'The temperature to measure, from a cold bed'
 diff --git a/translations/ru.yml b/translations/ru.yml
-index e6c22df6..cadf8914 100644
+index d1de1be417..ccdaea4381 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -5179,13 +5179,13 @@ translations:
+@@ -6652,13 +6652,13 @@ translations:
    'Can''t shut down the printer: {}': 'Не удалось выключить принтер: {}'
    # Extended memory on Settings > System and its bell notice (patch 0074)
    'Extended memory': 'Расширенная память'
@@ -78,7 +78,7 @@ index e6c22df6..cadf8914 100644
    'Cancel sent. The printer stops its start sequence at the next safe point.': 'Отмена отправлена. Принтер остановит стартовую последовательность в ближайшей безопасной точке.'
    # Reboot or Shutdown asked one at a time on Kiln OS (patch 0075)
    'Restart the printer?': 'Перезагрузить принтер?'
-@@ -5412,7 +5412,7 @@ translations:
+@@ -6889,7 +6889,7 @@ translations:
    'Purge box': 'Лоток для отходов'
    'Remove {}?': 'Удалить {}?'
    'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': 'Перезапуск в систему восстановления (установка обновления с USB-флешки или через веб-страницу на порту 8080)'
@@ -87,7 +87,7 @@ index e6c22df6..cadf8914 100644
    'Restarting into the recovery OS...': 'Перезапуск в систему восстановления...'
    'Retracting filament': 'Втягивание филамента'
    'Retracting {}': 'Втягивание: {}'
-@@ -5461,7 +5461,7 @@ translations:
+@@ -6938,7 +6938,7 @@ translations:
    'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.': 'Сопло, установленное на принтере. От него зависят ширина линий, длина продувки и тест первого слоя. Изменить его можно позже в настройках.'
    'The nozzle size can''t change during a print': 'Размер сопла нельзя изменить во время печати'
    'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'Принтер перезапустится в систему восстановления, где печать недоступна. Чтобы вернуться, нажмите на её экране «Запустить ОС».'
@@ -96,6 +96,3 @@ index e6c22df6..cadf8914 100644
    'The results of the tuning so far. Check them, then Save.': 'Результаты настройки на данный момент. Проверьте их, затем сохраните.'
    'The results so far, before Save': 'Результаты на данный момент, до сохранения'
    'The temperature to measure, from a cold bed': 'Температура для измерения, начиная с холодного стола'
--- 
-2.56.0
-

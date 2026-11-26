@@ -35,17 +35,17 @@ The tests check the fields: unknown variant codes, a cell on the second
 nvmem device, a cell that can't be read (falls back to ad5x.ram=) and
 no cpuinfo.
 ---
- include/system/kiln_hardware.h    | 41 +++++++++++---
- include/ui_settings_about.h       |  4 +-
- src/system/kiln_hardware.cpp      | 42 +++++++--------
- src/ui/ui_settings_about.cpp      | 41 +++++++++++---
- tests/unit/test_kiln_hardware.cpp | 90 +++++++++++++++++++++++++++----
- translations/en.yml               |  6 +++
- translations/ru.yml               |  6 +++
+ include/system/kiln_hardware.h        | 41 +++++++++---
+ include/ui_settings_about.h           |  4 +-
+ src/system/kiln_hardware.cpp          | 42 ++++++-------
+ src/ui/settings/ui_settings_about.cpp | 41 +++++++++---
+ tests/unit/test_kiln_hardware.cpp     | 90 +++++++++++++++++++++++----
+ translations/en.yml                   |  6 ++
+ translations/ru.yml                   |  6 ++
  7 files changed, 179 insertions(+), 51 deletions(-)
 
 diff --git a/include/system/kiln_hardware.h b/include/system/kiln_hardware.h
-index bd2bf242..1bd1af9b 100644
+index bd2bf24209..1bd1af9b5c 100644
 --- a/include/system/kiln_hardware.h
 +++ b/include/system/kiln_hardware.h
 @@ -14,6 +14,14 @@
@@ -120,10 +120,10 @@ index bd2bf242..1bd1af9b 100644
  /// What the eMMC row shows
  struct EmmcInfo {
 diff --git a/include/ui_settings_about.h b/include/ui_settings_about.h
-index df2da846..4cc9c513 100644
+index 1767b04f68..7a5d929188 100644
 --- a/include/ui_settings_about.h
 +++ b/include/ui_settings_about.h
-@@ -134,7 +134,8 @@ class AboutSettingsOverlay : public OverlayBase {
+@@ -142,7 +142,8 @@ class AboutSettingsOverlay : public OverlayBase {
      char log_dest_value_buf_[256];
      char host_arch_value_buf_[64];
      char about_copyright_buf_[48];
@@ -133,7 +133,7 @@ index df2da846..4cc9c513 100644
      char emmc_value_buf_[96];
  
      // Debounce tracker restart on inadvertent re-open
-@@ -142,6 +143,7 @@ class AboutSettingsOverlay : public OverlayBase {
+@@ -150,6 +151,7 @@ class AboutSettingsOverlay : public OverlayBase {
  
      // Kiln OS on the AD5X: read once in init_subjects() (the hardware doesn't
      // change while running), made into translated text in populate_info_rows()
@@ -142,12 +142,12 @@ index df2da846..4cc9c513 100644
  };
  
 diff --git a/src/system/kiln_hardware.cpp b/src/system/kiln_hardware.cpp
-index a01fe819..307e0da6 100644
+index 61314082d2..8dfa92e3c8 100644
 --- a/src/system/kiln_hardware.cpp
 +++ b/src/system/kiln_hardware.cpp
 @@ -3,8 +3,6 @@
  
- #include "text_io.h"
+ #include "core/text_io.h"
  
 -#include <spdlog/fmt/fmt.h>
 -
@@ -218,10 +218,10 @@ index a01fe819..307e0da6 100644
  }
  
  std::optional<double> EmmcInfo::size_gib() const {
-diff --git a/src/ui/ui_settings_about.cpp b/src/ui/ui_settings_about.cpp
-index ebb69620..9c599883 100644
---- a/src/ui/ui_settings_about.cpp
-+++ b/src/ui/ui_settings_about.cpp
+diff --git a/src/ui/settings/ui_settings_about.cpp b/src/ui/settings/ui_settings_about.cpp
+index ef83d6b3c1..b31096fe7b 100644
+--- a/src/ui/settings/ui_settings_about.cpp
++++ b/src/ui/settings/ui_settings_about.cpp
 @@ -109,18 +109,16 @@ void AboutSettingsOverlay::init_subjects() {
  
          // Kiln OS on the AD5X: the X2600 variant and the eMMC (the parts that
@@ -246,7 +246,7 @@ index ebb69620..9c599883 100644
                                 "about_has_processor", subjects_);
          UI_MANAGED_SUBJECT_INT(has_emmc_subject_, kiln_emmc_ ? 1 : 0, "about_has_emmc",
                                 subjects_);
-@@ -312,6 +310,29 @@ void AboutSettingsOverlay::setup_contributor_marquee() {
+@@ -309,6 +307,29 @@ void AboutSettingsOverlay::setup_contributor_marquee() {
  
  namespace {
  
@@ -276,21 +276,21 @@ index ebb69620..9c599883 100644
  // Kiln OS: the eMMC row, "A31M8C (maker 0xEC), PRV 0x30, 58.2 GiB". The words
  // are translated; the identifiers (the name, PRV) are not.
  std::string kiln_emmc_text(const helix::kiln_hardware::EmmcInfo& e) {
-@@ -344,7 +365,11 @@ void AboutSettingsOverlay::populate_info_rows() {
-     lv_subject_copy_string(&printer_value_subject_, printer_name.c_str());
+@@ -341,7 +362,11 @@ void AboutSettingsOverlay::populate_info_rows() {
+     lv_subject_set_string(&printer_value_subject_, printer_name.c_str());
      spdlog::trace("[{}] Printer: {}", get_name(), printer_name);
  
 -    // Kiln OS: the eMMC, in the current language
 +    // Kiln OS: processor and eMMC, in the current language
 +    if (kiln_processor_) {
-+        lv_subject_copy_string(&processor_value_subject_,
++        lv_subject_set_string(&processor_value_subject_,
 +                               kiln_processor_text(*kiln_processor_).c_str());
 +    }
      if (kiln_emmc_) {
-         lv_subject_copy_string(&emmc_value_subject_, kiln_emmc_text(*kiln_emmc_).c_str());
+         lv_subject_set_string(&emmc_value_subject_, kiln_emmc_text(*kiln_emmc_).c_str());
      }
 diff --git a/tests/unit/test_kiln_hardware.cpp b/tests/unit/test_kiln_hardware.cpp
-index 0d45b227..18ed641d 100644
+index 0d45b22774..18ed641d4a 100644
 --- a/tests/unit/test_kiln_hardware.cpp
 +++ b/tests/unit/test_kiln_hardware.cpp
 @@ -6,6 +6,7 @@
@@ -429,12 +429,12 @@ index 0d45b227..18ed641d 100644
  }
  
 diff --git a/translations/en.yml b/translations/en.yml
-index e50c8101..5b17720b 100644
+index e74d0cd7b7..42b218bdcf 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -68,7 +68,9 @@ translations:
-   + New: + New
+@@ -91,7 +91,9 @@ translations:
    +{} more: +{} more
+   +{} tools: +{} tools
    ', also {}': ', also {}'
 +  ', core {}': ', core {}'
    ', {:.1f} GiB': ', {:.1f} GiB'
@@ -442,70 +442,67 @@ index e50c8101..5b17720b 100644
    '- Check [resonance_tester] in printer.cfg': '- Check [resonance_tester] in printer.cfg'
    '- Ensure ADXL345 is connected': '- Ensure ADXL345 is connected'
    '- Try Measure Noise first': '- Try Measure Noise first'
-@@ -4718,6 +4720,8 @@ translations:
-   X axis applied, but Y axis failed: X axis applied, but Y axis failed
-   X axis done, starting Y...: X axis done, starting Y...
+@@ -5999,6 +6001,8 @@ translations:
    X is at its limit ({}mm): X is at its limit ({}mm)
+   X motor: X motor
+   X only: X only
 +  'X2600, variant unknown ({})': 'X2600, variant unknown ({})'
 +  'X2600{}, variant unknown{}': 'X2600{}, variant unknown{}'
    'X:': 'X:'
    XY: XY
-   Y: Y
-@@ -4913,6 +4917,7 @@ translations:
-   '{} Issues Detected': '{} Issues Detected'
-   '{} LED strips available': '{} LED strips available'
-   '{} MCUs': '{} MCUs'
+   XY axis: XY axis
+@@ -6315,6 +6319,7 @@ translations:
+   '{} PID': '{} PID'
+   '{} Sensor': '{} Sensor'
+   '{} Settings': '{} Settings'
 +  '{} MiB {}': '{} MiB {}'
    '{} Tools': '{} Tools'
+   '{} accelerometers': '{} accelerometers'
    '{} and {}': '{} and {}'
-   '{} and {} are both mapped here': '{} and {} are both mapped here'
-@@ -4997,6 +5002,7 @@ translations:
+@@ -6460,6 +6465,7 @@ translations:
    '{} — response timed out': '{} — response timed out'
    '{} → {}: no filament loaded.': '{} → {}: no filament loaded.'
    "{}'s nozzle is still heating": "{}'s nozzle is still heating"
 +  '{}, size unknown': '{}, size unknown'
    '{}, {}': '{}, {}'
+   '{}/{} · needs you': '{}/{} · needs you'
    "{}: the tag names Spoolman spool #{}, which doesn't exist": "{}: the tag names Spoolman spool #{}, which doesn't exist"
-   '{}:{:02} elapsed': '{}:{:02} elapsed'
 diff --git a/translations/ru.yml b/translations/ru.yml
-index fe41d734..6ebda218 100644
+index 961dcde1c5..578c03dd71 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -112,7 +112,9 @@ translations:
-   + New: + Новый
-   +{} more: '+ещё {}'
+@@ -140,7 +140,9 @@ translations:
+     other: '+{} инструмента'
    ', also {}': ', также {}'
+   '- Check [resonance_tester] in printer.cfg': '- Проверьте блок [resonance_tester] в printer.cfg'
 +  ', core {}': ', ядро {}'
    ', {:.1f} GiB': ', {:.1f} ГБ'
 +  ', {} MiB': ', {} МБ'
-   '- Check [resonance_tester] in printer.cfg': '- Проверьте блок [resonance_tester]
-     в printer.cfg'
    '- Ensure ADXL345 is connected': '- Убедитесь, что ADXL345 подключен'
-@@ -4838,6 +4840,8 @@ translations:
-   X axis applied, but Y axis failed: Ось X применена, но ось Y не удалась
-   X axis done, starting Y...: 'Ось X готова, запуск Y...'
+   '- Try Measure Noise first': '- Сначала попробуйте измерить шум акселерометра'
+   -- A: -- А
+@@ -6123,6 +6125,8 @@ translations:
    X is at its limit ({}mm): X на пределе ({}mm)
+   X motor: 'Мотор X'
+   X only: Только X
 +  'X2600, variant unknown ({})': 'X2600, вариант неизвестен ({})'
 +  'X2600{}, variant unknown{}': 'X2600{}, вариант неизвестен{}'
    'X:': 'X:'
    XY: XY
-   Y: Y
-@@ -5042,6 +5046,7 @@ translations:
-   '{} Issues Detected': 'Обнаружено проблем: {}'
-   '{} LED strips available': 'Доступно светодиодных лент: {}'
-   '{} MCUs': '{} MCU'
+   XY axis: "Ось XY"
+@@ -6449,6 +6453,7 @@ translations:
+   '{} PID': '{} PID'
+   '{} Sensor': 'Датчик {}'
+   '{} Settings': 'Настройки: {}'
 +  '{} MiB {}': '{} МБ {}'
    '{} Tools': 'Инструментов: {}'
+   '{} accelerometers': 'Акселерометров: {}'
    '{} and {}': '{} и {}'
-   '{} and {} are both mapped here': '{} и {} оба назначены сюда'
-@@ -5150,6 +5155,7 @@ translations:
+@@ -6618,6 +6623,7 @@ translations:
    '{} — response timed out': '{} — время ожидания ответа истекло'
    '{} → {}: no filament loaded.': '{} ({}): филамент не загружен.'
    "{}'s nozzle is still heating": 'Сопло {} всё ещё нагревается'
 +  '{}, size unknown': '{}, размер неизвестен'
    '{}, {}': '{}, {}'
+   '{}/{} · needs you': "{}/{} · нужны вы"
    "{}: the tag names Spoolman spool #{}, which doesn't exist": '{}: метка указывает катушку Spoolman #{}, которой не существует'
-   '{}:{:02} elapsed': прошло {}:{:02}
--- 
-2.56.0
-

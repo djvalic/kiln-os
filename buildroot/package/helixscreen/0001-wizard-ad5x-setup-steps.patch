@@ -15,13 +15,14 @@ telemetry opt-in step is skipped on these printers.
 Upstream: not applicable (AD5X OS specific)
 ---
  include/ui_wizard_ad5x_setup.h           | 175 +++++
+ include/ui_wizard_calibration.h          |   9 +-
  include/ui_wizard_telemetry.h            |   7 +-
  include/wizard_step.h                    |  10 +-
  src/api/moonraker_discovery_sequence.cpp |   9 +
  src/system/wizard_step.cpp               |  14 +
- src/ui/ui_wizard.cpp                     |   1 +
- src/ui/ui_wizard_ad5x_setup.cpp          | 775 +++++++++++++++++++++++
- src/ui/wizard_step_registry.cpp          |   4 +
+ src/ui/wizard/ui_wizard_ad5x_setup.cpp   | 773 +++++++++++++++++++++++
+ src/ui/wizard/wizard_step_registry.cpp   |   4 +
+ tests/unit/test_wizard_preferences.cpp   |   3 +-
  ui_xml/wizard_ad5x_finish.xml            |  15 +
  ui_xml/wizard_ad5x_ifs.xml               |  15 +
  ui_xml/wizard_ad5x_mesh.xml              |  15 +
@@ -30,21 +31,11 @@ Upstream: not applicable (AD5X OS specific)
  ui_xml/wizard_ad5x_setup.xml             | 103 +++
  ui_xml/wizard_ad5x_shaper.xml            |  15 +
  ui_xml/wizard_ad5x_zoffset.xml           |  15 +
- 16 files changed, 1201 insertions(+), 2 deletions(-)
- create mode 100644 include/ui_wizard_ad5x_setup.h
- create mode 100644 src/ui/ui_wizard_ad5x_setup.cpp
- create mode 100644 ui_xml/wizard_ad5x_finish.xml
- create mode 100644 ui_xml/wizard_ad5x_ifs.xml
- create mode 100644 ui_xml/wizard_ad5x_mesh.xml
- create mode 100644 ui_xml/wizard_ad5x_pid.xml
- create mode 100644 ui_xml/wizard_ad5x_selfcheck.xml
- create mode 100644 ui_xml/wizard_ad5x_setup.xml
- create mode 100644 ui_xml/wizard_ad5x_shaper.xml
- create mode 100644 ui_xml/wizard_ad5x_zoffset.xml
+ 17 files changed, 1207 insertions(+), 5 deletions(-)
 
 diff --git a/include/ui_wizard_ad5x_setup.h b/include/ui_wizard_ad5x_setup.h
 new file mode 100644
-index 0000000000..18787541ad
+index 0000000000..9094aa45be
 --- /dev/null
 +++ b/include/ui_wizard_ad5x_setup.h
 @@ -0,0 +1,175 @@
@@ -68,11 +59,11 @@ index 0000000000..18787541ad
 + * Moonraker subscription.
 + */
 +
-+#include "ui_observer_guard.h"
-+#include "ui_subscription_guard.h"
++#include "core/observer_guard.h"
++#include "subscription_guard.h"
 +
 +#include "async_lifetime_guard.h"
-+#include "json_fwd.h"
++#include "hv/json.hpp"
 +#include "lvgl/lvgl.h"
 +#include "subject_managed_panel.h"
 +#include "wizard_step.h"
@@ -154,13 +145,13 @@ index 0000000000..18787541ad
 +    std::string results_text() const;
 +
 +    SubjectManager subjects_;
-+    lv_subject_t view_{};
-+    lv_subject_t is_zoffset_{};
-+    lv_subject_t progress_{};
-+    lv_subject_t explanation_{};
-+    lv_subject_t message_{};
-+    lv_subject_t results_{};
-+    lv_subject_t zoffset_{};
++    helix::Subject view_{};
++    helix::Subject is_zoffset_{};
++    helix::Subject progress_{};
++    helix::Subject explanation_{};
++    helix::Subject message_{};
++    helix::Subject results_{};
++    helix::Subject zoffset_{};
 +    char explanation_buf_[512] = "";
 +    char message_buf_[256] = "";
 +    char results_buf_[1536] = "";
@@ -223,11 +214,39 @@ index 0000000000..18787541ad
 +
 +/// The step instance for @p id (one of the AD5X tuning step ids).
 +WizardAd5xSetupStep* get_wizard_ad5x_setup_step(helix::wizard::StepId id);
+diff --git a/include/ui_wizard_calibration.h b/include/ui_wizard_calibration.h
+index 8679535882..aee4602b51 100644
+--- a/include/ui_wizard_calibration.h
++++ b/include/ui_wizard_calibration.h
+@@ -4,6 +4,10 @@
+ #include "core/subject.h"
+ #include "wizard_step.h"
+ 
++namespace helix::ad5x_setup {
++bool available(const helix::wizard::StepContext& ctx); // ui_wizard_ad5x_setup.h
++}
++
+ namespace helix::wizard {
+ 
+ /// The setup wizard's last page: start the guided calibration run, or skip it.
+@@ -20,9 +24,10 @@ class WizardCalibrationStep : public Step {
+     const char* log_name() const override {
+         return "WizardCalibration";
+     }
+-    /// Nothing to calibrate without a printer to talk to.
++    /// Nothing to calibrate without a printer to talk to. On a Kiln OS AD5X
++    /// the AD5X tuning steps (ui_wizard_ad5x_setup.h) have calibrated it.
+     bool should_skip(const StepContext& ctx) const override {
+-        return ctx.api == nullptr;
++        return ctx.api == nullptr || helix::ad5x_setup::available(ctx);
+     }
+     void init_subjects() override;
+     void register_callbacks() override;
 diff --git a/include/ui_wizard_telemetry.h b/include/ui_wizard_telemetry.h
-index 7e61136949..3eff1bbac2 100644
+index 04db09121c..079aa3194e 100644
 --- a/include/ui_wizard_telemetry.h
 +++ b/include/ui_wizard_telemetry.h
-@@ -4,6 +4,10 @@
+@@ -5,6 +5,10 @@
  #include "lvgl/lvgl.h"
  #include "wizard_step.h"
  
@@ -237,8 +256,8 @@ index 7e61136949..3eff1bbac2 100644
 +
  /**
   * @class WizardTelemetryStep
-  * @brief Dedicated telemetry opt-in step for preset wizard mode
-@@ -25,7 +29,8 @@ class WizardTelemetryStep : public helix::wizard::Step {
+  * @brief Updates & Data step for preset wizard mode
+@@ -26,7 +30,8 @@ class WizardTelemetryStep : public helix::wizard::Step {
          return "WizardTelemetry";
      }
      bool should_skip(const helix::wizard::StepContext& ctx) const override {
@@ -249,10 +268,10 @@ index 7e61136949..3eff1bbac2 100644
  
      void init_subjects() override;
 diff --git a/include/wizard_step.h b/include/wizard_step.h
-index f02b9d9d02..5b223c5797 100644
+index 16e4ce7dfa..9704305729 100644
 --- a/include/wizard_step.h
 +++ b/include/wizard_step.h
-@@ -22,12 +22,20 @@ enum class StepId {
+@@ -24,12 +24,20 @@ enum class StepId {
      AmsIdentify,
      LedSelect,
      FilamentSensor,
@@ -264,21 +283,21 @@ index f02b9d9d02..5b223c5797 100644
 +    Ad5xIfs,
 +    Ad5xZoffset,
 +    Ad5xFinish,
-     InputShaper,
      Preferences,
      Summary,
      Telemetry,
+     Calibration,
  };
--inline constexpr int STEP_COUNT = 14;
-+inline constexpr int STEP_COUNT = 21;
+-inline constexpr int STEP_COUNT = 16;
++inline constexpr int STEP_COUNT = 23;
  
  // Plain data needed to decide skips — no LVGL, constructible in tests.
  struct StepContext {
 diff --git a/src/api/moonraker_discovery_sequence.cpp b/src/api/moonraker_discovery_sequence.cpp
-index 9ee4947458..ca65478ca6 100644
+index c3096cadcb..6054bac0ef 100644
 --- a/src/api/moonraker_discovery_sequence.cpp
 +++ b/src/api/moonraker_discovery_sequence.cpp
-@@ -1503,6 +1503,15 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
+@@ -1558,6 +1558,15 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
              {"retract_length", "retract_speed", "unretract_extra_length", "unretract_speed"});
      }
  
@@ -295,10 +314,10 @@ index 9ee4947458..ca65478ca6 100644
      // Other variables on these macros (slicer args, profile names, etc.) are
      // irrelevant to the start-detection logic.
 diff --git a/src/system/wizard_step.cpp b/src/system/wizard_step.cpp
-index 4c1e95037f..5dbe78a577 100644
+index b541150b49..33350d7ec6 100644
 --- a/src/system/wizard_step.cpp
 +++ b/src/system/wizard_step.cpp
-@@ -25,6 +25,20 @@ const char* to_string(StepId id) {
+@@ -29,6 +29,20 @@ const char* to_string(StepId id) {
          return "LedSelect";
      case StepId::FilamentSensor:
          return "FilamentSensor";
@@ -316,27 +335,15 @@ index 4c1e95037f..5dbe78a577 100644
 +        return "Ad5xZoffset";
 +    case StepId::Ad5xFinish:
 +        return "Ad5xFinish";
-     case StepId::InputShaper:
-         return "InputShaper";
+     case StepId::Preferences:
+         return "Preferences";
      case StepId::Summary:
-diff --git a/src/ui/ui_wizard.cpp b/src/ui/ui_wizard.cpp
-index aaf5a87089..5e7e4b2df2 100644
---- a/src/ui/ui_wizard.cpp
-+++ b/src/ui/ui_wizard.cpp
-@@ -530,6 +530,7 @@ void ui_wizard_container_register_responsive_constants() {
-         "wizard_ams_identify",
-         "wizard_led_select",
-         "wizard_filament_sensor_select",
-+        "wizard_ad5x_setup",
-         "wizard_input_shaper",
-         "wizard_language_chooser",
-         "wizard_preferences",
-diff --git a/src/ui/ui_wizard_ad5x_setup.cpp b/src/ui/ui_wizard_ad5x_setup.cpp
+diff --git a/src/ui/wizard/ui_wizard_ad5x_setup.cpp b/src/ui/wizard/ui_wizard_ad5x_setup.cpp
 new file mode 100644
-index 0000000000..c8333e7ac3
+index 0000000000..5f642ce9c9
 --- /dev/null
-+++ b/src/ui/ui_wizard_ad5x_setup.cpp
-@@ -0,0 +1,775 @@
++++ b/src/ui/wizard/ui_wizard_ad5x_setup.cpp
+@@ -0,0 +1,773 @@
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +
 +#include "ui_wizard_ad5x_setup.h"
@@ -346,7 +353,7 @@ index 0000000000..c8333e7ac3
 +#include "ui_error_reporting.h"
 +#include "ui_event_safety.h"
 +#include "ui_modal.h"
-+#include "ui_update_queue.h"
++#include "core/update_queue.h"
 +#include "ui_wizard.h"
 +
 +#include "app_globals.h"
@@ -355,10 +362,10 @@ index 0000000000..c8333e7ac3
 +#include "i_moonraker_api.h"
 +#include "i_moonraker_client.h"
 +#include "lvgl/src/others/translation/lv_translation.h"
-+#include "observer_factory.h"
++#include "core/observer_factory.h"
 +#include "printer_discovery.h"
 +#include "printer_state.h"
-+#include "static_panel_registry.h"
++#include "core/static_panel_registry.h"
 +
 +#include <spdlog/fmt/fmt.h>
 +#include <spdlog/spdlog.h>
@@ -368,8 +375,8 @@ index 0000000000..c8333e7ac3
 +#include <cstring>
 +
 +// Wizard footer subjects (defined in ui_wizard.cpp)
-+extern lv_subject_t wizard_show_skip;
-+extern lv_subject_t connection_test_passed;
++extern helix::Subject wizard_show_skip;
++extern helix::Subject connection_test_passed;
 +
 +namespace helix::ad5x_setup {
 +
@@ -453,7 +460,7 @@ index 0000000000..c8333e7ac3
 +void copy_if_changed(lv_subject_t* subject, const std::string& text) {
 +    const char* cur = lv_subject_get_string(subject);
 +    if (!cur || text != cur) {
-+        lv_subject_copy_string(subject, text.c_str());
++        lv_subject_set_string(subject, text.c_str());
 +    }
 +}
 +
@@ -772,8 +779,7 @@ index 0000000000..c8333e7ac3
 +        auto it = status_.find("pending_save");
 +        const bool pending = it == status_.end() || !it->is_boolean() || it->get<bool>();
 +        if (pending) {
-+            helix::ui::begin_expected_klippy_restart(
-+                "Saving setup results... Klipper will restart.");
++            helix::ui::begin_expected_klippy_restart("Saving setup results... Klipper will restart.", get_moonraker_api());
 +        }
 +    }
 +    start_in_flight_ = true;
@@ -987,7 +993,6 @@ index 0000000000..c8333e7ac3
 +void launch_targeted(lv_obj_t* parent) {
 +    spdlog::info("[AD5X setup] Running the setup steps again");
 +    ui_wizard_register_event_callbacks();
-+    ui_wizard_container_register_responsive_constants();
 +    ui_wizard_init_subjects();
 +    // Back on the first step leaves the session, like the other targeted runs.
 +    set_wizard_cancel_callback([]() {
@@ -1112,28 +1117,42 @@ index 0000000000..c8333e7ac3
 +    model().deactivate();
 +    root_ = nullptr;
 +}
-diff --git a/src/ui/wizard_step_registry.cpp b/src/ui/wizard_step_registry.cpp
-index c887cfe2ed..58c83b5299 100644
---- a/src/ui/wizard_step_registry.cpp
-+++ b/src/ui/wizard_step_registry.cpp
+diff --git a/src/ui/wizard/wizard_step_registry.cpp b/src/ui/wizard/wizard_step_registry.cpp
+index 03bdacabd8..4727d22c10 100644
+--- a/src/ui/wizard/wizard_step_registry.cpp
++++ b/src/ui/wizard/wizard_step_registry.cpp
 @@ -1,6 +1,7 @@
  // SPDX-License-Identifier: GPL-3.0-or-later
  #include "wizard_step_registry.h"
  
 +#include "ui_wizard_ad5x_setup.h"
  #include "ui_wizard_ams_identify.h"
- #include "ui_wizard_connection.h"
- #include "ui_wizard_fan_select.h"
-@@ -42,6 +43,9 @@ std::vector<Step*> steps() {
-     v.push_back(get_wizard_ams_identify_step());               // AmsIdentify
-     v.push_back(get_wizard_led_select_step());                 // LedSelect
-     v.push_back(get_wizard_filament_sensor_select_step());     // FilamentSensor
+ #include "ui_wizard_appearance.h"
+ #include "ui_wizard_calibration.h"
+@@ -46,6 +47,9 @@ std::vector<Step*> steps() {
+     v.push_back(get_wizard_ams_identify_step());                // AmsIdentify
+     v.push_back(get_wizard_led_select_step());                  // LedSelect
+     v.push_back(get_wizard_filament_sensor_select_step());      // FilamentSensor
 +    for (StepId id : helix::ad5x_setup::step_ids()) {           // Ad5xSelfcheck..Ad5xFinish
 +        v.push_back(get_wizard_ad5x_setup_step(id));
 +    }
-     v.push_back(get_wizard_input_shaper_step());               // InputShaper
-     v.push_back(helix::wizard::get_wizard_preferences_step()); // Preferences
-     v.push_back(get_wizard_summary_step());                    // Summary
+     v.push_back(helix::wizard::get_wizard_preferences_step());  // Preferences
+     v.push_back(get_wizard_summary_step());                     // Summary
+     v.push_back(get_wizard_telemetry_step());                   // Telemetry
+diff --git a/tests/unit/test_wizard_preferences.cpp b/tests/unit/test_wizard_preferences.cpp
+index 78474423c5..50f5389eb4 100644
+--- a/tests/unit/test_wizard_preferences.cpp
++++ b/tests/unit/test_wizard_preferences.cpp
+@@ -39,7 +39,8 @@ TEST_CASE("Preference rows: Sounds need a sound backend on the first printer",
+ }
+ 
+ TEST_CASE("Preferences step sits between FilamentSensor and Summary", "[wizard][preferences]") {
+-    CHECK(static_cast<int>(StepId::Preferences) == static_cast<int>(StepId::FilamentSensor) + 1);
++    // Kiln OS: the AD5X setup steps sit between them (patch 0001), ending at Ad5xFinish
++    CHECK(static_cast<int>(StepId::Preferences) == static_cast<int>(StepId::Ad5xFinish) + 1);
+     CHECK(static_cast<int>(StepId::Summary) == static_cast<int>(StepId::Preferences) + 1);
+ 
+     helix::wizard::Step* step = helix::wizard::step_by_id(StepId::Preferences);
 diff --git a/ui_xml/wizard_ad5x_finish.xml b/ui_xml/wizard_ad5x_finish.xml
 new file mode 100644
 index 0000000000..8747264ddd
@@ -1241,7 +1260,7 @@ index 0000000000..bff47a4dff
 +</component>
 diff --git a/ui_xml/wizard_ad5x_setup.xml b/ui_xml/wizard_ad5x_setup.xml
 new file mode 100644
-index 0000000000..75bd4e9cf7
+index 0000000000..449f863a58
 --- /dev/null
 +++ b/ui_xml/wizard_ad5x_setup.xml
 @@ -0,0 +1,103 @@
@@ -1304,31 +1323,31 @@ index 0000000000..75bd4e9cf7
 +      <lv_obj width="100%"
 +              height="content" style_pad_all="0" style_pad_gap="#space_md" style_bg_opa="0" style_border_width="0"
 +              flex_flow="row" style_flex_main_place="center" scrollable="false">
-+        <ui_button name="btn_ad5x_start" width="#wizard_button_width" height="#button_height" text="Start">
++        <ui_button name="btn_ad5x_start" width="140" height="#button_height" text="Start">
 +          <event_cb trigger="clicked" callback="on_ad5x_setup_start"/>
 +          <bind_flag_if_not_eq subject="ad5x_setup_view" flag="hidden" ref_value="0"/>
 +        </ui_button>
-+        <ui_button name="btn_ad5x_retry" width="#wizard_button_width" height="#button_height" text="Retry">
++        <ui_button name="btn_ad5x_retry" width="140" height="#button_height" text="Retry">
 +          <event_cb trigger="clicked" callback="on_ad5x_setup_start"/>
 +          <bind_flag_if_not_eq subject="ad5x_setup_view" flag="hidden" ref_value="4"/>
 +        </ui_button>
-+        <ui_button name="btn_ad5x_rerun" width="#wizard_button_width" height="#button_height" text="Run Again"
++        <ui_button name="btn_ad5x_rerun" width="140" height="#button_height" text="Run Again"
 +                   variant="ghost">
 +          <event_cb trigger="clicked" callback="on_ad5x_setup_start"/>
 +          <bind_flag_if_not_eq subject="ad5x_setup_view" flag="hidden" ref_value="3"/>
 +        </ui_button>
 +        <!-- Z offset: Start again while waiting prints another patch beside the first -->
-+        <ui_button name="btn_ad5x_another" width="#wizard_button_width" height="#button_height"
++        <ui_button name="btn_ad5x_another" width="140" height="#button_height"
 +                   text="New Patch" variant="secondary">
 +          <event_cb trigger="clicked" callback="on_ad5x_setup_start"/>
 +          <bind_flag_if cond="ad5x_setup_is_zoffset eq 0 or ad5x_setup_view ne 2" flag="hidden"/>
 +        </ui_button>
-+        <ui_button name="btn_ad5x_accept" width="#wizard_button_width" height="#button_height" text="Accept"
++        <ui_button name="btn_ad5x_accept" width="140" height="#button_height" text="Accept"
 +                   variant="success">
 +          <event_cb trigger="clicked" callback="on_ad5x_setup_accept"/>
 +          <bind_flag_if cond="ad5x_setup_is_zoffset eq 0 or ad5x_setup_view ne 2" flag="hidden"/>
 +        </ui_button>
-+        <ui_button name="btn_ad5x_abort" width="#wizard_button_width" height="#button_height" text="Abort"
++        <ui_button name="btn_ad5x_abort" width="140" height="#button_height" text="Abort"
 +                   variant="danger">
 +          <event_cb trigger="clicked" callback="on_ad5x_setup_abort"/>
 +          <bind_flag_if cond="ad5x_setup_view ne 1 and ad5x_setup_view ne 2" flag="hidden"/>
@@ -1390,6 +1409,3 @@ index 0000000000..0c1a779d56
 +    <wizard_ad5x_setup/>
 +  </view>
 +</component>
--- 
-2.56.0
-

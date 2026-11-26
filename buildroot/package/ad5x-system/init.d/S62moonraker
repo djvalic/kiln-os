@@ -21,7 +21,8 @@ start)
 	# Moonraker on a small top file that reads the printer's own
 	# moonraker.conf and that list, so moonraker.conf needs no change.
 	# (Klipper rewrites the list when plugins change; Moonraker reads it
-	# at its next start.)
+	# at its next start.) The step drops to the config folder's owner
+	# (klipper) itself: it only reads and writes klipper's files.
 	PL=$PD/config/moonraker-plugins.conf
 	/usr/bin/python3 $KROOT/klippy/extras/ad5x_plugins.py \
 		moonraker $PD/config/plugins.cfg $PL \

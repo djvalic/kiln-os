@@ -33,21 +33,17 @@ Upstream: not applicable (AD5X OS specific)
  include/ui_settings_ad5x_soak.h          | 233 ++++++++
  include/ui_wizard_ad5x_setup.h           |  21 +
  src/api/moonraker_discovery_sequence.cpp |  10 +
+ src/ui/settings/ui_panel_settings.cpp    |  10 +
  src/ui/ui_ad5x_nozzle.cpp                |  88 ++-
- src/ui/ui_panel_settings.cpp             |  10 +
  src/ui/ui_settings_ad5x_soak.cpp         | 729 +++++++++++++++++++++++
- src/ui/ui_wizard_ad5x_setup.cpp          |  68 ++-
+ src/ui/wizard/ui_wizard_ad5x_setup.cpp   |  68 ++-
  tests/unit/test_settings_ad5x_soak.cpp   |  94 +++
  ui_xml/settings_ad5x_soak_overlay.xml    | 126 ++++
  ui_xml/settings_panel.xml                |   6 +
  12 files changed, 1390 insertions(+), 6 deletions(-)
- create mode 100644 include/ui_settings_ad5x_soak.h
- create mode 100644 src/ui/ui_settings_ad5x_soak.cpp
- create mode 100644 tests/unit/test_settings_ad5x_soak.cpp
- create mode 100644 ui_xml/settings_ad5x_soak_overlay.xml
 
 diff --git a/include/ui_ad5x_nozzle.h b/include/ui_ad5x_nozzle.h
-index 309eca4c49..08ba55c1e4 100644
+index 451fe764ba..004cf40a9f 100644
 --- a/include/ui_ad5x_nozzle.h
 +++ b/include/ui_ad5x_nozzle.h
 @@ -12,7 +12,9 @@
@@ -74,21 +70,21 @@ index 309eca4c49..08ba55c1e4 100644
  
  namespace helix::ui {
 diff --git a/include/ui_panel_settings.h b/include/ui_panel_settings.h
-index 8068762783..4df6629b1b 100644
+index 309e2bb36c..3c4d6baccc 100644
 --- a/include/ui_panel_settings.h
 +++ b/include/ui_panel_settings.h
-@@ -141,6 +141,8 @@ class SettingsPanel : public PanelBase {
-     lv_subject_t show_ad5x_plugins_subject_{};
+@@ -145,6 +145,8 @@ class SettingsPanel : public PanelBase {
+     helix::Subject show_ad5x_plugins_subject_{};
      // 1 when the printer has the AD5X nozzle object: unhides "Nozzle Size"
-     lv_subject_t show_ad5x_nozzle_subject_{};
+     helix::Subject show_ad5x_nozzle_subject_{};
 +    // 1 when the printer has the AD5X bed soak object: unhides "Bed Heat Soak"
-+    lv_subject_t show_ad5x_soak_subject_{};
++    helix::Subject show_ad5x_soak_subject_{};
  
      // Live status line shown under each stateful root row (settings_panel.xml),
      // refreshed by refresh_status_lines().
 diff --git a/include/ui_settings_ad5x_soak.h b/include/ui_settings_ad5x_soak.h
 new file mode 100644
-index 0000000000..fa8cb30819
+index 0000000000..802757e280
 --- /dev/null
 +++ b/include/ui_settings_ad5x_soak.h
 @@ -0,0 +1,233 @@
@@ -121,14 +117,14 @@ index 0000000000..fa8cb30819
 +
 +#pragma once
 +
-+#include "ui_observer_guard.h"
-+#include "ui_subscription_guard.h"
++#include "core/observer_guard.h"
++#include "subscription_guard.h"
 +
 +#include "async_lifetime_guard.h"
-+#include "json_fwd.h"
++#include "hv/json.hpp"
 +#include "lvgl/lvgl.h"
 +#include "overlay_base.h"
-+#include "static_panel_registry.h"
++#include "core/static_panel_registry.h"
 +#include "subject_managed_panel.h"
 +
 +#include <cstddef>
@@ -248,16 +244,16 @@ index 0000000000..fa8cb30819
 +    void refresh();
 +
 +    SubjectManager subjects_;
-+    lv_subject_t summary_{};
-+    lv_subject_t enabled_{};
-+    lv_subject_t view_{};
-+    lv_subject_t busy_{};
-+    lv_subject_t stopping_{};
-+    lv_subject_t status_line_{};
-+    lv_subject_t rounds_{};
-+    lv_subject_t calibrated_{};
-+    lv_subject_t result_{};
-+    lv_subject_t result_kind_{};
++    helix::Subject summary_{};
++    helix::Subject enabled_{};
++    helix::Subject view_{};
++    helix::Subject busy_{};
++    helix::Subject stopping_{};
++    helix::Subject status_line_{};
++    helix::Subject rounds_{};
++    helix::Subject calibrated_{};
++    helix::Subject result_{};
++    helix::Subject result_kind_{};
 +    char summary_buf_[128] = "";
 +    char status_line_buf_[160] = "";
 +    char rounds_buf_[768] = "";
@@ -326,7 +322,7 @@ index 0000000000..fa8cb30819
 +
 +} // namespace helix::settings
 diff --git a/include/ui_wizard_ad5x_setup.h b/include/ui_wizard_ad5x_setup.h
-index 9f8840f038..994dcbbfee 100644
+index 09a2e251d9..cf6906a639 100644
 --- a/include/ui_wizard_ad5x_setup.h
 +++ b/include/ui_wizard_ad5x_setup.h
 @@ -20,6 +20,10 @@
@@ -339,7 +335,7 @@ index 9f8840f038..994dcbbfee 100644
 + * Wizard" add none, so their PID step tunes nozzle and bed.
   */
  
- #include "ui_observer_guard.h"
+ #include "core/observer_guard.h"
 @@ -69,6 +73,10 @@ const StepSpec* spec_for(wizard::StepId id);
  /// when Klipper has the `ad5x_nozzle` object (for a targeted wizard session).
  std::vector<wizard::StepId> step_ids();
@@ -390,10 +386,10 @@ index 9f8840f038..994dcbbfee 100644
  /// `// action:ad5x_setup_wizard`, and drop the start-up flag file it wrote
  /// (HELIX_WIZARD_FLAG_FILE), which this run then answers. Idempotent per client.
 diff --git a/src/api/moonraker_discovery_sequence.cpp b/src/api/moonraker_discovery_sequence.cpp
-index 7cca5bee5c..82c7774b5f 100644
+index d47d1e7b84..3a0cb27bc3 100644
 --- a/src/api/moonraker_discovery_sequence.cpp
 +++ b/src/api/moonraker_discovery_sequence.cpp
-@@ -1539,6 +1539,16 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
+@@ -1594,6 +1594,16 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
          }
      }
  
@@ -410,15 +406,57 @@ index 7cca5bee5c..82c7774b5f 100644
      // Print start macros — only the boolean flags PrintStartCollector reads.
      // Other variables on these macros (slicer args, profile names, etc.) are
      // irrelevant to the start-detection logic.
+diff --git a/src/ui/settings/ui_panel_settings.cpp b/src/ui/settings/ui_panel_settings.cpp
+index 2ebf9ed44e..c71797db6b 100644
+--- a/src/ui/settings/ui_panel_settings.cpp
++++ b/src/ui/settings/ui_panel_settings.cpp
+@@ -15,6 +15,7 @@
+ #include "ui_panel_memory_stats.h"
+ #include "ui_printer_manager_overlay.h"
+ #include "ui_settings_ad5x_plugins.h"
++#include "ui_settings_ad5x_soak.h"
+ #include "ui_settings_appearance.h"
+ #include "ui_settings_connection.h"
+ #include "ui_settings_display.h"
+@@ -156,6 +157,9 @@ void SettingsPanel::init_subjects() {
+     UI_MANAGED_SUBJECT_INT(show_ad5x_nozzle_subject_, 0, "settings_show_ad5x_nozzle", subjects_);
+     // The Nozzle Size row's line (ad5x_nozzle_size_text) follows the printer's object
+     helix::ad5x_nozzle::model().init_subjects();
++    UI_MANAGED_SUBJECT_INT(show_ad5x_soak_subject_, 0, "settings_show_ad5x_soak", subjects_);
++    // The Bed Heat Soak row's line (ad5x_soak_summary) follows the printer's object
++    helix::ad5x_soak::model().init_subjects();
+ 
+     // Live status line under each stateful root row; refresh_status_lines()
+     // fills these in, first from setup() and then on every return to the root.
+@@ -249,6 +253,11 @@ void SettingsPanel::refresh_status_lines() {
+     if (has_nozzle) {
+         helix::ad5x_nozzle::model().start();
+     }
++    const bool has_soak = helix::ad5x_soak::available();
++    lv_subject_set_int(&show_ad5x_soak_subject_, has_soak ? 1 : 0);
++    if (has_soak) {
++        helix::ad5x_soak::model().start();
++    }
+ 
+     // Formatted here rather than once at init, so it is in the language of the
+     // latest return to the settings root.
+@@ -435,6 +444,7 @@ void register_settings_panel_callbacks() {
+         {"on_connection_clicked", nav_row<get_connection_settings_overlay>()},
+         {"on_updates_clicked", nav_row<get_updates_settings_overlay>()},
+         {"on_ad5x_plugins_clicked", nav_row<get_ad5x_plugins_overlay>()},
++        {"on_ad5x_soak_clicked", nav_row<get_ad5x_soak_overlay>()},
+ #if HELIX_HAS_PLUGINS
+         {"on_plugins_clicked", nav_row<helix::plugin::get_plugins_overlay>()},
+ #else
 diff --git a/src/ui/ui_ad5x_nozzle.cpp b/src/ui/ui_ad5x_nozzle.cpp
-index dfa5236bd7..e5385d1dc2 100644
+index 2fcfda8396..1f7d232a1a 100644
 --- a/src/ui/ui_ad5x_nozzle.cpp
 +++ b/src/ui/ui_ad5x_nozzle.cpp
 @@ -4,6 +4,8 @@
  
  #include "ui_emergency_stop.h"
  #include "ui_error_reporting.h"
-+#include "ui_timer_guard.h"
++#include "core/timer_guard.h"
 +#include "ui_wizard_ad5x_setup.h"
  
  #include "app_globals.h"
@@ -526,51 +564,9 @@ index dfa5236bd7..e5385d1dc2 100644
                        });
                    });
  }
-diff --git a/src/ui/ui_panel_settings.cpp b/src/ui/ui_panel_settings.cpp
-index 57c2b46995..1c8bc694c3 100644
---- a/src/ui/ui_panel_settings.cpp
-+++ b/src/ui/ui_panel_settings.cpp
-@@ -15,6 +15,7 @@
- #include "ui_panel_memory_stats.h"
- #include "ui_printer_manager_overlay.h"
- #include "ui_settings_ad5x_plugins.h"
-+#include "ui_settings_ad5x_soak.h"
- #include "ui_settings_appearance.h"
- #include "ui_settings_connection.h"
- #include "ui_settings_display.h"
-@@ -143,6 +144,9 @@ void SettingsPanel::init_subjects() {
-     UI_MANAGED_SUBJECT_INT(show_ad5x_nozzle_subject_, 0, "settings_show_ad5x_nozzle", subjects_);
-     // The Nozzle Size row's line (ad5x_nozzle_size_text) follows the printer's object
-     helix::ad5x_nozzle::model().init_subjects();
-+    UI_MANAGED_SUBJECT_INT(show_ad5x_soak_subject_, 0, "settings_show_ad5x_soak", subjects_);
-+    // The Bed Heat Soak row's line (ad5x_soak_summary) follows the printer's object
-+    helix::ad5x_soak::model().init_subjects();
- 
-     // Live status line under each stateful root row; refresh_status_lines()
-     // fills these in, first from setup() and then on every return to the root.
-@@ -233,6 +237,11 @@ void SettingsPanel::refresh_status_lines() {
-     if (has_nozzle) {
-         helix::ad5x_nozzle::model().start();
-     }
-+    const bool has_soak = helix::ad5x_soak::available();
-+    lv_subject_set_int(&show_ad5x_soak_subject_, has_soak ? 1 : 0);
-+    if (has_soak) {
-+        helix::ad5x_soak::model().start();
-+    }
- 
-     // Formatted here rather than once at init, so it is in the language of the
-     // latest return to the settings root.
-@@ -406,6 +415,7 @@ void register_settings_panel_callbacks() {
-         {"on_connection_clicked", nav_row<get_connection_settings_overlay>()},
-         {"on_updates_clicked", nav_row<get_updates_settings_overlay>()},
-         {"on_ad5x_plugins_clicked", nav_row<get_ad5x_plugins_overlay>()},
-+        {"on_ad5x_soak_clicked", nav_row<get_ad5x_soak_overlay>()},
- #if HELIX_HAS_PLUGINS
-         {"on_plugins_clicked", nav_row<helix::plugin::get_plugins_overlay>()},
- #else
 diff --git a/src/ui/ui_settings_ad5x_soak.cpp b/src/ui/ui_settings_ad5x_soak.cpp
 new file mode 100644
-index 0000000000..c0d81d2f4e
+index 0000000000..f5f20b8fd4
 --- /dev/null
 +++ b/src/ui/ui_settings_ad5x_soak.cpp
 @@ -0,0 +1,729 @@
@@ -587,7 +583,7 @@ index 0000000000..c0d81d2f4e
 +#include "i_moonraker_client.h"
 +#include "json_utils.h"
 +#include "lvgl/src/others/translation/lv_translation.h"
-+#include "observer_factory.h"
++#include "core/observer_factory.h"
 +#include "printer_discovery.h"
 +#include "printer_state.h"
 +#include "ui/ui_widget_helpers.h"
@@ -622,7 +618,7 @@ index 0000000000..c0d81d2f4e
 +void copy_if_changed(lv_subject_t* subject, const std::string& text) {
 +    const char* cur = lv_subject_get_string(subject);
 +    if (!cur || text != cur) {
-+        lv_subject_copy_string(subject, text.c_str());
++        lv_subject_set_string(subject, text.c_str());
 +    }
 +}
 +
@@ -1303,11 +1299,11 @@ index 0000000000..c0d81d2f4e
 +}
 +
 +} // namespace helix::settings
-diff --git a/src/ui/ui_wizard_ad5x_setup.cpp b/src/ui/ui_wizard_ad5x_setup.cpp
-index 9c152525c9..fadaa9940d 100644
---- a/src/ui/ui_wizard_ad5x_setup.cpp
-+++ b/src/ui/ui_wizard_ad5x_setup.cpp
-@@ -85,6 +85,12 @@ const std::vector<StepSpec> k_specs = {
+diff --git a/src/ui/wizard/ui_wizard_ad5x_setup.cpp b/src/ui/wizard/ui_wizard_ad5x_setup.cpp
+index ff5506066c..7b80b5072a 100644
+--- a/src/ui/wizard/ui_wizard_ad5x_setup.cpp
++++ b/src/ui/wizard/ui_wizard_ad5x_setup.cpp
+@@ -87,6 +87,12 @@ const std::vector<StepSpec> k_specs = {
       true},
  };
  
@@ -1320,7 +1316,7 @@ index 9c152525c9..fadaa9940d 100644
  /// Result labels for the save step's overview, in wizard order.
  struct ResultLabel {
      const char* key;
-@@ -155,6 +161,10 @@ std::vector<wizard::StepId> step_ids() {
+@@ -157,6 +163,10 @@ std::vector<wizard::StepId> step_ids() {
      return ids;
  }
  
@@ -1331,7 +1327,7 @@ index 9c152525c9..fadaa9940d 100644
  bool available(const wizard::StepContext& ctx) {
      if (ctx.config && ctx.config->get_preset() == "ad5x") {
          return true;
-@@ -271,7 +281,10 @@ void Ad5xSetupModel::activate(const StepSpec* spec) {
+@@ -273,7 +283,10 @@ void Ad5xSetupModel::activate(const StepSpec* spec) {
      }
  
      if (subjects_initialized_ && spec) {
@@ -1343,7 +1339,7 @@ index 9c152525c9..fadaa9940d 100644
          set_if_changed(&is_zoffset_, std::strcmp(spec->key, "zoffset") == 0 ? 1 : 0);
      }
      query_status();
-@@ -311,9 +324,34 @@ json Ad5xSetupModel::step_options() const {
+@@ -313,9 +326,34 @@ json Ad5xSetupModel::step_options() const {
              options["keep_bed"] = 1;
          }
      }
@@ -1378,7 +1374,7 @@ index 9c152525c9..fadaa9940d 100644
  void Ad5xSetupModel::send(const std::string& action, double delta) {
      if (!active_) {
          return;
-@@ -656,17 +694,39 @@ Ad5xSetupModel& model() {
+@@ -657,16 +695,38 @@ Ad5xSetupModel& model() {
      return owner().model;
  }
  
@@ -1390,7 +1386,6 @@ index 9c152525c9..fadaa9940d 100644
 +/// (Ad5xSetupModel::set_session_params()), dropped when the session ends.
 +void launch_session(lv_obj_t* parent, std::vector<StepId> ids, json params) {
      ui_wizard_register_event_callbacks();
-     ui_wizard_container_register_responsive_constants();
      ui_wizard_init_subjects();
 +    model().set_session_params(std::move(params));
      // Back on the first step leaves the session, like the other targeted runs.
@@ -1670,6 +1665,3 @@ index 184249b4ba..6286f575e4 100644
        <!-- AD5X: the printer's own plugins (Klipper add-ons), not HelixScreen's -->
        <setting_action_row name="row_ad5x_plugins"
                            label="Plugins" icon="puzzle_outline" callback="on_ad5x_plugins_clicked"
--- 
-2.56.0
-

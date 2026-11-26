@@ -35,7 +35,7 @@ trim_log() {
 # their own; wifi.log keeps one start (S42).
 KILN_APPEND_LOGS="/data/ad5x/update/last.log /data/ad5x/recovery/update.log
 /data/ad5x/mcu/log /data/ad5x/kiln-log/agent.log /data/ad5x/umask.log
-/data/ad5x/kiln-log/plugins-root.log"
+/data/ad5x/kiln-log/plugins-root.log /data/ad5x/kiln-log/passwd.log"
 kiln_logs_trim() {
 	for f in $KILN_APPEND_LOGS; do
 		trim_log "$f"

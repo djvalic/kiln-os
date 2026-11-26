@@ -1,14 +1,14 @@
 
 ---
- src/ui/ui_wizard_ad5x_setup.cpp | 10 ++++----
- ui_xml/wizard_ad5x_setup.xml    | 42 +++++++++------------------------
+ src/ui/wizard/ui_wizard_ad5x_setup.cpp | 10 +++---
+ ui_xml/wizard_ad5x_setup.xml           | 42 +++++++-------------------
  2 files changed, 15 insertions(+), 37 deletions(-)
 
-diff --git a/src/ui/ui_wizard_ad5x_setup.cpp b/src/ui/ui_wizard_ad5x_setup.cpp
-index f39084d146..1a323beb4f 100644
---- a/src/ui/ui_wizard_ad5x_setup.cpp
-+++ b/src/ui/ui_wizard_ad5x_setup.cpp
-@@ -75,14 +75,12 @@ const std::vector<StepSpec> k_specs = {
+diff --git a/src/ui/wizard/ui_wizard_ad5x_setup.cpp b/src/ui/wizard/ui_wizard_ad5x_setup.cpp
+index 6ec85088a3..27b1d98fc1 100644
+--- a/src/ui/wizard/ui_wizard_ad5x_setup.cpp
++++ b/src/ui/wizard/ui_wizard_ad5x_setup.cpp
+@@ -77,14 +77,12 @@ const std::vector<StepSpec> k_specs = {
       "load and unload distances. Load filament into the slots you use first.",
       false},
      {StepId::Ad5xTrash, "trash", "wizard_ad5x_trash",
@@ -28,7 +28,7 @@ index f39084d146..1a323beb4f 100644
      {StepId::Ad5xSoak, "soak", "wizard_ad5x_soak",
       "Calibrates the bed heat soak: how long the bed keeps warming after it reaches 60 \xC2\xB0"
 diff --git a/ui_xml/wizard_ad5x_setup.xml b/ui_xml/wizard_ad5x_setup.xml
-index bd37899c48..888bbfc879 100644
+index f0c47a4745..39af9ec5c6 100644
 --- a/ui_xml/wizard_ad5x_setup.xml
 +++ b/ui_xml/wizard_ad5x_setup.xml
 @@ -35,22 +35,20 @@
@@ -111,6 +111,3 @@ index bd37899c48..888bbfc879 100644
        </lv_obj>
  
        <!-- Actions -->
--- 
-2.56.0
-

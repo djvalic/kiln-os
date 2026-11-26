@@ -23,16 +23,16 @@ With no ps_printer_area in the tree, PrintStatusTiles already publishes
 the ps_chip_* subjects without a callout layout; there the fans now
 publish without their label, as each stat has its own caption.
 ---
- src/ui/ui_print_status_tiles.cpp              |   6 +-
- .../components/print_status_printer_tile.xml  | 360 +++++++++++-------
- 2 files changed, 237 insertions(+), 129 deletions(-)
+ src/ui/print/ui_print_status_tiles.cpp        |   6 +-
+ .../components/print_status_printer_tile.xml  | 376 +++++++++++-------
+ 2 files changed, 237 insertions(+), 145 deletions(-)
 
-diff --git a/src/ui/ui_print_status_tiles.cpp b/src/ui/ui_print_status_tiles.cpp
-index 3052d45f83..3752753bd0 100644
---- a/src/ui/ui_print_status_tiles.cpp
-+++ b/src/ui/ui_print_status_tiles.cpp
-@@ -515,9 +515,13 @@ void PrintStatusTiles::update_now() {
- 
+diff --git a/src/ui/print/ui_print_status_tiles.cpp b/src/ui/print/ui_print_status_tiles.cpp
+index 798b81be62..51fd1bc121 100644
+--- a/src/ui/print/ui_print_status_tiles.cpp
++++ b/src/ui/print/ui_print_status_tiles.cpp
+@@ -681,9 +681,13 @@ void PrintStatusTiles::update_now() {
+     laid_out_ = {};
      if (!area || !probe) {
          // No printer tile in this tree: the chips publish their content alone.
 +        // Fans without their label: each stat in Kiln OS's tile has a caption.
@@ -47,21 +47,23 @@ index 3052d45f83..3752753bd0 100644
          return;
      }
 diff --git a/ui_xml/components/print_status_printer_tile.xml b/ui_xml/components/print_status_printer_tile.xml
-index 2d5188eaff..1ed8f4e4a5 100644
+index 7c65462aa2..1ed8f4e4a5 100644
 --- a/ui_xml/components/print_status_printer_tile.xml
 +++ b/ui_xml/components/print_status_printer_tile.xml
-@@ -1,143 +1,247 @@
+@@ -1,159 +1,247 @@
  <?xml version="1.0"?>
  <!-- Copyright (C) 2026 356C LLC -->
  <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 -<!-- Print status printer tile: the printer picture with a chip per heater, fan,
--     the light and speed/flow. PrintStatusTiles measures the chips and the
+-     the light, speed/flow and the other heads of a multi-head printer. PrintStatusTiles measures the chips and the
 -     shared CalloutPresenter positions the image, chips, lines and glows inside
 -     ps_printer_area's content box; everything else is bound here.
 -     ps_callout_mode: 0 ImageOnly, 1 Pinned (compact chips on the picture),
--     2 Docked (untagged image, no lines or glows), 3 BothSides, 4 OneSide.
+-     2 Docked (untagged image, no lines or glows), 3 BothSides, 4 OneSide,
+-     5 Staggered (compact chips at the side edges, over the picture's edge).
 -     A glow is strong while its chip's tone is Active (a heater climbing, a fan
--     spinning, the light on) and soft otherwise; ps_glow_<key> 0 hides it. -->
+-     spinning, the light on) and soft otherwise; ps_glow_<key> 0 hides it. The bed
+-     and chamber glow by how hot they are instead (heat_glow). -->
 +<!-- Print status printer tile, Kiln OS: no printer picture. Stat tiles two to
 +     a row (nozzle and bed, part fan and speed/flow, chamber when it reads),
 +     then the IFS: a colour swatch per slot with its number, material and what
@@ -83,10 +85,13 @@ index 2d5188eaff..1ed8f4e4a5 100644
 -              width="100%" height="100%" style_pad_all="0" style_bg_opa="0" style_border_width="0" scrollable="false"
 -              clickable="false" ignore_layout="true">
 -        <bind_flag_if_eq subject="ps_callout_mode" flag="hidden" ref_value="0"/>
--        <!-- PrintStatusTiles paints the heater glows from the heat state. -->
+-        <!-- PrintStatusTiles paints the nozzle's glow from the heat state. -->
 -        <region_glow name="ps_glow_nozzle" tone_subject="ps_chip_nozzle_tone" shown_subject="ps_glow_nozzle"/>
--        <region_glow name="ps_glow_bed" tone_subject="ps_chip_bed_tone" shown_subject="ps_glow_bed"/>
--        <region_glow name="ps_glow_chamber" tone_subject="ps_chip_chamber_tone" shown_subject="ps_glow_chamber"/>
+-        <!-- ps_glow_bed is the plate's heat level: 0 hidden, 1 warm, 2 hot, 3 very hot. -->
+-        <heat_glow name="ps_glow_bed" level_subject="ps_glow_bed" hidden_when="ps_glow_bed eq 0"/>
+-        <!-- Likewise the chamber's air: its level, drawn across the enclosure's windows. -->
+-        <heat_glow name="ps_glow_chamber"
+-                   color="#danger" level_subject="ps_glow_chamber" hidden_when="ps_glow_chamber eq 0"/>
 -        <region_glow name="ps_glow_part_fan"
 -                     color="#info" tone_subject="ps_chip_part_fan_tone" shown_subject="ps_glow_part_fan"/>
 -        <region_glow name="ps_glow_hotend_fan"
@@ -115,7 +120,7 @@ index 2d5188eaff..1ed8f4e4a5 100644
 -          <event_cb trigger="clicked" callback="on_temp_card_clicked"/>
 -          <!-- The chip text carries the tool badge, so the icon stays bare. -->
 -          <nozzle_icon size="xs" badge_subject="">
--            <bind_flag_if_eq subject="ps_callout_mode" flag="hidden" ref_value="1"/>
+-            <bind_flag_if cond="ps_callout_mode eq 1 or ps_callout_mode eq 5" flag="hidden"/>
 -          </nozzle_icon>
 -        </activity_chip>
 -        <activity_chip name="ps_chip_bed"
@@ -125,7 +130,7 @@ index 2d5188eaff..1ed8f4e4a5 100644
 -          <bind_flag_if cond="ps_chip_bed_shown eq 0" flag="hidden"/>
 -          <event_cb trigger="clicked" callback="on_temp_card_clicked"/>
 -          <heater_icon src="radiator" glyph_name="bed_icon_glyph" size="xs">
--            <bind_flag_if_eq subject="ps_callout_mode" flag="hidden" ref_value="1"/>
+-            <bind_flag_if cond="ps_callout_mode eq 1 or ps_callout_mode eq 5" flag="hidden"/>
 -          </heater_icon>
 -        </activity_chip>
 -        <activity_chip name="ps_chip_chamber"
@@ -135,7 +140,7 @@ index 2d5188eaff..1ed8f4e4a5 100644
 -          <bind_flag_if cond="ps_chip_chamber_shown eq 0" flag="hidden"/>
 -          <event_cb trigger="clicked" callback="on_temp_card_clicked"/>
 -          <heater_icon src="fridge_industrial" glyph_name="chamber_icon_glyph" size="xs">
--            <bind_flag_if_eq subject="ps_callout_mode" flag="hidden" ref_value="1"/>
+-            <bind_flag_if cond="ps_callout_mode eq 1 or ps_callout_mode eq 5" flag="hidden"/>
 -          </heater_icon>
 -        </activity_chip>
 -        <activity_chip name="ps_chip_part_fan"
@@ -145,7 +150,7 @@ index 2d5188eaff..1ed8f4e4a5 100644
 -          <bind_flag_if cond="ps_chip_part_fan_shown eq 0 or ps_toolhead_merged eq 1" flag="hidden"/>
 -          <event_cb trigger="clicked" callback="on_print_status_fans_clicked"/>
 -          <icon src="fan" size="xs">
--            <bind_flag_if_eq subject="ps_callout_mode" flag="hidden" ref_value="1"/>
+-            <bind_flag_if cond="ps_callout_mode eq 1 or ps_callout_mode eq 5" flag="hidden"/>
 +  <styles>
 +    <!-- Sizes and flow are attributes on each object: a style's size loses to
 +         the object's own default, and a growing flex item is ignored when a
@@ -196,7 +201,7 @@ index 2d5188eaff..1ed8f4e4a5 100644
 -          <bind_flag_if cond="ps_chip_hotend_fan_shown eq 0" flag="hidden"/>
 -          <event_cb trigger="clicked" callback="on_print_status_fans_clicked"/>
 -          <icon src="fan" size="xs">
--            <bind_flag_if_eq subject="ps_callout_mode" flag="hidden" ref_value="1"/>
+-            <bind_flag_if cond="ps_callout_mode eq 1 or ps_callout_mode eq 5" flag="hidden"/>
 -          </icon>
 -        </activity_chip>
 -        <activity_chip name="ps_chip_aux_fan"
@@ -206,7 +211,7 @@ index 2d5188eaff..1ed8f4e4a5 100644
 -          <bind_flag_if cond="ps_chip_aux_fan_shown eq 0" flag="hidden"/>
 -          <event_cb trigger="clicked" callback="on_print_status_fans_clicked"/>
 -          <icon src="fan" size="xs">
--            <bind_flag_if_eq subject="ps_callout_mode" flag="hidden" ref_value="1"/>
+-            <bind_flag_if cond="ps_callout_mode eq 1 or ps_callout_mode eq 5" flag="hidden"/>
 -          </icon>
 -        </activity_chip>
 -        <lv_obj name="ps_chip_light" width="content" height="content" scrollable="false" clickable="true">
@@ -216,6 +221,9 @@ index 2d5188eaff..1ed8f4e4a5 100644
 -          <event_cb trigger="clicked" callback="on_print_status_light"/>
 -          <icon name="ps_chip_light_lit" src="lightbulb_on" size="xs" variant="warning">
 -            <bind_flag_if_not_eq subject="ps_chip_light_tone" flag="hidden" ref_value="1"/>
+-          </icon>
+-          <icon name="ps_chip_light_dark" src="lightbulb_outline" size="xs" variant="muted">
+-            <bind_flag_if_eq subject="ps_chip_light_tone" flag="hidden" ref_value="1"/>
 +          <text_small text="Nozzle" style_text_color="#text_muted" clickable="false">
 +            <bind_flag_if_eq subject="ps_arrangement" flag="hidden" ref_value="1"/>
 +          </text_small>
@@ -237,12 +245,19 @@ index 2d5188eaff..1ed8f4e4a5 100644
 +          <icon src="radiator" size="xs" variant="muted" clickable="false">
 +            <bind_style_if_eq name="icon_hot" subject="ps_chip_bed_tone" ref_value="1"/>
            </icon>
--          <icon name="ps_chip_light_dark" src="lightbulb_outline" size="xs" variant="muted">
--            <bind_flag_if_eq subject="ps_chip_light_tone" flag="hidden" ref_value="1"/>
 +          <text_small text="Bed" style_text_color="#text_muted" clickable="false">
 +            <bind_flag_if_eq subject="ps_arrangement" flag="hidden" ref_value="1"/>
 +          </text_small>
-+        </lv_obj>
+         </lv_obj>
+-        <activity_chip name="ps_chip_speed_flow"
+-                       text_subject="ps_chip_speed_flow_text" shown_subject="ps_chip_speed_flow_shown"
+-                       compact_subject="ps_callout_mode" tone_subject="ps_chip_speed_flow_tone"
+-                       progress_subject="ps_chip_speed_flow_progress" max_lines="2">
+-          <bind_flag_if cond="ps_chip_speed_flow_shown eq 0" flag="hidden"/>
+-          <event_cb trigger="clicked" callback="on_print_status_tune"/>
+-          <!-- The pill lays out row_reverse: the speed icon reads before the chip's text. -->
+-          <icon src="speed" size="xs">
+-            <bind_flag_if cond="ps_callout_mode eq 1 or ps_callout_mode eq 5" flag="hidden"/>
 +        <text_body bind_text="ps_chip_bed_text" long_mode="dots" width="100%" clickable="false">
 +          <style name="value"/>
 +        </text_body>
@@ -259,6 +274,16 @@ index 2d5188eaff..1ed8f4e4a5 100644
 +          <icon src="fan" size="xs" variant="muted" clickable="false">
 +            <bind_style_if_eq name="icon_cool" subject="ps_chip_part_fan_tone" ref_value="1"/>
            </icon>
+-        </activity_chip>
+-        <!-- Every head but the printing one. No tagged point, so no line or glow. -->
+-        <activity_chip name="ps_chip_other_tools"
+-                       text_subject="ps_chip_other_tools_text" shown_subject="ps_chip_other_tools_shown"
+-                       compact_subject="ps_callout_mode" tone_subject="ps_chip_other_tools_tone"
+-                       progress_subject="ps_chip_other_tools_progress">
+-          <bind_flag_if cond="ps_chip_other_tools_shown eq 0" flag="hidden"/>
+-          <event_cb trigger="clicked" callback="on_temp_card_clicked"/>
+-          <icon name="chip_glyph" src="heater" size="xs">
+-            <bind_flag_if cond="ps_callout_mode eq 1 or ps_callout_mode eq 5" flag="hidden"/>
 +          <text_small text="Part Fan" style_text_color="#text_muted" clickable="false">
 +            <bind_flag_if_eq subject="ps_arrangement" flag="hidden" ref_value="1"/>
 +          </text_small>
@@ -280,16 +305,7 @@ index 2d5188eaff..1ed8f4e4a5 100644
 +          <text_small text="Speed" style_text_color="#text_muted" clickable="false">
 +            <bind_flag_if_eq subject="ps_arrangement" flag="hidden" ref_value="1"/>
 +          </text_small>
-         </lv_obj>
--        <activity_chip name="ps_chip_speed_flow"
--                       text_subject="ps_chip_speed_flow_text" shown_subject="ps_chip_speed_flow_shown"
--                       compact_subject="ps_callout_mode" tone_subject="ps_chip_speed_flow_tone"
--                       progress_subject="ps_chip_speed_flow_progress" max_lines="2">
--          <bind_flag_if cond="ps_chip_speed_flow_shown eq 0" flag="hidden"/>
--          <event_cb trigger="clicked" callback="on_print_status_tune"/>
--          <!-- The pill lays out row_reverse: the speed icon reads before the chip's text. -->
--          <icon src="speed" size="xs">
--            <bind_flag_if_eq subject="ps_callout_mode" flag="hidden" ref_value="1"/>
++        </lv_obj>
 +        <!-- Two lines: the live speed, then the volumetric flow. -->
 +        <text_body bind_text="ps_chip_speed_flow_text" width="100%" clickable="false">
 +          <style name="value"/>
@@ -426,6 +442,3 @@ index 2d5188eaff..1ed8f4e4a5 100644
      <lv_obj name="chamber_fault_banner_slot"
              width="100%" height="content" ignore_layout="true" align="top_mid" style_pad_all="#space_xs"
              style_border_width="0" style_bg_opa="0" scrollable="false">
--- 
-2.56.0
-

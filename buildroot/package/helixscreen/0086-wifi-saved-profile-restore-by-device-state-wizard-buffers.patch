@@ -65,13 +65,13 @@ join's connect), and one cancelled once the profile is up (kept).
 ---
  include/ui_wizard_ad5x_setup.h                |   7 +-
  include/wifi_backend_networkmanager.h         |  28 +++-
- src/api/wifi_backend_networkmanager.cpp       | 153 +++++++++++++++---
- src/ui/ui_wizard_ad5x_setup.cpp               |  15 +-
+ src/network/wifi_backend_networkmanager.cpp   | 153 +++++++++++++++---
+ src/ui/wizard/ui_wizard_ad5x_setup.cpp        |  15 +-
  .../unit/test_wifi_backend_networkmanager.cpp | 132 ++++++++++++++-
  5 files changed, 298 insertions(+), 37 deletions(-)
 
 diff --git a/include/ui_wizard_ad5x_setup.h b/include/ui_wizard_ad5x_setup.h
-index 97b6ba1..551b18d 100644
+index a49748ec91..44ba58401e 100644
 --- a/include/ui_wizard_ad5x_setup.h
 +++ b/include/ui_wizard_ad5x_setup.h
 @@ -301,8 +301,11 @@ class Ad5xSetupModel {
@@ -89,10 +89,10 @@ index 97b6ba1..551b18d 100644
      char message_buf_[256] = "";
      char results_buf_[1536] = "";
 diff --git a/include/wifi_backend_networkmanager.h b/include/wifi_backend_networkmanager.h
-index b94d862..bec7656 100644
+index ec27858f64..f52bad1e42 100644
 --- a/include/wifi_backend_networkmanager.h
 +++ b/include/wifi_backend_networkmanager.h
-@@ -11,6 +11,7 @@
+@@ -12,6 +12,7 @@
  // ============================================================================
  
  #include <atomic>
@@ -100,7 +100,7 @@ index b94d862..bec7656 100644
  #include <condition_variable>
  #include <functional>
  #include <map>
-@@ -251,8 +252,9 @@ class WifiBackendNetworkManager : public WifiBackend {
+@@ -269,8 +270,9 @@ class WifiBackendNetworkManager : public WifiBackend {
                                       bool is_hidden);
  
      // Single fork/exec of `nmcli <args>` (no shell), stderr captured, 30 s limit.
@@ -112,7 +112,7 @@ index b94d862..bec7656 100644
  
      /// A saved NetworkManager Wi-Fi profile, as found by find_saved_profile().
      struct SavedProfile {
-@@ -261,6 +263,7 @@ class WifiBackendNetworkManager : public WifiBackend {
+@@ -279,6 +281,7 @@ class WifiBackendNetworkManager : public WifiBackend {
          std::string mode;        ///< 802-11-wireless.mode ("" or "infrastructure" for a client)
          std::string key_mgmt;    ///< 802-11-wireless-security.key-mgmt ("" = open)
          std::string psk;         ///< Stored psk (empty when not stored in the profile)
@@ -120,7 +120,7 @@ index b94d862..bec7656 100644
          std::string autoconnect; ///< connection.autoconnect as nmcli prints it ("yes"/"no")
          std::string hidden;      ///< 802-11-wireless.hidden as nmcli prints it ("yes"/"no")
      };
-@@ -271,7 +274,8 @@ class WifiBackendNetworkManager : public WifiBackend {
+@@ -289,7 +292,8 @@ class WifiBackendNetworkManager : public WifiBackend {
      std::vector<std::string> parse_wifi_profile_uuids(const std::string& output);
  
      /// The fields of one profile from `nmcli -s -t -f <fields> connection show uuid <U>`
@@ -130,7 +130,7 @@ index b94d862..bec7656 100644
      SavedProfile parse_profile_fields(const std::string& output);
  
      /// The saved client profile whose SSID is `ssid`, if there is one.
-@@ -296,6 +300,24 @@ class WifiBackendNetworkManager : public WifiBackend {
+@@ -314,6 +318,24 @@ class WifiBackendNetworkManager : public WifiBackend {
                                                           const std::string& password,
                                                           bool is_hidden);
  
@@ -155,11 +155,11 @@ index b94d862..bec7656 100644
      /// `nmcli connection up uuid <uuid> ifname <iface>` argv, program name excluded.
      static std::vector<std::string> activate_profile_argv(const std::string& uuid,
                                                            const std::string& iface);
-diff --git a/src/api/wifi_backend_networkmanager.cpp b/src/api/wifi_backend_networkmanager.cpp
-index 4ee7e61..41f72e1 100644
---- a/src/api/wifi_backend_networkmanager.cpp
-+++ b/src/api/wifi_backend_networkmanager.cpp
-@@ -26,6 +26,7 @@
+diff --git a/src/network/wifi_backend_networkmanager.cpp b/src/network/wifi_backend_networkmanager.cpp
+index 15bd898c80..2d65ae7d06 100644
+--- a/src/network/wifi_backend_networkmanager.cpp
++++ b/src/network/wifi_backend_networkmanager.cpp
+@@ -24,6 +24,7 @@
  #include <cerrno>
  #include <chrono>
  #include <cstdio>
@@ -167,7 +167,7 @@ index 4ee7e61..41f72e1 100644
  #include <cstring>
  #include <fcntl.h>
  #include <sstream>
-@@ -725,18 +726,15 @@ WifiBackendNetworkManager::parse_profile_fields(const std::string& output) {
+@@ -697,18 +698,15 @@ WifiBackendNetworkManager::parse_profile_fields(const std::string& output) {
      std::istringstream stream(output);
      std::string line;
      while (std::getline(stream, line)) {
@@ -190,7 +190,7 @@ index 4ee7e61..41f72e1 100644
          if (name == "802-11-wireless.ssid") {
              profile.ssid = value;
          } else if (name == "802-11-wireless.mode") {
-@@ -747,6 +745,8 @@ WifiBackendNetworkManager::parse_profile_fields(const std::string& output) {
+@@ -719,6 +717,8 @@ WifiBackendNetworkManager::parse_profile_fields(const std::string& output) {
              profile.key_mgmt = value;
          } else if (name == "802-11-wireless-security.psk") {
              profile.psk = value;
@@ -199,7 +199,7 @@ index 4ee7e61..41f72e1 100644
          } else if (name == "connection.autoconnect") {
              profile.autoconnect = value;
          }
-@@ -763,7 +763,8 @@ WifiBackendNetworkManager::find_saved_profile(const std::string& ssid) {
+@@ -735,7 +735,8 @@ WifiBackendNetworkManager::find_saved_profile(const std::string& ssid) {
          SavedProfile profile = parse_profile_fields(
              exec_nmcli("-s -t -f 802-11-wireless.ssid,802-11-wireless.mode,"
                         "802-11-wireless.hidden,802-11-wireless-security.key-mgmt,"
@@ -209,7 +209,7 @@ index 4ee7e61..41f72e1 100644
                         "connection show uuid " +
                         uuid));
          if (profile.ssid != ssid ||
-@@ -810,19 +811,90 @@ std::vector<std::string> WifiBackendNetworkManager::restore_profile_argv(
+@@ -782,19 +783,90 @@ std::vector<std::string> WifiBackendNetworkManager::restore_profile_argv(
          argv.insert(argv.end(),
                      {"802-11-wireless.hidden", profile.hidden == "yes" ? "yes" : "no"});
      }
@@ -303,7 +303,7 @@ index 4ee7e61..41f72e1 100644
      ConnectAttempt result;
  
      // SECURITY: fork/exec (no shell) so SSID/password can't be interpreted by sh.
-@@ -866,12 +938,16 @@ WifiBackendNetworkManager::run_nmcli(const std::vector<std::string>& args) {
+@@ -838,12 +910,16 @@ WifiBackendNetworkManager::run_nmcli(const std::vector<std::string>& args) {
      close(stderr_pipe[1]);
  
      constexpr auto kConnectTimeout = std::chrono::seconds(30);
@@ -322,7 +322,7 @@ index 4ee7e61..41f72e1 100644
  
      switch (wait.outcome) {
      case helix::ChildWaitOutcome::Cancelled:
-@@ -947,29 +1023,56 @@ void WifiBackendNetworkManager::connect_thread_func(std::string ssid, std::strin
+@@ -926,29 +1002,56 @@ void WifiBackendNetworkManager::connect_thread_func(std::string ssid, std::strin
      // joined by hand is joined again at the next start.
      std::optional<SavedProfile> profile = find_saved_profile(ssid);
      if (profile && can_update_in_place(*profile, password)) {
@@ -391,11 +391,11 @@ index 4ee7e61..41f72e1 100644
          } else {
              spdlog::warn("[WifiBackend] NM: Could not update the saved profile for '{}' "
                           "(exit code {}); trying device wifi connect",
-diff --git a/src/ui/ui_wizard_ad5x_setup.cpp b/src/ui/ui_wizard_ad5x_setup.cpp
-index 28be544..b378d16 100644
---- a/src/ui/ui_wizard_ad5x_setup.cpp
-+++ b/src/ui/ui_wizard_ad5x_setup.cpp
-@@ -145,9 +145,20 @@ std::string result_string(const json& value) {
+diff --git a/src/ui/wizard/ui_wizard_ad5x_setup.cpp b/src/ui/wizard/ui_wizard_ad5x_setup.cpp
+index 9099de2efe..875f2303a0 100644
+--- a/src/ui/wizard/ui_wizard_ad5x_setup.cpp
++++ b/src/ui/wizard/ui_wizard_ad5x_setup.cpp
+@@ -147,9 +147,20 @@ std::string result_string(const json& value) {
  }
  
  void copy_if_changed(lv_subject_t* subject, const std::string& text) {
@@ -412,17 +412,17 @@ index 28be544..b378d16 100644
 +    }
      const char* cur = lv_subject_get_string(subject);
 -    if (!cur || text != cur) {
--        lv_subject_copy_string(subject, text.c_str());
+-        lv_subject_set_string(subject, text.c_str());
 +    if (!cur || fit != cur) {
-+        lv_subject_copy_string(subject, fit.c_str());
++        lv_subject_set_string(subject, fit.c_str());
      }
  }
  
 diff --git a/tests/unit/test_wifi_backend_networkmanager.cpp b/tests/unit/test_wifi_backend_networkmanager.cpp
-index d7a5f54..3944576 100644
+index 5922b4bf43..2415d44ac8 100644
 --- a/tests/unit/test_wifi_backend_networkmanager.cpp
 +++ b/tests/unit/test_wifi_backend_networkmanager.cpp
-@@ -47,7 +47,9 @@ class TestableNMBackend : public WifiBackendNetworkManager {
+@@ -45,7 +45,9 @@ class TestableNMBackend : public WifiBackendNetworkManager {
      using WifiBackendNetworkManager::activate_profile_argv;
      using WifiBackendNetworkManager::can_update_in_place;
      using WifiBackendNetworkManager::connect_argv;
@@ -432,7 +432,7 @@ index d7a5f54..3944576 100644
      using WifiBackendNetworkManager::parse_wifi_profile_uuids;
      using WifiBackendNetworkManager::restore_profile_argv;
      using WifiBackendNetworkManager::SavedProfile;
-@@ -191,10 +193,19 @@ case "$*" in
+@@ -192,10 +194,19 @@ case "$*" in
  "-s -t -f "*" connection show uuid "*)
    for a; do u=$a; done
    cat "$NMCLI_DIR/show-$u" 2>/dev/null; exit 0 ;;
@@ -452,16 +452,16 @@ index d7a5f54..3944576 100644
  if [ -n "$NMCLI_FAIL_UP" ] && [ "$1 $2" = "connection up" ]; then
    echo "$NMCLI_FAIL_UP" >&2
    exit 4
-@@ -219,7 +230,7 @@ exit 0
+@@ -221,7 +232,7 @@ exit 0
      }
      ~FakeNmcliDir() {
          for (const char* var : {"NMCLI_ARGV", "NMCLI_COUNT", "NMCLI_FAIL_FIRST", "NMCLI_FAIL_ALL",
--                                "NMCLI_DIR", "NMCLI_FAIL_UP"}) {
-+                                "NMCLI_DIR", "NMCLI_FAIL_UP", "NMCLI_SLOW_UP"}) {
+-                                "NMCLI_HOLD", "NMCLI_DIR", "NMCLI_FAIL_UP"}) {
++                                "NMCLI_HOLD", "NMCLI_DIR", "NMCLI_FAIL_UP", "NMCLI_SLOW_UP"}) {
              ::unsetenv(var);
          }
          std::error_code ec;
-@@ -249,6 +260,20 @@ exit 0
+@@ -260,6 +271,20 @@ exit 0
          ::setenv("NMCLI_FAIL_UP", stderr_line, 1);
      }
  
@@ -482,7 +482,7 @@ index d7a5f54..3944576 100644
      /// Every acting invocation's argv, in order.
      std::vector<std::vector<std::string>> history() {
          std::ifstream f(history_file);
-@@ -426,20 +451,53 @@ TEST_CASE("NM backend: saved profile parsing", "[network][nm][saved_profile]") {
+@@ -434,20 +459,53 @@ TEST_CASE("NM backend: saved profile parsing", "[network][nm][saved_profile]") {
                                                  "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"});
      }
  
@@ -540,7 +540,7 @@ index d7a5f54..3944576 100644
      SECTION("which profiles are updated in place") {
          TestableNMBackend::SavedProfile p;
          p.key_mgmt = "wpa-psk";
-@@ -477,6 +535,17 @@ TEST_CASE("NM backend: saved profile parsing", "[network][nm][saved_profile]") {
+@@ -485,6 +543,17 @@ TEST_CASE("NM backend: saved profile parsing", "[network][nm][saved_profile]") {
                std::vector<std::string>{"connection", "modify", "uuid", kSavedUuid,
                                         "connection.autoconnect", "no", "802-11-wireless.hidden",
                                         "no", "802-11-wireless-security.psk", "oldpass1"});
@@ -558,7 +558,7 @@ index d7a5f54..3944576 100644
          CHECK(TestableNMBackend::activate_profile_argv(kSavedUuid, "wlan0") ==
                std::vector<std::string>{"connection", "up", "uuid", kSavedUuid, "ifname", "wlan0"});
      }
-@@ -545,6 +614,59 @@ TEST_CASE("NM backend: joining a saved network updates its profile in place",
+@@ -553,6 +622,59 @@ TEST_CASE("NM backend: joining a saved network updates its profile in place",
          CHECK_FALSE(connected.load());
      }
  

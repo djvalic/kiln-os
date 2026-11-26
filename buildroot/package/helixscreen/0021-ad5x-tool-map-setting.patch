@@ -6,7 +6,7 @@
  3 files changed, 42 insertions(+), 1 deletion(-)
 
 diff --git a/include/ui_settings_ad5x_refill.h b/include/ui_settings_ad5x_refill.h
-index 494f43f510..66cea253bb 100644
+index a8e8ec1d55..3007ccbec4 100644
 --- a/include/ui_settings_ad5x_refill.h
 +++ b/include/ui_settings_ad5x_refill.h
 @@ -65,6 +65,9 @@ std::string enable_gcode(bool on);
@@ -30,12 +30,12 @@ index 494f43f510..66cea253bb 100644
      /// while it is built. Empty to stop.
      void set_on_slots_changed(std::function<void()> cb) {
 @@ -154,6 +160,7 @@ class Ad5xRefillModel {
-     lv_subject_t summary_{};
-     lv_subject_t enabled_{};
-     lv_subject_t match_{};
-+    lv_subject_t map_mode_{};
-     lv_subject_t busy_{};
-     lv_subject_t has_backups_{};
+     helix::Subject summary_{};
+     helix::Subject enabled_{};
+     helix::Subject match_{};
++    helix::Subject map_mode_{};
+     helix::Subject busy_{};
+     helix::Subject has_backups_{};
      char summary_buf_[160] = "";
 @@ -237,6 +244,7 @@ class Ad5xRefillOverlay : public OverlayBase {
  
@@ -46,7 +46,7 @@ index 494f43f510..66cea253bb 100644
  
    private:
 diff --git a/src/ui/ui_settings_ad5x_refill.cpp b/src/ui/ui_settings_ad5x_refill.cpp
-index 4710785d91..99329c86cc 100644
+index 668663c72c..7b2675066a 100644
 --- a/src/ui/ui_settings_ad5x_refill.cpp
 +++ b/src/ui/ui_settings_ad5x_refill.cpp
 @@ -38,8 +38,11 @@ constexpr const char* kObject = "ifs";
@@ -145,6 +145,3 @@ index cfa102443e..613978b6a1 100644
        </setting_group>
        <!-- Per slot with filament: its colour, material and the slots that would take over -->
        <setting_group name="ad5x_refill_backups_group">
--- 
-2.56.0
-

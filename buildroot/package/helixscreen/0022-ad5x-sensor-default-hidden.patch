@@ -4,25 +4,22 @@
  1 file changed, 9 insertions(+)
 
 diff --git a/src/sensors/temperature_sensor_manager.cpp b/src/sensors/temperature_sensor_manager.cpp
-index b9706bd556..a5aba03437 100644
+index 3c237b203d..2298f8c0af 100644
 --- a/src/sensors/temperature_sensor_manager.cpp
 +++ b/src/sensors/temperature_sensor_manager.cpp
-@@ -190,6 +190,15 @@ void TemperatureSensorManager::on_discovered(const PrinterDiscovery& /*hw*/) {
-             continue;
+@@ -202,6 +202,15 @@ void TemperatureSensorManager::on_discovered(const PrinterDiscovery& hw) {
+     for (auto& e : entries_locked()) {
+         if (e.role == 0) {
+             e.role = role_for_name(e.display_name, e.klipper_name);
++            // AD5X toolhead filament and cutter readings are raw ADC values, not
++            // temperatures, as are the IFS slot sensors with the IFS on Klipper
++            // firmware (ifs_spool1_inlet ... ifs_spool4_stall). Keep them out of
++            // the temperature widgets by default.
++            // Only new entries reach here (role 0), so a saved choice still wins.
++            if (e.display_name == "filamentValue" || e.display_name == "cutValue" ||
++                e.display_name.rfind("ifs_spool", 0) == 0) {
++                e.enabled = false;
++            }
          }
-         e.role = role_for_name(e.display_name, e.klipper_name);
-+        // AD5X toolhead filament and cutter readings are raw ADC values, not
-+        // temperatures, as are the IFS slot sensors with the IFS on Klipper
-+        // firmware (ifs_spool1_inlet ... ifs_spool4_stall). Keep them out of
-+        // the temperature widgets by default.
-+        // Only new entries reach here (role 0), so a saved choice still wins.
-+        if (e.display_name == "filamentValue" || e.display_name == "cutValue" ||
-+            e.display_name.rfind("ifs_spool", 0) == 0) {
-+            e.enabled = false;
-+        }
-         spdlog::debug("[TemperatureSensorManager] Discovered {} (role {})", e.klipper_name,
-                       enum_id(kTemperatureSensorRoles, static_cast<TemperatureSensorRole>(e.role)));
-     }
--- 
-2.56.0
-
+         // A sensor_type outranks the name, but only over the AUXILIARY fallback:
+         // CHAMBER may have been moved here by apply_chamber_sensor_override().

@@ -19,10 +19,10 @@ of the other Kiln strings (печатающая головка, слот, фил
  2 files changed, 110 insertions(+)
 
 diff --git a/translations/en.yml b/translations/en.yml
-index a14ea92..2ada29d 100644
+index 42b218bdcf..d88e17cd6c 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -5096,6 +5096,7 @@ translations:
+@@ -6563,6 +6563,7 @@ translations:
    'Screen, sound, connection, and the printer''s own settings: Run Setup Wizard, Nozzle Size, Filament Auto-Refill, Plugins. Replay this tour from Help & About.': 'Screen, sound, connection, and the printer''s own settings: Run Setup Wizard, Nozzle Size, Filament Auto-Refill, Plugins. Replay this tour from Help & About.'
    ', corners {:+.3f} to {:+.3f}': ', corners {:+.3f} to {:+.3f}'
    ', not fully settled': ', not fully settled'
@@ -30,7 +30,7 @@ index a14ea92..2ada29d 100644
    'Ad5xFinish': 'Ad5xFinish'
    'Ad5xIfs': 'Ad5xIfs'
    'Ad5xMesh': 'Ad5xMesh'
-@@ -5340,3 +5341,57 @@ translations:
+@@ -6807,3 +6808,57 @@ translations:
    '{}  centre {:+.3f} mm': '{}  centre {:+.3f} mm'
    '{} °C — {} (centre moved {:.2f} mm)': '{} °C — {} (centre moved {:.2f} mm)'
    '{}, set in local.cfg': '{}, set in local.cfg'
@@ -89,10 +89,10 @@ index a14ea92..2ada29d 100644
 +  'Kiln can''t tell which slot''s filament is in the toolhead. Look at the tubes: tap the slot whose filament goes into the toolhead. Nothing is fed until you choose.': 'Kiln can''t tell which slot''s filament is in the toolhead. Look at the tubes: tap the slot whose filament goes into the toolhead. Nothing is fed until you choose.'
 +  'I pulled it out by hand': 'I pulled it out by hand'
 diff --git a/translations/ru.yml b/translations/ru.yml
-index c8c09b5..bb03bc7 100644
+index 578c03dd71..73d8bc82b3 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -5262,6 +5262,7 @@ translations:
+@@ -6739,6 +6739,7 @@ translations:
    The plugin didn't say why.: "Плагин не указал причину."
    ', corners {:+.3f} to {:+.3f}': ', углы от {:+.3f} до {:+.3f}'
    ', not fully settled': ', не до конца стабилизировался'
@@ -100,7 +100,7 @@ index c8c09b5..bb03bc7 100644
    'Ad5xFinish': 'Ad5xFinish'
    'Ad5xIfs': 'Ad5xIfs'
    'Ad5xMesh': 'Ad5xMesh'
-@@ -5506,3 +5507,57 @@ translations:
+@@ -6983,3 +6984,57 @@ translations:
    '{}  centre {:+.3f} mm': '{}  центр {:+.3f} мм'
    '{} °C — {} (centre moved {:.2f} mm)': '{} °C — {} (центр сместился на {:.2f} мм)'
    '{}, set in local.cfg': '{}, задано в local.cfg'

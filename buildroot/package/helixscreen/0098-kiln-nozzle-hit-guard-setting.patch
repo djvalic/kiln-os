@@ -52,13 +52,13 @@ in en.yml and ru.yml only; the other nine get it here (patches 0005,
 0008 and 0009 ask it too).
 ---
  include/ui_settings_ad5x_nozzle_guard.h       | 158 ++++++
- include/ui_settings_safety.h                  |   5 +
+ include/ui_settings_safety.h                  |   6 +-
  src/api/moonraker_discovery_sequence.cpp      |  11 +
  src/application/discovery_steps.cpp           |   9 +
+ src/ui/settings/ui_settings_safety.cpp        |  14 +
  src/ui/ui_settings_ad5x_nozzle_guard.cpp      | 456 ++++++++++++++++++
- src/ui/ui_settings_safety.cpp                 |  18 +
  tests/unit/test_discovery_steps.cpp           |   1 +
- .../unit/test_settings_ad5x_nozzle_guard.cpp  | 191 ++++++++
+ .../unit/test_settings_ad5x_nozzle_guard.cpp  | 192 ++++++++
  translations/de.yml                           |  13 +
  translations/en.yml                           |  10 +
  translations/es.yml                           |  13 +
@@ -71,14 +71,11 @@ in en.yml and ru.yml only; the other nine get it here (patches 0005,
  translations/tr.yml                           |  13 +
  translations/zh.yml                           |  13 +
  ui_xml/settings_safety_overlay.xml            |  35 ++
- 20 files changed, 1022 insertions(+)
- create mode 100644 include/ui_settings_ad5x_nozzle_guard.h
- create mode 100644 src/ui/ui_settings_ad5x_nozzle_guard.cpp
- create mode 100644 tests/unit/test_settings_ad5x_nozzle_guard.cpp
+ 20 files changed, 1019 insertions(+), 1 deletion(-)
 
 diff --git a/include/ui_settings_ad5x_nozzle_guard.h b/include/ui_settings_ad5x_nozzle_guard.h
 new file mode 100644
-index 0000000..e07f4be
+index 0000000000..c97eadd3a7
 --- /dev/null
 +++ b/include/ui_settings_ad5x_nozzle_guard.h
 @@ -0,0 +1,158 @@
@@ -110,12 +107,12 @@ index 0000000..e07f4be
 +
 +#pragma once
 +
-+#include "ui_observer_guard.h"
-+#include "ui_subscription_guard.h"
-+#include "ui_timer_guard.h"
++#include "core/observer_guard.h"
++#include "subscription_guard.h"
++#include "core/timer_guard.h"
 +
 +#include "async_lifetime_guard.h"
-+#include "json_fwd.h"
++#include "hv/json.hpp"
 +#include "lvgl/lvgl.h"
 +#include "subject_managed_panel.h"
 +
@@ -213,12 +210,12 @@ index 0000000..e07f4be
 +    void restart_wait_over();
 +
 +    SubjectManager subjects_;
-+    lv_subject_t available_{};
-+    lv_subject_t enabled_{};
-+    lv_subject_t sensitivity_{};
-+    lv_subject_t locked_{};
-+    lv_subject_t busy_{};
-+    lv_subject_t print_hint_{};
++    helix::Subject available_{};
++    helix::Subject enabled_{};
++    helix::Subject sensitivity_{};
++    helix::Subject locked_{};
++    helix::Subject busy_{};
++    helix::Subject print_hint_{};
 +    bool subjects_initialized_ = false;
 +
 +    IMoonrakerAPI* api_ = nullptr;
@@ -241,7 +238,7 @@ index 0000000..e07f4be
 +
 +} // namespace helix::ad5x_nozzle_guard
 diff --git a/include/ui_settings_safety.h b/include/ui_settings_safety.h
-index 07cbce8..b6290db 100644
+index b7f3bb0482..ecd99ae59a 100644
 --- a/include/ui_settings_safety.h
 +++ b/include/ui_settings_safety.h
 @@ -9,6 +9,7 @@
@@ -252,23 +249,24 @@ index 07cbce8..b6290db 100644
   *
   * @pattern Overlay (lazy init)
   * @threading Main thread only
-@@ -40,7 +41,11 @@ class SafetySettingsOverlay : public OverlayBase {
-         return "settings_safety_overlay";
+@@ -43,8 +44,11 @@ class SafetySettingsOverlay : public OverlayBase {
+         return true;
      }
  
 +    /// Kiln OS: the nozzle-hit guard rows bind the model's subjects
 +    void init_subjects() override;
      void register_callbacks() override;
-+    /// Kiln OS: asks Klipper for the nozzle-hit guard's state
-+    void on_activate() override;
+-    /// Kiln OS: hides Confirm shutdown and reboot, which does nothing there
++    /// Kiln OS: hides Confirm shutdown and reboot, which does nothing there,
++    /// and asks Klipper for the nozzle-hit guard's state
+     void on_activate() override;
  };
  
- inline SafetySettingsOverlay& get_safety_settings_overlay() {
 diff --git a/src/api/moonraker_discovery_sequence.cpp b/src/api/moonraker_discovery_sequence.cpp
-index 22c2e31..16f532c 100644
+index 4c8ad506c3..5b78c0b2bc 100644
 --- a/src/api/moonraker_discovery_sequence.cpp
 +++ b/src/api/moonraker_discovery_sequence.cpp
-@@ -1599,6 +1599,17 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
+@@ -1651,6 +1651,17 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
          }
      }
  
@@ -287,7 +285,7 @@ index 22c2e31..16f532c 100644
      // auto_refill, refill_match, refill_backups and refill_notice, which the
      // Settings screen and the "No backup spool" pop-up read; `ifs_materials`
 diff --git a/src/application/discovery_steps.cpp b/src/application/discovery_steps.cpp
-index 788f9b4..e27a188 100644
+index f9582431b1..cf6f049367 100644
 --- a/src/application/discovery_steps.cpp
 +++ b/src/application/discovery_steps.cpp
 @@ -12,6 +12,7 @@
@@ -296,8 +294,8 @@ index 788f9b4..e27a188 100644
  #include "ui_settings_ad5x_log.h"
 +#include "ui_settings_ad5x_nozzle_guard.h"
  #include "ui_settings_ad5x_refill.h"
- #include "ui_update_queue.h"
  #include "ui_wizard.h"
+ 
 @@ -215,6 +216,13 @@ void ad5x_log_watch_step(DiscoveryContext& ctx) {
      ad5x_log::model().attach(&ctx.api, ctx.status);
  }
@@ -320,9 +318,55 @@ index 788f9b4..e27a188 100644
  };
  
  } // namespace
+diff --git a/src/ui/settings/ui_settings_safety.cpp b/src/ui/settings/ui_settings_safety.cpp
+index 7b46eb72a5..74d9793d62 100644
+--- a/src/ui/settings/ui_settings_safety.cpp
++++ b/src/ui/settings/ui_settings_safety.cpp
+@@ -5,6 +5,7 @@
+ 
+ #include "ui_callback_helpers.h"
+ #include "ui_emergency_stop.h"
++#include "ui_settings_ad5x_nozzle_guard.h"
+ 
+ #include "audio_settings_manager.h"
+ #include "detection_manager.h"
+@@ -22,6 +23,11 @@ namespace helix::settings {
+ using helix::ui::event_checked;
+ using helix::ui::event_selected;
+ 
++void SafetySettingsOverlay::init_subjects() {
++    // Kiln OS: the nozzle-hit guard rows bind these; the model may not be attached yet
++    helix::ad5x_nozzle_guard::model().init_subjects();
++}
++
+ void SafetySettingsOverlay::on_activate() {
+     OverlayBase::on_activate();
+     // Kiln OS: Advanced's Reboot and Shutdown rows always ask first
+@@ -31,6 +37,7 @@ void SafetySettingsOverlay::on_activate() {
+             lv_obj_add_flag(row, LV_OBJ_FLAG_HIDDEN);
+         }
+     }
++    helix::ad5x_nozzle_guard::model().query();
+ }
+ 
+ void SafetySettingsOverlay::register_callbacks() {
+@@ -87,6 +94,13 @@ void SafetySettingsOverlay::register_callbacks() {
+          [](lv_event_t* e) {
+              SettingsManager::instance().set_detection_pause_on_detect(event_checked(e));
+          }},
++        // Kiln OS: the nozzle-hit guard (NOZZLE_GUARD, or ENABLE_PLUGIN when the plugin is off)
++        {"on_ad5x_nozzle_guard_changed",
++         [](lv_event_t* e) { helix::ad5x_nozzle_guard::model().handle_switch(event_checked(e)); }},
++        {"on_ad5x_nozzle_guard_sensitivity_changed",
++         [](lv_event_t* e) {
++             helix::ad5x_nozzle_guard::model().set_sensitivity(event_selected(e));
++         }},
+     });
+ }
+ 
 diff --git a/src/ui/ui_settings_ad5x_nozzle_guard.cpp b/src/ui/ui_settings_ad5x_nozzle_guard.cpp
 new file mode 100644
-index 0000000..7efc32f
+index 0000000000..f7b1d3c207
 --- /dev/null
 +++ b/src/ui/ui_settings_ad5x_nozzle_guard.cpp
 @@ -0,0 +1,456 @@
@@ -334,7 +378,7 @@ index 0000000..7efc32f
 +#include "ui_error_reporting.h"
 +#include "ui_modal.h"
 +#include "ui_settings_ad5x_plugins.h"
-+#include "ui_update_queue.h"
++#include "core/update_queue.h"
 +
 +#include "app_globals.h"
 +#include "i_moonraker_api.h"
@@ -342,10 +386,10 @@ index 0000000..7efc32f
 +#include "json_utils.h"
 +#include "lvgl/src/others/translation/lv_translation.h"
 +#include "macro_executor.h"
-+#include "observer_factory.h"
++#include "core/observer_factory.h"
 +#include "printer_discovery.h"
 +#include "printer_state.h"
-+#include "static_panel_registry.h"
++#include "core/static_panel_registry.h"
 +
 +#include <spdlog/fmt/fmt.h>
 +#include <spdlog/spdlog.h>
@@ -647,7 +691,7 @@ index 0000000..7efc32f
 +        [this, token, restarts]() {
 +            // The next discovery (after the restart) releases the switch
 +            if (restarts) {
-+                helix::ui::begin_expected_klippy_restart("Firmware restarting...");
++                helix::ui::begin_expected_klippy_restart("Firmware restarting...", get_moonraker_api());
 +            }
 +            token.defer("Ad5xNozzleGuardModel::enable_plugin_done", [this]() {
 +                // "already enabled" restarts nothing: don't wait forever
@@ -663,7 +707,7 @@ index 0000000..7efc32f
 +        },
 +        [this, token, effect](const MoonrakerError& err) {
 +            if (classify_macro_rpc_failure(effect, err) == MacroFailureReport::ExpectedRestart) {
-+                helix::ui::begin_expected_klippy_restart("Firmware restarting...");
++                helix::ui::begin_expected_klippy_restart("Firmware restarting...", get_moonraker_api());
 +                return;
 +            }
 +            const std::string message = err.message;
@@ -782,51 +826,8 @@ index 0000000..7efc32f
 +}
 +
 +} // namespace helix::ad5x_nozzle_guard
-diff --git a/src/ui/ui_settings_safety.cpp b/src/ui/ui_settings_safety.cpp
-index f6b05fd..d74e80f 100644
---- a/src/ui/ui_settings_safety.cpp
-+++ b/src/ui/ui_settings_safety.cpp
-@@ -5,6 +5,7 @@
- 
- #include "ui_callback_helpers.h"
- #include "ui_emergency_stop.h"
-+#include "ui_settings_ad5x_nozzle_guard.h"
- 
- #include "audio_settings_manager.h"
- #include "safety_settings_manager.h"
-@@ -20,6 +21,16 @@ namespace helix::settings {
- using helix::ui::event_checked;
- using helix::ui::event_selected;
- 
-+void SafetySettingsOverlay::init_subjects() {
-+    // Kiln OS: the nozzle-hit guard rows bind these; the model may not be attached yet
-+    helix::ad5x_nozzle_guard::model().init_subjects();
-+}
-+
-+void SafetySettingsOverlay::on_activate() {
-+    OverlayBase::on_activate();
-+    helix::ad5x_nozzle_guard::model().query();
-+}
-+
- void SafetySettingsOverlay::register_callbacks() {
-     register_xml_callbacks({
-         {"on_estop_confirm_changed",
-@@ -60,6 +71,13 @@ void SafetySettingsOverlay::register_callbacks() {
-          [](lv_event_t* e) {
-              SettingsManager::instance().set_detection_pause_on_detect(event_checked(e));
-          }},
-+        // Kiln OS: the nozzle-hit guard (NOZZLE_GUARD, or ENABLE_PLUGIN when the plugin is off)
-+        {"on_ad5x_nozzle_guard_changed",
-+         [](lv_event_t* e) { helix::ad5x_nozzle_guard::model().handle_switch(event_checked(e)); }},
-+        {"on_ad5x_nozzle_guard_sensitivity_changed",
-+         [](lv_event_t* e) {
-+             helix::ad5x_nozzle_guard::model().set_sensitivity(event_selected(e));
-+         }},
-     });
- }
- 
 diff --git a/tests/unit/test_discovery_steps.cpp b/tests/unit/test_discovery_steps.cpp
-index 0d2e150..c37889d 100644
+index 7317fb9ed9..b073166ba0 100644
 --- a/tests/unit/test_discovery_steps.cpp
 +++ b/tests/unit/test_discovery_steps.cpp
 @@ -158,6 +158,7 @@ TEST_CASE("the tail discovery steps run in this order", "[discovery_steps]") {
@@ -839,17 +840,18 @@ index 0d2e150..c37889d 100644
  }
 diff --git a/tests/unit/test_settings_ad5x_nozzle_guard.cpp b/tests/unit/test_settings_ad5x_nozzle_guard.cpp
 new file mode 100644
-index 0000000..46a2794
+index 0000000000..08951c893f
 --- /dev/null
 +++ b/tests/unit/test_settings_ad5x_nozzle_guard.cpp
-@@ -0,0 +1,191 @@
+@@ -0,0 +1,192 @@
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +
 +// Kiln OS nozzle-hit guard: the commands, what the switch does, the rows on
 +// Settings > Safety & Alerts, and the module's pause line as the pause reason.
 +
 +#include "ui_settings_ad5x_nozzle_guard.h"
-+#include "ui_update_queue.h"
++#include "core/update_queue.h"
++#include "ui_widget_ref.h"
 +
 +#include "../lvgl_ui_test_fixture.h"
 +#include "helix-xml/src/xml/lv_xml.h"
@@ -888,7 +890,7 @@ index 0000000..46a2794
 +    }
 +
 +    ~NozzleGuardRowsFixture() override {
-+        if (root_ && lv_obj_is_valid(root_)) {
++        if (root_) {
 +            lv_obj_delete(root_);
 +        }
 +        root_ = nullptr;
@@ -930,7 +932,7 @@ index 0000000..46a2794
 +        return t;
 +    }
 +
-+    lv_obj_t* root_ = nullptr;
++    helix::ui::WeakWidget root_; // cleared when a case deletes the tree itself
 +    std::vector<lv_subject_t*> subjects_;
 +};
 +
@@ -1035,10 +1037,10 @@ index 0000000..46a2794
 +    }
 +}
 diff --git a/translations/de.yml b/translations/de.yml
-index d7c39ca..d058787 100644
+index 067fdcdfb1..76cd36fc61 100644
 --- a/translations/de.yml
 +++ b/translations/de.yml
-@@ -5161,3 +5161,16 @@ translations:
+@@ -6559,3 +6559,16 @@ translations:
    # Kiln OS: switching on a plugin that runs code as root (patch 0097)
    'Turn on {}?': '{} einschalten?'
    'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'Dieses Plugin führt einen Teil seines Codes als root aus, dem Administratorkonto des Systems, zum Beispiel um USB-Geräte einzurichten. Schalte es nur ein, wenn du seiner Herkunft vertraust. Klipper startet neu.'
@@ -1056,10 +1058,10 @@ index d7c39ca..d058787 100644
 +  # The question before a Klipper restart (patches 0005, 0008, 0009 and this switch)
 +  'Klipper restarts to apply this. Continue?': 'Klipper startet neu, um dies zu übernehmen. Fortfahren?'
 diff --git a/translations/en.yml b/translations/en.yml
-index 3ff02e3..c3520ab 100644
+index 3b0cc6e5b6..71e36e0b9e 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -5406,3 +5406,13 @@ translations:
+@@ -6873,3 +6873,13 @@ translations:
    'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader. Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader. Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
    # Kiln OS: switching on a plugin that runs code as root (patch 0097)
    'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.'
@@ -1074,10 +1076,10 @@ index 3ff02e3..c3520ab 100644
 +  'How hard a push pauses the print: Low 600 g, Medium 300 g, High 150 g': 'How hard a push pauses the print: Low 600 g, Medium 300 g, High 150 g'
 +  'the nozzle-hit guard': 'the nozzle-hit guard'
 diff --git a/translations/es.yml b/translations/es.yml
-index 053c6e3..fdb30b8 100644
+index 6bcead8399..0df32da7ff 100644
 --- a/translations/es.yml
 +++ b/translations/es.yml
-@@ -5151,3 +5151,16 @@ translations:
+@@ -6559,3 +6559,16 @@ translations:
    # Kiln OS: switching on a plugin that runs code as root (patch 0097)
    'Turn on {}?': '¿Encender {}?'
    'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'Este plugin ejecuta parte de su código como root, la cuenta de administrador del sistema, por ejemplo para configurar dispositivos USB. Enciéndelo solo si confías en su origen. Klipper se reinicia.'
@@ -1095,10 +1097,10 @@ index 053c6e3..fdb30b8 100644
 +  # The question before a Klipper restart (patches 0005, 0008, 0009 and this switch)
 +  'Klipper restarts to apply this. Continue?': 'Klipper se reinicia para aplicarlo. ¿Continuar?'
 diff --git a/translations/fr.yml b/translations/fr.yml
-index 867f12e..0b0e9d1 100644
+index fc26d6c94f..db6e886784 100644
 --- a/translations/fr.yml
 +++ b/translations/fr.yml
-@@ -5187,3 +5187,16 @@ translations:
+@@ -6571,3 +6571,16 @@ translations:
    # Kiln OS: switching on a plugin that runs code as root (patch 0097)
    'Turn on {}?': 'Allumer {} ?'
    'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'Ce plugin exécute une partie de son code en tant que root, le compte administrateur du système, par exemple pour configurer des périphériques USB. Ne l''activez que si vous faites confiance à sa provenance. Klipper redémarre.'
@@ -1116,10 +1118,10 @@ index 867f12e..0b0e9d1 100644
 +  # The question before a Klipper restart (patches 0005, 0008, 0009 and this switch)
 +  'Klipper restarts to apply this. Continue?': 'Klipper redémarre pour appliquer ce changement. Continuer ?'
 diff --git a/translations/it.yml b/translations/it.yml
-index 9cb41f2..f00d3fb 100644
+index 72e289a722..08e2a0c0cb 100644
 --- a/translations/it.yml
 +++ b/translations/it.yml
-@@ -5152,3 +5152,16 @@ translations:
+@@ -6559,3 +6559,16 @@ translations:
    # Kiln OS: switching on a plugin that runs code as root (patch 0097)
    'Turn on {}?': 'Accendere {}?'
    'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'Questo plugin esegue parte del suo codice come root, l''account amministratore del sistema, ad esempio per configurare dispositivi USB. Accendilo solo se ti fidi della sua provenienza. Klipper si riavvia.'
@@ -1137,10 +1139,10 @@ index 9cb41f2..f00d3fb 100644
 +  # The question before a Klipper restart (patches 0005, 0008, 0009 and this switch)
 +  'Klipper restarts to apply this. Continue?': 'Klipper si riavvia per applicare la modifica. Continuare?'
 diff --git a/translations/ja.yml b/translations/ja.yml
-index 820a926..6c905a3 100644
+index 1f8b2bc5fe..aa39bc7a82 100644
 --- a/translations/ja.yml
 +++ b/translations/ja.yml
-@@ -4895,3 +4895,16 @@ translations:
+@@ -6559,3 +6559,16 @@ translations:
    # Kiln OS: switching on a plugin that runs code as root (patch 0097)
    'Turn on {}?': '{} をオンにしますか？'
    'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'このプラグインはコードの一部を root（システムの管理者アカウント）として実行します。たとえば USB デバイスの設定に使います。提供元を信頼できる場合にのみオンにしてください。Klipper が再起動します。'
@@ -1158,7 +1160,7 @@ index 820a926..6c905a3 100644
 +  # The question before a Klipper restart (patches 0005, 0008, 0009 and this switch)
 +  'Klipper restarts to apply this. Continue?': 'これを適用するため Klipper が再起動します。続行しますか？'
 diff --git a/translations/ko.yml b/translations/ko.yml
-index 19ad384..5373b52 100644
+index 19ad384b1a..5373b5200d 100644
 --- a/translations/ko.yml
 +++ b/translations/ko.yml
 @@ -4694,3 +4694,16 @@ translations:
@@ -1179,10 +1181,10 @@ index 19ad384..5373b52 100644
 +  # The question before a Klipper restart (patches 0005, 0008, 0009 and this switch)
 +  'Klipper restarts to apply this. Continue?': '적용하려면 Klipper가 재시작됩니다. 계속할까요?'
 diff --git a/translations/pt.yml b/translations/pt.yml
-index 25f7c10..287ace6 100644
+index 4f7912f9ab..69e0a7a35b 100644
 --- a/translations/pt.yml
 +++ b/translations/pt.yml
-@@ -5155,3 +5155,16 @@ translations:
+@@ -6559,3 +6559,16 @@ translations:
    # Kiln OS: switching on a plugin that runs code as root (patch 0097)
    'Turn on {}?': 'Ligar {}?'
    'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'Este plugin executa parte do seu código como root, a conta de administrador do sistema, por exemplo para configurar dispositivos USB. Ligue-o apenas se confiar na sua origem. O Klipper reinicia.'
@@ -1200,10 +1202,10 @@ index 25f7c10..287ace6 100644
 +  # The question before a Klipper restart (patches 0005, 0008, 0009 and this switch)
 +  'Klipper restarts to apply this. Continue?': 'O Klipper reinicia para aplicar isto. Continuar?'
 diff --git a/translations/ru.yml b/translations/ru.yml
-index c796cd7..cd3db7f 100644
+index 40bd070b50..e2501c3a21 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -5572,3 +5572,14 @@ translations:
+@@ -7049,3 +7049,14 @@ translations:
    'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader. Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'У Kiln OS есть собственный загрузчик для этого принтера. Чтобы установить его: Настройки > Система > Загрузить систему восстановления > Питание > Установить загрузчик Kiln. Сначала прочитайте руководство по загрузчику, в нём описаны риск и флешка для восстановления: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
    # Kiln OS: switching on a plugin that runs code as root (patch 0097)
    'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'Часть кода этого плагина выполняется от имени root, учётной записи администратора системы, например для настройки USB-устройств. Включайте его, только если доверяете его источнику. Klipper перезапустится.'
@@ -1219,7 +1221,7 @@ index c796cd7..cd3db7f 100644
 +  # Goes into 'Turn on {}?', the title of the confirmation before Klipper restarts
 +  'the nozzle-hit guard': 'защиту от удара сопла'
 diff --git a/translations/tr.yml b/translations/tr.yml
-index b5df9c1..5234291 100644
+index b5df9c1537..5234291f28 100644
 --- a/translations/tr.yml
 +++ b/translations/tr.yml
 @@ -4694,3 +4694,16 @@ translations:
@@ -1240,10 +1242,10 @@ index b5df9c1..5234291 100644
 +  # The question before a Klipper restart (patches 0005, 0008, 0009 and this switch)
 +  'Klipper restarts to apply this. Continue?': 'Bunu uygulamak için Klipper yeniden başlar. Devam edilsin mi?'
 diff --git a/translations/zh.yml b/translations/zh.yml
-index 9072f06..6685099 100644
+index d4dde940e9..1cb0531cb6 100644
 --- a/translations/zh.yml
 +++ b/translations/zh.yml
-@@ -4885,3 +4885,16 @@ translations:
+@@ -6559,3 +6559,16 @@ translations:
    # Kiln OS: switching on a plugin that runs code as root (patch 0097)
    'Turn on {}?': '开启 {}？'
    'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': '此插件的部分代码以 root（系统管理员账户）身份运行，例如用于设置 USB 设备。仅在您信任其来源时才开启。Klipper 将重新启动。'
@@ -1261,12 +1263,12 @@ index 9072f06..6685099 100644
 +  # The question before a Klipper restart (patches 0005, 0008, 0009 and this switch)
 +  'Klipper restarts to apply this. Continue?': 'Klipper 将重启以应用此设置。是否继续？'
 diff --git a/ui_xml/settings_safety_overlay.xml b/ui_xml/settings_safety_overlay.xml
-index 5a6da3e..b6c694b 100644
+index 3eb1170eb6..7434127d39 100644
 --- a/ui_xml/settings_safety_overlay.xml
 +++ b/ui_xml/settings_safety_overlay.xml
-@@ -47,6 +47,41 @@
-                             description="Show a confirmation dialog when tapping a macro"
-                             subject="settings_macro_confirm" callback="on_macro_confirm_changed"/>
+@@ -73,6 +73,41 @@
+                                 bind_selected="settings_power_target" callback="on_power_target_changed"/>
+         </lv_obj>
          <!-- ================================================================== -->
 +        <!-- KILN OS NOZZLE-HIT GUARD (only on a Kiln OS printer: ad5x_weight) -->
 +        <!-- Off with the plugin off: switching on enables the plugin (Klipper
@@ -1306,6 +1308,3 @@ index 5a6da3e..b6c694b 100644
          <!-- SPAGHETTI DETECTION (only when a detection source is capable) -->
          <!-- ================================================================== -->
          <lv_obj name="container_detection" width="100%" style_pad_all="0" scrollable="false" flex_flow="column">
--- 
-2.56.0
-

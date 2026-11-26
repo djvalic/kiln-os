@@ -5,14 +5,25 @@ Subject: [PATCH] ams: AD5X IFS ports count as prep sensors (open the slot
  editor on insert)
 
 ---
- include/ams_backend_ad5x_ifs.h | 8 ++++++++
- 1 file changed, 8 insertions(+)
+ include/ams_backend_ad5x_ifs.h | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
 
 diff --git a/include/ams_backend_ad5x_ifs.h b/include/ams_backend_ad5x_ifs.h
-index 8b244b330a..0819eacd93 100644
+index 30a5f537ba..24eae86e6a 100644
 --- a/include/ams_backend_ad5x_ifs.h
 +++ b/include/ams_backend_ad5x_ifs.h
-@@ -423,6 +423,14 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend {
+@@ -148,6 +148,10 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend,
+ 
+     static constexpr int kDefaultPorts = helix::ad5x::kDefaultPorts;
+     static constexpr int kMaxPorts = helix::ad5x::kMaxPorts;
++    /// Kiln OS's IFS driver drives one IFS: its channels, backup lists and
++    /// per-slot state are 1..kNumPorts (the name upstream used before ports
++    /// became a count).
++    static constexpr int kNumPorts = kDefaultPorts;
+     static constexpr int kToolMapSize = helix::ad5x::kToolMapSize;
+     static constexpr int kUnmappedPort = helix::ad5x::kUnmappedPort;
+ 
+@@ -471,6 +475,14 @@ class AmsBackendAd5xIfs : public AmsSubscriptionBackend,
          return true;
      }
  
@@ -27,6 +38,3 @@ index 8b244b330a..0819eacd93 100644
      AmsError recover() override;
      AmsError reset() override;
      AmsError cancel() override;
--- 
-2.56.0
-

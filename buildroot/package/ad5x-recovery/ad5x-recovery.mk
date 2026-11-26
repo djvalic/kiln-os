@@ -11,7 +11,8 @@ AD5X_RECOVERY_LICENSE = GPL-3.0
 # Shared with the main OS, installed from its sources unchanged: the stock
 # driver loader, the vendor files helper (ad5x-vendor, /usr/bin/cmd_*), Ethernet (stock MAC; DHCP or static from
 # /data/ad5x/network.conf), Wi-Fi, the watchdog feeder (on Kiln's 6.6 only),
-# and the slot/network helpers.
+# the slot/network helpers, and root's password kept on /data (ad5x-passwd,
+# lib/rootpw.sh).
 AD5X_RECOVERY_MAIN = $(BR2_EXTERNAL_AD5X_PATH)/package/ad5x-system
 # ad5x-ff-decrypt (Return to Flashforge firmware: a Flashforge AD5X-*.tgz
 # from a USB stick) uses mbedTLS's MD5 and DES, which SWUpdate brings
@@ -59,6 +60,7 @@ define AD5X_RECOVERY_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0644 $(AD5X_RECOVERY_MAIN)/lib/watchdog.conf \
 		$(TARGET_DIR)/usr/lib/ad5x/watchdog.conf
 	$(AD5X_SYSTEM_INSTALL_VENDOR_SUPPORT)
+	$(AD5X_SYSTEM_INSTALL_ROOT_PASSWORD)
 	for s in S05ad5x-watchdog S06ad5x-modules S41ad5x-eth S42ad5x-wifi; do \
 		$(INSTALL) -D -m 0755 $(AD5X_RECOVERY_MAIN)/init.d/$$s \
 			$(TARGET_DIR)/etc/init.d/$$s || exit 1; \

@@ -27,17 +27,18 @@ empty answer; the row's callback, its visibility and greying.
 
 Upstream: not applicable (AD5X OS specific)
 ---
- include/ui_settings_kiln_recovery.h           | 33 +++++++++++---
- src/ui/ui_settings_kiln_recovery.cpp          | 97 +++++++++++++++++++++++++++++-----------
- src/ui/ui_settings_system.cpp                 |  7 ++-
- tests/unit/test_settings_kiln_recovery.cpp    | 94 ++++++++++++++++++++++++++++++++++++--
- tests/unit/test_settings_system_callbacks.cpp | 37 +++++++++++++++
- translations/en.yml                           |  5 ++
- translations/ru.yml                           |  5 ++
- ui_xml/settings_system_overlay.xml            | 10 ++++-
+ include/ui_settings_kiln_recovery.h           | 33 +++++--
+ src/ui/settings/ui_settings_system.cpp        |  7 +-
+ src/ui/ui_settings_kiln_recovery.cpp          | 97 ++++++++++++++-----
+ tests/unit/test_settings_kiln_recovery.cpp    | 94 ++++++++++++++++--
+ tests/unit/test_settings_system_callbacks.cpp | 37 +++++++
+ translations/en.yml                           |  5 +
+ translations/ru.yml                           |  5 +
+ ui_xml/settings_system_overlay.xml            | 10 +-
  8 files changed, 247 insertions(+), 41 deletions(-)
 
 diff --git a/include/ui_settings_kiln_recovery.h b/include/ui_settings_kiln_recovery.h
+index f7d7587008..ada83fa2a7 100644
 --- a/include/ui_settings_kiln_recovery.h
 +++ b/include/ui_settings_kiln_recovery.h
 @@ -2,7 +2,8 @@
@@ -68,7 +69,7 @@ diff --git a/include/ui_settings_kiln_recovery.h b/include/ui_settings_kiln_reco
   * down.
   *
   * @threading Main thread; Moonraker's answer hops over through the UpdateQueue
-@@ -41,6 +47,9 @@
+@@ -41,6 +47,9 @@ namespace helix::kiln_recovery {
  /// The JSON-RPC method of POST /machine/kiln_os/boot_recovery
  inline constexpr const char* kMethod = "machine.kiln_os.boot_recovery";
  
@@ -78,7 +79,7 @@ diff --git a/include/ui_settings_kiln_recovery.h b/include/ui_settings_kiln_reco
  /// Moonraker waits up to 30 s for the update agent; a little more here
  inline constexpr uint32_t kTimeoutMs = 45000;
  
-@@ -48,8 +57,10 @@
+@@ -48,8 +57,10 @@ inline constexpr uint32_t kTimeoutMs = 45000;
  bool available();
  void set_available_for_test(std::optional<bool> value);
  
@@ -91,7 +92,7 @@ diff --git a/include/ui_settings_kiln_recovery.h b/include/ui_settings_kiln_reco
  std::string refusal_text(const std::string& message);
  
  /// The answer, on the main thread: @p rebooting true when the printer is
-@@ -59,10 +70,18 @@
+@@ -59,10 +70,18 @@ using Done = std::function<void(bool rebooting, const std::string& text)>;
  /// Send the request over @p client.
  void request(IMoonrakerClient& client, Done done);
  
@@ -111,10 +112,36 @@ diff --git a/include/ui_settings_kiln_recovery.h b/include/ui_settings_kiln_reco
  class RecoveryRow {
    public:
      RecoveryRow() = default;
+diff --git a/src/ui/settings/ui_settings_system.cpp b/src/ui/settings/ui_settings_system.cpp
+index 5a7d0a288c..a16c43b5a7 100644
+--- a/src/ui/settings/ui_settings_system.cpp
++++ b/src/ui/settings/ui_settings_system.cpp
+@@ -43,7 +43,8 @@ namespace helix::settings {
+ void SystemSettingsOverlay::init_subjects() {
+     // Kiln OS: the Log detail row binds these; the model may not be attached yet
+     helix::ad5x_log::model().init_subjects();
+-    // Kiln OS: Boot into recovery shows on the AD5X build only
++    // Kiln OS: Boot into recovery and Return to Flashforge firmware show on the
++    // AD5X build only
+     helix::kiln_recovery::row().init_subjects();
+ }
+ 
+@@ -112,6 +113,10 @@ void SystemSettingsOverlay::register_callbacks() {
+         // Kiln OS: restart into the recovery OS (machine.kiln_os.boot_recovery)
+         {"on_kiln_boot_recovery_clicked",
+          [](lv_event_t*) { helix::kiln_recovery::confirm_and_request(); }},
++        // Kiln OS: the same, then the recovery OS offers Flashforge's firmware
++        // back (machine.kiln_os.return_stock)
++        {"on_kiln_return_stock_clicked",
++         [](lv_event_t*) { helix::kiln_recovery::confirm_and_request_return_stock(); }},
+         {"on_factory_reset_clicked",
+          [](lv_event_t*) { get_system_settings_overlay().handle_factory_reset_clicked(); }},
+         {"on_restore_stock_screen_clicked",
 diff --git a/src/ui/ui_settings_kiln_recovery.cpp b/src/ui/ui_settings_kiln_recovery.cpp
+index 56e08a72f0..a8555f6eb2 100644
 --- a/src/ui/ui_settings_kiln_recovery.cpp
 +++ b/src/ui/ui_settings_kiln_recovery.cpp
-@@ -34,21 +34,20 @@
+@@ -34,21 +34,20 @@ constexpr bool kBuiltIn = false;
  
  std::optional<bool> g_available_override;
  
@@ -147,7 +174,7 @@ diff --git a/src/ui/ui_settings_kiln_recovery.cpp b/src/ui/ui_settings_kiln_reco
      auto shared = std::make_shared<Done>(std::move(done));
      auto finish = [shared](bool rebooting, std::string text) {
          helix::ui::queue_update("kiln_recovery::answer", [shared, rebooting, text]() {
-@@ -57,16 +56,21 @@
+@@ -57,16 +56,21 @@ void request(IMoonrakerClient& client, Done done) {
              }
          });
      };
@@ -173,7 +200,7 @@ diff --git a/src/ui/ui_settings_kiln_recovery.cpp b/src/ui/ui_settings_kiln_reco
                  spdlog::info("[Kiln recovery] Rebooting into the recovery OS");
                  finish(true, answer);
              } else {
-@@ -83,34 +87,74 @@
+@@ -83,34 +87,74 @@ void request(IMoonrakerClient& client, Done done) {
          kTimeoutMs, /*silent=*/true);
  }
  
@@ -257,7 +284,7 @@ diff --git a/src/ui/ui_settings_kiln_recovery.cpp b/src/ui/ui_settings_kiln_reco
  RecoveryRow::~RecoveryRow() {
      subjects_.deinit_all();
  }
-@@ -119,7 +163,8 @@
+@@ -119,7 +163,8 @@ void RecoveryRow::init_subjects() {
      if (subjects_initialized_) {
          return;
      }
@@ -267,31 +294,8 @@ diff --git a/src/ui/ui_settings_kiln_recovery.cpp b/src/ui/ui_settings_kiln_reco
      UI_MANAGED_SUBJECT_INT(available_, available() ? 1 : 0, "kiln_boot_recovery_available",
                             subjects_);
      subjects_initialized_ = true;
-diff --git a/src/ui/ui_settings_system.cpp b/src/ui/ui_settings_system.cpp
---- a/src/ui/ui_settings_system.cpp
-+++ b/src/ui/ui_settings_system.cpp
-@@ -37,7 +37,8 @@
- void SystemSettingsOverlay::init_subjects() {
-     // Kiln OS: the Log detail row binds these; the model may not be attached yet
-     helix::ad5x_log::model().init_subjects();
--    // Kiln OS: Boot into recovery shows on the AD5X build only
-+    // Kiln OS: Boot into recovery and Return to Flashforge firmware show on the
-+    // AD5X build only
-     helix::kiln_recovery::row().init_subjects();
- }
- 
-@@ -84,6 +85,10 @@
-         // Kiln OS: restart into the recovery OS (machine.kiln_os.boot_recovery)
-         {"on_kiln_boot_recovery_clicked",
-          [](lv_event_t*) { helix::kiln_recovery::confirm_and_request(); }},
-+        // Kiln OS: the same, then the recovery OS offers Flashforge's firmware
-+        // back (machine.kiln_os.return_stock)
-+        {"on_kiln_return_stock_clicked",
-+         [](lv_event_t*) { helix::kiln_recovery::confirm_and_request_return_stock(); }},
-         {"on_factory_reset_clicked",
-          [](lv_event_t*) { get_system_settings_overlay().handle_factory_reset_clicked(); }},
-         {"on_factory_reset_confirm",
 diff --git a/tests/unit/test_settings_kiln_recovery.cpp b/tests/unit/test_settings_kiln_recovery.cpp
+index 3fa475a1d1..01e833469b 100644
 --- a/tests/unit/test_settings_kiln_recovery.cpp
 +++ b/tests/unit/test_settings_kiln_recovery.cpp
 @@ -5,6 +5,9 @@
@@ -303,8 +307,8 @@ diff --git a/tests/unit/test_settings_kiln_recovery.cpp b/tests/unit/test_settin
 +// "rebooting"}.
  
  #include "ui_settings_kiln_recovery.h"
- #include "ui_update_queue.h"
-@@ -30,18 +33,23 @@
+ #include "core/update_queue.h"
+@@ -30,18 +33,23 @@ struct Answer {
      std::string text;
  };
  
@@ -332,7 +336,7 @@ diff --git a/tests/unit/test_settings_kiln_recovery.cpp b/tests/unit/test_settin
      CHECK(call.timeout_ms == recovery::kTimeoutMs);
      reply(call);
      // The answer reaches the caller on the main thread, through the queue
-@@ -51,12 +59,18 @@
+@@ -51,12 +59,18 @@ template <typename Reply> Answer ask(Reply reply) {
      return answer;
  }
  
@@ -353,7 +357,7 @@ diff --git a/tests/unit/test_settings_kiln_recovery.cpp b/tests/unit/test_settin
  }
  
  } // namespace
-@@ -68,6 +82,11 @@
+@@ -68,6 +82,11 @@ TEST_CASE("Kiln recovery: the reason is left out of the refusal", "[kiln][kiln_r
            "Start-up has not finished yet, try again in a minute");
      CHECK(recovery::refusal_text("A print is running") == "A print is running");
      CHECK(recovery::refusal_text("Method not found") == "Method not found");
@@ -365,7 +369,7 @@ diff --git a/tests/unit/test_settings_kiln_recovery.cpp b/tests/unit/test_settin
  }
  
  TEST_CASE("Kiln errors: the reason is the data, the message the text", "[kiln][moonraker][error]") {
-@@ -156,6 +175,69 @@
+@@ -156,6 +175,69 @@ TEST_CASE_METHOD(LVGLTestFixture, "Kiln recovery: Moonraker's answer reaches the
      }
  }
  
@@ -436,9 +440,10 @@ diff --git a/tests/unit/test_settings_kiln_recovery.cpp b/tests/unit/test_settin
  #if defined(HELIX_KILN_AD5X)
      CHECK(recovery::available());
 diff --git a/tests/unit/test_settings_system_callbacks.cpp b/tests/unit/test_settings_system_callbacks.cpp
+index 02db5e2878..fd58c5f261 100644
 --- a/tests/unit/test_settings_system_callbacks.cpp
 +++ b/tests/unit/test_settings_system_callbacks.cpp
-@@ -113,6 +113,7 @@
+@@ -114,6 +114,7 @@ TEST_CASE_METHOD(SystemCallbacksFixture, "System page: every action row runs its
                               Binding{"row_telemetry_view_data", "on_telemetry_view_data"},
                               Binding{"row_restart_helix", "on_restart_helix_settings_clicked"},
                               Binding{"row_kiln_boot_recovery", "on_kiln_boot_recovery_clicked"},
@@ -446,11 +451,10 @@ diff --git a/tests/unit/test_settings_system_callbacks.cpp b/tests/unit/test_set
                               Binding{"row_factory_reset", "on_factory_reset_clicked"}}) {
          CAPTURE(b.row, b.callback);
          CHECK(row_runs(b.row, b.callback));
-@@ -175,4 +176,40 @@
- 
+@@ -177,3 +178,39 @@ TEST_CASE_METHOD(SystemCallbacksFixture,
      lv_subject_set_int(available, available_before);
      process_lvgl(5);
-+}
+ }
 +
 +// Kiln OS: Return to Flashforge firmware shows with Boot into recovery
 +// (kiln_boot_recovery_available) and is greyed while a print is active.
@@ -486,11 +490,12 @@ diff --git a/tests/unit/test_settings_system_callbacks.cpp b/tests/unit/test_set
 +
 +    lv_subject_set_int(available, available_before);
 +    process_lvgl(5);
- }
++}
 diff --git a/translations/en.yml b/translations/en.yml
+index 506d9f2774..4db5b9f80a 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -5083,6 +5083,7 @@
+@@ -6550,6 +6550,7 @@ translations:
    'Calibration stopped. Heaters off, nothing saved.': 'Calibration stopped. Heaters off, nothing saved.'
    'Can''t boot into recovery: {}': 'Can''t boot into recovery: {}'
    'Can''t calibrate now': 'Can''t calibrate now'
@@ -498,7 +503,7 @@ diff --git a/translations/en.yml b/translations/en.yml
    'Change the nozzle size to {}?': 'Change the nozzle size to {}?'
    'Changing filament': 'Changing filament'
    'Changing the nozzle size... Klipper will restart.': 'Changing the nozzle size... Klipper will restart.'
-@@ -5192,9 +5193,12 @@
+@@ -6659,9 +6660,12 @@ translations:
    'Purge box': 'Purge box'
    'Remove {}?': 'Remove {}?'
    'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': 'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)'
@@ -511,7 +516,7 @@ diff --git a/translations/en.yml b/translations/en.yml
    'Run Again': 'Run Again'
    'Run Setup Wizard': 'Run Setup Wizard'
    'Run the hotend PID tune and the first-layer Z offset test now? (The bed doesn''t need retuning.)': 'Run the hotend PID tune and the first-layer Z offset test now? (The bed doesn''t need retuning.)'
-@@ -5238,6 +5242,7 @@
+@@ -6705,6 +6709,7 @@ translations:
    'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.': 'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.'
    'The nozzle size can''t change during a print': 'The nozzle size can''t change during a print'
    'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.'
@@ -520,9 +525,10 @@ diff --git a/translations/en.yml b/translations/en.yml
    'The results so far, before Save': 'The results so far, before Save'
    'The temperature to measure, from a cold bed': 'The temperature to measure, from a cold bed'
 diff --git a/translations/ru.yml b/translations/ru.yml
+index e66f0ace34..8cb93e58fb 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -5249,6 +5249,7 @@
+@@ -6726,6 +6726,7 @@ translations:
    'Calibration stopped. Heaters off, nothing saved.': 'Калибровка остановлена. Нагреватели выключены, ничего не сохранено.'
    'Can''t boot into recovery: {}': 'Не удалось загрузить систему восстановления: {}'
    'Can''t calibrate now': 'Сейчас калибровка невозможна'
@@ -530,7 +536,7 @@ diff --git a/translations/ru.yml b/translations/ru.yml
    'Change the nozzle size to {}?': 'Изменить размер сопла на {}?'
    'Changing filament': 'Смена филамента'
    'Changing the nozzle size... Klipper will restart.': 'Смена размера сопла... Klipper перезапустится.'
-@@ -5358,9 +5359,12 @@
+@@ -6835,9 +6836,12 @@ translations:
    'Purge box': 'Лоток для отходов'
    'Remove {}?': 'Удалить {}?'
    'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': 'Перезапуск в систему восстановления (установка обновления с USB-флешки или через веб-страницу на порту 8080)'
@@ -543,7 +549,7 @@ diff --git a/translations/ru.yml b/translations/ru.yml
    'Run Again': 'Ещё раз'
    'Run Setup Wizard': 'Запустить мастер настройки'
    'Run the hotend PID tune and the first-layer Z offset test now? (The bed doesn''t need retuning.)': 'Запустить сейчас настройку PID хотенда и тест смещения по Z на первом слое? (Стол перенастраивать не нужно.)'
-@@ -5404,6 +5408,7 @@
+@@ -6881,6 +6885,7 @@ translations:
    'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.': 'Сопло, установленное на принтере. От него зависят ширина линий, длина продувки и тест первого слоя. Изменить его можно позже в настройках.'
    'The nozzle size can''t change during a print': 'Размер сопла нельзя изменить во время печати'
    'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'Принтер перезапустится в систему восстановления, где печать недоступна. Чтобы вернуться, нажмите на её экране «Запустить ОС».'
@@ -552,18 +558,19 @@ diff --git a/translations/ru.yml b/translations/ru.yml
    'The results so far, before Save': 'Результаты на данный момент, до сохранения'
    'The temperature to measure, from a cold bed': 'Температура для измерения, начиная с холодного стола'
 diff --git a/ui_xml/settings_system_overlay.xml b/ui_xml/settings_system_overlay.xml
+index c9fb2c20a5..975bbd05d1 100644
 --- a/ui_xml/settings_system_overlay.xml
 +++ b/ui_xml/settings_system_overlay.xml
 @@ -2,7 +2,7 @@
  <!-- Copyright (C) 2025-2026 356C LLC -->
  <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
  <!-- System Settings Overlay -->
--<!-- Security, performance, telemetry, log level, restart, boot into recovery (Kiln OS), factory reset -->
-+<!-- Security, performance, telemetry, log level, restart, boot into recovery and return to Flashforge firmware (Kiln OS), factory reset -->
+-<!-- Security, performance, telemetry, log level, restart, boot into recovery (Kiln OS), factory reset, restore stock screen -->
++<!-- Security, performance, telemetry, log level, restart, boot into recovery and return to Flashforge firmware (Kiln OS), factory reset, restore stock screen -->
  <component>
    <view name="settings_system_overlay" extends="overlay_panel" title="System" bg_color="#screen_bg">
      <!-- Content Area - no padding, rows handle their own -->
-@@ -78,6 +78,14 @@
+@@ -90,6 +90,14 @@
                              callback="on_kiln_boot_recovery_clicked" disabled="print_active">
            <bind_flag_if_eq subject="kiln_boot_recovery_available" flag="hidden" ref_value="0"/>
          </setting_action_row>
@@ -578,6 +585,3 @@ diff --git a/ui_xml/settings_system_overlay.xml b/ui_xml/settings_system_overlay
          <!-- ================================================================== -->
          <!-- FACTORY RESET -->
          <!-- ================================================================== -->
--- 
-2.56.0
-

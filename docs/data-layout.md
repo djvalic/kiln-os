@@ -50,6 +50,7 @@ boot or the next start of the service.
 | `kernel/mainline` | Start the opt-in mainline 7.3 kernel instead of 6.6. | absent | `S00ad5x-kernel`, `ad5x-kernel` | `ad5x-kernel mainline on` / `off` |
 | `kernel/extended-memory` | Extended memory: on a 512 MiB board Kiln's kernels get the second bank (all 512 MiB) from the next start; without it every board runs in standard memory (256 MiB). Not on the first start after an install, nor while `kernel/extended-memory-failed` is there ([memory.md](memory.md), "Extended memory"). Root's, 0644. | absent | `S00ad5x-kernel`, Kiln's U-Boot, `ad5x-memory`, Moonraker `kiln_os` | `ad5x-memory extended on` / `off` (also via Kiln's API and the touch screen) |
 | `kernel/cmdline-extra` | Extra kernel options added at the end of Kiln's kernel command line (for tests; `loglevel=8` brings the full console back). In standard memory a `mem=` word at 0x30000000 there is taken out. | absent | `S00ad5x-kernel` | you |
+| `ssh/screen-reset.disable` | The touch screen's Reset root password (Settings > System) is turned off: the update agent refuses it. A factory reset still sets the password to `root` and removes this file. Root's, 0600, in root's 0700 `ssh/`; unlike the other switches, anything at this name (a link, a folder) counts, so an odd file never turns the reset back on. Never made by boot, install or update. | absent (the reset works) | `S68ad5x-update-agent`, `ad5x-passwd --status` | `ad5x-passwd --lock-reset` / `--unlock-reset` (SSH or a terminal only), `S68ad5x-update-agent` (removes it at a factory reset) |
 | `umask-ssh` | `077`: root's SSH sessions create private files (umask 077) instead of 022. | absent (022) | `S50dropbear` (main) | `ad5x-umask off` / `on` |
 | `klipper-mlock.disable` | Klipper's memory is not locked in RAM (`ad5x_mlock`), from klippy's next start. | absent (locked) | `klipper/extras/ad5x_mlock.py` | you |
 | `stock-copy.disable` | The main OS makes no second copy of the saved stock system on the usershare partition (`kiln-stock-backup/`). | absent | `S99ad5x-stock-copy` | you |
@@ -69,6 +70,7 @@ boot or the next start of the service.
 | `nginx/*.conf` | Extra nginx servers, for example a second web UI on another port. Must be root's: nginx runs as root. | nginx (`include` at the end of `/etc/nginx/nginx.conf`) | you, as root |
 | `kiln-os.token` | Read token for a private update server. `S68` makes it `root:klipper` 0640. | Moonraker `kiln_os` (`token_file`) | you |
 | `ssh/authorized_keys` | Root's SSH keys (`/root/.ssh` is a link to `ssh/`, in both OSes). | dropbear | you |
+| `ssh/root-password` | Root's password set with `passwd` / `ad5x-passwd`: one SHA-512 crypt hash (`$6$...`, never the password), root's, 0600. Used at every start of both OSes instead of stock's when it is a regular file of root's with one name, not a link, writable by root only, in `ssh/` (root's, no link), holding one valid `$1$`/`$5$`/`$6$` hash; anything else is ignored (a line in the boot log) and stock's password applies. Delete it (`ad5x-passwd --stock`) for stock's again. | `S05ad5x-data` (main and recovery, `lib/rootpw.sh`), `ad5x-passwd --status` | `ad5x-passwd` (written beside it and renamed), the touch screen's reset through `S68ad5x-update-agent` (`ad5x-passwd --default`: `root`) |
 
 The Klipper config lives in `printer_data/config/` (below). Which file
 there holds what is in [config-layout.md](config-layout.md).
@@ -81,7 +83,7 @@ both paths name the same files.
 
 | Path | What | Written by |
 |---|---|---|
-| `printer_data/config/` | `printer.cfg`, `unit.cfg`, `local.cfg`, `plugins.cfg`, `moonraker.conf`, `variables.cfg`, `macros/*.cfg` and the generated `plugins-active.cfg` and `moonraker-plugins.conf`; see [config-layout.md](config-layout.md) | `S05ad5x-data` (first-boot copies, `macros/` templates), Klipper, `S61klipper`, `S62moonraker`, you |
+| `printer_data/config/` | `printer.cfg`, `unit.cfg`, `local.cfg`, `plugins.cfg`, `moonraker.conf`, `variables.cfg`, `macros/*.cfg` and the generated `plugins-active.cfg`, `moonraker-plugins.conf` and `.kiln-pinned/` (pinned plugins' Moonraker parts); see [config-layout.md](config-layout.md) | `S05ad5x-data` (first-boot copies, `macros/` templates), Klipper, `S61klipper`, `S62moonraker`, you |
 | `printer_data/logs/` | `klippy.log` (and dated copies, at most 5 and 50 MB), `moonraker.log`, `helixscreen.log`, `wifi.log` (+ `.1`), `network.log` (+ `.1`, main OS); see [logs.md](logs.md) | the services, `S42ad5x-wifi` or `S46ad5x-wifi-log`, `S40ad5x-network` |
 | `printer_data/gcodes/` | Uploaded print files | Moonraker |
 | `printer_data/plugin-staging/` | A plugin while `INSTALL_PLUGIN` clones it; moved into `/data/ad5x/plugins/` in one step when complete, so Moonraker (which watches `config/plugins`) never sees a half-cloned plugin. Empty between installs | `ad5x_plugins.py` |
@@ -129,7 +131,7 @@ both paths name the same files.
 | `umask.log` | Log of `ad5x-umask` changes | `ad5x-umask` | you |
 
 Kiln's append-only logs (`update/last.log`, `recovery/update.log`, `mcu/log`,
-`kiln-log/agent.log`, `kiln-log/plugins-root.log`, `umask.log`) are cut to their last 64 KiB at each boot
+`kiln-log/agent.log`, `kiln-log/plugins-root.log`, `kiln-log/passwd.log`, `umask.log`) are cut to their last 64 KiB at each boot
 (`kiln_logs_trim`, `S05ad5x-data`).
 
 ## Updates and installs
@@ -143,6 +145,7 @@ Kiln's append-only logs (`update/last.log`, `recovery/update.log`, `mcu/log`,
 | `kiln-stage/` | Root-only (0700) staging: each request and file is moved here before root reads, hashes or unpacks it | `S68ad5x-update-agent` | `S68ad5x-update-agent` |
 | `kiln-log/agent.log` | Log of the update agent (root's folder, readable by `klipper`) | `S68ad5x-update-agent` | you (over SSH) |
 | `kiln-status/ifs-firmware` | The IFS firmware switch's last run (`target`, `state` running/done/failed, `phase`, `reason`, `message`, `version`; root's folder, readable by `klipper`). A run the printer's restart cut short is marked failed (`interrupted`) at the agent's start | `S68ad5x-update-agent` (`ad5x-mcu ifs-status`, `flash-ifs`) | Moonraker `kiln_os` (`GET /machine/kiln_os/ifs_firmware`) |
+| `kiln-log/passwd.log` | Root password changes: set, set to the default (and by what: the touch screen's reset or factory reset), back to stock's, the reset locked or unlocked. No passwords or hashes | `ad5x-passwd` | you (over SSH) |
 | `kiln-log/plugins-root.log` | Output and result of each plugin root script and boot script | `S68ad5x-update-agent`, `S69ad5x-plugin-boot` | you (over SSH) |
 | `update/` | Updates staged for the recovery OS (`*.swu`, `*.zip`); after an install `*.done` or `*.failed`; `*.stale`: still staged when the main OS started, so staged before that start and never installed (docs/updates.md, "Staged updates"); `last.log`, `applied.list` (sha256s of USB stick images already installed), `.work/` | `ad5x-update` (main), the installer, `S99ad5x-booted` (`*.stale`), `ad5x-recovery-auto` (recovery) | `ad5x-recovery-auto`, `ad5x-status` (recovery) |
 | `moonraker-tmp/` | Moonraker's temporary folder (`TMPDIR`, owned by `klipper`, 0700): uploads are written here whole, then renamed into `gcodes`; update downloads and components' temp files. Emptied at each Moonraker start | Moonraker | Moonraker |
@@ -159,7 +162,10 @@ Main OS:
 | `/run/ad5x-boot.log` | Boot trace: each script's start and end, uptime first | `rcS`, `ad5x-bootlog` | you, `ad5x-bootlog` (copies it into `ota` at 64 KiB) |
 | `/run/ad5x-booted` | This boot's start-up has finished (empty file): made after the boot flag is back on this slot (`lib/slot.sh`, `start_done`) | `S99ad5x-booted` | `S68ad5x-update-agent`, `ad5x-update`, `ad5x-boot-recovery` |
 | `/run/ad5x/logo-early` | `S02` drew the default logo (its depth in bpp) | `S02ad5x-logo` | `S07ad5x-board` |
-| `/run/ad5x/shadow` | `/etc/shadow` with stock's root password, bound over `/etc/shadow` | `S05ad5x-data` | login, dropbear |
+| `/run/ad5x/shadow` | `/etc/shadow` with root's password (Kiln's `ssh/root-password`, else stock's; with neither the default `root`, so SSH and the serial console take root/root, never an empty password; the image's own `/etc/shadow` has the same default, `post-build.sh`), bound over `/etc/shadow`, 0600; a change is written into it in place, so it applies at once (both OSes) | `S05ad5x-data`, `ad5x-passwd` | login, dropbear |
+| `/run/ad5x/root-hash.stock` | Stock's root hash as `S05` read it from usershare, 0600, for `ad5x-passwd --stock` (both OSes) | `S05ad5x-data` | `ad5x-passwd` |
+| `/run/ad5x/screen-request/` | Main OS: the touch screen's requests to the root agent, root's only (0700), so no request survives a restart and Moonraker, Klipper and plugins can't make one. `root-password-default` (HelixScreen writes one line, `KIND STAMP`: `reset` from the Reset root password button or `factory-reset` from its factory reset, and the seconds since boot when the press began; refused when that is over 10 s ago; [helixscreen-integration.md](helixscreen-integration.md)), answered in `root-password-default.status` (`done`, `refused: ...`, `failed: ...`); `root-password-reset.state` (`locked` or `unlocked`) for the button. Handled by the agent's own screen loop, every second (pid `/run/ad5x-update-agent-screen.pid`) | HelixScreen (requests), `S68ad5x-update-agent` (answers, state) | the same |
+| `/run/ad5x/remote-touch` | Main OS: the last touch from the browser's screen view, `STATE SECONDS` (`down` or `up`, seconds since boot), 26 bytes; the agent refuses the touch screen's password reset while a browser holds the screen or touched it in the last 30 s | `ad5x-fbstream` (`S65ad5x-screen`) | `S68ad5x-update-agent` |
 | `/run/dropbear` | Bind mount of `/data/ad5x/ssh/hostkeys` (`/etc/dropbear` points here) | `S05ad5x-data` | dropbear |
 | `/run/ad5x-sound.conf`, `/run/ad5x-sound/` | `PWM=pwmchip0/pwm13`: where the speaker is (only on Kiln's kernels); the player's pid | `S35ad5x-sound`, `ad5x-sound` | Klipper's `ad5x_sound`, `S70helixscreen` |
 | `/run/ad5x-memory.conf` | `MEM_KB=` (MemTotal), `LOW_MEM=1` under 300000 kB (a 256 MiB board, or a 512 MiB one in standard memory) else `0`, `HW_MEM_MIB=256\|512` (the board's RAM: `ad5x.ram=` from the boot loader, else the bank at 0x30000000, else MemTotal >= 400000 kB), `MEM_MODE=standard\|extended` (`ad5x.memmode=`, else whether that bank is on the command line), `MEM_MODE_FIXED=0\|1` (1: an older Kiln U-Boot started this, `ad5x.uboot=1` without `ad5x.memmode=`; it can't choose the mode, only a boot loader update changes it) (docs/memory.md, `lib/memory.sh`) | `S04ad5x-memory` | `S64ad5x-camera`, Moonraker `kiln_os`, plugins |

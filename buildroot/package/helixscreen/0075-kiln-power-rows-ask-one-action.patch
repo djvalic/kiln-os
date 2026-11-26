@@ -32,51 +32,72 @@ Cancel, the refusal toast with its reason; the Shutdown row the same for
 machine.shutdown; nothing sent without a connection; other builds open
 upstream's dialog from both rows.
 
+Settings > Safety & Alerts: HelixScreen 1.2's "Confirm shutdown and
+reboot" switch (row_power_confirm) sets whether upstream's power dialog
+asks first. On Kiln the Reboot and Shutdown rows always ask, so the
+switch would do nothing: SafetySettingsOverlay::on_activate() hides the
+row when helix::kiln_host_power() is true. Other builds keep it. Test:
+the row hidden on Kiln, shown elsewhere.
+
 Upstream: not applicable (AD5X OS specific)
 ---
- include/ui_panel_advanced.h              |  12 +-
- src/ui/panel_widgets/shutdown_widget.cpp |  86 +++++++--
+ include/ui_panel_advanced.h              |   1 +
+ include/ui_settings_safety.h             |   2 +
+ src/ui/controls/ui_panel_advanced.cpp    |   7 +-
+ src/ui/panel_widgets/shutdown_widget.cpp |  87 ++++++--
  src/ui/panel_widgets/shutdown_widget.h   |  38 +++-
- src/ui/ui_panel_advanced.cpp             |  20 +-
- tests/unit/test_kiln_power_entries.cpp   | 236 +++++++++++++++++++++++
+ src/ui/settings/ui_settings_safety.cpp   |  12 ++
+ tests/unit/test_kiln_power_entries.cpp   | 263 +++++++++++++++++++++++
  translations/en.yml                      |   5 +
  translations/ru.yml                      |   5 +
- ui_xml/advanced_panel.xml                |  15 +-
- 8 files changed, 377 insertions(+), 40 deletions(-)
- create mode 100644 tests/unit/test_kiln_power_entries.cpp
+ ui_xml/advanced_panel.xml                |   9 +-
+ 10 files changed, 401 insertions(+), 28 deletions(-)
 
 diff --git a/include/ui_panel_advanced.h b/include/ui_panel_advanced.h
-index 8ae916a5..81092db9 100644
+index e5d45adef0..11190d67bb 100644
 --- a/include/ui_panel_advanced.h
 +++ b/include/ui_panel_advanced.h
-@@ -160,10 +160,11 @@ class AdvancedPanel : public PanelBase {
-     /// initialized first.
-     void wire_macro_restart_observer();
- 
--    // Both POWER rows (Shutdown, Reboot) open the same shared dialog — the
--    // dialog itself presents shutdown vs. reboot buttons and, on dual-host
--    // setups, the printer/screen/both scope. Single handler reflects that.
--    void handle_power_clicked();
-+    // Upstream: both POWER rows (Shutdown, Reboot) open the same shared
-+    // dialog — it presents shutdown vs. reboot buttons and, on dual-host
-+    // setups, the printer/screen/both scope. Kiln OS: each row asks only for
-+    // its own action (show_power_entry_dialog).
-+    void handle_power_clicked(bool is_reboot);
+@@ -167,6 +167,7 @@ class AdvancedPanel : public PanelBase {
+     // Both POWER rows (Shutdown, Reboot) open the same shared dialog — the
+     // dialog itself presents shutdown vs. reboot buttons and, on dual-host
+     // setups, the printer/screen/both scope. Single handler reflects that.
++    // Kiln OS: each row asks only for its own action (show_power_entry_dialog).
+     void handle_power_clicked(helix::PowerIntent intent);
  
      //
-     // === Static Event Callbacks (registered via lv_xml_register_event_cb) ===
-@@ -180,7 +181,8 @@ class AdvancedPanel : public PanelBase {
-     static void on_helix_plugin_uninstall_clicked(lv_event_t* e);
-     static void on_helix_macros_install_clicked(lv_event_t* e);
-     static void on_helix_macros_update_clicked(lv_event_t* e);
--    static void on_advanced_power_clicked(lv_event_t* e);
-+    static void on_advanced_shutdown_clicked(lv_event_t* e);
-+    static void on_advanced_reboot_clicked(lv_event_t* e);
+diff --git a/include/ui_settings_safety.h b/include/ui_settings_safety.h
+index edc8dc8b6d..b7f3bb0482 100644
+--- a/include/ui_settings_safety.h
++++ b/include/ui_settings_safety.h
+@@ -44,6 +44,8 @@ class SafetySettingsOverlay : public OverlayBase {
+     }
  
-     //
-     // === HelixPrint Plugin Support ===
+     void register_callbacks() override;
++    /// Kiln OS: hides Confirm shutdown and reboot, which does nothing there
++    void on_activate() override;
+ };
+ 
+ inline SafetySettingsOverlay& get_safety_settings_overlay() {
+diff --git a/src/ui/controls/ui_panel_advanced.cpp b/src/ui/controls/ui_panel_advanced.cpp
+index 08d92ba8f1..6bb70ec51b 100644
+--- a/src/ui/controls/ui_panel_advanced.cpp
++++ b/src/ui/controls/ui_panel_advanced.cpp
+@@ -292,9 +292,10 @@ void AdvancedPanel::on_advanced_reboot_clicked(lv_event_t* /*e*/) {
+ // POWER HANDLER — shares the same dialog the home-panel power widget uses
+ 
+ void AdvancedPanel::handle_power_clicked(PowerIntent intent) {
+-    spdlog::debug("[{}] Power row clicked, opening shutdown dialog", get_name());
+-    helix::show_shutdown_dialog(api_, shutdown_modal_, object_lifetime_, lv_screen_active(),
+-                                intent);
++    spdlog::debug("[{}] Power row clicked, opening the power dialog", get_name());
++    // Kiln OS: the row's own action only; other builds open upstream's dialog
++    helix::show_power_entry_dialog(api_, intent == PowerIntent::Reboot, shutdown_modal_,
++                                   object_lifetime_, lv_screen_active());
+ }
+ 
+ // TIMELAPSE SETUP HANDLER
 diff --git a/src/ui/panel_widgets/shutdown_widget.cpp b/src/ui/panel_widgets/shutdown_widget.cpp
-index da651d95..1907c69f 100644
+index 1d9fc0348c..e2468f7cc3 100644
 --- a/src/ui/panel_widgets/shutdown_widget.cpp
 +++ b/src/ui/panel_widgets/shutdown_widget.cpp
 @@ -5,6 +5,7 @@
@@ -84,10 +105,10 @@ index da651d95..1907c69f 100644
  #include "ui_callback_helpers.h"
  #include "ui_event_safety.h"
 +#include "ui_modal.h"
- #include "ui_observer_guard.h"
+ #include "core/observer_guard.h"
  #include "ui_shutdown_modal.h"
  #include "ui_split_button.h"
-@@ -523,29 +524,80 @@ std::string kiln_power_failure_message(const std::string& err_message, bool is_r
+@@ -513,29 +514,81 @@ std::string kiln_power_failure_message(const std::string& err_message, bool is_r
                         why);
  }
  
@@ -161,8 +182,9 @@ index da651d95..1907c69f 100644
 +void show_power_entry_dialog(IMoonrakerAPI* api, bool is_reboot, ShutdownModal& modal,
 +                             AsyncLifetimeGuard& lifetime, lv_obj_t* parent_screen) {
 +    if (!helix::kiln_host_power()) {
-+        // Upstream: one dialog with both actions behind either entry
-+        show_shutdown_dialog(api, modal, lifetime, parent_screen);
++        // Upstream: its dialog, opened for the entry's action
++        show_shutdown_dialog(api, modal, lifetime, parent_screen,
++                             is_reboot ? PowerIntent::Reboot : PowerIntent::Shutdown);
 +        return;
 +    }
 +    // Same backstops as show_shutdown_dialog()
@@ -186,7 +208,7 @@ index da651d95..1907c69f 100644
  
  bool kiln_power_locked(bool kiln_host_power, bool job_holds_machine) {
 diff --git a/src/ui/panel_widgets/shutdown_widget.h b/src/ui/panel_widgets/shutdown_widget.h
-index 0cf2d87d..c87d2045 100644
+index 258e37de9b..65bdab81b3 100644
 --- a/src/ui/panel_widgets/shutdown_widget.h
 +++ b/src/ui/panel_widgets/shutdown_widget.h
 @@ -109,13 +109,41 @@ ShutdownDialogPlan plan_power_dialog(bool kiln_host_power, bool api_connected,
@@ -236,55 +258,42 @@ index 0cf2d87d..c87d2045 100644
  /// Kiln OS: whether the power entries are greyed: on a Kiln build
  /// (@p kiln_host_power) while a job holds the machine (@p job_holds_machine:
  /// printing, paused or preparing), when Kiln's update agent refuses anyway. Pure.
-diff --git a/src/ui/ui_panel_advanced.cpp b/src/ui/ui_panel_advanced.cpp
-index a3ec76e5..ff05dcb8 100644
---- a/src/ui/ui_panel_advanced.cpp
-+++ b/src/ui/ui_panel_advanced.cpp
-@@ -94,7 +94,8 @@ void AdvancedPanel::init_subjects() {
-          [](lv_event_t*) { get_global_advanced_panel().handle_pa_tuning_clicked(); }},
-         {"on_timelapse_videos_clicked", on_timelapse_videos_clicked},
-         {"on_timelapse_setup_clicked", on_timelapse_setup_clicked},
--        {"on_advanced_power_clicked", on_advanced_power_clicked},
-+        {"on_advanced_shutdown_clicked", on_advanced_shutdown_clicked},
-+        {"on_advanced_reboot_clicked", on_advanced_reboot_clicked},
-     });
+diff --git a/src/ui/settings/ui_settings_safety.cpp b/src/ui/settings/ui_settings_safety.cpp
+index ad1c822b71..7b46eb72a5 100644
+--- a/src/ui/settings/ui_settings_safety.cpp
++++ b/src/ui/settings/ui_settings_safety.cpp
+@@ -8,6 +8,7 @@
  
-     // Note: Input shaping uses on_input_shaper_row_clicked registered by InputShaperPanel
-@@ -262,17 +263,22 @@ void AdvancedPanel::on_timelapse_setup_clicked(lv_event_t* /*e*/) {
-     get_global_advanced_panel().handle_timelapse_setup_clicked();
- }
+ #include "audio_settings_manager.h"
+ #include "detection_manager.h"
++#include "platform_info.h"
+ #include "safety_settings_manager.h"
+ #include "settings_manager.h"
+ #include "ui/ui_widget_helpers.h"
+@@ -21,6 +22,17 @@ namespace helix::settings {
+ using helix::ui::event_checked;
+ using helix::ui::event_selected;
  
--void AdvancedPanel::on_advanced_power_clicked(lv_event_t* /*e*/) {
--    get_global_advanced_panel().handle_power_clicked();
-+void AdvancedPanel::on_advanced_shutdown_clicked(lv_event_t* /*e*/) {
-+    get_global_advanced_panel().handle_power_clicked(/*is_reboot=*/false);
++void SafetySettingsOverlay::on_activate() {
++    OverlayBase::on_activate();
++    // Kiln OS: Advanced's Reboot and Shutdown rows always ask first
++    // (show_power_entry_dialog), so the switch for that question does nothing
++    if (helix::kiln_host_power()) {
++        if (lv_obj_t* row = lv_obj_find_by_name(overlay_root_, "row_power_confirm")) {
++            lv_obj_add_flag(row, LV_OBJ_FLAG_HIDDEN);
++        }
++    }
 +}
 +
-+void AdvancedPanel::on_advanced_reboot_clicked(lv_event_t* /*e*/) {
-+    get_global_advanced_panel().handle_power_clicked(/*is_reboot=*/true);
- }
- 
- // ============================================================================
--// POWER HANDLER — shares the same dialog the home-panel power widget uses
-+// POWER HANDLER — upstream shares the dialog the home-panel power widget uses
- // ============================================================================
- 
--void AdvancedPanel::handle_power_clicked() {
--    spdlog::debug("[{}] Power row clicked — opening shutdown dialog", get_name());
--    helix::show_shutdown_dialog(api_, shutdown_modal_, object_lifetime_, lv_screen_active());
-+void AdvancedPanel::handle_power_clicked(bool is_reboot) {
-+    spdlog::debug("[{}] {} row clicked", get_name(), is_reboot ? "Reboot" : "Shutdown");
-+    helix::show_power_entry_dialog(api_, is_reboot, shutdown_modal_, object_lifetime_,
-+                                   lv_screen_active());
- }
- 
- // ============================================================================
+ void SafetySettingsOverlay::register_callbacks() {
+     register_xml_callbacks({
+         {"on_estop_confirm_changed",
 diff --git a/tests/unit/test_kiln_power_entries.cpp b/tests/unit/test_kiln_power_entries.cpp
 new file mode 100644
-index 00000000..df7be85a
+index 0000000000..1ad11e0fc4
 --- /dev/null
 +++ b/tests/unit/test_kiln_power_entries.cpp
-@@ -0,0 +1,236 @@
+@@ -0,0 +1,263 @@
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +
 +/**
@@ -301,18 +310,21 @@ index 00000000..df7be85a
 +
 +#include "ui_modal.h"
 +#include "ui_panel_advanced.h"
++#include "ui_settings_safety.h"
 +#include "ui_toast_manager.h"
-+#include "ui_update_queue.h"
++#include "ui_widget_ref.h"
 +
 +#include "../../src/ui/panel_widgets/shutdown_widget.h"
 +#include "../lvgl_ui_test_fixture.h"
 +#include "../test_helpers/modal_answer.h"
 +#include "../ui_test_utils.h"
++#include "core/static_panel_registry.h"
++#include "core/update_queue.h"
 +#include "moonraker_api.h"
 +#include "moonraker_client.h"
 +#include "moonraker_error.h"
 +#include "platform_info.h"
-+#include "static_panel_registry.h"
++#include "settings_manager.h"
 +
 +#include <string>
 +#include <utility>
@@ -351,7 +363,7 @@ index 00000000..df7be85a
 +/// with a PowerRecordingAPI behind the panel.
 +struct PowerRowsFixture : LVGLUITestFixture {
 +    PowerRecordingAPI power_api{*client(), state()};
-+    lv_obj_t* root = nullptr;
++    helix::ui::WeakWidget root; // cleared when a case deletes the tree itself
 +    std::vector<std::pair<ToastSeverity, std::string>> toasts;
 +
 +    PowerRowsFixture() {
@@ -372,7 +384,7 @@ index 00000000..df7be85a
 +            Modal::hide(ModalStack::instance().top_dialog());
 +            process_lvgl(5);
 +        }
-+        if (root && lv_obj_is_valid(root)) {
++        if (root) {
 +            lv_obj_delete(root);
 +        }
 +        helix::ui::UpdateQueue::instance().drain();
@@ -521,11 +533,35 @@ index 00000000..df7be85a
 +    }
 +    set_platform_override(-1);
 +}
++
++// Settings > Safety's "Confirm shutdown and reboot" sets whether upstream's
++// power dialog asks first. Kiln's Reboot and Shutdown rows always ask, so the
++// switch would do nothing there: it is hidden on Kiln, shown elsewhere.
++TEST_CASE_METHOD(LVGLUITestFixture, "Kiln power entries: Safety hides Confirm shutdown and reboot",
++                 "[shutdown][power][kiln][safety]") {
++    SettingsManager::instance().init_subjects();
++    auto& safety = helix::settings::get_safety_settings_overlay();
++    safety.init_subjects();
++    safety.register_callbacks();
++    for (const int kiln : {1, 0}) {
++        CAPTURE(kiln);
++        set_kiln_host_power_override(kiln);
++        lv_obj_t* root = safety.create(test_screen());
++        REQUIRE(root != nullptr);
++        lv_obj_t* row = lv_obj_find_by_name(root, "row_power_confirm");
++        REQUIRE(row != nullptr);
++        safety.on_activate();
++        CHECK(lv_obj_has_flag(row, LV_OBJ_FLAG_HIDDEN) == (kiln == 1));
++        lv_obj_delete(root);
++        helix::ui::UpdateQueue::instance().drain();
++    }
++    set_kiln_host_power_override(-1);
++}
 diff --git a/translations/en.yml b/translations/en.yml
-index 6a4c1ff1..e5111a65 100644
+index 955cff5227..26ae939e53 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -5026,6 +5026,11 @@ translations:
+@@ -6494,6 +6494,11 @@ translations:
    'Extended memory available': 'Extended memory available'
    'This printer has 512 MiB of memory. Kiln OS uses 256 MiB by default, the same on every AD5X. You can switch Extended memory on in Settings > System. It isn''t needed; it is off by default.': 'This printer has 512 MiB of memory. Kiln OS uses 256 MiB by default, the same on every AD5X. You can switch Extended memory on in Settings > System. It isn''t needed; it is off by default.'
    'Restart now?': 'Restart now?'
@@ -538,10 +574,10 @@ index 6a4c1ff1..e5111a65 100644
    'Welcome to Kiln OS': 'Welcome to Kiln OS'
    'Here''s a quick tour of the screen, so you can find things fast.': 'Here''s a quick tour of the screen, so you can find things fast.'
 diff --git a/translations/ru.yml b/translations/ru.yml
-index 4621dec5..c2b797d9 100644
+index 0627e15bb9..5cbc22c052 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -5183,6 +5183,11 @@ translations:
+@@ -6657,6 +6657,11 @@ translations:
    'This printer has 512 MiB of memory. Kiln OS uses 256 MiB by default, the same on every AD5X. You can switch Extended memory on in Settings > System. It isn''t needed; it is off by default.': 'В принтере 512 МБ, а Kiln OS на всех AD5X по умолчанию использует 256 МБ. Расширенную память можно включить в Настройки > Система. Это не обязательно.'
    'Restart now?': 'Перезапустить сейчас?'
    'Cancel sent. The printer stops its start sequence at the next safe point.': 'Отмена отправлена. Принтер остановит стартовую последовательность в ближайшей безопасной точке.'
@@ -554,18 +590,16 @@ index 4621dec5..c2b797d9 100644
    'IFS not detected': 'IFS не обнаружен'
    'IFS Active: ': 'IFS активен: '
 diff --git a/ui_xml/advanced_panel.xml b/ui_xml/advanced_panel.xml
-index a88d9de2..412ef6ac 100644
+index f3bc129a66..c0250f6c18 100644
 --- a/ui_xml/advanced_panel.xml
 +++ b/ui_xml/advanced_panel.xml
-@@ -260,25 +260,28 @@
-       <!-- ================================================================== -->
-       <!-- POWER SECTION -->
-       <!-- ================================================================== -->
--      <!-- Both rows open the same dialog the home-panel power widget uses,
--           which handles single-/dual-host scope and confirms the action.
-+      <!-- Upstream: both rows open the same dialog the home-panel power widget
-+           uses, which handles single-/dual-host scope and confirms the action.
-+           Kiln OS: each row asks only for its own action.
+@@ -264,15 +264,18 @@
+       <!-- Both rows open the same dialog the home-panel power widget uses,
+            which handles single-/dual-host scope and confirms the action. With
+            Safety's power confirmation off, a single-host screen skips the
+-           dialog and runs the row's own action.
++           dialog and runs the row's own action. Kiln OS: each row asks only for its
++           own action.
             Hidden whole (header + rows) on platforms without host power
             controls (Android) — see platform_host_power_supported in
             app_globals.cpp. -->
@@ -581,17 +615,3 @@ index a88d9de2..412ef6ac 100644
          <!-- Kiln OS: greyed while a job holds the machine (Kiln's update agent refuses then) -->
          <setting_action_row name="row_shutdown"
                              label="Shutdown" icon="power" description="Power off the printer or screen"
-                             disabled="kiln_power_locked">
--          <event_cb trigger="clicked" callback="on_advanced_power_clicked"/>
-+          <event_cb trigger="clicked" callback="on_advanced_shutdown_clicked"/>
-         </setting_action_row>
-         <setting_action_row name="row_reboot" label="Reboot" icon="restart" description="Restart the printer or screen"
-                             disabled="kiln_power_locked">
--          <event_cb trigger="clicked" callback="on_advanced_power_clicked"/>
-+          <event_cb trigger="clicked" callback="on_advanced_reboot_clicked"/>
-         </setting_action_row>
-       </setting_group>
-       <!-- Bottom padding for scroll -->
--- 
-2.56.0
-

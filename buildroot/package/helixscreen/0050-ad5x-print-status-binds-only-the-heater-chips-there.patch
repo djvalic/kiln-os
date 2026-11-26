@@ -9,14 +9,14 @@ print status still bound the old chips' icons as required, so every print
 logged three "[HeaterIconBinder] Required icon ... is missing" errors.
 A chip that isn't there is now skipped.
 ---
- src/ui/ui_panel_print_status.cpp | 18 ++++++++++++------
+ src/ui/print/ui_panel_print_status.cpp | 18 ++++++++++++------
  1 file changed, 12 insertions(+), 6 deletions(-)
 
-diff --git a/src/ui/ui_panel_print_status.cpp b/src/ui/ui_panel_print_status.cpp
-index 452e6af241..67e77493e7 100644
---- a/src/ui/ui_panel_print_status.cpp
-+++ b/src/ui/ui_panel_print_status.cpp
-@@ -1136,12 +1136,18 @@ lv_obj_t* PrintStatusPanel::create(lv_obj_t* parent) {
+diff --git a/src/ui/print/ui_panel_print_status.cpp b/src/ui/print/ui_panel_print_status.cpp
+index 318f7659ea..c270dc9e88 100644
+--- a/src/ui/print/ui_panel_print_status.cpp
++++ b/src/ui/print/ui_panel_print_status.cpp
+@@ -1261,12 +1261,18 @@ lv_obj_t* PrintStatusPanel::create(lv_obj_t* parent) {
  
      // Thermal tint for the heater chip icons. The binder owns its own
      // observers, so this needs no hook into on_temperature_changed().
@@ -41,6 +41,3 @@ index 452e6af241..67e77493e7 100644
  
      // The first arrangement is measured from on_activate(): overlay_root_ is
      // HIDDEN until then, and a hidden subtree lays out at 0 width.
--- 
-2.56.0
-

@@ -175,7 +175,7 @@ manager's `Kiln OS` entry (`version`) there.
 | `3mf_upload` | Uploads of sliced `.gcode.3mf` are unpacked to G-code; form field `plate` |
 | `print_error` | Upload replies carry `print_error` when a requested print didn't start |
 | `updates` | The update manager has the `Kiln OS` entry (present unless `[kiln_os]` lost its `[update_manager]`) |
-| `lane_data` | The `lane_data` database namespace is kept up to date (`[kiln_lanes]` loaded) |
+| `lane_data` | The `lane_data` database namespace is kept up to date (`[kiln_lanes]` loaded); with AFC in Klipper by AFC, not Kiln ([lane_data](#database-namespace-lane_data)) |
 | `memory_mode` | This printer has 512 MiB and can use Extended memory mode: `/machine/kiln_os/memory`, `KILN_MEMORY_MODE`. Absent on 256 MiB printers |
 | `ifs_firmware` | `GET`/`POST /machine/kiln_os/ifs_firmware`, the IFS firmware switch. Whether it can be offered on this printer is its `available` |
 
@@ -957,6 +957,15 @@ whole record. Since v1.0.1 Kiln merges: it keeps HelixScreen's keys, and a
 check 5 s after each slot change and every 60 s (a read; a write only for
 a record that needs it) puts Kiln's fields back after a HelixScreen
 write. Before, the last write of a record won.
+
+With AFC (AFC-Klipper-Add-On, the afc-kiln plugin) the namespace is AFC's:
+when `printer.objects.list` has `AFC` at Klipper ready (exact name, AFC's
+`[AFC]` section), Kiln writes nothing, stops its check and deletes the
+`lane1`..`lane4` records it wrote alone (no `writer`, none but the fields
+above); a record HelixScreen signed or with AFC's own fields stays. AFC
+writes one record per AFC lane (afc-kiln: `T0`..`T3`). Checked at every
+Klipper ready, so installing or removing AFC takes effect at the next
+Klipper restart. Since v1.0.1 (issue #101).
 
 Kiln also writes Fluidd's own namespace `fluidd` once (key `macros`: macro
 categories, internal macros hidden), only while Fluidd has no macro

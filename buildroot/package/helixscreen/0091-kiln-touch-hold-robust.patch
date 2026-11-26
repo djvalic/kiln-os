@@ -57,22 +57,22 @@ tour is not completed and is offered again.
 
 Upstream: not applicable (Kiln OS specific)
 ---
- include/first_run_tour.h              |   7 +-
- include/touch_calibration_wrapper.h   |  19 +-
- include/touch_hold_gesture.h          | 185 +++++++++++----
- include/ui_wizard.h                   |  21 ++
- src/api/touch_calibration_wrapper.cpp |  24 +-
- src/application/application.cpp       | 156 ++++++++-----
- src/ui/tour/first_run_tour.cpp        |  13 +-
- src/ui/ui_wizard.cpp                  |  38 +++
- tests/unit/test_kiln_touch_hold.cpp   | 318 ++++++++++++++++++++++++--
+ include/first_run_tour.h                      |   7 +-
+ include/touch_calibration_wrapper.h           |  19 +-
+ include/touch_hold_gesture.h                  | 185 +++++++---
+ include/ui_wizard.h                           |  21 ++
+ src/application/application.cpp               | 156 ++++++---
+ .../input/touch_calibration_wrapper.cpp       |  24 +-
+ src/ui/tour/first_run_tour.cpp                |  13 +-
+ src/ui/wizard/ui_wizard.cpp                   |  38 +++
+ tests/unit/test_kiln_touch_hold.cpp           | 318 +++++++++++++++++-
  9 files changed, 644 insertions(+), 137 deletions(-)
 
 diff --git a/include/first_run_tour.h b/include/first_run_tour.h
-index 23ce05e..deb3a2a 100644
+index 7213ff3132..66d58a61d3 100644
 --- a/include/first_run_tour.h
 +++ b/include/first_run_tour.h
-@@ -58,6 +58,11 @@ class FirstRunTour {
+@@ -66,6 +66,11 @@ class FirstRunTour {
      /// Skip button — marks completed and tears down overlay.
      void skip();
  
@@ -84,7 +84,7 @@ index 23ce05e..deb3a2a 100644
      bool is_running() const {
          return running_;
      }
-@@ -66,7 +71,7 @@ class FirstRunTour {
+@@ -74,7 +79,7 @@ class FirstRunTour {
      FirstRunTour() = default;
      void start_impl(int seen_version);
      void finish();
@@ -94,7 +94,7 @@ index 23ce05e..deb3a2a 100644
      void show_panel(TourPanel panel);
      void arm_panel_timer(lv_timer_cb_t callback);
 diff --git a/include/touch_calibration_wrapper.h b/include/touch_calibration_wrapper.h
-index 9f8025a..e2d9305 100644
+index 30d976b9fe..09138e617e 100644
 --- a/include/touch_calibration_wrapper.h
 +++ b/include/touch_calibration_wrapper.h
 @@ -3,6 +3,7 @@
@@ -105,7 +105,7 @@ index 9f8025a..e2d9305 100644
  
  #include <functional>
  #include <lvgl.h>
-@@ -83,22 +84,8 @@ struct CalibrationContext {
+@@ -85,22 +86,8 @@ struct CalibrationContext {
  /// samples within one press.
  inline constexpr int kTransposedGuessCorroboration = 3;
  
@@ -131,7 +131,7 @@ index 9f8025a..e2d9305 100644
  /// Called on the LVGL thread, from the read callback, when a press has been held
  /// for kCalibrationHoldMs. Returns true when it takes the hold (and schedules the
 diff --git a/include/touch_hold_gesture.h b/include/touch_hold_gesture.h
-index bc8fcf0..d08b5c1 100644
+index bc8fcf0f7b..d08b5c1478 100644
 --- a/include/touch_hold_gesture.h
 +++ b/include/touch_hold_gesture.h
 @@ -12,14 +12,24 @@
@@ -392,10 +392,10 @@ index bc8fcf0..d08b5c1 100644
 +
  } // namespace helix
 diff --git a/include/ui_wizard.h b/include/ui_wizard.h
-index 7dc7d35..8a5e0af 100644
+index f0371d4458..5a6e5f1da6 100644
 --- a/include/ui_wizard.h
 +++ b/include/ui_wizard.h
-@@ -117,6 +117,27 @@ void ui_wizard_navigate_to_step(helix::wizard::StepId step);
+@@ -94,6 +94,27 @@ void ui_wizard_navigate_to_step(helix::wizard::StepId step);
   */
  void ui_wizard_advance();
  
@@ -423,55 +423,11 @@ index 7dc7d35..8a5e0af 100644
  /**
   * Set wizard title
   *
-diff --git a/src/api/touch_calibration_wrapper.cpp b/src/api/touch_calibration_wrapper.cpp
-index 526880c..2126b7a 100644
---- a/src/api/touch_calibration_wrapper.cpp
-+++ b/src/api/touch_calibration_wrapper.cpp
-@@ -147,7 +147,9 @@ void note_raw_sample(CalibrationContext& ctx, int raw_x, int raw_y) {
- /// The timing is TouchHoldGesture (touch_hold_gesture.h).
- struct CalibrationHold {
-     std::function<bool()> handler;
--    TouchHoldGesture gesture{kCalibrationHoldMs, kCalibrationHoldGapMs, kCalibrationHoldRearmMs};
-+    TouchHoldGesture gesture;
-+    uint32_t tap_restarts = 0;
-+    uint32_t move_restarts = 0;
- };
- CalibrationHold s_hold;
- 
-@@ -160,13 +162,23 @@ void track_calibration_hold(lv_indev_t* indev, const lv_indev_data_t* data,
-     if (!s_hold.handler) {
-         return;
-     }
--    s_hold.gesture.set_radius(ctx.screen_width * kCalibrationHoldRadiusPercent / 100,
--                              ctx.screen_height * kCalibrationHoldRadiusPercent / 100);
-+    s_hold.gesture.set_screen(ctx.screen_width, ctx.screen_height);
-     // capture_active is written on this thread too (set_touch_capture_active),
-     // so reading it without the diagnostics lock cannot miss a change.
--    if (!s_hold.gesture.feed(data->state == LV_INDEV_STATE_PRESSED,
--                             static_cast<int>(data->point.x), static_cast<int>(data->point.y),
--                             lv_tick_get(), ctx.capture_active)) {
-+    const bool fired =
-+        s_hold.gesture.feed(data->state == LV_INDEV_STATE_PRESSED, static_cast<int>(data->point.x),
-+                            static_cast<int>(data->point.y), lv_tick_get(), ctx.capture_active);
-+    // Kiln OS: why a hold started again, for a printer test on the panel
-+    if (s_hold.gesture.tap_restarts() != s_hold.tap_restarts) {
-+        s_hold.tap_restarts = s_hold.gesture.tap_restarts();
-+        spdlog::debug("[TouchCal] Hold timer restarted: more than {} lifts (taps)",
-+                      kCalibrationHoldMaxLifts);
-+    }
-+    if (s_hold.gesture.move_restarts() != s_hold.move_restarts) {
-+        s_hold.move_restarts = s_hold.gesture.move_restarts();
-+        spdlog::debug("[TouchCal] Hold timer restarted: moved out of the radius");
-+    }
-+    if (!fired) {
-         return;
-     }
-     if (!s_hold.handler()) {
 diff --git a/src/application/application.cpp b/src/application/application.cpp
-index 0562271..c9b7581 100644
+index 6f0a7cbecd..252c324443 100644
 --- a/src/application/application.cpp
 +++ b/src/application/application.cpp
-@@ -153,7 +153,10 @@
+@@ -152,7 +152,10 @@
  #include "ui_tile_rung.h"
  #include "ui_toast_manager.h"
  #include "touch_calibration_wrapper.h"
@@ -481,8 +437,8 @@ index 0562271..c9b7581 100644
 +#include "ui_presentation_gate.h"
  #include "ui_settings_touch.h"
  #include "ui_touch_calibration_overlay.h"
- #include "ui_utils.h"
-@@ -420,6 +423,25 @@ void close_dialogs_for_touch_calibration() {
+ #include "ui_unit_art.h"
+@@ -409,6 +412,25 @@ void close_dialogs_for_touch_calibration() {
      }
  }
  
@@ -508,7 +464,7 @@ index 0562271..c9b7581 100644
  } // namespace
  
  // C bridge functions called from SDL event handler (lv_sdl_window.c)
-@@ -921,70 +943,96 @@ int Application::run(int argc, char** argv) {
+@@ -859,70 +881,96 @@ int Application::run(int argc, char** argv) {
          // fixable without hitting anything in particular. Any screen, wizard
          // included; not while calibration is already open.
          //
@@ -659,11 +615,55 @@ index 0562271..c9b7581 100644
              return true;
          });
  
+diff --git a/src/platform/input/touch_calibration_wrapper.cpp b/src/platform/input/touch_calibration_wrapper.cpp
+index f848ddf9fd..93865bf269 100644
+--- a/src/platform/input/touch_calibration_wrapper.cpp
++++ b/src/platform/input/touch_calibration_wrapper.cpp
+@@ -147,7 +147,9 @@ void note_raw_sample(CalibrationContext& ctx, int raw_x, int raw_y) {
+ /// The timing is TouchHoldGesture (touch_hold_gesture.h).
+ struct CalibrationHold {
+     std::function<bool()> handler;
+-    TouchHoldGesture gesture{kCalibrationHoldMs, kCalibrationHoldGapMs, kCalibrationHoldRearmMs};
++    TouchHoldGesture gesture;
++    uint32_t tap_restarts = 0;
++    uint32_t move_restarts = 0;
+ };
+ CalibrationHold s_hold;
+ 
+@@ -160,13 +162,23 @@ void track_calibration_hold(lv_indev_t* indev, const lv_indev_data_t* data,
+     if (!s_hold.handler) {
+         return;
+     }
+-    s_hold.gesture.set_radius(ctx.screen_width * kCalibrationHoldRadiusPercent / 100,
+-                              ctx.screen_height * kCalibrationHoldRadiusPercent / 100);
++    s_hold.gesture.set_screen(ctx.screen_width, ctx.screen_height);
+     // capture_active is written on this thread too (set_touch_capture_active),
+     // so reading it without the diagnostics lock cannot miss a change.
+-    if (!s_hold.gesture.feed(data->state == LV_INDEV_STATE_PRESSED,
+-                             static_cast<int>(data->point.x), static_cast<int>(data->point.y),
+-                             lv_tick_get(), ctx.capture_active)) {
++    const bool fired =
++        s_hold.gesture.feed(data->state == LV_INDEV_STATE_PRESSED, static_cast<int>(data->point.x),
++                            static_cast<int>(data->point.y), lv_tick_get(), ctx.capture_active);
++    // Kiln OS: why a hold started again, for a printer test on the panel
++    if (s_hold.gesture.tap_restarts() != s_hold.tap_restarts) {
++        s_hold.tap_restarts = s_hold.gesture.tap_restarts();
++        spdlog::debug("[TouchCal] Hold timer restarted: more than {} lifts (taps)",
++                      kCalibrationHoldMaxLifts);
++    }
++    if (s_hold.gesture.move_restarts() != s_hold.move_restarts) {
++        s_hold.move_restarts = s_hold.gesture.move_restarts();
++        spdlog::debug("[TouchCal] Hold timer restarted: moved out of the radius");
++    }
++    if (!fired) {
+         return;
+     }
+     if (!s_hold.handler()) {
 diff --git a/src/ui/tour/first_run_tour.cpp b/src/ui/tour/first_run_tour.cpp
-index 1645f08..08a55e7 100644
+index 397bf20cfb..e4af190d06 100644
 --- a/src/ui/tour/first_run_tour.cpp
 +++ b/src/ui/tour/first_run_tour.cpp
-@@ -228,13 +228,22 @@ void FirstRunTour::skip() {
+@@ -241,13 +241,22 @@ void FirstRunTour::skip() {
      end_tour();
  }
  
@@ -688,11 +688,11 @@ index 1645f08..08a55e7 100644
      running_ = false;
      nav_observer_.reset();
      breakpoint_observer_.reset();
-diff --git a/src/ui/ui_wizard.cpp b/src/ui/ui_wizard.cpp
-index 57cb2be..e2f46bf 100644
---- a/src/ui/ui_wizard.cpp
-+++ b/src/ui/ui_wizard.cpp
-@@ -642,6 +642,14 @@ void ui_wizard_navigate_to_step(helix::wizard::StepId step) {
+diff --git a/src/ui/wizard/ui_wizard.cpp b/src/ui/wizard/ui_wizard.cpp
+index ef5be78412..81182b800b 100644
+--- a/src/ui/wizard/ui_wizard.cpp
++++ b/src/ui/wizard/ui_wizard.cpp
+@@ -614,6 +614,14 @@ void ui_wizard_navigate_to_step(helix::wizard::StepId step) {
          }
      }
  
@@ -707,7 +707,7 @@ index 57cb2be..e2f46bf 100644
      const int step_idx = static_cast<int>(step);
  
      // Recompute the skip vector for progress + button state. should_skip(ctx)
-@@ -987,6 +995,8 @@ static void ui_wizard_load_screen(helix::wizard::StepId step) {
+@@ -930,6 +938,8 @@ static void ui_wizard_load_screen(helix::wizard::StepId step) {
  static void dismiss_wizard_container() {
      // Cleanup current wizard screen
      ui_wizard_cleanup_current_screen();
@@ -716,7 +716,7 @@ index 57cb2be..e2f46bf 100644
  
      // Dismiss any on-screen keyboard left over from wizard text inputs
      // (prevents stale textarea focus from wizard_connection step)
-@@ -1342,3 +1352,31 @@ static void on_next_clicked(lv_event_t* e) {
+@@ -1297,3 +1307,31 @@ static void on_next_clicked(lv_event_t* e) {
  void ui_wizard_advance() {
      on_next_clicked(nullptr);
  }
@@ -749,7 +749,7 @@ index 57cb2be..e2f46bf 100644
 +    return true;
 +}
 diff --git a/tests/unit/test_kiln_touch_hold.cpp b/tests/unit/test_kiln_touch_hold.cpp
-index bb7b04b..de1c353 100644
+index bb7b04baee..de1c35354d 100644
 --- a/tests/unit/test_kiln_touch_hold.cpp
 +++ b/tests/unit/test_kiln_touch_hold.cpp
 @@ -2,7 +2,7 @@
@@ -1165,6 +1165,3 @@ index bb7b04b..de1c353 100644
                   "[touch][kiln][touch-hold]") {
      hold(80, true);
      hold(300, false);
--- 
-2.56.0
-

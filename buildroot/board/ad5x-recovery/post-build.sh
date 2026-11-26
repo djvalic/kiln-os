@@ -17,6 +17,11 @@
 #   its own) are replaced by S70swupdate.
 set -e
 TARGET=$1
+
+# Root's password in the image: the default "root" instead of an empty one
+# (lib/rootpw.sh, docs/install.md "SSH login and the root password")
+. "$BR2_EXTERNAL_AD5X_PATH/board/ad5x/root-default.sh"
+root_default_shadow "$TARGET"
 EXT=$BR2_EXTERNAL_AD5X_PATH
 
 . "$EXT/board/ad5x/bundle-stock.sh"

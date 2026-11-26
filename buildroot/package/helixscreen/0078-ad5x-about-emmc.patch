@@ -16,31 +16,28 @@ Kiln builds only (HELIX_KILN_AD5X); elsewhere the row stays hidden.
 
 Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
 ---
- include/system/kiln_hardware.h    | 24 ++++++++++++
- include/ui_settings_about.h       |  3 ++
- src/system/kiln_hardware.cpp      | 55 ++++++++++++++++++++++++++++
- src/ui/ui_settings_about.cpp      | 13 +++++++
- tests/unit/test_kiln_hardware.cpp | 61 +++++++++++++++++++++++++++++++
- translations/de.yml               |  1 +
- translations/en.yml               |  1 +
- translations/es.yml               |  1 +
- translations/fr.yml               |  1 +
- translations/it.yml               |  1 +
- translations/ja.yml               |  1 +
- translations/ko.yml               |  1 +
- translations/pt.yml               |  1 +
- translations/ru.yml               |  1 +
- translations/tr.yml               |  1 +
- translations/zh.yml               |  1 +
- ui_xml/about_settings_overlay.xml |  5 +++
+ include/system/kiln_hardware.h        | 24 +++++++++++
+ include/ui_settings_about.h           |  3 ++
+ src/system/kiln_hardware.cpp          | 55 ++++++++++++++++++++++++
+ src/ui/settings/ui_settings_about.cpp | 13 ++++++
+ tests/unit/test_kiln_hardware.cpp     | 61 +++++++++++++++++++++++++++
+ translations/de.yml                   |  1 +
+ translations/en.yml                   |  1 +
+ translations/es.yml                   |  1 +
+ translations/fr.yml                   |  1 +
+ translations/it.yml                   |  1 +
+ translations/ja.yml                   |  1 +
+ translations/ko.yml                   |  1 +
+ translations/pt.yml                   |  1 +
+ translations/ru.yml                   |  1 +
+ translations/tr.yml                   |  1 +
+ translations/zh.yml                   |  1 +
+ ui_xml/about_settings_overlay.xml     |  5 +++
  17 files changed, 172 insertions(+)
- create mode 100644 include/system/kiln_hardware.h
- create mode 100644 src/system/kiln_hardware.cpp
- create mode 100644 tests/unit/test_kiln_hardware.cpp
 
 diff --git a/include/system/kiln_hardware.h b/include/system/kiln_hardware.h
 new file mode 100644
-index 00000000..8f2a254b
+index 0000000000..8f2a254bf2
 --- /dev/null
 +++ b/include/system/kiln_hardware.h
 @@ -0,0 +1,24 @@
@@ -69,19 +66,19 @@ index 00000000..8f2a254b
 +
 +} // namespace helix::kiln_hardware
 diff --git a/include/ui_settings_about.h b/include/ui_settings_about.h
-index 9643b107..82d47b1f 100644
+index 9a250d19e3..bcee833622 100644
 --- a/include/ui_settings_about.h
 +++ b/include/ui_settings_about.h
-@@ -116,6 +116,8 @@ class AboutSettingsOverlay : public OverlayBase {
-     lv_subject_t log_dest_value_subject_{};
-     lv_subject_t host_arch_value_subject_{};
-     lv_subject_t about_copyright_subject_{};
-+    lv_subject_t emmc_value_subject_{};
-+    lv_subject_t has_emmc_subject_{};
+@@ -124,6 +124,8 @@ class AboutSettingsOverlay : public OverlayBase {
+     helix::Subject log_dest_value_subject_{};
+     helix::Subject host_arch_value_subject_{};
+     helix::Subject about_copyright_subject_{};
++    helix::Subject emmc_value_subject_{};
++    helix::Subject has_emmc_subject_{};
  
      // Static buffers for string subjects
      char version_value_buf_[32];
-@@ -128,6 +130,7 @@ class AboutSettingsOverlay : public OverlayBase {
+@@ -136,6 +138,7 @@ class AboutSettingsOverlay : public OverlayBase {
      char log_dest_value_buf_[256];
      char host_arch_value_buf_[64];
      char about_copyright_buf_[48];
@@ -91,14 +88,14 @@ index 9643b107..82d47b1f 100644
      std::chrono::steady_clock::time_point last_deactivate_{};
 diff --git a/src/system/kiln_hardware.cpp b/src/system/kiln_hardware.cpp
 new file mode 100644
-index 00000000..fc69422e
+index 0000000000..1b9b5d3ddc
 --- /dev/null
 +++ b/src/system/kiln_hardware.cpp
 @@ -0,0 +1,55 @@
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +#include "system/kiln_hardware.h"
 +
-+#include "text_io.h"
++#include "core/text_io.h"
 +
 +#include <spdlog/fmt/fmt.h>
 +
@@ -150,12 +147,12 @@ index 00000000..fc69422e
 +}
 +
 +} // namespace helix::kiln_hardware
-diff --git a/src/ui/ui_settings_about.cpp b/src/ui/ui_settings_about.cpp
-index 513dfd43..4d7d1861 100644
---- a/src/ui/ui_settings_about.cpp
-+++ b/src/ui/ui_settings_about.cpp
-@@ -37,6 +37,7 @@ inline constexpr int kContributorCount = sizeof(kContributors) / sizeof(kContrib
- #include "lvgl/src/others/translation/lv_translation.h"
+diff --git a/src/ui/settings/ui_settings_about.cpp b/src/ui/settings/ui_settings_about.cpp
+index 59ad9c65a6..465e399f3e 100644
+--- a/src/ui/settings/ui_settings_about.cpp
++++ b/src/ui/settings/ui_settings_about.cpp
+@@ -39,6 +39,7 @@ inline constexpr int kContributorCount = sizeof(kContributors) / sizeof(kContrib
+ #include "lvgl.h"
  #include "replace_method_callback.h"
  #include "system/diagnostics.h"
 +#include "system/kiln_hardware.h"
@@ -183,7 +180,7 @@ index 513dfd43..4d7d1861 100644
  
 diff --git a/tests/unit/test_kiln_hardware.cpp b/tests/unit/test_kiln_hardware.cpp
 new file mode 100644
-index 00000000..2ca52436
+index 0000000000..2ca5243647
 --- /dev/null
 +++ b/tests/unit/test_kiln_hardware.cpp
 @@ -0,0 +1,61 @@
@@ -249,10 +246,10 @@ index 00000000..2ca52436
 +    }
 +}
 diff --git a/translations/de.yml b/translations/de.yml
-index da1d3525..2fe96c44 100644
+index cbe62464fb..e1b4f6626a 100644
 --- a/translations/de.yml
 +++ b/translations/de.yml
-@@ -4908,6 +4908,7 @@ translations:
+@@ -6173,6 +6173,7 @@ translations:
    e.g. Jet Black: z.B. Tiefschwarz
    e.g. NAME=my_var VALUE=123: z. B. NAME=my_var VALUE=123
    e.g. Polymaker: z.B. Polymaker
@@ -261,10 +258,10 @@ index da1d3525..2fe96c44 100644
    eSpooler, clog detection, and sensor settings: 'eSpooler-, Verstopfungserkennungs- und Sensoreinstellungen'
    elapsed: vergangen
 diff --git a/translations/en.yml b/translations/en.yml
-index 1f9ac5a0..c4a3274f 100644
+index 33ce7a0ab4..4805521a1f 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -4802,6 +4802,7 @@ translations:
+@@ -6139,6 +6139,7 @@ translations:
    e.g. Jet Black: e.g. Jet Black
    e.g. NAME=my_var VALUE=123: e.g. NAME=my_var VALUE=123
    e.g. Polymaker: e.g. Polymaker
@@ -273,10 +270,10 @@ index 1f9ac5a0..c4a3274f 100644
    eSpooler, clog detection, and sensor settings: eSpooler, clog detection, and sensor settings
    elapsed: elapsed
 diff --git a/translations/es.yml b/translations/es.yml
-index 68b8dcd9..771fd281 100644
+index e67d9f94fb..a28a53ae9d 100644
 --- a/translations/es.yml
 +++ b/translations/es.yml
-@@ -4899,6 +4899,7 @@ translations:
+@@ -6173,6 +6173,7 @@ translations:
    e.g. Jet Black: p. ej. Negro Azabache
    e.g. NAME=my_var VALUE=123: p. ej. NAME=mi_var VALUE=123
    e.g. Polymaker: p. ej. Polymaker
@@ -285,10 +282,10 @@ index 68b8dcd9..771fd281 100644
    eSpooler, clog detection, and sensor settings: 'Ajustes de eSpooler, detección de atascos y sensores'
    elapsed: transcurrido
 diff --git a/translations/fr.yml b/translations/fr.yml
-index 1309f27d..7c6f1795 100644
+index 46e88a9687..5cf68b081c 100644
 --- a/translations/fr.yml
 +++ b/translations/fr.yml
-@@ -4934,6 +4934,7 @@ translations:
+@@ -6185,6 +6185,7 @@ translations:
    e.g. Jet Black: p. ex. Noir profond
    e.g. NAME=my_var VALUE=123: ex. NAME=ma_var VALUE=123
    e.g. Polymaker: p. ex. Polymaker
@@ -297,10 +294,10 @@ index 1309f27d..7c6f1795 100644
    eSpooler, clog detection, and sensor settings: 'Paramètres eSpooler, détection de bourrage et capteurs'
    elapsed: écoulé
 diff --git a/translations/it.yml b/translations/it.yml
-index 4d0fe19a..74065455 100644
+index 0ef512044a..3d5158a9c0 100644
 --- a/translations/it.yml
 +++ b/translations/it.yml
-@@ -4900,6 +4900,7 @@ translations:
+@@ -6173,6 +6173,7 @@ translations:
    e.g. Jet Black: es. Nero intenso
    e.g. NAME=my_var VALUE=123: es. NAME=mia_var VALUE=123
    e.g. Polymaker: es. Polymaker
@@ -309,10 +306,10 @@ index 4d0fe19a..74065455 100644
    eSpooler, clog detection, and sensor settings: 'Impostazioni eSpooler, rilevamento intasamenti e sensori'
    elapsed: trascorso
 diff --git a/translations/ja.yml b/translations/ja.yml
-index f19444cd..b58e9a93 100644
+index dc32f7c9f6..518b664699 100644
 --- a/translations/ja.yml
 +++ b/translations/ja.yml
-@@ -4645,6 +4645,7 @@ translations:
+@@ -6173,6 +6173,7 @@ translations:
    e.g. Jet Black: 例：ジェットブラック
    e.g. NAME=my_var VALUE=123: '例: NAME=my_var VALUE=123'
    e.g. Polymaker: 例：Polymaker
@@ -321,7 +318,7 @@ index f19444cd..b58e9a93 100644
    eSpooler, clog detection, and sensor settings: 'eSpooler、詰まり検出、センサーの設定'
    elapsed: 経過
 diff --git a/translations/ko.yml b/translations/ko.yml
-index 8620e5ae..8b89cc30 100644
+index 8620e5ae05..8b89cc303e 100644
 --- a/translations/ko.yml
 +++ b/translations/ko.yml
 @@ -4486,6 +4486,7 @@ translations:
@@ -333,10 +330,10 @@ index 8620e5ae..8b89cc30 100644
    eSpooler, clog detection, and sensor settings: eSpooler, 막힘 감지 및 센서 설정
    elapsed: 경과
 diff --git a/translations/pt.yml b/translations/pt.yml
-index 1784bd6f..ddb1344d 100644
+index 7586834786..fccf375b55 100644
 --- a/translations/pt.yml
 +++ b/translations/pt.yml
-@@ -4903,6 +4903,7 @@ translations:
+@@ -6173,6 +6173,7 @@ translations:
    e.g. Jet Black: ex. Preto Fosco
    e.g. NAME=my_var VALUE=123: ex. NAME=minha_var VALUE=123
    e.g. Polymaker: ex. Polymaker
@@ -345,10 +342,10 @@ index 1784bd6f..ddb1344d 100644
    eSpooler, clog detection, and sensor settings: 'Configurações de eSpooler, detecção de entupimento e sensores'
    elapsed: decorrido
 diff --git a/translations/ru.yml b/translations/ru.yml
-index 400b17fd..0dd83607 100644
+index bece058c78..4af2b5d88a 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -4922,6 +4922,7 @@ translations:
+@@ -6264,6 +6264,7 @@ translations:
    e.g. Jet Black: напр. Чёрный
    e.g. NAME=my_var VALUE=123: напр. NAME=my_var VALUE=123
    e.g. Polymaker: напр. Polymaker
@@ -357,7 +354,7 @@ index 400b17fd..0dd83607 100644
    eSpooler, clog detection, and sensor settings: 'Настройки eSpooler, обнаружения засора и датчиков'
    elapsed: прошло
 diff --git a/translations/tr.yml b/translations/tr.yml
-index 9ce98226..bd4f37ef 100644
+index 9ce98226ba..bd4f37efad 100644
 --- a/translations/tr.yml
 +++ b/translations/tr.yml
 @@ -4486,6 +4486,7 @@ translations:
@@ -369,10 +366,10 @@ index 9ce98226..bd4f37ef 100644
    eSpooler, clog detection, and sensor settings: eSpooler, tıkanma algılama ve sensör ayarları
    elapsed: geçen
 diff --git a/translations/zh.yml b/translations/zh.yml
-index 599e6007..2abdafec 100644
+index 6ff42b6f72..b971230934 100644
 --- a/translations/zh.yml
 +++ b/translations/zh.yml
-@@ -4635,6 +4635,7 @@ translations:
+@@ -6173,6 +6173,7 @@ translations:
    e.g. Jet Black: 例如 炭黑
    e.g. NAME=my_var VALUE=123: 例如 NAME=my_var VALUE=123
    e.g. Polymaker: 例如 Polymaker
@@ -381,7 +378,7 @@ index 599e6007..2abdafec 100644
    eSpooler, clog detection, and sensor settings: 'eSpooler、堵塞检测与传感器设置'
    elapsed: 已用时
 diff --git a/ui_xml/about_settings_overlay.xml b/ui_xml/about_settings_overlay.xml
-index 471d79c4..f13fb87a 100644
+index 11dac20448..cceac09e7a 100644
 --- a/ui_xml/about_settings_overlay.xml
 +++ b/ui_xml/about_settings_overlay.xml
 @@ -69,6 +69,11 @@
@@ -396,6 +393,3 @@ index 471d79c4..f13fb87a 100644
        <!-- Install Root (hidden on Android — SDL-sandboxed paths are not user-meaningful) -->
        <lv_obj name="container_install_root" width="100%" style_pad_all="0" scrollable="false">
          <bind_flag_if_eq subject="settings_is_android" flag="hidden" ref_value="1"/>
--- 
-2.43.0
-

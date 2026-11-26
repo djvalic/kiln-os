@@ -30,13 +30,12 @@ and ru.
  translations/en.yml             |  16 ++++
  translations/ru.yml             |  16 ++++
  6 files changed, 190 insertions(+)
- create mode 100644 src/ui/tour/tour_steps_kiln.cpp
 
 diff --git a/include/first_run_tour.h b/include/first_run_tour.h
-index 3b23c72..23ce05e 100644
+index eb787f1686..7213ff3132 100644
 --- a/include/first_run_tour.h
 +++ b/include/first_run_tour.h
-@@ -17,7 +17,11 @@ namespace helix::tour {
+@@ -16,7 +16,11 @@ namespace helix::tour {
  class TourOverlay; // fwd-declare (defined in tour_overlay.h)
  
  /// Current tour version. Bump when tour content materially changes.
@@ -49,7 +48,7 @@ index 3b23c72..23ce05e 100644
  /// Singleton used by runtime methods (start, advance, skip); gate helpers below are static.
  class FirstRunTour {
 diff --git a/include/tour_steps.h b/include/tour_steps.h
-index 9680af2..67c836b 100644
+index 9680af2f27..67c836be59 100644
 --- a/include/tour_steps.h
 +++ b/include/tour_steps.h
 @@ -58,6 +58,15 @@ struct TourStep {
@@ -69,7 +68,7 @@ index 9680af2..67c836b 100644
  /// who has never finished a tour, or whose state predates versioning, gets the full tour.
  int auto_start_seen_version(bool completed, int last_seen_version);
 diff --git a/src/ui/tour/tour_steps.cpp b/src/ui/tour/tour_steps.cpp
-index 57fe3ef..41ba0dc 100644
+index 57fe3ef02a..41ba0dc6a5 100644
 --- a/src/ui/tour/tour_steps.cpp
 +++ b/src/ui/tour/tour_steps.cpp
 @@ -23,6 +23,9 @@ bool hardware_has_ams() {
@@ -84,7 +83,7 @@ index 57fe3ef..41ba0dc 100644
  
 diff --git a/src/ui/tour/tour_steps_kiln.cpp b/src/ui/tour/tour_steps_kiln.cpp
 new file mode 100644
-index 0000000..b8ef5af
+index 0000000000..b8ef5af3fb
 --- /dev/null
 +++ b/src/ui/tour/tour_steps_kiln.cpp
 @@ -0,0 +1,142 @@
@@ -231,10 +230,10 @@ index 0000000..b8ef5af
 +
 +} // namespace helix::tour
 diff --git a/translations/en.yml b/translations/en.yml
-index 5989953..65b807b 100644
+index 94ce5f5db1..54fbbafa82 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -5005,6 +5005,22 @@ translations:
+@@ -6472,6 +6472,22 @@ translations:
    NOT AVAILABLE HERE: "NOT AVAILABLE HERE"
    The plugin didn't say why.: "The plugin didn't say why."
    # Kiln OS (AD5X) strings from the Kiln HelixScreen patches
@@ -258,12 +257,12 @@ index 5989953..65b807b 100644
    ', not fully settled': ', not fully settled'
    'Ad5xFinish': 'Ad5xFinish'
 diff --git a/translations/ru.yml b/translations/ru.yml
-index 2314b41..be23251 100644
+index bc99e33206..b122c8bb12 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -5154,6 +5154,22 @@ translations:
-   'Basic': 'Базовый'
-   'Recycled': 'Переработанный'
+@@ -6627,6 +6627,22 @@ translations:
+   Add to Spoolman: 'Добавить в Spoolman'
+   Add to Spoolman & Assign: Добавить в Spoolman и назначить
    'Add to Spoolman + label': 'Добавить в Spoolman + этикетка'
 +  # Kiln's tour (patch 0058, tour_steps_kiln.cpp)
 +  'Welcome to Kiln OS': 'Добро пожаловать в Kiln OS'
@@ -282,8 +281,5 @@ index 2314b41..be23251 100644
 +  'Macros, G-code console, print history, Spoolman, calibration, and Shutdown or Reboot.': 'Макросы, консоль G-code, история печати, Spoolman, калибровка, выключение и перезагрузка.'
 +  'Screen, sound, connection, and the printer''s own settings: Run Setup Wizard, Nozzle Size, Filament Auto-Refill, Plugins. Replay this tour from Help & About.': 'Экран, звук, соединение и настройки принтера: «Запустить мастер настройки», «Размер сопла», «Автозамена филамента», «Плагины». Повторить тур: «Помощь и о программе».'
    'More': 'Ещё'
+   Price per kWh: "Цена за кВт·ч"
    'Price, location, lot, notes': 'Цена, место, партия, заметки'
-   'Product': 'Продукт'
--- 
-2.56.0
-

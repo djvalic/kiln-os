@@ -6,7 +6,8 @@
 
 #include "i18n_ids.h"
 
-/* A code from the picker ("en", "de", ...); anything else is LANG_EN */
+/* A code the recovery UI ships ("en", "ru"); anything else, a language
+ * Kiln OS no longer ships among them ("de", "zh", ...), is LANG_EN */
 rui_lang lang_from_code(const char *code);
 
 /* The top-level "language" string of a JSON object text. Nested keys,

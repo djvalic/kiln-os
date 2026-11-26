@@ -166,6 +166,23 @@ is missing": it replaces the connection's security settings with the
 password alone; fixed in 1.56). Upstream's way out, deleting the connection
 and making a new one, stays for a connection without key management.
 
+### If Wi-Fi misbehaves
+
+v1.0.1-rc3 moved HelixScreen to v1.2.0-alpha.1, so the screen's Wi-Fi code
+is newer than the rest of this page has been tried with. Kiln's patches
+above (0046, 0051, 0083, 0086) are carried over; the change is in
+HelixScreen's own joining code, and in the new "Getting address…" state
+(HelixScreen issue #2101). If the screen won't join, forgets a saved
+network or its password, never shows an address, or Wi-Fi is gone after a
+restart:
+
+1. Note what you did and what the screen showed.
+2. Use Ethernet, or the old way (`/data/ad5x/network-legacy`, above), to
+   get the printer back on the network.
+3. Open a GitHub issue with `network.log`, `wifi.log` (and their `.1`
+   copies, the start before) and `helixscreen.log` from
+   `printer_data/logs/` (Fluidd > Logs; [logs.md](logs.md)).
+
 ## Logs
 
 - `printer_data/logs/network.log`: the stack chosen and why, the

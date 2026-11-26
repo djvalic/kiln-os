@@ -106,6 +106,7 @@ define AD5X_SYSTEM_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-config-templates \
 		$(TARGET_DIR)/usr/bin/ad5x-config-templates
 	$(AD5X_SYSTEM_INSTALL_VENDOR_SUPPORT)
+	$(AD5X_SYSTEM_INSTALL_ROOT_PASSWORD)
 	for f in $(@D)/init.d/S*; do \
 		$(INSTALL) -D -m 0755 $$f $(TARGET_DIR)/etc/init.d/$$(basename $$f) \
 			|| exit 1; \
@@ -128,6 +129,32 @@ define AD5X_SYSTEM_INSTALL_VENDOR_SUPPORT
 	done
 endef
 AD5X_SYSTEM_PKGDIR = $(BR2_EXTERNAL_AD5X_PATH)/package/ad5x-system
+
+# Root's password kept on /data (lib/rootpw.sh, read by S05ad5x-data;
+# ad5x-passwd; passwd runs ad5x-passwd, as BusyBox's can't write the
+# read-only /etc). Shared with the recovery image (ad5x-recovery.mk).
+# BusyBox's own passwd link wins over the file installed here: with
+# per-package directories the final target is merged from every package's
+# own, whatever the install order (rc3's test and staged builds). So
+# AD5X_SYSTEM_PASSWD_LAST puts the wrapper back as a target-finalize hook,
+# on the merged target, in both images.
+define AD5X_SYSTEM_INSTALL_ROOT_PASSWORD
+	$(INSTALL) -D -m 0644 $(AD5X_SYSTEM_PKGDIR)/lib/rootpw.sh \
+		$(TARGET_DIR)/usr/lib/ad5x/rootpw.sh
+	$(INSTALL) -D -m 0755 $(AD5X_SYSTEM_PKGDIR)/bin/ad5x-passwd \
+		$(TARGET_DIR)/usr/bin/ad5x-passwd
+	rm -f $(TARGET_DIR)/usr/bin/passwd
+	$(INSTALL) -D -m 0755 $(AD5X_SYSTEM_PKGDIR)/bin/passwd \
+		$(TARGET_DIR)/usr/bin/passwd
+endef
+define AD5X_SYSTEM_PASSWD_LAST
+	rm -f $(TARGET_DIR)/usr/bin/passwd
+	$(INSTALL) -D -m 0755 $(AD5X_SYSTEM_PKGDIR)/bin/passwd \
+		$(TARGET_DIR)/usr/bin/passwd
+endef
+ifneq ($(BR2_PACKAGE_AD5X_SYSTEM)$(BR2_PACKAGE_AD5X_RECOVERY),)
+TARGET_FINALIZE_HOOKS += AD5X_SYSTEM_PASSWD_LAST
+endif
 
 # The boards' Klipper firmware this image is tested against
 # (klipper/mcu-dicts/FLASHED, built by tools/build_mcu.sh); ad5x-mcu flashes

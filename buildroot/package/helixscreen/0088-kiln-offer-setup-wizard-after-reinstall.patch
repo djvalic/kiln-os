@@ -31,30 +31,27 @@ Russian and in German.
 
 Upstream: not applicable (Kiln OS specific)
 ---
- include/ui_kiln_wizard_offer.h        |  85 +++++++++
- src/application/application.cpp       |   5 +
- src/ui/ui_kiln_wizard_offer.cpp       | 157 ++++++++++++++++
- src/ui/ui_wizard_ad5x_setup.cpp       |   3 +
- tests/unit/test_kiln_wizard_offer.cpp | 288 ++++++++++++++++++++++++++++
- translations/de.yml                   |   3 +
- translations/en.yml                   |   3 +
- translations/es.yml                   |   3 +
- translations/fr.yml                   |   3 +
- translations/it.yml                   |   3 +
- translations/ja.yml                   |   3 +
- translations/ko.yml                   |   5 +
- translations/pt.yml                   |   3 +
- translations/ru.yml                   |   3 +
- translations/tr.yml                   |   5 +
- translations/zh.yml                   |   3 +
+ include/ui_kiln_wizard_offer.h         |  85 ++++++++
+ src/application/application.cpp        |   5 +
+ src/ui/ui_kiln_wizard_offer.cpp        | 157 ++++++++++++++
+ src/ui/wizard/ui_wizard_ad5x_setup.cpp |   3 +
+ tests/unit/test_kiln_wizard_offer.cpp  | 288 +++++++++++++++++++++++++
+ translations/de.yml                    |   3 +
+ translations/en.yml                    |   3 +
+ translations/es.yml                    |   3 +
+ translations/fr.yml                    |   3 +
+ translations/it.yml                    |   3 +
+ translations/ja.yml                    |   3 +
+ translations/ko.yml                    |   5 +
+ translations/pt.yml                    |   3 +
+ translations/ru.yml                    |   3 +
+ translations/tr.yml                    |   5 +
+ translations/zh.yml                    |   3 +
  16 files changed, 575 insertions(+)
- create mode 100644 include/ui_kiln_wizard_offer.h
- create mode 100644 src/ui/ui_kiln_wizard_offer.cpp
- create mode 100644 tests/unit/test_kiln_wizard_offer.cpp
 
 diff --git a/include/ui_kiln_wizard_offer.h b/include/ui_kiln_wizard_offer.h
 new file mode 100644
-index 0000000..fbb97b6
+index 0000000000..fbb97b6d85
 --- /dev/null
 +++ b/include/ui_kiln_wizard_offer.h
 @@ -0,0 +1,85 @@
@@ -144,18 +141,18 @@ index 0000000..fbb97b6
 +
 +} // namespace helix::kiln_wizard_offer
 diff --git a/src/application/application.cpp b/src/application/application.cpp
-index 1c2863d..d671e5d 100644
+index b5bbe06e94..e590950fd6 100644
 --- a/src/application/application.cpp
 +++ b/src/application/application.cpp
-@@ -211,6 +211,7 @@
- #include "action_prompt_manager.h"
+@@ -217,6 +217,7 @@
  #include "action_prompt_modal.h"
  #include "app_globals.h"
+ #include "core/update_queue.h"
 +#include "ui_kiln_wizard_offer.h"
- #include "ui_wizard_ad5x_setup.h"
- #include "helix_fs.h"
  #include "detection_manager.h"
-@@ -904,6 +905,10 @@ int Application::run(int argc, char** argv) {
+ #include "filament_sensor_manager.h"
+ #include "gcode_file_modifier.h"
+@@ -842,6 +843,10 @@ int Application::run(int argc, char** argv) {
              // default layout reflects currently-connected hardware.
              get_global_home_panel().finalize_setup();
          }
@@ -168,13 +165,14 @@ index 1c2863d..d671e5d 100644
          // per-printer cache of the Moonraker plugin folder, synced on connect)
 diff --git a/src/ui/ui_kiln_wizard_offer.cpp b/src/ui/ui_kiln_wizard_offer.cpp
 new file mode 100644
-index 0000000..9ea020d
+index 0000000000..d6cbbd8425
 --- /dev/null
 +++ b/src/ui/ui_kiln_wizard_offer.cpp
 @@ -0,0 +1,157 @@
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +
 +#include "ui_kiln_wizard_offer.h"
++#include "ui_widget_ref.h"
 +
 +#include "ui_modal.h"
 +#include "ui_toast_manager.h"
@@ -195,16 +193,15 @@ index 0000000..9ea020d
 +
 +namespace {
 +
-+lv_obj_t* g_dialog = nullptr;
++// Cleared by itself when the dialog is deleted (a fixture or a rebuild can
++// delete it without telling us)
++helix::ui::WeakWidget g_dialog;
 +std::function<void()> g_launch_override;
 +
 +/// The dialog is still on the screen (a fixture or a rebuild can delete it
 +/// without telling us)
 +bool dialog_up() {
-+    if (g_dialog && !lv_obj_is_valid(g_dialog)) {
-+        g_dialog = nullptr;
-+    }
-+    return g_dialog != nullptr;
++    return g_dialog.get() != nullptr;
 +}
 +
 +bool motion_blocked() {
@@ -329,18 +326,18 @@ index 0000000..9ea020d
 +}
 +
 +} // namespace helix::kiln_wizard_offer
-diff --git a/src/ui/ui_wizard_ad5x_setup.cpp b/src/ui/ui_wizard_ad5x_setup.cpp
-index b378d16..edafd8e 100644
---- a/src/ui/ui_wizard_ad5x_setup.cpp
-+++ b/src/ui/ui_wizard_ad5x_setup.cpp
-@@ -7,6 +7,7 @@
+diff --git a/src/ui/wizard/ui_wizard_ad5x_setup.cpp b/src/ui/wizard/ui_wizard_ad5x_setup.cpp
+index 875f2303a0..720dfed96b 100644
+--- a/src/ui/wizard/ui_wizard_ad5x_setup.cpp
++++ b/src/ui/wizard/ui_wizard_ad5x_setup.cpp
+@@ -9,6 +9,7 @@
  #include "ui_emergency_stop.h"
  #include "ui_error_reporting.h"
  #include "ui_event_safety.h"
 +#include "ui_kiln_wizard_offer.h"
  #include "ui_modal.h"
  #include "ui_settings_language_time.h"
- #include "ui_update_queue.h"
+ #include "core/update_queue.h"
 @@ -1522,6 +1523,8 @@ void watch_wizard_requests() {
                  if (const char* flag = std::getenv("HELIX_WIZARD_FLAG_FILE")) {
                      helix::fs::remove(flag);
@@ -352,7 +349,7 @@ index b378d16..edafd8e 100644
                  }
 diff --git a/tests/unit/test_kiln_wizard_offer.cpp b/tests/unit/test_kiln_wizard_offer.cpp
 new file mode 100644
-index 0000000..e7e4a29
+index 0000000000..51aba1d4fa
 --- /dev/null
 +++ b/tests/unit/test_kiln_wizard_offer.cpp
 @@ -0,0 +1,288 @@
@@ -372,7 +369,7 @@ index 0000000..e7e4a29
 +#include "ui_kiln_wizard_offer.h"
 +#include "ui_modal.h"
 +#include "ui_toast_manager.h"
-+#include "ui_update_queue.h"
++#include "core/update_queue.h"
 +
 +#include "../lvgl_ui_test_fixture.h"
 +#include "../test_helpers/modal_answer.h"
@@ -645,10 +642,10 @@ index 0000000..e7e4a29
 +               ContainsSubstring("Überspringen"));
 +}
 diff --git a/translations/de.yml b/translations/de.yml
-index d6ffa48..a0396b2 100644
+index 549e1cbf5a..a37226cebd 100644
 --- a/translations/de.yml
 +++ b/translations/de.yml
-@@ -5142,3 +5142,6 @@ translations:
+@@ -6540,3 +6540,6 @@ translations:
    'Bypass is active, but this print uses IFS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?': 'Bypass ist aktiv, aber dieser Druck verwendet IFS-Slots. Der Drucker verweigert möglicherweise das Laden eines Slots, solange Bypass-Filament im Werkzeugkopf ist. Entfernen Sie das Filament und deaktivieren Sie Bypass, bevor Sie drucken. Trotzdem starten?'
    'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': 'Im Werkzeugkopf befindet sich Filament, aber kein IFS-Slot meldet es als geladen. Der Drucker verweigert möglicherweise das Laden eines Slots, bis er geleert ist. Trotzdem starten?'
    'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?': 'Im Werkzeugkopf befindet sich Filament, aber kein IFS-Slot meldet es als geladen. Ziehen Sie es vor dem Drucken manuell heraus. Trotzdem starten?'
@@ -656,10 +653,10 @@ index d6ffa48..a0396b2 100644
 +  'Run the setup wizard?': 'Einrichtungsassistenten starten?'
 +  'Kiln OS is installed again and kept your settings. Flashforge''s firmware ran in between and may have changed the filament, the Z offset or the boards. The setup wizard checks and tunes the printer again; every step can be skipped.': 'Kiln OS ist neu installiert und hat deine Einstellungen behalten. Dazwischen lief die Firmware von Flashforge und hat vielleicht das Filament, den Z-Offset oder die Steuerplatinen geändert. Der Einrichtungsassistent prüft und optimiert den Drucker erneut; jeder Schritt lässt sich überspringen.'
 diff --git a/translations/en.yml b/translations/en.yml
-index 2ada29d..6639f2a 100644
+index d88e17cd6c..8342fd1a5d 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -5395,3 +5395,6 @@ translations:
+@@ -6862,3 +6862,6 @@ translations:
    'Which slot is in the toolhead?': 'Which slot is in the toolhead?'
    'Kiln can''t tell which slot''s filament is in the toolhead. Look at the tubes: tap the slot whose filament goes into the toolhead. Nothing is fed until you choose.': 'Kiln can''t tell which slot''s filament is in the toolhead. Look at the tubes: tap the slot whose filament goes into the toolhead. Nothing is fed until you choose.'
    'I pulled it out by hand': 'I pulled it out by hand'
@@ -667,10 +664,10 @@ index 2ada29d..6639f2a 100644
 +  'Run the setup wizard?': 'Run the setup wizard?'
 +  'Kiln OS is installed again and kept your settings. Flashforge''s firmware ran in between and may have changed the filament, the Z offset or the boards. The setup wizard checks and tunes the printer again; every step can be skipped.': 'Kiln OS is installed again and kept your settings. Flashforge''s firmware ran in between and may have changed the filament, the Z offset or the boards. The setup wizard checks and tunes the printer again; every step can be skipped.'
 diff --git a/translations/es.yml b/translations/es.yml
-index 104e814..7b956d7 100644
+index 10ce7f5f8d..b0fd3148cc 100644
 --- a/translations/es.yml
 +++ b/translations/es.yml
-@@ -5132,3 +5132,6 @@ translations:
+@@ -6540,3 +6540,6 @@ translations:
    'Bypass is active, but this print uses IFS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?': 'El bypass está activo, pero esta impresión usa ranuras IFS. La impresora puede negarse a cargar una ranura mientras haya filamento de bypass en el cabezal. Retire el filamento y desactive el bypass antes de imprimir. ¿Iniciar de todos modos?'
    'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': 'El cabezal tiene filamento, pero ninguna ranura del IFS informa que esté cargado. La impresora puede negarse a cargar una ranura hasta que se vacíe. ¿Iniciar de todos modos?'
    'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?': 'El cabezal tiene filamento, pero ninguna ranura del IFS informa que esté cargado. Retírelo manualmente antes de imprimir. ¿Iniciar de todos modos?'
@@ -678,10 +675,10 @@ index 104e814..7b956d7 100644
 +  'Run the setup wizard?': '¿Ejecutar el asistente de configuración?'
 +  'Kiln OS is installed again and kept your settings. Flashforge''s firmware ran in between and may have changed the filament, the Z offset or the boards. The setup wizard checks and tunes the printer again; every step can be skipped.': 'Kiln OS se ha vuelto a instalar y ha conservado tus ajustes. Mientras tanto funcionó el firmware de Flashforge, que puede haber cambiado el filamento, el desfase Z o las placas controladoras. El asistente de configuración vuelve a comprobar y ajustar la impresora; puedes omitir cualquier paso.'
 diff --git a/translations/fr.yml b/translations/fr.yml
-index 9117442..110e76c 100644
+index 1144f115b0..e3e8a552c7 100644
 --- a/translations/fr.yml
 +++ b/translations/fr.yml
-@@ -5168,3 +5168,6 @@ translations:
+@@ -6552,3 +6552,6 @@ translations:
    'Bypass is active, but this print uses IFS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?': 'Le bypass est actif, mais cette impression utilise les slots de l''IFS. L''imprimante peut refuser de charger un slot tant que du filament bypass se trouve dans la tête d''outil. Retirez le filament et désactivez le bypass avant d''imprimer. Démarrer quand même ?'
    'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': 'La tête d''outil contient du filament mais aucun slot de l''IFS ne le signale comme chargé. L''imprimante peut refuser de charger un slot tant qu''il n''est pas vidé. Démarrer quand même ?'
    'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?': 'La tête d''outil contient du filament mais aucun slot de l''IFS ne le signale comme chargé. Retirez-le manuellement avant d''imprimer. Démarrer quand même ?'
@@ -689,10 +686,10 @@ index 9117442..110e76c 100644
 +  'Run the setup wizard?': 'Lancer l''assistant de configuration ?'
 +  'Kiln OS is installed again and kept your settings. Flashforge''s firmware ran in between and may have changed the filament, the Z offset or the boards. The setup wizard checks and tunes the printer again; every step can be skipped.': 'Kiln OS a été réinstallé et a conservé vos paramètres. Entre-temps, le firmware de Flashforge a fonctionné et a pu modifier le filament, le décalage Z ou les cartes contrôleur. L''assistant de configuration vérifie et règle de nouveau l''imprimante ; chaque étape peut être passée.'
 diff --git a/translations/it.yml b/translations/it.yml
-index 778c4d7..34ee5da 100644
+index 4771036d7b..c5b2e091df 100644
 --- a/translations/it.yml
 +++ b/translations/it.yml
-@@ -5133,3 +5133,6 @@ translations:
+@@ -6540,3 +6540,6 @@ translations:
    'Bypass is active, but this print uses IFS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?': 'Il bypass è attivo, ma questa stampa usa gli slot IFS. La stampante potrebbe rifiutare il caricamento di uno slot mentre il filamento del bypass è nella testina. Rimuovi il filamento e disattiva il bypass prima di stampare. Avviare comunque?'
    'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': 'La testina contiene filamento ma nessuno slot IFS lo riporta come caricato. La stampante potrebbe rifiutare il caricamento di uno slot finché non viene svuotata. Avviare comunque?'
    'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?': 'La testina contiene filamento ma nessuno slot IFS lo riporta come caricato. Estrailo manualmente prima di stampare. Avviare comunque?'
@@ -700,10 +697,10 @@ index 778c4d7..34ee5da 100644
 +  'Run the setup wizard?': 'Avviare la procedura guidata di configurazione?'
 +  'Kiln OS is installed again and kept your settings. Flashforge''s firmware ran in between and may have changed the filament, the Z offset or the boards. The setup wizard checks and tunes the printer again; every step can be skipped.': 'Kiln OS è stato reinstallato e ha mantenuto le tue impostazioni. Nel frattempo ha funzionato il firmware di Flashforge, che potrebbe aver cambiato il filamento, l''offset Z o le schede controller. La procedura guidata di configurazione controlla e regola di nuovo la stampante; ogni passaggio si può saltare.'
 diff --git a/translations/ja.yml b/translations/ja.yml
-index 6ee0b7f..58efee5 100644
+index 0550ff0efe..f408475f51 100644
 --- a/translations/ja.yml
 +++ b/translations/ja.yml
-@@ -4876,3 +4876,6 @@ translations:
+@@ -6540,3 +6540,6 @@ translations:
    'Bypass is active, but this print uses IFS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?': 'バイパスが有効ですが、この印刷はIFSスロットを使用します。バイパスのフィラメントがツールヘッドにある間は、プリンターがスロットの装填を拒否する場合があります。印刷前にフィラメントを取り除き、バイパスをオフにしてください。それでも印刷を開始しますか？'
    'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': 'ツールヘッドにフィラメントがありますが、装填済みと報告しているIFSスロットはありません。取り除くまで、プリンターがスロットの装填を拒否する場合があります。それでも印刷を開始しますか？'
    'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?': 'ツールヘッドにフィラメントがありますが、装填済みと報告しているIFSスロットはありません。印刷前に手動で引き抜いてください。それでも印刷を開始しますか？'
@@ -711,7 +708,7 @@ index 6ee0b7f..58efee5 100644
 +  'Run the setup wizard?': 'セットアップウィザードを実行しますか？'
 +  'Kiln OS is installed again and kept your settings. Flashforge''s firmware ran in between and may have changed the filament, the Z offset or the boards. The setup wizard checks and tunes the printer again; every step can be skipped.': 'Kiln OSが再インストールされ、設定は保持されています。その間にFlashforgeのファームウェアが動作し、フィラメント、Zオフセット、またはコントローラーボードが変更された可能性があります。セットアップウィザードでプリンターを再度確認・調整します。各ステップはスキップできます。'
 diff --git a/translations/ko.yml b/translations/ko.yml
-index 32fbd95..28a85e7 100644
+index 32fbd95ae6..28a85e76c7 100644
 --- a/translations/ko.yml
 +++ b/translations/ko.yml
 @@ -4673,3 +4673,8 @@ translations:
@@ -724,10 +721,10 @@ index 32fbd95..28a85e7 100644
 +  # Run refused during a print (an upstream key this language lacked)
 +  'Cannot calibrate while printing': '인쇄 중에는 보정할 수 없습니다'
 diff --git a/translations/pt.yml b/translations/pt.yml
-index 516da46..28c8cb0 100644
+index e0d7a6ded4..e6cbe5587d 100644
 --- a/translations/pt.yml
 +++ b/translations/pt.yml
-@@ -5136,3 +5136,6 @@ translations:
+@@ -6540,3 +6540,6 @@ translations:
    'Bypass is active, but this print uses IFS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?': 'O bypass está ativo, mas esta impressão usa slots IFS. A impressora pode não conseguir carregar um slot enquanto houver filamento de bypass no cabeçote. Remova o filamento e desative o bypass antes de imprimir. Iniciar mesmo assim?'
    'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': 'O cabeçote tem filamento, mas nenhum slot IFS o reporta como carregado. A impressora pode não conseguir carregar um slot até que ele seja esvaziado. Iniciar mesmo assim?'
    'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?': 'O cabeçote tem filamento, mas nenhum slot IFS o reporta como carregado. Retire-o manualmente antes de imprimir. Iniciar mesmo assim?'
@@ -735,10 +732,10 @@ index 516da46..28c8cb0 100644
 +  'Run the setup wizard?': 'Executar o assistente de configuração?'
 +  'Kiln OS is installed again and kept your settings. Flashforge''s firmware ran in between and may have changed the filament, the Z offset or the boards. The setup wizard checks and tunes the printer again; every step can be skipped.': 'O Kiln OS foi instalado novamente e manteve suas configurações. Nesse meio-tempo, o firmware da Flashforge rodou e pode ter alterado o filamento, o deslocamento Z ou as placas controladoras. O assistente de configuração verifica e ajusta a impressora de novo; qualquer etapa pode ser pulada.'
 diff --git a/translations/ru.yml b/translations/ru.yml
-index bb03bc7..e902639 100644
+index 73d8bc82b3..670667c4f2 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -5561,3 +5561,6 @@ translations:
+@@ -7038,3 +7038,6 @@ translations:
    'Which slot is in the toolhead?': 'Какой слот в печатающей головке?'
    'Kiln can''t tell which slot''s filament is in the toolhead. Look at the tubes: tap the slot whose filament goes into the toolhead. Nothing is fed until you choose.': 'Kiln не может определить, филамент какого слота в печатающей головке. Посмотрите на трубки и нажмите слот, филамент которого идёт в печатающую головку. Пока вы не выберете, ничего не подаётся.'
    'I pulled it out by hand': 'Филамент вытянут вручную'
@@ -746,7 +743,7 @@ index bb03bc7..e902639 100644
 +  'Run the setup wizard?': 'Запустить мастер настройки?'
 +  'Kiln OS is installed again and kept your settings. Flashforge''s firmware ran in between and may have changed the filament, the Z offset or the boards. The setup wizard checks and tunes the printer again; every step can be skipped.': 'Kiln OS установлена снова, ваши настройки сохранены. До этого работала прошивка Flashforge: она могла изменить филамент, смещение по Z или прошивку плат. Мастер настройки снова проверит и настроит принтер, любой шаг можно пропустить.'
 diff --git a/translations/tr.yml b/translations/tr.yml
-index 54c741f..09136f8 100644
+index 54c741fbcb..09136f8d07 100644
 --- a/translations/tr.yml
 +++ b/translations/tr.yml
 @@ -4673,3 +4673,8 @@ translations:
@@ -759,10 +756,10 @@ index 54c741f..09136f8 100644
 +  # Run refused during a print (an upstream key this language lacked)
 +  'Cannot calibrate while printing': 'Yazdırma sırasında kalibrasyon yapılamaz'
 diff --git a/translations/zh.yml b/translations/zh.yml
-index a72956d..b86a84f 100644
+index ff3c212c2e..92a4152f95 100644
 --- a/translations/zh.yml
 +++ b/translations/zh.yml
-@@ -4866,3 +4866,6 @@ translations:
+@@ -6540,3 +6540,6 @@ translations:
    'Bypass is active, but this print uses IFS slots. The printer may refuse to load a slot while bypass filament is in the toolhead. Remove the filament and turn bypass off before printing. Start anyway?': '旁路已启用，但此打印使用 IFS 槽位。当旁路耗材仍在工具头中时，打印机可能拒绝装载槽位。请在打印前取出耗材并关闭旁路。仍要开始打印吗？'
    'The toolhead has filament but no IFS slot reports it loaded. The printer may refuse to load a slot until it is cleared. Start anyway?': '工具头内有耗材，但没有 IFS 槽位报告已装载。在清空之前，打印机可能拒绝装载槽位。仍要开始打印吗？'
    'The toolhead has filament but no IFS slot reports it loaded. Pull it out manually before printing. Start anyway?': '工具头内有耗材，但没有 IFS 槽位报告已装载。请在打印前手动取出耗材。仍要开始打印吗？'

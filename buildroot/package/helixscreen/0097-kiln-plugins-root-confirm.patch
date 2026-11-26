@@ -59,7 +59,7 @@ for word).
  14 files changed, 177 insertions(+), 16 deletions(-)
 
 diff --git a/include/ui_settings_ad5x_plugins.h b/include/ui_settings_ad5x_plugins.h
-index cc80efa..4b59a12 100644
+index d6a30416d7..c52e03bf31 100644
 --- a/include/ui_settings_ad5x_plugins.h
 +++ b/include/ui_settings_ad5x_plugins.h
 @@ -42,6 +42,7 @@ struct Ad5xInstalledPlugin {
@@ -101,7 +101,7 @@ index cc80efa..4b59a12 100644
      bool loaded_ = false;
      bool klippy_ready_ = true;
 diff --git a/src/ui/ui_settings_ad5x_plugins.cpp b/src/ui/ui_settings_ad5x_plugins.cpp
-index 787788c..8f934de 100644
+index db745e6f9a..0238b84e4c 100644
 --- a/src/ui/ui_settings_ad5x_plugins.cpp
 +++ b/src/ui/ui_settings_ad5x_plugins.cpp
 @@ -102,6 +102,7 @@ std::vector<Ad5xInstalledPlugin> ad5x_installed_plugins(const json& status) {
@@ -173,7 +173,7 @@ index 787788c..8f934de 100644
  
  void Ad5xPluginsOverlay::handle_install(const std::string& name) {
 diff --git a/tests/unit/test_settings_ad5x_plugins.cpp b/tests/unit/test_settings_ad5x_plugins.cpp
-index 976830a..49480d8 100644
+index 976830a8e5..49480d888d 100644
 --- a/tests/unit/test_settings_ad5x_plugins.cpp
 +++ b/tests/unit/test_settings_ad5x_plugins.cpp
 @@ -2,10 +2,16 @@
@@ -325,10 +325,10 @@ index 976830a..49480d8 100644
 +    CHECK(ru.button == "Включить");
 +}
 diff --git a/translations/de.yml b/translations/de.yml
-index 2289c11..d7c39ca 100644
+index 4bf88a23d9..067fdcdfb1 100644
 --- a/translations/de.yml
 +++ b/translations/de.yml
-@@ -5158,3 +5158,6 @@ translations:
+@@ -6556,3 +6556,6 @@ translations:
    'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': 'Neustart ins Wiederherstellungssystem (ein Update von einem USB-Stick oder über die Webseite auf Port 8080 installieren)'
    'Restarting into the recovery OS...': 'Neustart ins Wiederherstellungssystem...'
    'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'Der Drucker startet ins Wiederherstellungssystem neu, wo er nicht drucken kann. Zum Zurückkehren dort auf Boot main OS tippen.'
@@ -336,20 +336,20 @@ index 2289c11..d7c39ca 100644
 +  'Turn on {}?': '{} einschalten?'
 +  'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'Dieses Plugin führt einen Teil seines Codes als root aus, dem Administratorkonto des Systems, zum Beispiel um USB-Geräte einzurichten. Schalte es nur ein, wenn du seiner Herkunft vertraust. Klipper startet neu.'
 diff --git a/translations/en.yml b/translations/en.yml
-index 9239089..3ff02e3 100644
+index 2678efd909..3b0cc6e5b6 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -5404,3 +5404,5 @@ translations:
+@@ -6871,3 +6871,5 @@ translations:
    'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.': 'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.'
    'Kiln''s own boot loader': 'Kiln''s own boot loader'
    'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader. Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader. Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
 +  # Kiln OS: switching on a plugin that runs code as root (patch 0097)
 +  'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.'
 diff --git a/translations/es.yml b/translations/es.yml
-index e705e3e..053c6e3 100644
+index f72c470ace..6bcead8399 100644
 --- a/translations/es.yml
 +++ b/translations/es.yml
-@@ -5148,3 +5148,6 @@ translations:
+@@ -6556,3 +6556,6 @@ translations:
    'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': 'Reiniciar en el sistema de recuperación (instalar una actualización desde una memoria USB o la página web del puerto 8080)'
    'Restarting into the recovery OS...': 'Reiniciando en el sistema de recuperación...'
    'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'La impresora se reinicia en el sistema de recuperación, donde no puede imprimir. Para volver, toca Boot main OS en su pantalla.'
@@ -357,10 +357,10 @@ index e705e3e..053c6e3 100644
 +  'Turn on {}?': '¿Encender {}?'
 +  'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'Este plugin ejecuta parte de su código como root, la cuenta de administrador del sistema, por ejemplo para configurar dispositivos USB. Enciéndelo solo si confías en su origen. Klipper se reinicia.'
 diff --git a/translations/fr.yml b/translations/fr.yml
-index a230ec1..867f12e 100644
+index 3d360d479f..fc26d6c94f 100644
 --- a/translations/fr.yml
 +++ b/translations/fr.yml
-@@ -5184,3 +5184,6 @@ translations:
+@@ -6568,3 +6568,6 @@ translations:
    'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': 'Redémarrer dans le système de récupération (installer une mise à jour depuis une clé USB ou la page web du port 8080)'
    'Restarting into the recovery OS...': 'Redémarrage dans le système de récupération...'
    'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'L''imprimante redémarre dans le système de récupération, où elle ne peut pas imprimer. Pour revenir, touchez Boot main OS sur son écran.'
@@ -368,10 +368,10 @@ index a230ec1..867f12e 100644
 +  'Turn on {}?': 'Allumer {} ?'
 +  'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'Ce plugin exécute une partie de son code en tant que root, le compte administrateur du système, par exemple pour configurer des périphériques USB. Ne l''activez que si vous faites confiance à sa provenance. Klipper redémarre.'
 diff --git a/translations/it.yml b/translations/it.yml
-index 2709027..9cb41f2 100644
+index 2c3e2527c8..72e289a722 100644
 --- a/translations/it.yml
 +++ b/translations/it.yml
-@@ -5149,3 +5149,6 @@ translations:
+@@ -6556,3 +6556,6 @@ translations:
    'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': 'Riavvia nel sistema di ripristino (installa un aggiornamento da una chiavetta USB o dalla pagina web sulla porta 8080)'
    'Restarting into the recovery OS...': 'Riavvio nel sistema di ripristino...'
    'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'La stampante si riavvia nel sistema di ripristino, dove non può stampare. Per tornare, tocca Boot main OS sulla sua schermata.'
@@ -379,10 +379,10 @@ index 2709027..9cb41f2 100644
 +  'Turn on {}?': 'Accendere {}?'
 +  'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'Questo plugin esegue parte del suo codice come root, l''account amministratore del sistema, ad esempio per configurare dispositivi USB. Accendilo solo se ti fidi della sua provenienza. Klipper si riavvia.'
 diff --git a/translations/ja.yml b/translations/ja.yml
-index 7e86fad..820a926 100644
+index 33b2c5248f..1f8b2bc5fe 100644
 --- a/translations/ja.yml
 +++ b/translations/ja.yml
-@@ -4892,3 +4892,6 @@ translations:
+@@ -6556,3 +6556,6 @@ translations:
    'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': '復旧システムで再起動します (USB メモリまたはポート 8080 の Web ページから更新をインストール)'
    'Restarting into the recovery OS...': '復旧システムで再起動しています...'
    'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'プリンターは復旧システムで再起動し、そこでは印刷できません。戻るには、その画面で Boot main OS をタップしてください。'
@@ -390,7 +390,7 @@ index 7e86fad..820a926 100644
 +  'Turn on {}?': '{} をオンにしますか？'
 +  'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'このプラグインはコードの一部を root（システムの管理者アカウント）として実行します。たとえば USB デバイスの設定に使います。提供元を信頼できる場合にのみオンにしてください。Klipper が再起動します。'
 diff --git a/translations/ko.yml b/translations/ko.yml
-index 9aa1685..19ad384 100644
+index 9aa1685284..19ad384b1a 100644
 --- a/translations/ko.yml
 +++ b/translations/ko.yml
 @@ -4691,3 +4691,6 @@ translations:
@@ -401,10 +401,10 @@ index 9aa1685..19ad384 100644
 +  'Turn on {}?': '{}을(를) 켤까요?'
 +  'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': '이 플러그인은 USB 장치 설정 등을 위해 코드의 일부를 root(시스템 관리자 계정)로 실행합니다. 출처를 신뢰할 수 있을 때만 켜세요. Klipper가 재시작됩니다.'
 diff --git a/translations/pt.yml b/translations/pt.yml
-index 3cedd7a..25f7c10 100644
+index 1762a75b31..4f7912f9ab 100644
 --- a/translations/pt.yml
 +++ b/translations/pt.yml
-@@ -5152,3 +5152,6 @@ translations:
+@@ -6556,3 +6556,6 @@ translations:
    'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': 'Reiniciar no sistema de recuperação (instalar uma atualização de um pendrive ou pela página web na porta 8080)'
    'Restarting into the recovery OS...': 'Reiniciando no sistema de recuperação...'
    'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': 'A impressora reinicia no sistema de recuperação, onde não pode imprimir. Para voltar, toque em Boot main OS na tela dele.'
@@ -412,17 +412,17 @@ index 3cedd7a..25f7c10 100644
 +  'Turn on {}?': 'Ligar {}?'
 +  'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'Este plugin executa parte do seu código como root, a conta de administrador do sistema, por exemplo para configurar dispositivos USB. Ligue-o apenas se confiar na sua origem. O Klipper reinicia.'
 diff --git a/translations/ru.yml b/translations/ru.yml
-index 177cd41..c796cd7 100644
+index aa3926ad09..40bd070b50 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -5570,3 +5570,5 @@ translations:
+@@ -7047,3 +7047,5 @@ translations:
    'A boot loader update is ready. To install it: Settings > System > Boot into recovery > Reboot / Power > Update Kiln''s boot loader. Nothing is written until you start it there.': 'Готово обновление загрузчика. Чтобы установить его: Настройки > Система > Загрузить систему восстановления > Питание > Обновить загрузчик Kiln. Пока вы не запустите обновление там, ничего не записывается.'
    'Kiln''s own boot loader': 'Собственный загрузчик Kiln'
    'Kiln OS has its own boot loader for this printer. To install it: Settings > System > Boot into recovery > Reboot / Power > Install Kiln''s boot loader. Read the boot loader guide first; it explains the risk and the rescue stick: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md': 'У Kiln OS есть собственный загрузчик для этого принтера. Чтобы установить его: Настройки > Система > Загрузить систему восстановления > Питание > Установить загрузчик Kiln. Сначала прочитайте руководство по загрузчику, в нём описаны риск и флешка для восстановления: github.com/djvalic/kiln-os/blob/main/docs/own-boot-loader.md'
 +  # Kiln OS: switching on a plugin that runs code as root (patch 0097)
 +  'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'Часть кода этого плагина выполняется от имени root, учётной записи администратора системы, например для настройки USB-устройств. Включайте его, только если доверяете его источнику. Klipper перезапустится.'
 diff --git a/translations/tr.yml b/translations/tr.yml
-index 2366826..b5df9c1 100644
+index 2366826e84..b5df9c1537 100644
 --- a/translations/tr.yml
 +++ b/translations/tr.yml
 @@ -4691,3 +4691,6 @@ translations:
@@ -433,10 +433,10 @@ index 2366826..b5df9c1 100644
 +  'Turn on {}?': '{} açılsın mı?'
 +  'This plugin runs some of its code as root, the system''s administrator account, for example to set up USB devices. Turn it on only if you trust where it comes from. Klipper restarts.': 'Bu eklenti, örneğin USB aygıtlarını kurmak için kodunun bir kısmını sistemin yönetici hesabı olan root olarak çalıştırır. Yalnızca kaynağına güveniyorsanız açın. Klipper yeniden başlar.'
 diff --git a/translations/zh.yml b/translations/zh.yml
-index 5cba097..9072f06 100644
+index 6450306ac9..d4dde940e9 100644
 --- a/translations/zh.yml
 +++ b/translations/zh.yml
-@@ -4882,3 +4882,6 @@ translations:
+@@ -6556,3 +6556,6 @@ translations:
    'Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)': '重启到恢复系统（从 U 盘或端口 8080 的网页安装更新）'
    'Restarting into the recovery OS...': '正在重启到恢复系统...'
    'The printer restarts into the recovery OS, where it can''t print. To come back, tap Boot main OS on its screen.': '打印机将重启到恢复系统，在恢复系统中无法打印。要返回，请在其屏幕上点按 Boot main OS。'

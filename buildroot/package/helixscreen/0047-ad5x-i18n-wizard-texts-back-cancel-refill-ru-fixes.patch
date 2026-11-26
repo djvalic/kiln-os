@@ -19,15 +19,14 @@ Content-Transfer-Encoding: 8bit
   em dash, so English no longer shows a box either.
 ---
  src/ui/ui_settings_ad5x_refill.cpp       |  2 +-
- src/ui/ui_wizard.cpp                     |  2 +-
  tests/unit/test_settings_ad5x_refill.cpp |  6 ++--
  translations/en.yml                      | 22 ++++++++++++++-
  translations/ru.yml                      | 36 ++++++++++++++++++------
  ui_xml/settings_ad5x_refill_overlay.xml  |  2 ++
- 6 files changed, 56 insertions(+), 14 deletions(-)
+ 5 files changed, 55 insertions(+), 13 deletions(-)
 
 diff --git a/src/ui/ui_settings_ad5x_refill.cpp b/src/ui/ui_settings_ad5x_refill.cpp
-index 99329c86cc..0a1cb294dd 100644
+index 7b2675066a..7d0f145d00 100644
 --- a/src/ui/ui_settings_ad5x_refill.cpp
 +++ b/src/ui/ui_settings_ad5x_refill.cpp
 @@ -211,7 +211,7 @@ std::string backup_line(const SlotBackup& slot) {
@@ -39,19 +38,6 @@ index 99329c86cc..0a1cb294dd 100644
  }
  
  bool any_backup(const std::vector<SlotBackup>& slots) {
-diff --git a/src/ui/ui_wizard.cpp b/src/ui/ui_wizard.cpp
-index 9fa1f2e5cc..57cb2bec03 100644
---- a/src/ui/ui_wizard.cpp
-+++ b/src/ui/ui_wizard.cpp
-@@ -708,7 +708,7 @@ void ui_wizard_navigate_to_step(helix::wizard::StepId step) {
-                 }
-             }
-             if (lbl) {
--                lv_label_set_text(lbl, btn_label_text);
-+                lv_label_set_text(lbl, lv_tr(btn_label_text));
-             }
-         }
-     }
 diff --git a/tests/unit/test_settings_ad5x_refill.cpp b/tests/unit/test_settings_ad5x_refill.cpp
 index 6d65baa414..d1c29f6f39 100644
 --- a/tests/unit/test_settings_ad5x_refill.cpp
@@ -77,10 +63,10 @@ index 6d65baa414..d1c29f6f39 100644
  
  TEST_CASE("without loaded_channels the slots with a backup are listed", "[ad5x_refill]") {
 diff --git a/translations/en.yml b/translations/en.yml
-index edc5eed5c5..bed02f2938 100644
+index f4e31f5e7d..2c3532af5b 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -5038,18 +5038,22 @@ translations:
+@@ -6505,18 +6505,22 @@ translations:
    'Bed Heat Soak': 'Bed Heat Soak'
    'Bed heat soak before the Z check': 'Bed heat soak before the Z check'
    'Bed heat soak calibration (optional)': 'Bed heat soak calibration (optional)'
@@ -103,7 +89,7 @@ index edc5eed5c5..bed02f2938 100644
    'Closer 0.01': 'Closer 0.01'
    'Closer 0.05': 'Closer 0.05'
    'Colour match': 'Colour match'
-@@ -5076,9 +5080,11 @@ translations:
+@@ -6543,9 +6547,11 @@ translations:
    'First-layer test print with live adjustment': 'First-layer test print with live adjustment'
    'Heating nozzle to {}°C': 'Heating nozzle to {}°C'
    'Heating nozzle to {}°C ({}°C)': 'Heating nozzle to {}°C ({}°C)'
@@ -115,7 +101,7 @@ index edc5eed5c5..bed02f2938 100644
    'Input shaping against ringing': 'Input shaping against ringing'
    'Install {}?': 'Install {}?'
    'INSTALLED': 'INSTALLED'
-@@ -5087,6 +5093,7 @@ translations:
+@@ -6554,6 +6560,7 @@ translations:
    'Klipper restarts to apply this. Continue?': 'Klipper restarts to apply this. Continue?'
    'Last tune': 'Last tune'
    'Let the bed cool below {} °C (now {} °C). The calibration measures from a cold bed.': 'Let the bed cool below {} °C (now {} °C). The calibration measures from a cold bed.'
@@ -123,7 +109,7 @@ index edc5eed5c5..bed02f2938 100644
    'Load distance': 'Load distance'
    'Loaded in the toolhead': 'Loaded in the toolhead'
    'Loading filament': 'Loading filament'
-@@ -5096,7 +5103,9 @@ translations:
+@@ -6563,7 +6570,9 @@ translations:
    'material not set': 'material not set'
    'Measure the shape of the bed': 'Measure the shape of the bed'
    'Measures how long the bed keeps moving at that temperature. Takes 20-35 minutes; the bed must be empty and below 40 °C.': 'Measures how long the bed keeps moving at that temperature. Takes 20-35 minutes; the bed must be empty and below 40 °C.'
@@ -133,7 +119,7 @@ index edc5eed5c5..bed02f2938 100644
    'Needs a newer Kiln OS': 'Needs a newer Kiln OS'
    'New Patch': 'New Patch'
    'no backup': 'no backup'
-@@ -5140,7 +5149,9 @@ translations:
+@@ -6607,7 +6616,9 @@ translations:
    'PRINTER SOUNDS': 'PRINTER SOUNDS'
    'Printer Sounds': 'Printer Sounds'
    'Printer Volume': 'Printer Volume'
@@ -143,7 +129,7 @@ index edc5eed5c5..bed02f2938 100644
    'Remove {}?': 'Remove {}?'
    'Retracting filament': 'Retracting filament'
    'Retracting {}': 'Retracting {}'
-@@ -5148,10 +5159,13 @@ translations:
+@@ -6615,10 +6626,13 @@ translations:
    'Run Setup Wizard': 'Run Setup Wizard'
    'Run the hotend PID tune and the first-layer Z offset test now? (The bed doesn''t need retuning.)': 'Run the hotend PID tune and the first-layer Z offset test now? (The bed doesn''t need retuning.)'
    'Save the results to the printer configuration': 'Save the results to the printer configuration'
@@ -157,7 +143,7 @@ index edc5eed5c5..bed02f2938 100644
    'Self-check, PID, bed mesh, vibration, IFS, Z offset': 'Self-check, PID, bed mesh, vibration, IFS, Z offset'
    'Similar': 'Similar'
    'Similar colour': 'Similar colour'
-@@ -5161,7 +5175,7 @@ translations:
+@@ -6628,7 +6642,7 @@ translations:
    'Slot per file': 'Slot per file'
    'Slot per file: the file''s own slot for each tool. Auto colour: each tool uses the loaded slot with the same material and the nearest colour, so a file made before can still print.': 'Slot per file: the file''s own slot for each tool. Auto colour: each tool uses the loaded slot with the same material and the nearest colour, so a file made before can still print.'
    'Slot {}': 'Slot {}'
@@ -166,7 +152,7 @@ index edc5eed5c5..bed02f2938 100644
    'Slots {}': 'Slots {}'
    'Sounds the printer plays on print events': 'Sounds the printer plays on print events'
    'STATUS': 'STATUS'
-@@ -5180,6 +5194,7 @@ translations:
+@@ -6647,6 +6661,7 @@ translations:
    'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it.': 'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it.'
    'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.': 'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.'
    'The nozzle size can''t change during a print': 'The nozzle size can''t change during a print'
@@ -174,7 +160,7 @@ index edc5eed5c5..bed02f2938 100644
    'The results so far, before Save': 'The results so far, before Save'
    'The temperature to measure, from a cold bed': 'The temperature to measure, from a cold bed'
    'This printer can''t stop the calibration from the screen; use the emergency stop.': 'This printer can''t stop the calibration from the screen; use the emergency stop.'
-@@ -5188,6 +5203,9 @@ translations:
+@@ -6655,6 +6670,9 @@ translations:
    'Tool to slot': 'Tool to slot'
    'Tune IFS': 'Tune IFS'
    'Tune the IFS feed speed and load distances': 'Tune the IFS feed speed and load distances'
@@ -184,7 +170,7 @@ index edc5eed5c5..bed02f2938 100644
    'Tuning': 'Tuning'
    'Tuning is running': 'Tuning is running'
    'Tuning the IFS': 'Tuning the IFS'
-@@ -5201,6 +5219,7 @@ translations:
+@@ -6668,6 +6686,7 @@ translations:
    'Update {}?': 'Update {}?'
    'Updating {}...': 'Updating {}...'
    'Used by the screen''s clock and screensaver. You can change it later in Settings > Language & Time.': 'Used by the screen''s clock and screensaver. You can change it later in Settings > Language & Time.'
@@ -192,7 +178,7 @@ index edc5eed5c5..bed02f2938 100644
    'Waiting for Klipper...': 'Waiting for Klipper...'
    'WARN': 'WARN'
    'When a spool runs out mid-print, the printer switches to a slot with the same material and colour and carries on.': 'When a spool runs out mid-print, the printer switches to a slot with the same material and colour and carries on.'
-@@ -5208,6 +5227,7 @@ translations:
+@@ -6675,6 +6694,7 @@ translations:
    'Which slot each tool of a print uses': 'Which slot each tool of a print uses'
    'Which spool auto-refill takes over with': 'Which spool auto-refill takes over with'
    'Working on {}...': 'Working on {}...'
@@ -201,55 +187,55 @@ index edc5eed5c5..bed02f2938 100644
    '{} °C — {} (centre moved {:.2f} mm)': '{} °C — {} (centre moved {:.2f} mm)'
    '{}, set in local.cfg': '{}, set in local.cfg'
 diff --git a/translations/ru.yml b/translations/ru.yml
-index 02d75b0633..182df14382 100644
+index f5a815e393..90a88265a8 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -3572,7 +3572,7 @@ translations:
-   Samples: Образцы
+@@ -4377,7 +4377,7 @@ translations:
    Samples Tolerance: Допуск образцов
+   Saturation: Насыщенность
    Save: Сохранить
 -  Save & Restart: Сохранить и перезапустить
 +  Save & Restart: Сохранить
    Save As New: Сохранить как новый
+   Save Autotuned Rotation: "Сохранять автоподбор вращения"
    Save Hardware: Сохранить оборудование
-   Save Printer Configuration: Сохранить конфигурацию принтера
-@@ -3808,7 +3808,7 @@ translations:
+@@ -4646,7 +4646,7 @@ translations:
    Shutting down screen...: Выключение экрана...
    Shutting down...: Выключение...
    Signal: Сигнал
 -  'Signal #': Сигнал №
 +  'Signal #': Номер сигнала
-   Similarity: "Схожесть"
-   Single object: 'Один объект'
-   Single toggle macro. State is not tracked.: Один макрос переключения. Состояние
-@@ -3871,7 +3871,7 @@ translations:
-   Speed used to push filament out of the box (mm/s): Скорость выталкивания филамента
-     из коробки (мм/с)
+   Signal macro renaming: 'Переименование сигнальных макросов'
+   Signal macros are hidden from Fluidd and Mainsail macro lists.: 'Сигнальные макросы скрыты из списков макросов Fluidd и Mainsail.'
+   Signal macros keep their old names too, so older calls still work.: 'Сигнальные макросы сохраняют и старые имена, поэтому старые вызовы продолжают работать.'
+@@ -4726,7 +4726,7 @@ translations:
+   Speed of retraction movement: Скорость ретракта
+   Speed used to push filament out of the box (mm/s): Скорость выталкивания филамента из коробки (мм/с)
    Spool: Катушка
 -  'Spool #': Катушка №
 +  'Spool #': 'Катушка #'
    'Spool #{}': 'Катушка #{}'
    Spool Info: Информация о катушке
    Spool Not Found: 'Катушка не найдена'
-@@ -4243,7 +4243,7 @@ translations:
+@@ -5306,7 +5306,7 @@ translations:
    The printer applied this value and keeps it for this tool.: 'Принтер применил это значение и сохранил его для этого инструмента.'
    The printer can draw a priming line before a print. HelixScreen offers it in the pre-print options.: 'Принтер может нарисовать линию прочистки перед печатью. HelixScreen предлагает ее в параметрах подготовки к печати.'
    The printer can measure each tool's offset automatically. Run it on the tool offset calibration screen.: 'Принтер может автоматически измерить смещение каждого инструмента. Запустите это на экране калибровки смещений инструментов.'
 -  The printer can measure pressure advance on its own. Run it on the PA calibration screen.: 'Принтер может сам измерить pressure advance. Запускается на экране «Калибровка PA».'
 +  The printer can measure pressure advance on its own. Run it on the PA calibration screen.: 'Принтер может сам измерить Pressure Advance. Запускается на экране «Калибровка PA».'
    The printer can pause at a chosen layer, for a filament swap or an insert. Set the layer from the print preview.: 'Принтер может встать на паузу на выбранном слое, для смены филамента или вставки детали. Слой задается в предпросмотре печати.'
-   The printer could not work out where to resume.: Принтер не смог определить, откуда продолжить.
-   The printer did not change its bed check: 'Принтер не изменил проверку стола'
-@@ -5147,7 +5147,7 @@ translations:
-   '{} · {}': '{} · {}'
+   The printer could not connect to one of its boards at startup.: 'При запуске принтер не смог подключиться к одной из своих плат.'
+   'The printer could not get the head ready: homing, picking up the head or heating the nozzle failed.': 'Принтер не смог подготовить головку: не удалась парковка, захват головки или нагрев сопла.'
+@@ -6612,7 +6612,7 @@ translations:
+   '{} · {} firmware': '{} · прошивка {}'
    '{} · {} · {}': '{} · {} · {}'
    '{} — response timed out': '{} — время ожидания ответа истекло'
 -  '{} → {}: no filament loaded.': '{} → {}: филамент не загружен.'
 +  '{} → {}: no filament loaded.': '{} ({}): филамент не загружен.'
    "{}'s nozzle is still heating": 'Сопло {} всё ещё нагревается'
    '{}, {}': '{}, {}'
-   "{}: the tag names Spoolman spool #{}, which doesn't exist": '{}: метка указывает катушку Spoolman #{}, которой не существует'
-@@ -5209,18 +5209,22 @@ translations:
+   '{}/{} · needs you': "{}/{} · нужны вы"
+@@ -6683,18 +6683,22 @@ translations:
    'Bed Heat Soak': 'Прогрев стола'
    'Bed heat soak before the Z check': 'Прогрев стола перед проверкой Z'
    'Bed heat soak calibration (optional)': 'Калибровка прогрева стола (необязательно)'
@@ -272,7 +258,7 @@ index 02d75b0633..182df14382 100644
    'Closer 0.01': 'Ближе 0.01'
    'Closer 0.05': 'Ближе 0.05'
    'Colour match': 'Подбор цвета'
-@@ -5247,9 +5251,11 @@ translations:
+@@ -6721,9 +6725,11 @@ translations:
    'First-layer test print with live adjustment': 'Тестовая печать первого слоя с подстройкой на ходу'
    'Heating nozzle to {}°C': 'Нагрев сопла до {}°C'
    'Heating nozzle to {}°C ({}°C)': 'Нагрев сопла до {}°C ({}°C)'
@@ -284,7 +270,7 @@ index 02d75b0633..182df14382 100644
    'Input shaping against ringing': 'Компенсация вибраций против звона'
    'Install {}?': 'Установить {}?'
    'INSTALLED': 'УСТАНОВЛЕННЫЕ'
-@@ -5258,6 +5264,7 @@ translations:
+@@ -6732,6 +6738,7 @@ translations:
    'Klipper restarts to apply this. Continue?': 'Для применения Klipper перезапустится. Продолжить?'
    'Last tune': 'Последняя настройка'
    'Let the bed cool below {} °C (now {} °C). The calibration measures from a cold bed.': 'Дайте столу остыть ниже {} °C (сейчас {} °C). Калибровка измеряет от холодного стола.'
@@ -292,7 +278,7 @@ index 02d75b0633..182df14382 100644
    'Load distance': 'Расстояние загрузки'
    'Loaded in the toolhead': 'Загружен в печатающую головку'
    'Loading filament': 'Загрузка филамента'
-@@ -5267,7 +5274,9 @@ translations:
+@@ -6741,7 +6748,9 @@ translations:
    'material not set': 'материал не указан'
    'Measure the shape of the bed': 'Измерение формы стола'
    'Measures how long the bed keeps moving at that temperature. Takes 20-35 minutes; the bed must be empty and below 40 °C.': 'Измеряет, как долго стол смещается при этой температуре. Занимает 20-35 минут; стол должен быть пустым и холоднее 40 °C.'
@@ -302,7 +288,7 @@ index 02d75b0633..182df14382 100644
    'Needs a newer Kiln OS': 'Нужна более новая Kiln OS'
    'New Patch': 'Ещё образец'
    'no backup': 'нет резерва'
-@@ -5302,7 +5311,7 @@ translations:
+@@ -6776,7 +6785,7 @@ translations:
    'Printer Setup: Bed Soak': 'Настройка принтера: прогрев стола'
    'Printer Setup: Heater Tuning': 'Настройка принтера: нагреватели'
    'Printer Setup: IFS Tuning': 'Настройка принтера: IFS'
@@ -311,7 +297,7 @@ index 02d75b0633..182df14382 100644
    'Printer Setup: Save': 'Настройка принтера: сохранение'
    'Printer Setup: Self-Check': 'Настройка принтера: самопроверка'
    'Printer Setup: Summary': 'Настройка принтера: итоги'
-@@ -5311,7 +5320,9 @@ translations:
+@@ -6785,7 +6794,9 @@ translations:
    'PRINTER SOUNDS': 'ЗВУКИ ПРИНТЕРА'
    'Printer Sounds': 'Звуки принтера'
    'Printer Volume': 'Громкость принтера'
@@ -321,7 +307,7 @@ index 02d75b0633..182df14382 100644
    'Remove {}?': 'Удалить {}?'
    'Retracting filament': 'Втягивание филамента'
    'Retracting {}': 'Втягивание: {}'
-@@ -5319,10 +5330,13 @@ translations:
+@@ -6793,10 +6804,13 @@ translations:
    'Run Setup Wizard': 'Запустить мастер настройки'
    'Run the hotend PID tune and the first-layer Z offset test now? (The bed doesn''t need retuning.)': 'Запустить сейчас настройку PID хотенда и тест смещения по Z на первом слое? (Стол перенастраивать не нужно.)'
    'Save the results to the printer configuration': 'Сохранение результатов в конфигурацию принтера'
@@ -335,7 +321,7 @@ index 02d75b0633..182df14382 100644
    'Self-check, PID, bed mesh, vibration, IFS, Z offset': 'Самопроверка, PID, сетка стола, вибрации, IFS, смещение по Z'
    'Similar': 'Похожий'
    'Similar colour': 'Похожий цвет'
-@@ -5332,7 +5346,7 @@ translations:
+@@ -6806,7 +6820,7 @@ translations:
    'Slot per file': 'Слот из файла'
    'Slot per file: the file''s own slot for each tool. Auto colour: each tool uses the loaded slot with the same material and the nearest colour, so a file made before can still print.': 'Слот из файла: для каждого инструмента — слот, указанный в файле. Авто по цвету: каждый инструмент берёт загруженный слот с тем же материалом и ближайшим цветом, поэтому можно напечатать и ранее подготовленный файл.'
    'Slot {}': 'Слот {}'
@@ -344,7 +330,7 @@ index 02d75b0633..182df14382 100644
    'Slots {}': 'Слоты {}'
    'Sounds the printer plays on print events': 'Звуки принтера при событиях печати'
    'STATUS': 'СОСТОЯНИЕ'
-@@ -5351,14 +5365,18 @@ translations:
+@@ -6825,14 +6839,18 @@ translations:
    'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it.': 'Сопло, установленное на принтере. От него зависят ширина линий, длина продувки и тест первого слоя.'
    'The nozzle fitted to the printer. Line widths, purge lengths and the first-layer test use it. Change it later in Settings.': 'Сопло, установленное на принтере. От него зависят ширина линий, длина продувки и тест первого слоя. Изменить его можно позже в настройках.'
    'The nozzle size can''t change during a print': 'Размер сопла нельзя изменить во время печати'
@@ -364,7 +350,7 @@ index 02d75b0633..182df14382 100644
    'Tuning': 'Настройка'
    'Tuning is running': 'Идёт настройка'
    'Tuning the IFS': 'Настройка IFS'
-@@ -5372,6 +5390,7 @@ translations:
+@@ -6846,6 +6864,7 @@ translations:
    'Update {}?': 'Обновить {}?'
    'Updating {}...': 'Обновление {}...'
    'Used by the screen''s clock and screensaver. You can change it later in Settings > Language & Time.': 'Используется часами экрана и заставкой. Изменить можно позже в разделе «Настройки > Язык и время».'
@@ -372,7 +358,7 @@ index 02d75b0633..182df14382 100644
    'Waiting for Klipper...': 'Ожидание Klipper...'
    'WARN': 'ВНИМАНИЕ'
    'When a spool runs out mid-print, the printer switches to a slot with the same material and colour and carries on.': 'Если катушка заканчивается во время печати, принтер переключается на слот с тем же материалом и цветом и продолжает печать.'
-@@ -5379,6 +5398,7 @@ translations:
+@@ -6853,6 +6872,7 @@ translations:
    'Which slot each tool of a print uses': 'Какой слот использует каждый инструмент печати'
    'Which spool auto-refill takes over with': 'Какой катушкой автозамена продолжает печать'
    'Working on {}...': 'Обработка {}...'
@@ -398,6 +384,3 @@ index 613978b6a1..7797e4ca37 100644
                                description="Slot per file: the file's own slot for each tool. Auto colour: each tool uses the loaded slot with the same material and the nearest colour, so a file made before can still print."
                                bind_selected="ad5x_map_mode" callback="on_ad5x_map_mode_changed"
                                disabled="ad5x_refill_busy" dropdown_width="40%"/>
--- 
-2.56.0
-

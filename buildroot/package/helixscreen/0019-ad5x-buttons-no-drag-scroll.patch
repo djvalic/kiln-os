@@ -5,18 +5,18 @@
  2 files changed, 27 insertions(+)
 
 diff --git a/include/ui_utils.h b/include/ui_utils.h
-index f8356034b5..daaf16e5b4 100644
+index 30ca16e7b0..33806cddb6 100644
 --- a/include/ui_utils.h
 +++ b/include/ui_utils.h
-@@ -11,6 +11,7 @@
- #include "static_panel_registry.h"
+@@ -12,6 +12,7 @@
+ #include "lvgl/lvgl.h"
  
  #include <cstdint>
 +#include <cstring>
  #include <string_view>
  
  // ============================================================================
-@@ -499,6 +500,31 @@ inline void set_event_bubble_recursive(lv_obj_t* obj) {
+@@ -523,6 +524,31 @@ inline void set_event_bubble_recursive(lv_obj_t* obj) {
      }
  }
  
@@ -49,17 +49,14 @@ index f8356034b5..daaf16e5b4 100644
  /// so enable_widget_clicks_recursive() restores exactly those and leaves an
  /// object that was never clickable alone.
 diff --git a/src/ui/ui_panel_common.cpp b/src/ui/ui_panel_common.cpp
-index 5fd7592b55..3a6c6ae637 100644
+index 13e262b81d..b8d78c422a 100644
 --- a/src/ui/ui_panel_common.cpp
 +++ b/src/ui/ui_panel_common.cpp
-@@ -161,6 +161,7 @@ lv_obj_t* create_xml_hidden(lv_obj_t* parent, const char* component, const char*
+@@ -153,6 +153,7 @@ lv_obj_t* create_xml_hidden(lv_obj_t* parent, const char* component, const char*
      if (root) {
-         lv_obj_add_flag(root, LV_OBJ_FLAG_HIDDEN); // XML_HIDDEN_OK: built under the holder
+         lv_obj_set_hidden(root, true); // XML_HIDDEN_OK: built under the holder
          lv_obj_set_parent(root, parent);
 +        stop_drag_chain_on_buttons(root);
      }
      lv_obj_delete(holder);
      return root;
--- 
-2.56.0
-

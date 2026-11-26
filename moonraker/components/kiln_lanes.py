@@ -33,6 +33,16 @@
 # Kiln key is missing or wrong) runs a few seconds after each slot change
 # and once a minute.
 #
+# AFC (AFC-Klipper-Add-On, the afc-kiln plugin) writes lane_data itself,
+# one record per AFC lane (afc-kiln: T0..T3 for the same four slots). So
+# when Klipper has an "AFC" object (its [AFC] section; Klipper names the
+# object as the section is written and loads extras/AFC.py for it only by
+# that spelling, so the check is case-sensitive), Kiln doesn't sync, stops
+# its check and deletes the lane1..lane4 records it wrote alone (own_record:
+# no "writer", only Kiln's keys); a record with HelixScreen's or AFC's keys
+# stays. Checked again at each klippy ready: AFC can come or go with a
+# Klipper restart.
+#
 # [kiln_lanes]
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
@@ -56,6 +66,11 @@ FILAMENT_IDS = {
     "TPU": "PKLNTPU",
 }
 KILN_IDS = frozenset(FILAMENT_IDS.values())
+# Klipper's object for AFC-Klipper-Add-On's [AFC] section
+AFC_OBJECT = "AFC"
+# the keys of a record Kiln wrote alone (merge_lane into no record)
+OWN_KEYS = frozenset(("lane", "material", "color", "nozzle_temp",
+                      "bed_temp", "filament_id", "spool_id", "scan_time"))
 # seconds: re-check after a slot change (HelixScreen writes for the same
 # change land within it), and between the checks otherwise
 RECHECK_DELAY = 5.
@@ -166,6 +181,25 @@ def merge_lanes(records: Dict[str, Any], content: Dict[str, Dict[str, Any]],
     return out
 
 
+def has_afc(objects: Any) -> bool:
+    """True when Klipper's object list (printer.objects.list) has AFC's
+    main object. Exact name: AFC's lanes, units and hubs are other objects
+    ("AFC_stepper lane1", "AFC_BoxTurtle Turtle_1") that come with it."""
+    return isinstance(objects, (list, tuple)) and AFC_OBJECT in objects
+
+
+def own_record(key: str, rec: Any) -> bool:
+    """True when rec, stored under key, is a record Kiln wrote alone: no
+    "writer" (HelixScreen signs its records), only Kiln's keys (none of
+    HelixScreen's or AFC's, such as AFC's "td" and "extruder_index" under
+    an AFC lane named lane1) and Kiln's tool for that key."""
+    if key not in KEYS or not isinstance(rec, dict) or "writer" in rec:
+        return False
+    if not set(rec) <= OWN_KEYS:
+        return False
+    return rec.get("lane") == str(KEYS.index(key))
+
+
 def build_lanes(materials: Dict[str, Any], ifs: Dict[str, Any],
                 prev: Optional[Dict[str, Dict[str, Any]]] = None,
                 now: str = "") -> Dict[str, Dict[str, Any]]:
@@ -184,6 +218,8 @@ class KilnLanes:
         self.ifs: Dict[str, Any] = {}
         # Kiln's content at the last pass, None before the first
         self.content: Optional[Dict[str, Dict[str, Any]]] = None
+        # Klipper has AFC (at the last klippy ready): lane_data is AFC's
+        self.afc = False
         self.lock = asyncio.Lock()
         self.timer = self.server.get_event_loop().register_timer(
             self._on_timer)
@@ -192,6 +228,19 @@ class KilnLanes:
 
     async def _on_ready(self) -> None:
         kapis = self.server.lookup_component("klippy_apis")
+        objects = await kapis.get_object_list(default=None)
+        if objects is None:
+            logging.info("kiln_lanes: no object list from Klipper, "
+                         "taken as without AFC")
+        self.afc = has_afc(objects)
+        if self.afc:
+            self.timer.stop()
+            self.materials = {}
+            self.ifs = {}
+            self.content = None
+            logging.info("kiln_lanes: AFC in Klipper, lane_data left to AFC")
+            await self._remove_own()
+            return
         objs = {"ifs_materials": None,
                 "ifs": ["connected", "loaded_channels"]}
         try:
@@ -209,6 +258,8 @@ class KilnLanes:
 
     async def _on_status(self, status: Dict[str, Any],
                          eventtime: float) -> None:
+        if self.afc:
+            return
         changed = False
         if "ifs_materials" in status:
             self.materials.update(status["ifs_materials"])
@@ -226,14 +277,20 @@ class KilnLanes:
         self.timer.start(RECHECK_DELAY)
 
     async def _on_timer(self, eventtime: float) -> float:
+        if self.afc:
+            self.timer.stop()
+            return eventtime
         if self.materials:
             await self._sync()
         return eventtime + CHECK_PERIOD
 
     async def _sync(self) -> None:
         """Read the records, merge Kiln's keys in, write the lanes that
-        differ (none: no write)."""
+        differ (none: no write). Nothing with AFC."""
         async with self.lock:
+            # checked under the lock: a pass waiting on _remove_own's
+            if self.afc:
+                return
             content = slot_content(self.materials, self.ifs)
             try:
                 records = await self.db.get_batch(NAMESPACE, KEYS)
@@ -250,6 +307,25 @@ class KilnLanes:
                     return
                 logging.debug(f"kiln_lanes: {lanes}")
             self.content = content
+
+    async def _remove_own(self) -> None:
+        """Delete the lane1..lane4 records Kiln wrote alone (own_record),
+        so AFC's are the only ones; any other record stays."""
+        async with self.lock:
+            try:
+                records = await self.db.get_batch(NAMESPACE, KEYS)
+            except Exception:
+                logging.exception("kiln_lanes: lane_data not readable")
+                return
+            own = [k for k in KEYS if own_record(k, (records or {}).get(k))]
+            if not own:
+                return
+            try:
+                await self.db.delete_batch(NAMESPACE, own)
+            except Exception:
+                logging.exception("kiln_lanes: lane_data not deleted")
+                return
+            logging.info(f"kiln_lanes: removed its records {own} (AFC)")
 
 
 def load_component(config: ConfigHelper) -> KilnLanes:

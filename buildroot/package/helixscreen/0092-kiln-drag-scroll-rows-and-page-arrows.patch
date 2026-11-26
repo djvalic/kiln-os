@@ -54,20 +54,23 @@ scroll; every pixel of the gap hits an arrow and a tap there pages; a
 held Z jog key in a scrolling column keeps the press and scrolls
 nothing; and what the walk clears.
 
+The tests' stand-in for printer_has_speaker is a helix::Subject
+(init_int), as HelixScreen 1.2's scripts/check_lvgl_subject_api.py
+asks.
+
 Upstream: not applicable (Kiln OS specific)
 ---
  include/ui_utils.h                       |  33 +-
- src/ui/page_scroll_controller.cpp        |  11 +
- tests/unit/test_kiln_drag_scroll.cpp     | 428 +++++++++++++++++++++++
+ src/ui/home/page_scroll_controller.cpp   |  11 +
+ tests/unit/test_kiln_drag_scroll.cpp     | 429 +++++++++++++++++++++++
  ui_xml/components/page_scroll_gutter.xml |  10 +-
- 4 files changed, 470 insertions(+), 12 deletions(-)
- create mode 100644 tests/unit/test_kiln_drag_scroll.cpp
+ 4 files changed, 471 insertions(+), 12 deletions(-)
 
 diff --git a/include/ui_utils.h b/include/ui_utils.h
-index daaf16e..e064fd5 100644
+index 33806cddb6..6bdee1e999 100644
 --- a/include/ui_utils.h
 +++ b/include/ui_utils.h
-@@ -500,22 +500,37 @@ inline void set_event_bubble_recursive(lv_obj_t* obj) {
+@@ -524,22 +524,37 @@ inline void set_event_bubble_recursive(lv_obj_t* obj) {
      }
  }
  
@@ -114,11 +117,11 @@ index daaf16e..e064fd5 100644
          !lv_obj_has_flag(obj, LV_OBJ_FLAG_SCROLLABLE)) {
          lv_obj_remove_flag(obj, LV_OBJ_FLAG_SCROLL_CHAIN);
      }
-diff --git a/src/ui/page_scroll_controller.cpp b/src/ui/page_scroll_controller.cpp
-index b0dcb50..5ef8292 100644
---- a/src/ui/page_scroll_controller.cpp
-+++ b/src/ui/page_scroll_controller.cpp
-@@ -50,6 +50,17 @@ bool PageScrollController::attach(lv_obj_t* container) {
+diff --git a/src/ui/home/page_scroll_controller.cpp b/src/ui/home/page_scroll_controller.cpp
+index 26a277913e..1371e167ea 100644
+--- a/src/ui/home/page_scroll_controller.cpp
++++ b/src/ui/home/page_scroll_controller.cpp
+@@ -80,6 +80,17 @@ bool PageScrollController::attach(lv_obj_t* container) {
          return false;
      }
  
@@ -138,10 +141,10 @@ index b0dcb50..5ef8292 100644
      gutter_w_ = lv_obj_get_width(gutter_);
 diff --git a/tests/unit/test_kiln_drag_scroll.cpp b/tests/unit/test_kiln_drag_scroll.cpp
 new file mode 100644
-index 0000000..fea39ff
+index 0000000000..e6a0d646b6
 --- /dev/null
 +++ b/tests/unit/test_kiln_drag_scroll.cpp
-@@ -0,0 +1,428 @@
+@@ -0,0 +1,429 @@
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +//
 +// Kiln OS: a finger drag scrolls Settings and the other long pages, and the
@@ -162,7 +165,8 @@ index 0000000..fea39ff
 +#include "ui_panel_motion.h"
 +#include "ui_panel_settings.h"
 +#include "ui_settings_printing.h"
-+#include "ui_update_queue.h"
++#include "core/subject.h"
++#include "core/update_queue.h"
 +#include "ui_utils.h"
 +
 +#include "../lvgl_ui_test_fixture.h"
@@ -280,9 +284,9 @@ index 0000000..fea39ff
 +    bool arrows_were_on_ = false;
 +
 +    DragFixture() {
-+        static lv_subject_t speaker_subject;
++        static helix::Subject speaker_subject;
 +        if (!lv_xml_get_subject(nullptr, "printer_has_speaker")) {
-+            lv_subject_init_int(&speaker_subject, 1);
++            speaker_subject.init_int(1);
 +            lv_xml_register_subject(nullptr, "printer_has_speaker", &speaker_subject);
 +        }
 +        SettingsManager::instance().init_subjects();
@@ -571,7 +575,7 @@ index 0000000..fea39ff
 +    lv_obj_delete(page);
 +}
 diff --git a/ui_xml/components/page_scroll_gutter.xml b/ui_xml/components/page_scroll_gutter.xml
-index fe91247..9cea4c3 100644
+index 56a96cd26e..81236b1aeb 100644
 --- a/ui_xml/components/page_scroll_gutter.xml
 +++ b/ui_xml/components/page_scroll_gutter.xml
 @@ -6,7 +6,11 @@
@@ -587,21 +591,19 @@ index fe91247..9cea4c3 100644
  <component>
    <view extends="lv_obj"
          width="#button_height" height="content" style_bg_opa="0" style_border_width="0" style_pad_all="0"
-@@ -14,12 +18,12 @@
+@@ -14,13 +18,13 @@
          scrollable="false" floating="true" align="right_mid">
      <ui_button name="up"
                 width="#button_height" height="#button_height_lg" style_radius="9999" variant="secondary"
 -               focusable="false" style_opa="170">
 +               focusable="false" style_opa="170" ext_click_area="16">
+       <event_cb trigger="clicked" callback="on_page_scroll_up"/>
        <icon src="chevron_up" size="md" variant="text" align="center" clickable="false" event_bubble="true"/>
      </ui_button>
      <ui_button name="down"
                 width="#button_height" height="#button_height_lg" style_radius="9999" variant="secondary"
 -               focusable="false" style_opa="170">
 +               focusable="false" style_opa="170" ext_click_area="16">
+       <event_cb trigger="clicked" callback="on_page_scroll_down"/>
        <icon src="chevron_down" size="md" variant="text" align="center" clickable="false" event_bubble="true"/>
      </ui_button>
-   </view>
--- 
-2.56.0
-

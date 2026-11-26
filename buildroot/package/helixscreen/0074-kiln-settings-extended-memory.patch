@@ -59,24 +59,21 @@ Upstream: not applicable (AD5X OS specific)
  include/ui_settings_kiln_memory.h             | 200 ++++++++
  include/ui_settings_system.h                  |   3 +-
  src/api/moonraker_discovery_sequence.cpp      |   5 +
+ .../notify/ui_panel_notification_history.cpp  |  13 +
  src/ui/panel_widgets/shutdown_widget.cpp      |  25 +
  src/ui/panel_widgets/shutdown_widget.h        |   7 +
- src/ui/ui_panel_notification_history.cpp      |  13 +
+ src/ui/settings/ui_settings_system.cpp        |   8 +
  src/ui/ui_settings_kiln_memory.cpp            | 329 +++++++++++++
- src/ui/ui_settings_system.cpp                 |   8 +
  tests/unit/test_settings_kiln_memory.cpp      | 457 ++++++++++++++++++
  tests/unit/test_settings_system_callbacks.cpp | 132 +++++
  translations/en.yml                           |   9 +
  translations/ru.yml                           |   9 +
  ui_xml/settings_system_overlay.xml            |  39 +-
  13 files changed, 1234 insertions(+), 2 deletions(-)
- create mode 100644 include/ui_settings_kiln_memory.h
- create mode 100644 src/ui/ui_settings_kiln_memory.cpp
- create mode 100644 tests/unit/test_settings_kiln_memory.cpp
 
 diff --git a/include/ui_settings_kiln_memory.h b/include/ui_settings_kiln_memory.h
 new file mode 100644
-index 00000000..4667ee7d
+index 0000000000..31a16e3fcf
 --- /dev/null
 +++ b/include/ui_settings_kiln_memory.h
 @@ -0,0 +1,200 @@
@@ -253,11 +250,11 @@ index 00000000..4667ee7d
 +    IMoonrakerClient* client() const;
 +
 +    SubjectManager subjects_;
-+    lv_subject_t available_{};
-+    lv_subject_t enabled_{};
-+    lv_subject_t pending_{};
-+    lv_subject_t failed_{};
-+    lv_subject_t bootloader_{};
++    helix::Subject available_{};
++    helix::Subject enabled_{};
++    helix::Subject pending_{};
++    helix::Subject failed_{};
++    helix::Subject bootloader_{};
 +    bool subjects_initialized_ = false;
 +
 +    std::optional<State> state_;
@@ -281,11 +278,11 @@ index 00000000..4667ee7d
 +
 +} // namespace helix::kiln_memory
 diff --git a/include/ui_settings_system.h b/include/ui_settings_system.h
-index 826aa818..010bf7fd 100644
+index d8bf41ed67..3b539b2f29 100644
 --- a/include/ui_settings_system.h
 +++ b/include/ui_settings_system.h
-@@ -47,7 +47,8 @@ class SystemSettingsOverlay : public OverlayBase {
-         return "settings_system_overlay";
+@@ -49,7 +49,8 @@ class SystemSettingsOverlay : public OverlayBase {
+         return true;
      }
  
 -    /// Kiln OS: the Log detail and Boot into recovery rows' subjects, before the XML
@@ -295,7 +292,7 @@ index 826aa818..010bf7fd 100644
      void register_callbacks() override;
  
 diff --git a/src/api/moonraker_discovery_sequence.cpp b/src/api/moonraker_discovery_sequence.cpp
-index a9ea6f29..70517685 100644
+index 9fcc7f5d6c..76d9cf28c4 100644
 --- a/src/api/moonraker_discovery_sequence.cpp
 +++ b/src/api/moonraker_discovery_sequence.cpp
 @@ -5,6 +5,7 @@
@@ -303,25 +300,70 @@ index a9ea6f29..70517685 100644
  #include "lvgl/src/others/translation/lv_translation.h"
  #include "ui_notification.h"
 +#include "ui_settings_kiln_memory.h"
- 
- #include "ui_update_queue.h"
- 
-@@ -699,6 +700,10 @@ void MoonrakerDiscoverySequence::continue_discovery_objects(uint64_t seq) {
-                                                            text.c_str());
-                         }
-                     }
-+                    // Kiln OS: Extended memory (the Settings > System row and its
-+                    // bell notice) from kiln_os, on every run like the warnings
-+                    helix::ui::queue_update("kiln_memory::fetch",
-+                                            []() { helix::kiln_memory::model().fetch(); });
+ #include "accel_sensor_manager.h"
+ #include "ams_backend.h"
+ #include "ams_state.h"
+@@ -743,6 +744,10 @@ void MoonrakerDiscoverySequence::on_server_info(uint64_t seq, const json& info_r
+             }
+         }
  #endif
-                     std::string klippy_version = result.value("klippy_version", "unknown");
-                     auto moonraker_version = result.value("moonraker_version", "unknown");
++        // Kiln OS: Extended memory (the Settings > System row and its bell
++        // notice) from kiln_os, on every run like the warnings
++        helix::ui::queue_update("kiln_memory::fetch",
++                                []() { helix::kiln_memory::model().fetch(); });
+         apply_server_info(seq, *result);
+     }
+ 
+diff --git a/src/ui/notify/ui_panel_notification_history.cpp b/src/ui/notify/ui_panel_notification_history.cpp
+index 2564a3b30a..895440af07 100644
+--- a/src/ui/notify/ui_panel_notification_history.cpp
++++ b/src/ui/notify/ui_panel_notification_history.cpp
+@@ -7,6 +7,7 @@
+ #include "ui_notification_manager.h"
+ #include "ui_panel_common.h"
+ #include "ui_update_notify_modal.h"
++#include "ui_settings_kiln_memory.h"
+ #include "ui_utils.h"
+ 
+ #include "app_globals.h"
+@@ -21,6 +22,7 @@
+ #include <spdlog/fmt/fmt.h>
+ #include <spdlog/spdlog.h>
+ 
++#include <algorithm>
+ #include <cstring>
+ #include <map>
+ #include <memory>
+@@ -150,6 +152,12 @@ void NotificationHistoryPanel::refresh() {
+     }
+     lv_subject_set_int(&row_count_subject_, static_cast<int>(n));
+ 
++    // Kiln OS: the Extended memory notice was seen here (Kiln is told once)
++    if (std::find(row_actions_.begin(), row_actions_.end(), helix::kiln_memory::kNoticeAction) !=
++        row_actions_.end()) {
++        helix::kiln_memory::model().notice_seen();
++    }
++
+     // Mark all as read
+     history_.mark_all_read();
+ 
+@@ -210,6 +218,11 @@ void NotificationHistoryPanel::handle_history_version_change(int32_t version) {
+ }
+ 
+ void NotificationHistoryPanel::handle_clear_clicked() {
++    // Kiln OS: clearing the Extended memory notice counts as seeing it
++    if (std::find(row_actions_.begin(), row_actions_.end(), helix::kiln_memory::kNoticeAction) !=
++        row_actions_.end()) {
++        helix::kiln_memory::model().notice_seen();
++    }
+     history_.clear();
+     // clear() bumps the store revision; the manager publishes it on its next
+     // badge refresh. Record it now so that publish does not rebuild the list
 diff --git a/src/ui/panel_widgets/shutdown_widget.cpp b/src/ui/panel_widgets/shutdown_widget.cpp
-index 64432b50..da651d95 100644
+index bf718409a9..1d9fc0348c 100644
 --- a/src/ui/panel_widgets/shutdown_widget.cpp
 +++ b/src/ui/panel_widgets/shutdown_widget.cpp
-@@ -523,6 +523,31 @@ std::string kiln_power_failure_message(const std::string& err_message, bool is_r
+@@ -513,6 +513,31 @@ std::string kiln_power_failure_message(const std::string& err_message, bool is_r
                         why);
  }
  
@@ -354,7 +396,7 @@ index 64432b50..da651d95 100644
      return kiln_host_power && job_holds_machine;
  }
 diff --git a/src/ui/panel_widgets/shutdown_widget.h b/src/ui/panel_widgets/shutdown_widget.h
-index 84cc4abd..0cf2d87d 100644
+index 554e82156c..258e37de9b 100644
 --- a/src/ui/panel_widgets/shutdown_widget.h
 +++ b/src/ui/panel_widgets/shutdown_widget.h
 @@ -109,6 +109,13 @@ ShutdownDialogPlan plan_power_dialog(bool kiln_host_power, bool api_connected,
@@ -371,54 +413,42 @@ index 84cc4abd..0cf2d87d 100644
  /// Kiln OS: whether the power entries are greyed: on a Kiln build
  /// (@p kiln_host_power) while a job holds the machine (@p job_holds_machine:
  /// printing, paused or preparing), when Kiln's update agent refuses anyway. Pure.
-diff --git a/src/ui/ui_panel_notification_history.cpp b/src/ui/ui_panel_notification_history.cpp
-index 0e91ef65..fd4fbbb8 100644
---- a/src/ui/ui_panel_notification_history.cpp
-+++ b/src/ui/ui_panel_notification_history.cpp
-@@ -8,6 +8,7 @@
- #include "ui_nav.h"
- #include "ui_notification_manager.h"
+diff --git a/src/ui/settings/ui_settings_system.cpp b/src/ui/settings/ui_settings_system.cpp
+index a16c43b5a7..e774a75d15 100644
+--- a/src/ui/settings/ui_settings_system.cpp
++++ b/src/ui/settings/ui_settings_system.cpp
+@@ -9,6 +9,7 @@
+ #include "ui_overlay_performance.h"
  #include "ui_panel_common.h"
+ #include "ui_settings_ad5x_log.h"
 +#include "ui_settings_kiln_memory.h"
- #include "ui_subject_registry.h"
- #include "ui_utils.h"
- 
-@@ -22,6 +23,7 @@
- #include <spdlog/fmt/fmt.h>
- #include <spdlog/spdlog.h>
- 
-+#include <algorithm>
- #include <cstring>
- #include <map>
- #include <memory>
-@@ -160,6 +162,12 @@ void NotificationHistoryPanel::refresh() {
-     }
-     lv_subject_set_int(&row_count_subject_, static_cast<int>(n));
- 
-+    // Kiln OS: the Extended memory notice was seen here (Kiln is told once)
-+    if (std::find(row_actions_.begin(), row_actions_.end(), helix::kiln_memory::kNoticeAction) !=
-+        row_actions_.end()) {
-+        helix::kiln_memory::model().notice_seen();
-+    }
-+
-     // Mark all as read
-     history_.mark_all_read();
- 
-@@ -220,6 +228,11 @@ void NotificationHistoryPanel::handle_history_version_change(int32_t version) {
+ #include "ui_settings_kiln_recovery.h"
+ #include "ui_settings_security.h"
+ #include "ui_settings_storage.h"
+@@ -46,6 +47,8 @@ void SystemSettingsOverlay::init_subjects() {
+     // Kiln OS: Boot into recovery and Return to Flashforge firmware show on the
+     // AD5X build only
+     helix::kiln_recovery::row().init_subjects();
++    // Kiln OS: Extended memory shows where the board has 512 MiB
++    helix::kiln_memory::model().init_subjects();
  }
  
- void NotificationHistoryPanel::handle_clear_clicked() {
-+    // Kiln OS: clearing the Extended memory notice counts as seeing it
-+    if (std::find(row_actions_.begin(), row_actions_.end(), helix::kiln_memory::kNoticeAction) !=
-+        row_actions_.end()) {
-+        helix::kiln_memory::model().notice_seen();
-+    }
-     history_.clear();
-     // clear() bumps the store revision; the manager publishes it on its next
-     // badge refresh. Record it now so that publish does not rebuild the list
+ void SystemSettingsOverlay::register_callbacks() {
+@@ -117,6 +120,11 @@ void SystemSettingsOverlay::register_callbacks() {
+         // back (machine.kiln_os.return_stock)
+         {"on_kiln_return_stock_clicked",
+          [](lv_event_t*) { helix::kiln_recovery::confirm_and_request_return_stock(); }},
++        // Kiln OS: all 512 MiB from the next start (machine.kiln_os.post_memory)
++        {"on_kiln_extended_memory_changed",
++         [](lv_event_t* e) {
++             helix::kiln_memory::model().set_enabled(helix::ui::event_checked(e));
++         }},
+         {"on_factory_reset_clicked",
+          [](lv_event_t*) { get_system_settings_overlay().handle_factory_reset_clicked(); }},
+         {"on_restore_stock_screen_clicked",
 diff --git a/src/ui/ui_settings_kiln_memory.cpp b/src/ui/ui_settings_kiln_memory.cpp
 new file mode 100644
-index 00000000..b3f89a55
+index 0000000000..0aec224949
 --- /dev/null
 +++ b/src/ui/ui_settings_kiln_memory.cpp
 @@ -0,0 +1,329 @@
@@ -432,7 +462,7 @@ index 00000000..b3f89a55
 +#include "ui_panel_notification_history.h"
 +#include "ui_settings_kiln_recovery.h"
 +#include "ui_settings_system.h"
-+#include "ui_update_queue.h"
++#include "core/update_queue.h"
 +
 +#include "app_globals.h"
 +#include "config.h"
@@ -441,7 +471,7 @@ index 00000000..b3f89a55
 +#include "lvgl/src/others/translation/lv_translation.h"
 +#include "moonraker_error.h"
 +#include "panel_widgets/shutdown_widget.h"
-+#include "static_panel_registry.h"
++#include "core/static_panel_registry.h"
 +
 +#include <spdlog/spdlog.h>
 +
@@ -751,42 +781,9 @@ index 00000000..b3f89a55
 +}
 +
 +} // namespace helix::kiln_memory
-diff --git a/src/ui/ui_settings_system.cpp b/src/ui/ui_settings_system.cpp
-index 214c248f..81d8cff7 100644
---- a/src/ui/ui_settings_system.cpp
-+++ b/src/ui/ui_settings_system.cpp
-@@ -8,6 +8,7 @@
- #include "ui_overlay_performance.h"
- #include "ui_panel_common.h"
- #include "ui_settings_ad5x_log.h"
-+#include "ui_settings_kiln_memory.h"
- #include "ui_settings_kiln_recovery.h"
- #include "ui_settings_security.h"
- #include "ui_settings_storage.h"
-@@ -40,6 +41,8 @@ void SystemSettingsOverlay::init_subjects() {
-     // Kiln OS: Boot into recovery and Return to Flashforge firmware show on the
-     // AD5X build only
-     helix::kiln_recovery::row().init_subjects();
-+    // Kiln OS: Extended memory shows where the board has 512 MiB
-+    helix::kiln_memory::model().init_subjects();
- }
- 
- void SystemSettingsOverlay::register_callbacks() {
-@@ -89,6 +92,11 @@ void SystemSettingsOverlay::register_callbacks() {
-         // back (machine.kiln_os.return_stock)
-         {"on_kiln_return_stock_clicked",
-          [](lv_event_t*) { helix::kiln_recovery::confirm_and_request_return_stock(); }},
-+        // Kiln OS: all 512 MiB from the next start (machine.kiln_os.post_memory)
-+        {"on_kiln_extended_memory_changed",
-+         [](lv_event_t* e) {
-+             helix::kiln_memory::model().set_enabled(helix::ui::event_checked(e));
-+         }},
-         {"on_factory_reset_clicked",
-          [](lv_event_t*) { get_system_settings_overlay().handle_factory_reset_clicked(); }},
-         {"on_factory_reset_confirm",
 diff --git a/tests/unit/test_settings_kiln_memory.cpp b/tests/unit/test_settings_kiln_memory.cpp
 new file mode 100644
-index 00000000..0d235971
+index 0000000000..25e8009856
 --- /dev/null
 +++ b/tests/unit/test_settings_kiln_memory.cpp
 @@ -0,0 +1,457 @@
@@ -801,7 +798,7 @@ index 00000000..0d235971
 +#include "ui_notification_history.h"
 +#include "ui_panel_notification_history.h"
 +#include "ui_settings_kiln_memory.h"
-+#include "ui_update_queue.h"
++#include "core/update_queue.h"
 +
 +#include "../fake_moonraker_client.h"
 +#include "../lvgl_ui_test_fixture.h"
@@ -1248,27 +1245,28 @@ index 00000000..0d235971
 +    drain();
 +}
 diff --git a/tests/unit/test_settings_system_callbacks.cpp b/tests/unit/test_settings_system_callbacks.cpp
-index 37c810c0..550499ad 100644
+index fd58c5f261..c50ed955b2 100644
 --- a/tests/unit/test_settings_system_callbacks.cpp
 +++ b/tests/unit/test_settings_system_callbacks.cpp
-@@ -7,12 +7,16 @@
+@@ -7,13 +7,17 @@
  // way the overlay does (callbacks registered, then the XML) and drive each row.
  
  #include "ui_panel_settings.h"
 +#include "ui_settings_kiln_memory.h"
  #include "ui_settings_kiln_recovery.h"
  #include "ui_settings_system.h"
- #include "ui_update_queue.h"
  
 +#include "../../src/ui/panel_widgets/shutdown_widget.h"
 +#include "../fake_moonraker_client.h"
  #include "../lvgl_ui_test_fixture.h"
+ #include "../test_helpers/widget_in_tree.h"
+ #include "core/update_queue.h"
  #include "helix-xml/src/xml/lv_xml.h"
 +#include "config.h"
  #include "settings_manager.h"
  #include "system_settings_manager.h"
  
-@@ -26,6 +30,10 @@ struct SystemCallbacksFixture : LVGLUITestFixture {
+@@ -27,6 +31,10 @@ struct SystemCallbacksFixture : LVGLUITestFixture {
      SystemCallbacksFixture() {
          SettingsManager::instance().init_subjects();
          get_global_settings_panel().init_subjects();
@@ -1279,7 +1277,7 @@ index 37c810c0..550499ad 100644
          helix::settings::get_system_settings_overlay().init_subjects();
          helix::settings::get_system_settings_overlay().register_callbacks();
          root_ = static_cast<lv_obj_t*>(
-@@ -39,6 +47,7 @@ struct SystemCallbacksFixture : LVGLUITestFixture {
+@@ -40,6 +48,7 @@ struct SystemCallbacksFixture : LVGLUITestFixture {
              lv_obj_delete(root_);
          }
          helix::ui::UpdateQueue::instance().drain();
@@ -1287,7 +1285,7 @@ index 37c810c0..550499ad 100644
          get_global_settings_panel().deinit_subjects();
          helix::ui::UpdateQueue::instance().drain();
      }
-@@ -213,3 +222,126 @@ TEST_CASE_METHOD(SystemCallbacksFixture,
+@@ -214,3 +223,126 @@ TEST_CASE_METHOD(SystemCallbacksFixture,
      lv_subject_set_int(available, available_before);
      process_lvgl(5);
  }
@@ -1415,10 +1413,10 @@ index 37c810c0..550499ad 100644
 +    helix::ui::UpdateQueue::instance().drain();
 +}
 diff --git a/translations/en.yml b/translations/en.yml
-index 94436b51..81214ee2 100644
+index 4db5b9f80a..955cff5227 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -5018,6 +5018,15 @@ translations:
+@@ -6485,6 +6485,15 @@ translations:
    # Reboot and Shutdown through Kiln's update agent (patch 0071)
    'Can''t restart the printer: {}': 'Can''t restart the printer: {}'
    'Can''t shut down the printer: {}': 'Can''t shut down the printer: {}'
@@ -1435,10 +1433,10 @@ index 94436b51..81214ee2 100644
    'Welcome to Kiln OS': 'Welcome to Kiln OS'
    'Here''s a quick tour of the screen, so you can find things fast.': 'Here''s a quick tour of the screen, so you can find things fast.'
 diff --git a/translations/ru.yml b/translations/ru.yml
-index ac60c03e..ac8033a9 100644
+index 8cb93e58fb..0627e15bb9 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -5174,6 +5174,15 @@ translations:
+@@ -6647,6 +6647,15 @@ translations:
    # Reboot and Shutdown through Kiln's update agent (patch 0071)
    'Can''t restart the printer: {}': 'Не удалось перезагрузить принтер: {}'
    'Can''t shut down the printer: {}': 'Не удалось выключить принтер: {}'
@@ -1455,19 +1453,19 @@ index ac60c03e..ac8033a9 100644
    # The AD5X's filament unit named IFS where the AD5X IFS is in use (patch 0066)
    'IFS not detected': 'IFS не обнаружен'
 diff --git a/ui_xml/settings_system_overlay.xml b/ui_xml/settings_system_overlay.xml
-index 3a03051c..196727d3 100644
+index 975bbd05d1..319e8c3c58 100644
 --- a/ui_xml/settings_system_overlay.xml
 +++ b/ui_xml/settings_system_overlay.xml
 @@ -2,7 +2,7 @@
  <!-- Copyright (C) 2025-2026 356C LLC -->
  <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
  <!-- System Settings Overlay -->
--<!-- Security, performance, telemetry, log level, restart, boot into recovery and return to Flashforge firmware (Kiln OS), factory reset -->
-+<!-- Security, performance, telemetry, log level, restart, boot into recovery, return to Flashforge firmware and extended memory (Kiln OS), factory reset -->
+-<!-- Security, performance, telemetry, log level, restart, boot into recovery and return to Flashforge firmware (Kiln OS), factory reset, restore stock screen -->
++<!-- Security, performance, telemetry, log level, restart, boot into recovery, return to Flashforge firmware and extended memory (Kiln OS), factory reset, restore stock screen -->
  <component>
    <view name="settings_system_overlay" extends="overlay_panel" title="System" bg_color="#screen_bg">
      <!-- Content Area - no padding, rows handle their own -->
-@@ -86,6 +86,43 @@
+@@ -98,6 +98,43 @@
                              callback="on_kiln_return_stock_clicked" disabled="print_active">
            <bind_flag_if_eq subject="kiln_boot_recovery_available" flag="hidden" ref_value="0"/>
          </setting_action_row>
@@ -1511,6 +1509,3 @@ index 3a03051c..196727d3 100644
          <!-- ================================================================== -->
          <!-- FACTORY RESET -->
          <!-- ================================================================== -->
--- 
-2.56.0
-

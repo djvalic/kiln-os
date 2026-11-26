@@ -37,30 +37,28 @@ kernel release and the tag written on Kiln saves only.
 
 Upstream: not applicable (AD5X OS specific)
 ---
- include/platform_info.h                     |  11 ++
- include/touch_calibration_wrapper.h         |  15 ++
- src/api/touch_calibration_wrapper.cpp       |  35 ++++
- src/application/subject_initializer.cpp     |  10 ++
- src/system/platform_info.cpp                |  18 ++
- src/ui/panel_widgets/shutdown_widget.cpp    | 155 ++++++++++++++++-
- src/ui/panel_widgets/shutdown_widget.h      |  37 ++++
- tests/unit/test_kiln_host_power.cpp         | 184 ++++++++++++++++++++
- tests/unit/test_kiln_touch_units.cpp        |  96 ++++++++++
- translations/en.yml                         |   3 +
- translations/ru.yml                         |   3 +
- ui_xml/advanced_panel.xml                   |   7 +-
- ui_xml/components/panel_widget_shutdown.xml |   3 +-
- 13 files changed, 571 insertions(+), 6 deletions(-)
- create mode 100644 tests/unit/test_kiln_host_power.cpp
- create mode 100644 tests/unit/test_kiln_touch_units.cpp
+ include/platform_info.h                       |  11 ++
+ include/touch_calibration_wrapper.h           |  15 ++
+ src/application/subject_initializer.cpp       |  10 +
+ .../input/touch_calibration_wrapper.cpp       |  35 ++++
+ src/system/platform_info.cpp                  |  18 ++
+ src/ui/panel_widgets/shutdown_widget.cpp      | 155 ++++++++++++++-
+ src/ui/panel_widgets/shutdown_widget.h        |  37 ++++
+ tests/unit/test_kiln_host_power.cpp           | 185 ++++++++++++++++++
+ tests/unit/test_kiln_touch_units.cpp          |  96 +++++++++
+ translations/en.yml                           |   3 +
+ translations/ru.yml                           |   3 +
+ ui_xml/advanced_panel.xml                     |   7 +-
+ ui_xml/components/panel_widget_shutdown.xml   |   3 +-
+ 13 files changed, 572 insertions(+), 6 deletions(-)
 
 diff --git a/include/platform_info.h b/include/platform_info.h
-index d724b0fe..c2693dc2 100644
+index 6faa192b8a..d71a4bb97e 100644
 --- a/include/platform_info.h
 +++ b/include/platform_info.h
-@@ -16,6 +16,17 @@ bool is_android_platform();
- /// is seeded from it and the shutdown widget/dialog gate on that.
- bool platform_host_power_supported();
+@@ -37,6 +37,17 @@ bool firmware_supervised();
+ inline constexpr const char* kFirmwareSupervisedConfigRefusal =
+     "The printer's firmware manages its configuration";
  
 +/// Kiln OS (HELIX_KILN_AD5X builds): Reboot and Shutdown go through Moonraker
 +/// only. Kiln's Moonraker hands them to its root update agent, which refuses
@@ -73,11 +71,11 @@ index d724b0fe..c2693dc2 100644
 +/// Test helper: override kiln_host_power(). Pass -1 to reset to the build's.
 +void set_kiln_host_power_override(int override_value);
 +
- /// True when this platform's software is owned by something other than HelixScreen
+ /// True when this install's updates are owned by something other than HelixScreen
  /// by DEFAULT, so the in-app updater must stay quiet unless explicitly turned on.
  ///
 diff --git a/include/touch_calibration_wrapper.h b/include/touch_calibration_wrapper.h
-index 898b63a8..5d622d12 100644
+index 207da237c9..55687ea50e 100644
 --- a/include/touch_calibration_wrapper.h
 +++ b/include/touch_calibration_wrapper.h
 @@ -6,6 +6,8 @@
@@ -89,7 +87,7 @@ index 898b63a8..5d622d12 100644
  
  namespace helix {
  
-@@ -144,6 +146,19 @@ TouchRangeSettings load_touch_range();
+@@ -146,6 +148,19 @@ TouchRangeSettings load_touch_range();
  /// full-pipeline affine.
  void save_touch_range(const TouchRangeSettings& range);
  
@@ -109,10 +107,38 @@ index 898b63a8..5d622d12 100644
  /// Install the calibration read callback wrapper on an input device.
  /// Sets up ctx with the calibration data, chains to the existing read callback,
  /// and records ctx as the process-wide active calibration context (see the .cpp
-diff --git a/src/api/touch_calibration_wrapper.cpp b/src/api/touch_calibration_wrapper.cpp
-index 20aa8f44..18b3540c 100644
---- a/src/api/touch_calibration_wrapper.cpp
-+++ b/src/api/touch_calibration_wrapper.cpp
+diff --git a/src/application/subject_initializer.cpp b/src/application/subject_initializer.cpp
+index c303a2a152..61b97e6b68 100644
+--- a/src/application/subject_initializer.cpp
++++ b/src/application/subject_initializer.cpp
+@@ -106,6 +106,12 @@
+ #include <chrono>
+ #include <memory>
+ 
++// Kiln OS: defined in src/ui/panel_widgets/shutdown_widget.cpp; that directory
++// is not on this file's include path (as in demo_overlays.cpp)
++namespace helix {
++void init_kiln_power_lock_subject(PrinterState& state, bool register_xml);
++}
++
+ SubjectInitializer::SubjectInitializer() = default;
+ // PanelWidgetManager outlives this object, and the next printer's widget subjects read
+ // their shared resources before that printer's SubjectInitializer registers its own, so a
+@@ -177,6 +183,10 @@ void SubjectInitializer::init_core_and_state() {
+     helix::material_zoffset::MaterialZOffsetState::instance().init_subjects();
+     helix::zoffset::init_save_available_subject();
+ 
++    // Kiln OS: kiln_power_locked greys the power entries while a job holds the
++    // machine (from PrinterState's job_holds_machine), before any panel XML
++    helix::init_kiln_power_lock_subject(get_printer_state(), true);
++
+     // The active bed mesh's stats, read by BedMeshPanel's XML and the home tile. They
+     // exist from here, so neither depends on the panel having been opened.
+     helix::BedMeshState::instance().init_subjects();
+diff --git a/src/platform/input/touch_calibration_wrapper.cpp b/src/platform/input/touch_calibration_wrapper.cpp
+index 43e3b361c4..6040cb1b90 100644
+--- a/src/platform/input/touch_calibration_wrapper.cpp
++++ b/src/platform/input/touch_calibration_wrapper.cpp
 @@ -11,7 +11,9 @@
  #include <spdlog/spdlog.h>
  
@@ -166,40 +192,12 @@ index 20aa8f44..18b3540c 100644
      cfg->set<bool>("/input/touch_range/valid", range.valid);
      if (!range.valid) {
          // Leave the numbers alone but make sure nothing reads them. A calibration
-diff --git a/src/application/subject_initializer.cpp b/src/application/subject_initializer.cpp
-index 74997365..8ca64ab8 100644
---- a/src/application/subject_initializer.cpp
-+++ b/src/application/subject_initializer.cpp
-@@ -89,6 +89,12 @@
- #include <chrono>
- #include <memory>
- 
-+// Kiln OS: defined in src/ui/panel_widgets/shutdown_widget.cpp; that directory
-+// is not on this file's include path (as in demo_overlays.cpp)
-+namespace helix {
-+void init_kiln_power_lock_subject(PrinterState& state, bool register_xml);
-+}
-+
- SubjectInitializer::SubjectInitializer() = default;
- // PanelWidgetManager outlives this object, and the next printer's widget subjects read
- // their shared resources before that printer's SubjectInitializer registers its own, so a
-@@ -140,6 +146,10 @@ void SubjectInitializer::init_core_and_state() {
-     // after all three, and before any panel XML binds the name.
-     helix::zoffset::init_save_available_subject();
- 
-+    // Kiln OS: kiln_power_locked greys the power entries while a job holds the
-+    // machine (from PrinterState's job_holds_machine), before any panel XML
-+    helix::init_kiln_power_lock_subject(get_printer_state(), true);
-+
-     // The active bed mesh's stats, read by BedMeshPanel's XML and the home tile. They
-     // exist from here, so neither depends on the panel having been opened.
-     helix::BedMeshState::instance().init_subjects();
 diff --git a/src/system/platform_info.cpp b/src/system/platform_info.cpp
-index ef070d63..125d5fb1 100644
+index 69ed33559b..bca6e8db52 100644
 --- a/src/system/platform_info.cpp
 +++ b/src/system/platform_info.cpp
-@@ -48,6 +48,24 @@ bool platform_host_power_supported() {
-     return !is_android_platform();
+@@ -70,6 +70,24 @@ bool platform_host_terminal_supported() {
+     return HELIX_HAS_HOST_TERMINAL && !is_android_platform();
  }
  
 +// -1 = the build's answer (HELIX_KILN_AD5X, set by Kiln OS's helixscreen.mk)
@@ -224,18 +222,18 @@ index ef070d63..125d5fb1 100644
  static int s_printer_embedded_override = -1;
  
 diff --git a/src/ui/panel_widgets/shutdown_widget.cpp b/src/ui/panel_widgets/shutdown_widget.cpp
-index 0e3a7b68..64432b50 100644
+index c8985e4613..bf718409a9 100644
 --- a/src/ui/panel_widgets/shutdown_widget.cpp
 +++ b/src/ui/panel_widgets/shutdown_widget.cpp
 @@ -5,6 +5,7 @@
  
  #include "ui_callback_helpers.h"
  #include "ui_event_safety.h"
-+#include "ui_observer_guard.h"
++#include "core/observer_guard.h"
  #include "ui_shutdown_modal.h"
  #include "ui_split_button.h"
  #include "ui_toast_manager.h"
-@@ -16,17 +17,23 @@
+@@ -16,18 +17,24 @@
  #include "display_manager.h"
  #include "host_identity.h"
  #include "i_moonraker_api.h"
@@ -245,8 +243,9 @@ index 0e3a7b68..64432b50 100644
  #include "platform_info.h"
  #include "printer_state.h"
  #include "runtime_config.h"
+ #include "safety_settings_manager.h"
 +#include "state/subject_macros.h"
-+#include "static_subject_registry.h"
++#include "core/static_subject_registry.h"
 +#include "subject_managed_panel.h"
  #include "system_power.h"
  
@@ -259,7 +258,7 @@ index 0e3a7b68..64432b50 100644
  
  namespace helix {
  
-@@ -214,6 +221,44 @@ void execute_host_power(IMoonrakerAPI* api, bool is_reboot) {
+@@ -215,6 +222,44 @@ void execute_host_power(IMoonrakerAPI* api, bool is_reboot) {
      }
  }
  
@@ -304,7 +303,7 @@ index 0e3a7b68..64432b50 100644
  void execute_screen_shutdown() {
      execute_screen_power(/*is_reboot=*/false);
  }
-@@ -458,6 +503,99 @@ HostPowerFollowUp host_power_follow_up(PowerResult local_result, bool api_connec
+@@ -448,6 +493,99 @@ HostPowerFollowUp host_power_follow_up(PowerResult local_result, bool api_connec
      return api_connected ? HostPowerFollowUp::RetryViaMoonraker : HostPowerFollowUp::Toast;
  }
  
@@ -341,7 +340,7 @@ index 0e3a7b68..64432b50 100644
 +/// observer is dropped from a StaticSubjectRegistry deinit while LVGL is up.
 +struct KilnPowerLockPublisher {
 +    SubjectManager subjects;
-+    lv_subject_t kiln_power_locked_{};
++    helix::Subject kiln_power_locked_{};
 +    ObserverGuard job_obs;
 +
 +    void init(PrinterState& state, bool register_xml) {
@@ -404,7 +403,7 @@ index 0e3a7b68..64432b50 100644
  ShutdownDialogPlan plan_shutdown_dialog(bool api_connected, bool live_moonraker_remote,
                                          bool configured_host_same, bool this_host_runs_systemd) {
      const bool same_host = api_connected ? !live_moonraker_remote : configured_host_same;
-@@ -487,10 +625,21 @@ void show_shutdown_dialog(IMoonrakerAPI* api, ShutdownModal& modal, AsyncLifetim
+@@ -514,14 +652,25 @@ void show_shutdown_dialog(IMoonrakerAPI* api, ShutdownModal& modal, AsyncLifetim
      Config* cfg = Config::get_instance();
      const std::string host = cfg->get<std::string>(cfg->df() + "moonraker_host", "localhost");
      const bool connected = api->is_connected();
@@ -414,6 +413,10 @@ index 0e3a7b68..64432b50 100644
 +    const ShutdownDialogPlan plan = plan_power_dialog(
 +        helix::kiln_host_power(), connected, get_printer_state().is_moonraker_remote(),
 +        helix::is_moonraker_on_same_host(host), helix::host_runs_systemd());
+     const auto& safety = SafetySettingsManager::instance();
+     const PowerDecision decision = decide_power_request(
+         intent, safety.get_power_require_confirmation(), plan, safety.get_power_target(),
+         classify_power_job(power_job_state_known(), power_job_active()));
      switch (plan.mode) {
 +    case ShutdownDialogMode::KilnViaMoonraker:
 +        // Kiln OS: this screen is the printer's own, and its Moonraker checks
@@ -430,10 +433,10 @@ index 0e3a7b68..64432b50 100644
          // Moonraker's machine.shutdown brings the whole device down. Moonraker
          // with `provider: none` answers it by shelling out to sudo, which a
 diff --git a/src/ui/panel_widgets/shutdown_widget.h b/src/ui/panel_widgets/shutdown_widget.h
-index ab8b7db1..84cc4abd 100644
+index a9c0a1b142..554e82156c 100644
 --- a/src/ui/panel_widgets/shutdown_widget.h
 +++ b/src/ui/panel_widgets/shutdown_widget.h
-@@ -14,6 +14,7 @@
+@@ -15,6 +15,7 @@
  
  namespace helix {
  class IMoonrakerAPI;
@@ -493,10 +496,10 @@ index ab8b7db1..84cc4abd 100644
  /// a clear made before a slow or failing request leaves a frozen black screen.
 diff --git a/tests/unit/test_kiln_host_power.cpp b/tests/unit/test_kiln_host_power.cpp
 new file mode 100644
-index 00000000..41a75da9
+index 0000000000..1f610953b9
 --- /dev/null
 +++ b/tests/unit/test_kiln_host_power.cpp
-@@ -0,0 +1,184 @@
+@@ -0,0 +1,185 @@
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +
 +/**
@@ -511,11 +514,12 @@ index 00000000..41a75da9
 + * (kiln_power_locked). Other builds keep upstream's plan.
 + */
 +
-+#include "ui_update_queue.h"
++#include "core/update_queue.h"
 +
 +#include "../../src/ui/panel_widgets/shutdown_widget.h"
 +#include "../lvgl_test_fixture.h"
 +#include "../test_helpers/update_queue_test_access.h"
++#include "hv/json.hpp"
 +#include "platform_info.h"
 +#include "printer_state.h"
 +
@@ -629,7 +633,7 @@ index 00000000..41a75da9
 +    }
 +
 +    static void drain() {
-+        helix::ui::UpdateQueueTestAccess::drain_all(helix::ui::UpdateQueue::instance());
++        helix::ui::UpdateQueue::instance().drain();
 +    }
 +
 +    void report_job_state(const char* moonraker_state) {
@@ -683,7 +687,7 @@ index 00000000..41a75da9
 +}
 diff --git a/tests/unit/test_kiln_touch_units.cpp b/tests/unit/test_kiln_touch_units.cpp
 new file mode 100644
-index 00000000..0c3437c8
+index 0000000000..0c3437c840
 --- /dev/null
 +++ b/tests/unit/test_kiln_touch_units.cpp
 @@ -0,0 +1,96 @@
@@ -784,10 +788,10 @@ index 00000000..0c3437c8
 +    forget_touch_keys(cfg);
 +}
 diff --git a/translations/en.yml b/translations/en.yml
-index d792b05b..c5b52ab4 100644
+index 6a96fae4f1..506d9f2774 100644
 --- a/translations/en.yml
 +++ b/translations/en.yml
-@@ -5015,6 +5015,9 @@ translations:
+@@ -6482,6 +6482,9 @@ translations:
    'Cancel sent. The printer stops its start sequence at the next safe point.': 'Cancel sent. The printer stops its start sequence at the next safe point.'
    # Moonraker's warnings on the screen (patch 0059)
    'Printer warning': 'Printer warning'
@@ -798,10 +802,10 @@ index d792b05b..c5b52ab4 100644
    'Welcome to Kiln OS': 'Welcome to Kiln OS'
    'Here''s a quick tour of the screen, so you can find things fast.': 'Here''s a quick tour of the screen, so you can find things fast.'
 diff --git a/translations/ru.yml b/translations/ru.yml
-index 6afa4b4f..aaf4aaaf 100644
+index a72ea8df0b..e66f0ace34 100644
 --- a/translations/ru.yml
 +++ b/translations/ru.yml
-@@ -5171,6 +5171,9 @@ translations:
+@@ -6644,6 +6644,9 @@ translations:
    'Macros, G-code console, print history, Spoolman, calibration, and Shutdown or Reboot.': 'Макросы, консоль G-code, история печати, Spoolman, калибровка, выключение и перезагрузка.'
    'Screen, sound, connection, and the printer''s own settings: Run Setup Wizard, Nozzle Size, Filament Auto-Refill, Plugins. Replay this tour from Help & About.': 'Экран, звук, соединение и настройки принтера: «Запустить мастер настройки», «Размер сопла», «Автозамена филамента», «Плагины». Повторить тур: «Помощь и о программе».'
    'Printer warning': 'Предупреждение принтера'
@@ -812,10 +816,10 @@ index 6afa4b4f..aaf4aaaf 100644
    # The AD5X's filament unit named IFS where the AD5X IFS is in use (patch 0066)
    'IFS not detected': 'IFS не обнаружен'
 diff --git a/ui_xml/advanced_panel.xml b/ui_xml/advanced_panel.xml
-index 541af2fd..a88d9de2 100644
+index f155436d5d..f3bc129a66 100644
 --- a/ui_xml/advanced_panel.xml
 +++ b/ui_xml/advanced_panel.xml
-@@ -270,11 +270,14 @@
+@@ -273,11 +273,14 @@
          <setting_group_header title="POWER" icon="power" hide_icon="false"/>
          <!-- Shutdown / Reboot — both rows open the same dialog (which presents
             both actions plus, on dual-host, the printer/screen/both scope). -->
@@ -824,16 +828,16 @@ index 541af2fd..a88d9de2 100644
 -                            label="Shutdown" icon="power" description="Power off the printer or screen">
 +                            label="Shutdown" icon="power" description="Power off the printer or screen"
 +                            disabled="kiln_power_locked">
-           <event_cb trigger="clicked" callback="on_advanced_power_clicked"/>
+           <event_cb trigger="clicked" callback="on_advanced_shutdown_clicked"/>
          </setting_action_row>
 -        <setting_action_row name="row_reboot" label="Reboot" icon="restart" description="Restart the printer or screen">
 +        <setting_action_row name="row_reboot" label="Reboot" icon="restart" description="Restart the printer or screen"
 +                            disabled="kiln_power_locked">
-           <event_cb trigger="clicked" callback="on_advanced_power_clicked"/>
+           <event_cb trigger="clicked" callback="on_advanced_reboot_clicked"/>
          </setting_action_row>
        </setting_group>
 diff --git a/ui_xml/components/panel_widget_shutdown.xml b/ui_xml/components/panel_widget_shutdown.xml
-index 8ef545ec..fc4d4ce4 100644
+index 8ef545ec9c..fc4d4ce454 100644
 --- a/ui_xml/components/panel_widget_shutdown.xml
 +++ b/ui_xml/components/panel_widget_shutdown.xml
 @@ -12,10 +12,11 @@

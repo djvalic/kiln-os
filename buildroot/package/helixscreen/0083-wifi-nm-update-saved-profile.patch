@@ -60,15 +60,15 @@ back, AUTH_FAILED), a profile without key-mgmt (connect, delete, retry)
 and no profile (connect as before).
 ---
  include/wifi_backend_networkmanager.h         |  50 ++++
- src/api/wifi_backend_networkmanager.cpp       | 189 +++++++++++++-
+ src/network/wifi_backend_networkmanager.cpp   | 189 +++++++++++++-
  .../unit/test_wifi_backend_networkmanager.cpp | 239 +++++++++++++++++-
  3 files changed, 472 insertions(+), 6 deletions(-)
 
 diff --git a/include/wifi_backend_networkmanager.h b/include/wifi_backend_networkmanager.h
-index c310057..b94d862 100644
+index 4894b3f195..ec27858f64 100644
 --- a/include/wifi_backend_networkmanager.h
 +++ b/include/wifi_backend_networkmanager.h
-@@ -250,6 +250,56 @@ class WifiBackendNetworkManager : public WifiBackend {
+@@ -268,6 +268,56 @@ class WifiBackendNetworkManager : public WifiBackend {
      ConnectAttempt try_nmcli_connect(const std::string& ssid, const std::string& password,
                                       bool is_hidden);
  
@@ -125,11 +125,11 @@ index c310057..b94d862 100644
      // Delete a saved connection profile by id. Best-effort, fork/exec to avoid
      // shell injection with caller-supplied SSIDs. Returns true if nmcli exited 0.
      bool delete_connection_profile(const std::string& profile_id);
-diff --git a/src/api/wifi_backend_networkmanager.cpp b/src/api/wifi_backend_networkmanager.cpp
-index dd894b9..4ee7e61 100644
---- a/src/api/wifi_backend_networkmanager.cpp
-+++ b/src/api/wifi_backend_networkmanager.cpp
-@@ -22,6 +22,7 @@
+diff --git a/src/network/wifi_backend_networkmanager.cpp b/src/network/wifi_backend_networkmanager.cpp
+index a88a0bcea3..15bd898c80 100644
+--- a/src/network/wifi_backend_networkmanager.cpp
++++ b/src/network/wifi_backend_networkmanager.cpp
+@@ -20,6 +20,7 @@
  
  #include <algorithm>
  #include <array>
@@ -137,7 +137,7 @@ index dd894b9..4ee7e61 100644
  #include <cerrno>
  #include <chrono>
  #include <cstdio>
-@@ -693,6 +694,135 @@ std::vector<std::string> WifiBackendNetworkManager::connect_argv(const std::stri
+@@ -665,6 +666,135 @@ std::vector<std::string> WifiBackendNetworkManager::connect_argv(const std::stri
  WifiBackendNetworkManager::ConnectAttempt
  WifiBackendNetworkManager::try_nmcli_connect(const std::string& ssid, const std::string& password,
                                               bool is_hidden) {
@@ -273,7 +273,7 @@ index dd894b9..4ee7e61 100644
      ConnectAttempt result;
  
      // SECURITY: fork/exec (no shell) so SSID/password can't be interpreted by sh.
-@@ -701,7 +831,6 @@ WifiBackendNetworkManager::try_nmcli_connect(const std::string& ssid, const std:
+@@ -673,7 +803,6 @@ WifiBackendNetworkManager::try_nmcli_connect(const std::string& ssid, const std:
  
      // Built before fork(): the child of a multithreaded process must not
      // allocate between fork and exec, so it inherits ready-to-use pointers.
@@ -281,9 +281,9 @@ index dd894b9..4ee7e61 100644
      std::vector<char*> exec_args;
      exec_args.reserve(args.size() + 2);
      exec_args.push_back(const_cast<char*>("nmcli"));
-@@ -803,7 +932,58 @@ void WifiBackendNetworkManager::connect_thread_func(std::string ssid, std::strin
-                                                     bool is_hidden) {
-     spdlog::debug("[WifiBackend] NM: Connect thread started for '{}'", helix::redact::ssid(ssid));
+@@ -782,7 +911,58 @@ void WifiBackendNetworkManager::connect_thread_func(std::string ssid, std::strin
+         }
+     } in_flight{connect_in_flight_};
  
 -    ConnectAttempt attempt = try_nmcli_connect(ssid, password, is_hidden);
 +    ConnectAttempt attempt;
@@ -341,7 +341,7 @@ index dd894b9..4ee7e61 100644
  
      if (!connect_active_) {
          return;
-@@ -814,13 +994,14 @@ void WifiBackendNetworkManager::connect_thread_func(std::string ssid, std::strin
+@@ -793,13 +973,14 @@ void WifiBackendNetworkManager::connect_thread_func(std::string ssid, std::strin
      // (e.g. created earlier without security), the password write lands but
      // key-mgmt stays empty and NM refuses with:
      //   Error: 802-11-wireless-security.key-mgmt: property is missing.
@@ -359,10 +359,10 @@ index dd894b9..4ee7e61 100644
          spdlog::warn("[WifiBackend] NM: '{}' has a stale/malformed saved profile "
                       "(key-mgmt missing); deleting and retrying",
 diff --git a/tests/unit/test_wifi_backend_networkmanager.cpp b/tests/unit/test_wifi_backend_networkmanager.cpp
-index 2381672..d7a5f54 100644
+index d391f0388c..5922b4bf43 100644
 --- a/tests/unit/test_wifi_backend_networkmanager.cpp
 +++ b/tests/unit/test_wifi_backend_networkmanager.cpp
-@@ -44,7 +44,14 @@
+@@ -42,7 +42,14 @@
  class TestableNMBackend : public WifiBackendNetworkManager {
    public:
      // Expose private methods for unit testing via public wrappers
@@ -377,7 +377,7 @@ index 2381672..d7a5f54 100644
      using WifiBackendNetworkManager::is_polkit_permission_error;
      using WifiBackendNetworkManager::parse_scan_output;
      using WifiBackendNetworkManager::split_nmcli_fields;
-@@ -165,16 +172,33 @@ struct FakeNmcliDir {
+@@ -166,16 +173,33 @@ struct FakeNmcliDir {
      std::string dir;
      std::string argv_file;
      std::string count_file;
@@ -411,7 +411,7 @@ index 2381672..d7a5f54 100644
  if [ -n "$NMCLI_FAIL_ALL" ]; then
    echo "$NMCLI_FAIL_ALL" >&2
    exit 1
-@@ -191,10 +215,11 @@ exit 0
+@@ -193,10 +217,11 @@ exit 0
  
          ::setenv("NMCLI_ARGV", argv_file.c_str(), 1);
          ::setenv("NMCLI_COUNT", count_file.c_str(), 1);
@@ -419,13 +419,13 @@ index 2381672..d7a5f54 100644
      }
      ~FakeNmcliDir() {
 -        for (const char* var :
--             {"NMCLI_ARGV", "NMCLI_COUNT", "NMCLI_FAIL_FIRST", "NMCLI_FAIL_ALL"}) {
+-             {"NMCLI_ARGV", "NMCLI_COUNT", "NMCLI_FAIL_FIRST", "NMCLI_FAIL_ALL", "NMCLI_HOLD"}) {
 +        for (const char* var : {"NMCLI_ARGV", "NMCLI_COUNT", "NMCLI_FAIL_FIRST", "NMCLI_FAIL_ALL",
-+                                "NMCLI_DIR", "NMCLI_FAIL_UP"}) {
++                                "NMCLI_HOLD", "NMCLI_DIR", "NMCLI_FAIL_UP"}) {
              ::unsetenv(var);
          }
          std::error_code ec;
-@@ -212,6 +237,34 @@ exit 0
+@@ -223,6 +248,34 @@ exit 0
          ::setenv("NMCLI_FAIL_ALL", stderr_line, 1);
      }
  
@@ -460,11 +460,10 @@ index 2381672..d7a5f54 100644
      /// How many times the fake nmcli was exec'd.
      int call_count() {
          std::ifstream f(count_file);
-@@ -335,6 +388,188 @@ TEST_CASE("NM backend: hidden connect execs nmcli with 'hidden yes'",
+@@ -344,6 +397,188 @@ TEST_CASE("NM backend: hidden connect execs nmcli with 'hidden yes'",
      }
  }
  
-+// ============================================================================
 +// Saved Profile: update in place
 +// ============================================================================
 +//
@@ -646,6 +645,7 @@ index 2381672..d7a5f54 100644
 +    }
 +}
 +
- // ============================================================================
++// ============================================================================
  // Scan Output Parsing Tests
- // ============================================================================
+ 
+ TEST_CASE("NM backend: parse_scan_output", "[network][nm][parsing]") {

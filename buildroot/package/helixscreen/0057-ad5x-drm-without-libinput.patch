@@ -11,27 +11,31 @@ touch screen by its evdev scan; SNAPMAKER_SKIP_LIBINPUT=yes, which
 already drops -linput from the main binary, now drops it from the splash
 and watchdog links too.
 ---
+ lv_conf.h      | 7 +++++--
+ mk/splash.mk   | 5 ++++-
+ mk/watchdog.mk | 5 ++++-
+ 3 files changed, 13 insertions(+), 4 deletions(-)
 
 diff --git a/lv_conf.h b/lv_conf.h
-index ac058b9..9d017be 100644
+index 52eed4b2d8..856b80ba0e 100644
 --- a/lv_conf.h
 +++ b/lv_conf.h
-@@ -1210,8 +1210,11 @@
+@@ -1792,8 +1792,11 @@
  #endif
  
- /*Driver for libinput input devices (preferred for DRM on modern systems)*/
--/*Snapmaker U1 has no libinput — uses evdev directly for touch input*/
+ /** Read pointer, touch and keyboard input through libinput, which must be available in the build. */
+-/* libinput is preferred for DRM; the Snapmaker U1 has none and reads touch through evdev. */
 -#if defined(HELIX_DISPLAY_DRM) && !defined(HELIX_PLATFORM_SNAPMAKER_U1)
-+/*Snapmaker U1 has no libinput — uses evdev directly for touch input.
-+ *HELIX_NO_LIBINPUT: any other build without libinput (the DRM backend then
-+ *finds the touch screen by its evdev scan)*/
++/* libinput is preferred for DRM; the Snapmaker U1 has none and reads touch through evdev.
++ * HELIX_NO_LIBINPUT: any other build without libinput (the DRM backend then finds the
++ * touch screen by its evdev scan). */
 +#if defined(HELIX_DISPLAY_DRM) && !defined(HELIX_PLATFORM_SNAPMAKER_U1) && \
 +    !defined(HELIX_NO_LIBINPUT)
-     #define LV_USE_LIBINPUT    1
+     #define LV_USE_LIBINPUT 1
  #else
-     #define LV_USE_LIBINPUT    0
+     #define LV_USE_LIBINPUT 0
 diff --git a/mk/splash.mk b/mk/splash.mk
-index 37252ba..5dc5dea 100644
+index b48e764b8d..fd868becc2 100644
 --- a/mk/splash.mk
 +++ b/mk/splash.mk
 @@ -40,7 +40,10 @@ endif
@@ -47,10 +51,10 @@ index 37252ba..5dc5dea 100644
              SPLASH_LDFLAGS += -lEGL -lGLESv2 -lgbm -ldl
          endif
 diff --git a/mk/watchdog.mk b/mk/watchdog.mk
-index 68aca68..802d1f4 100644
+index ea7bab1f2c..f16e00efbe 100644
 --- a/mk/watchdog.mk
 +++ b/mk/watchdog.mk
-@@ -46,7 +46,10 @@ endif
+@@ -42,7 +42,10 @@ endif
  ifneq ($(UNAME_S),Darwin)
      # Linux: may need DRM/input libraries
      ifeq ($(DISPLAY_BACKEND)-$(DLOPEN_GPU_LIBS),drm-)

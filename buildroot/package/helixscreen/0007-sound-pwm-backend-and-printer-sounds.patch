@@ -21,41 +21,18 @@ follow it, except one being changed and while a change is unanswered.
 
 Upstream: not applicable (AD5X OS specific)
 ---
- Makefile                                   |   6 +-
- include/ui_settings_sound.h                |  66 +++-
+ include/ui_settings_sound.h                |  65 +++-
  src/api/moonraker_discovery_sequence.cpp   |   9 +
- src/ui/ui_settings_sound.cpp               | 388 +++++++++++++++++++++
+ src/ui/settings/ui_settings_sound.cpp      | 388 +++++++++++++++++++++
  ui_xml/components/ad5x_sound_event_row.xml |  35 ++
  ui_xml/settings_sound_overlay.xml          |  71 ++++
- 6 files changed, 573 insertions(+), 2 deletions(-)
- create mode 100644 ui_xml/components/ad5x_sound_event_row.xml
+ 5 files changed, 567 insertions(+), 1 deletion(-)
 
-diff --git a/Makefile b/Makefile
-index 811d1af9b5..398fc97713 100644
---- a/Makefile
-+++ b/Makefile
-@@ -501,11 +501,15 @@ endif
- # must, or the user naming the channel. M300 (the PRINTER's beeper, over gcode) is deliberately NOT gated and
- # keeps working everywhere. Neither MIPS board exposes a sysfs pwmchip (the
- # FlashForge MIPS boards' piezo goes through jz_pwm below, the K1 has no audio at all).
-+# AD5X OS: the unified MIPS build (mips) carries it too. Its own kernel exposes the
-+# AD5X piezo as a sysfs pwmchip channel, which the start script names through
-+# HELIX_PWM_SOUND only when the speaker is there; without a named channel nothing
-+# probes it (no HELIX_PWM_AUTO_EXPORT), so the stock kernel keeps the jz_pwm path.
- #
- # Decided HERE, above APP_OBJS, and not down in the sound-flags section: APP_OBJS
- # is computed from APP_SRCS a few lines below, so a filter-out placed after it is
- # a silent no-op that still compiles and still links the backend.
--ifneq (,$(filter ad5m ad5m-br pi pi-fbdev pi-both pi32 pi32-fbdev pi32-both x86 x86-fbdev x86-both yocto native,$(PLATFORM_TARGET)))
-+ifneq (,$(filter ad5m ad5m-br mips pi pi-fbdev pi-both pi32 pi32-fbdev pi32-both x86 x86-fbdev x86-both yocto native,$(PLATFORM_TARGET)))
-     PWM_SOUND_CXXFLAGS := -DHELIX_HAS_PWM_SOUND
-     # Auto-export: the stock AD5M kernel ships the beeper channel unexported
-     # and nothing materializes pwm6, so initialize() writes the channel to
 diff --git a/include/ui_settings_sound.h b/include/ui_settings_sound.h
-index 83591f4e3c..41804ed2bf 100644
+index 30e081cef6..a07cbde9be 100644
 --- a/include/ui_settings_sound.h
 +++ b/include/ui_settings_sound.h
-@@ -5,21 +5,42 @@
+@@ -5,8 +5,12 @@
   * @file ui_settings_sound.h
   * @brief Sound settings overlay - master toggle, volume, UI sounds, theme, output device
   *
@@ -69,17 +46,15 @@ index 83591f4e3c..41804ed2bf 100644
   *
   * @see AudioSettingsManager for persistence
   */
- 
+@@ -14,12 +18,27 @@
  #pragma once
  
-+#include "ui_observer_guard.h"
-+#include "ui_subscription_guard.h"
-+
-+#include "json_fwd.h"
+ #include "core/static_panel_registry.h"
++#include "core/observer_guard.h"
++#include "subscription_guard.h"
++#include "hv/json.hpp"
  #include "overlay_base.h"
- #include "static_panel_registry.h"
 +#include "subject_managed_panel.h"
-+
 +#include <cstddef>
 +#include <string>
 +#include <vector>
@@ -99,8 +74,8 @@ index 83591f4e3c..41804ed2bf 100644
      const char* get_name() const override {
          return "Sound";
      }
-@@ -27,6 +48,8 @@ class SoundSettingsOverlay : public OverlayBase {
-         return "settings_sound_overlay";
+@@ -30,6 +49,8 @@ class SoundSettingsOverlay : public OverlayBase {
+         return true;
      }
  
 +    void init_subjects() override;
@@ -108,7 +83,7 @@ index 83591f4e3c..41804ed2bf 100644
      void register_callbacks() override;
      void on_activate() override;
  
-@@ -41,13 +64,54 @@ class SoundSettingsOverlay : public OverlayBase {
+@@ -44,9 +65,51 @@ class SoundSettingsOverlay : public OverlayBase {
      void handle_preview_sounds();
      void handle_test_tracker();
  
@@ -123,10 +98,9 @@ index 83591f4e3c..41804ed2bf 100644
 +    void on_deactivating(DeactivateReason reason) override;
 +
    private:
-     void init_volume_slider();
      void init_sound_theme_dropdown();
      void init_audio_device_dropdown();
- 
++
 +    /// Whether the printer publishes the `ad5x_sound` object.
 +    static bool printer_sounds_available();
 +    /// Subscribe, query the object, follow Klipper's restarts.
@@ -139,15 +113,13 @@ index 83591f4e3c..41804ed2bf 100644
 +    void send_printer_sounds(const std::string& gcode, bool changes_settings);
 +    void set_printer_volume_text(int value);
 +
-     /// Volume value label text
-     char volume_value_buf_[8]; // e.g., "100%"
 +
 +    SubjectManager subjects_;
-+    lv_subject_t printer_sounds_available_subject_{};
-+    lv_subject_t printer_sounds_enabled_subject_{};
-+    lv_subject_t printer_volume_subject_{};
-+    lv_subject_t printer_volume_text_subject_{};
-+    lv_subject_t printer_sound_on_subjects_[kPrinterSoundEvents]{};
++    helix::Subject printer_sounds_available_subject_{};
++    helix::Subject printer_sounds_enabled_subject_{};
++    helix::Subject printer_volume_subject_{};
++    helix::Subject printer_volume_text_subject_{};
++    helix::Subject printer_sound_on_subjects_[kPrinterSoundEvents]{};
 +    char printer_volume_text_buf_[8] = "";
 +
 +    json printer_sounds_ = json::object();
@@ -164,10 +136,10 @@ index 83591f4e3c..41804ed2bf 100644
  
  inline SoundSettingsOverlay& get_sound_settings_overlay() {
 diff --git a/src/api/moonraker_discovery_sequence.cpp b/src/api/moonraker_discovery_sequence.cpp
-index eec991227d..3ad69f0def 100644
+index 5df629fcf4..d5422411cf 100644
 --- a/src/api/moonraker_discovery_sequence.cpp
 +++ b/src/api/moonraker_discovery_sequence.cpp
-@@ -1521,6 +1521,15 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
+@@ -1576,6 +1576,15 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
          }
      }
  
@@ -183,28 +155,26 @@ index eec991227d..3ad69f0def 100644
      // Print start macros — only the boolean flags PrintStartCollector reads.
      // Other variables on these macros (slicer args, profile names, etc.) are
      // irrelevant to the start-detection logic.
-diff --git a/src/ui/ui_settings_sound.cpp b/src/ui/ui_settings_sound.cpp
-index a87ea22b1e..b7581de2c8 100644
---- a/src/ui/ui_settings_sound.cpp
-+++ b/src/ui/ui_settings_sound.cpp
-@@ -4,18 +4,33 @@
+diff --git a/src/ui/settings/ui_settings_sound.cpp b/src/ui/settings/ui_settings_sound.cpp
+index f3683437de..0036e9a5a1 100644
+--- a/src/ui/settings/ui_settings_sound.cpp
++++ b/src/ui/settings/ui_settings_sound.cpp
+@@ -4,16 +4,31 @@
  #include "ui_settings_sound.h"
  
  #include "ui_callback_helpers.h"
 +#include "ui_error_reporting.h"
- #include "ui_event_safety.h"
  #include "ui_sound_preview_overlay.h"
-+#include "ui_update_queue.h"
++#include "core/update_queue.h"
  
  #include "alsa_device_enum.h"
 +#include "app_globals.h"
  #include "audio_settings_manager.h"
- #include "format_utils.h"
 +#include "i_moonraker_api.h"
 +#include "i_moonraker_client.h"
 +#include "json_utils.h"
 +#include "lvgl/src/others/translation/lv_translation.h"
-+#include "observer_factory.h"
++#include "core/observer_factory.h"
 +#include "printer_discovery.h"
 +#include "printer_state.h"
  #include "sound_manager.h"
@@ -221,7 +191,7 @@ index a87ea22b1e..b7581de2c8 100644
  #include <string>
  
  namespace helix::settings {
-@@ -36,8 +51,103 @@ int event_slider_value(lv_event_t* e) {
+@@ -28,8 +43,103 @@ int event_slider_value(lv_event_t* e) {
      return lv_slider_get_value(lv_event_get_current_target_obj(e));
  }
  
@@ -325,7 +295,7 @@ index a87ea22b1e..b7581de2c8 100644
  void SoundSettingsOverlay::register_callbacks() {
      register_xml_callbacks({
          {"on_sounds_changed",
-@@ -66,6 +176,25 @@ void SoundSettingsOverlay::register_callbacks() {
+@@ -61,6 +171,25 @@ void SoundSettingsOverlay::register_callbacks() {
           [](lv_event_t*) { get_sound_settings_overlay().handle_preview_sounds(); }},
          {"on_test_tracker",
           [](lv_event_t*) { get_sound_settings_overlay().handle_test_tracker(); }},
@@ -351,10 +321,10 @@ index a87ea22b1e..b7581de2c8 100644
      });
  }
  
-@@ -81,6 +210,15 @@ void SoundSettingsOverlay::on_activate() {
-         lv_obj_add_flag(container, LV_OBJ_FLAG_HIDDEN);
-     }
- #endif
+@@ -70,6 +199,15 @@ void SoundSettingsOverlay::on_activate() {
+     select_volume_slider(overlay_root_);
+     init_sound_theme_dropdown();
+     init_audio_device_dropdown();
 +
 +    activate_printer_sounds();
 +}
@@ -366,8 +336,8 @@ index a87ea22b1e..b7581de2c8 100644
 +    printer_sounds_pending_ = 0;
  }
  
- // ============================================================================
-@@ -239,3 +377,253 @@ void SoundSettingsOverlay::handle_test_tracker() {
+ // INIT METHODS
+@@ -215,3 +353,253 @@ void SoundSettingsOverlay::handle_test_tracker() {
  }
  
  } // namespace helix::settings
@@ -478,7 +448,7 @@ index a87ea22b1e..b7581de2c8 100644
 +void SoundSettingsOverlay::set_printer_volume_text(int value) {
 +    helix::format::format_percent(value, printer_volume_text_buf_,
 +                                  sizeof(printer_volume_text_buf_));
-+    lv_subject_copy_string(&printer_volume_text_subject_, printer_volume_text_buf_);
++    lv_subject_set_string(&printer_volume_text_subject_, printer_volume_text_buf_);
 +}
 +
 +void SoundSettingsOverlay::apply_printer_sounds() {
@@ -663,7 +633,7 @@ index 0000000000..c34ac6af63
 +  </view>
 +</component>
 diff --git a/ui_xml/settings_sound_overlay.xml b/ui_xml/settings_sound_overlay.xml
-index a78d838c8d..96167413a8 100644
+index 5456805388..6b3f2448ce 100644
 --- a/ui_xml/settings_sound_overlay.xml
 +++ b/ui_xml/settings_sound_overlay.xml
 @@ -2,6 +2,7 @@
@@ -758,6 +728,3 @@ index a78d838c8d..96167413a8 100644
        <!-- Bottom padding for scroll -->
        <lv_obj width="100%" scrollable="false">
          <bind_style_if_eq name="spacer_micro" subject="ui_breakpoint" ref_value="0"/>
--- 
-2.56.0
-

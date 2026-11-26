@@ -11,7 +11,7 @@
 # LVGL is downloaded once into build/ (pinned version, sha256 checked)
 # Strings: i18n/*.txt -> src/i18n_*.{h,c} (python3 i18n/gen_i18n.py). The
 # screens' language comes from the main OS's settings.json; the simulator
-# takes one with RUI_SIM_LANG=de make sim (sim/run-sim.sh).
+# takes one with RUI_SIM_LANG=ru make sim (sim/run-sim.sh).
 # unless LVGL_DIR points at a source tree.
 
 LVGL_VERSION = 9.5.0

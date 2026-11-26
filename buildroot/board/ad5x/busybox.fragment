@@ -13,3 +13,17 @@ CONFIG_FEATURE_SWAPON_PRI=y
 # back to /data/ad5x/wpa_supplicant.conf as soon as it saves them
 # (docs/network.md)
 CONFIG_INOTIFYD=y
+# mkpasswd with SHA-512: ad5x-passwd hashes root's password with it
+# (Buildroot's default config has these; kept here so they stay)
+CONFIG_MKPASSWD=y
+CONFIG_USE_BB_CRYPT=y
+CONFIG_USE_BB_CRYPT_SHA=y
+# Passwords and hashes pass only through the shell's builtins (printf,
+# echo, test), awk's environment and pipes, never a command line that
+# other users can read in /proc (lib/rootpw.sh, ad5x-passwd); flock
+# keeps two password changes apart
+CONFIG_ASH_PRINTF=y
+CONFIG_ASH_ECHO=y
+CONFIG_ASH_TEST=y
+CONFIG_AWK=y
+CONFIG_FLOCK=y

@@ -50,22 +50,16 @@ Upstream: not applicable (AD5X OS specific)
  src/api/moonraker_discovery_sequence.cpp      |   9 +
  src/application/discovery_steps.cpp           |   5 +
  src/ui/ad5x_ifs_firmware_view.cpp             | 179 ++++++
- src/ui/ui_panel_settings.cpp                  |  11 +
+ src/ui/settings/ui_panel_settings.cpp         |  11 +
  src/ui/ui_settings_ad5x_ifs_firmware.cpp      | 523 ++++++++++++++++++
  tests/unit/test_ad5x_ifs_firmware.cpp         | 211 +++++++
  ui_xml/settings_ad5x_ifs_firmware_overlay.xml |  73 +++
  ui_xml/settings_hardware_overlay.xml          |   6 +
  11 files changed, 1295 insertions(+)
- create mode 100644 include/ad5x_ifs_firmware_view.h
- create mode 100644 include/ui_settings_ad5x_ifs_firmware.h
- create mode 100644 src/ui/ad5x_ifs_firmware_view.cpp
- create mode 100644 src/ui/ui_settings_ad5x_ifs_firmware.cpp
- create mode 100644 tests/unit/test_ad5x_ifs_firmware.cpp
- create mode 100644 ui_xml/settings_ad5x_ifs_firmware_overlay.xml
 
 diff --git a/include/ad5x_ifs_firmware_view.h b/include/ad5x_ifs_firmware_view.h
 new file mode 100644
-index 00000000..9ac3a53f
+index 0000000000..9ac3a53ff2
 --- /dev/null
 +++ b/include/ad5x_ifs_firmware_view.h
 @@ -0,0 +1,79 @@
@@ -149,21 +143,21 @@ index 00000000..9ac3a53f
 +
 +} // namespace helix::ad5x_ifs_firmware
 diff --git a/include/ui_panel_settings.h b/include/ui_panel_settings.h
-index 992b6333..f3284f70 100644
+index aa0c8a80a3..7b806914fb 100644
 --- a/include/ui_panel_settings.h
 +++ b/include/ui_panel_settings.h
-@@ -145,6 +145,8 @@ class SettingsPanel : public PanelBase {
-     lv_subject_t show_ad5x_soak_subject_{};
+@@ -149,6 +149,8 @@ class SettingsPanel : public PanelBase {
+     helix::Subject show_ad5x_soak_subject_{};
      // 1 when the printer has the IFS (`ifs` object): unhides "Filament Auto-Refill"
-     lv_subject_t show_ad5x_refill_subject_{};
+     helix::Subject show_ad5x_refill_subject_{};
 +    // 1 when the printer has the `ifs_firmware` object: unhides Devices > "IFS firmware"
-+    lv_subject_t show_ad5x_ifs_firmware_subject_{};
++    helix::Subject show_ad5x_ifs_firmware_subject_{};
  
      // Live status line shown under each stateful root row (settings_panel.xml),
      // refreshed by refresh_status_lines().
 diff --git a/include/ui_settings_ad5x_ifs_firmware.h b/include/ui_settings_ad5x_ifs_firmware.h
 new file mode 100644
-index 00000000..cc65f364
+index 0000000000..d965febcf7
 --- /dev/null
 +++ b/include/ui_settings_ad5x_ifs_firmware.h
 @@ -0,0 +1,197 @@
@@ -190,16 +184,16 @@ index 00000000..cc65f364
 +
 +#pragma once
 +
-+#include "ui_observer_guard.h"
-+#include "ui_subscription_guard.h"
-+#include "ui_timer_guard.h"
++#include "core/observer_guard.h"
++#include "subscription_guard.h"
++#include "core/timer_guard.h"
 +
 +#include "ad5x_ifs_firmware_view.h"
 +#include "async_lifetime_guard.h"
 +#include "json_fwd.h"
 +#include "lvgl/lvgl.h"
 +#include "overlay_base.h"
-+#include "static_panel_registry.h"
++#include "core/static_panel_registry.h"
 +#include "subject_managed_panel.h"
 +
 +#include <chrono>
@@ -255,7 +249,7 @@ index 00000000..cc65f364
 +    void notify();
 +
 +    SubjectManager subjects_;
-+    lv_subject_t text_{};
++    helix::Subject text_{};
 +    char text_buf_[32] = "";
 +    bool subjects_initialized_ = false;
 +
@@ -328,13 +322,13 @@ index 00000000..cc65f364
 +    void mark_alive();
 +
 +    SubjectManager subjects_;
-+    lv_subject_t kind_subject_{};
-+    lv_subject_t title_subject_{};
-+    lv_subject_t body_subject_{};
-+    lv_subject_t offer_stock_subject_{};
-+    lv_subject_t offer_klipper_subject_{};
-+    lv_subject_t choice_enabled_subject_{};
-+    lv_subject_t ok_subject_{};
++    helix::Subject kind_subject_{};
++    helix::Subject title_subject_{};
++    helix::Subject body_subject_{};
++    helix::Subject offer_stock_subject_{};
++    helix::Subject offer_klipper_subject_{};
++    helix::Subject choice_enabled_subject_{};
++    helix::Subject ok_subject_{};
 +    char title_buf_[128] = "";
 +    char body_buf_[512] = "";
 +
@@ -365,10 +359,10 @@ index 00000000..cc65f364
 +
 +} // namespace helix::settings
 diff --git a/src/api/moonraker_discovery_sequence.cpp b/src/api/moonraker_discovery_sequence.cpp
-index 70517685..239acbbb 100644
+index 76d9cf28c4..746b593fb4 100644
 --- a/src/api/moonraker_discovery_sequence.cpp
 +++ b/src/api/moonraker_discovery_sequence.cpp
-@@ -1592,6 +1592,15 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
+@@ -1645,6 +1645,15 @@ json MoonrakerDiscoverySequence::build_subscription_objects(const PrinterDiscove
          }
      }
  
@@ -385,7 +379,7 @@ index 70517685..239acbbb 100644
      // auto_refill, refill_match, refill_backups and refill_notice, which the
      // Settings screen and the "No backup spool" pop-up read; `ifs_materials`
 diff --git a/src/application/discovery_steps.cpp b/src/application/discovery_steps.cpp
-index 78b14326..412b1dc2 100644
+index 21119db826..1b908d36d1 100644
 --- a/src/application/discovery_steps.cpp
 +++ b/src/application/discovery_steps.cpp
 @@ -10,6 +10,7 @@
@@ -395,7 +389,7 @@ index 78b14326..412b1dc2 100644
 +#include "ui_settings_ad5x_ifs_firmware.h"
  #include "ui_settings_ad5x_log.h"
  #include "ui_settings_ad5x_refill.h"
- #include "ui_update_queue.h"
+ #include "ui_wizard.h"
 @@ -89,6 +90,10 @@ void validate_hardware_step(DiscoveryContext& ctx) {
      get_printer_state().hardware_validation_state().set_hardware_validation_result(
          validation_result);
@@ -409,7 +403,7 @@ index 78b14326..412b1dc2 100644
      }
 diff --git a/src/ui/ad5x_ifs_firmware_view.cpp b/src/ui/ad5x_ifs_firmware_view.cpp
 new file mode 100644
-index 00000000..dd78cbd4
+index 0000000000..dd78cbd4f6
 --- /dev/null
 +++ b/src/ui/ad5x_ifs_firmware_view.cpp
 @@ -0,0 +1,179 @@
@@ -592,10 +586,10 @@ index 00000000..dd78cbd4
 +}
 +
 +} // namespace helix::ad5x_ifs_firmware
-diff --git a/src/ui/ui_panel_settings.cpp b/src/ui/ui_panel_settings.cpp
-index 34c12811..2be06982 100644
---- a/src/ui/ui_panel_settings.cpp
-+++ b/src/ui/ui_panel_settings.cpp
+diff --git a/src/ui/settings/ui_panel_settings.cpp b/src/ui/settings/ui_panel_settings.cpp
+index bfadabd506..b87cb03618 100644
+--- a/src/ui/settings/ui_panel_settings.cpp
++++ b/src/ui/settings/ui_panel_settings.cpp
 @@ -14,6 +14,7 @@
  #include "ui_nav.h"
  #include "ui_panel_memory_stats.h"
@@ -604,7 +598,7 @@ index 34c12811..2be06982 100644
  #include "ui_settings_ad5x_plugins.h"
  #include "ui_settings_ad5x_refill.h"
  #include "ui_settings_ad5x_soak.h"
-@@ -151,6 +152,10 @@ void SettingsPanel::init_subjects() {
+@@ -164,6 +165,10 @@ void SettingsPanel::init_subjects() {
      UI_MANAGED_SUBJECT_INT(show_ad5x_refill_subject_, 0, "settings_show_ad5x_refill", subjects_);
      // The Filament Auto-Refill row's line (ad5x_refill_summary) follows the `ifs` object
      helix::ad5x_refill::model().init_subjects();
@@ -615,7 +609,7 @@ index 34c12811..2be06982 100644
  
      // Live status line under each stateful root row; refresh_status_lines()
      // fills these in, first from setup() and then on every return to the root.
-@@ -251,6 +256,11 @@ void SettingsPanel::refresh_status_lines() {
+@@ -267,6 +272,11 @@ void SettingsPanel::refresh_status_lines() {
      if (has_refill) {
          helix::ad5x_refill::model().start();
      }
@@ -627,7 +621,7 @@ index 34c12811..2be06982 100644
  
      // Formatted here rather than once at init, so it is in the language of the
      // latest return to the settings root.
-@@ -460,6 +470,7 @@ void register_settings_panel_callbacks() {
+@@ -489,6 +499,7 @@ void register_settings_panel_callbacks() {
          {"on_ad5x_nozzle_clicked", [](lv_event_t*) { helix::ui::Ad5xNozzleModal::show_owned(); }},
          {"on_ad5x_purge_clicked",
           [](lv_event_t*) { get_global_settings_panel().handle_ad5x_purge_clicked(); }},
@@ -637,7 +631,7 @@ index 34c12811..2be06982 100644
          {"on_restart_later_clicked",
 diff --git a/src/ui/ui_settings_ad5x_ifs_firmware.cpp b/src/ui/ui_settings_ad5x_ifs_firmware.cpp
 new file mode 100644
-index 00000000..e7de37c9
+index 0000000000..b9d6376b50
 --- /dev/null
 +++ b/src/ui/ui_settings_ad5x_ifs_firmware.cpp
 @@ -0,0 +1,523 @@
@@ -648,14 +642,14 @@ index 00000000..e7de37c9
 +#include "ui_callback_helpers.h"
 +#include "ui_emergency_stop.h"
 +#include "ui_modal.h"
-+#include "ui_update_queue.h"
++#include "core/update_queue.h"
 +
 +#include "app_globals.h"
 +#include "i_moonraker_api.h"
 +#include "i_moonraker_client.h"
 +#include "json_utils.h"
 +#include "lvgl/src/others/translation/lv_translation.h"
-+#include "observer_factory.h"
++#include "core/observer_factory.h"
 +#include "printer_state.h"
 +
 +#include <spdlog/spdlog.h>
@@ -821,7 +815,7 @@ index 00000000..e7de37c9
 +    }
 +    if (subjects_initialized_) {
 +        const std::string label = ifs_firmware_label(status_.firmware);
-+        lv_subject_copy_string(&text_, lv_tr(label.c_str()));
++        lv_subject_set_string(&text_, lv_tr(label.c_str()));
 +    }
 +    notify();
 +}
@@ -991,8 +985,8 @@ index 00000000..e7de37c9
 +    const fw::IfsFirmwareView v =
 +        fw::ifs_firmware_view(effective_status(), fw::model().klippy_ready(), seconds_waiting());
 +    lv_subject_set_int(&kind_subject_, static_cast<int>(v.kind));
-+    lv_subject_copy_string(&title_subject_, v.title.c_str());
-+    lv_subject_copy_string(&body_subject_, v.body.c_str());
++    lv_subject_set_string(&title_subject_, v.title.c_str());
++    lv_subject_set_string(&body_subject_, v.body.c_str());
 +    lv_subject_set_int(&offer_stock_subject_, v.offer_stock ? 1 : 0);
 +    lv_subject_set_int(&offer_klipper_subject_, v.offer_klipper ? 1 : 0);
 +    lv_subject_set_int(&choice_enabled_subject_,
@@ -1166,7 +1160,7 @@ index 00000000..e7de37c9
 +} // namespace helix::settings
 diff --git a/tests/unit/test_ad5x_ifs_firmware.cpp b/tests/unit/test_ad5x_ifs_firmware.cpp
 new file mode 100644
-index 00000000..0b2f8185
+index 0000000000..0b2f81851c
 --- /dev/null
 +++ b/tests/unit/test_ad5x_ifs_firmware.cpp
 @@ -0,0 +1,211 @@
@@ -1383,7 +1377,7 @@ index 00000000..0b2f8185
 +}
 diff --git a/ui_xml/settings_ad5x_ifs_firmware_overlay.xml b/ui_xml/settings_ad5x_ifs_firmware_overlay.xml
 new file mode 100644
-index 00000000..4c0d7e8e
+index 0000000000..4c0d7e8e99
 --- /dev/null
 +++ b/ui_xml/settings_ad5x_ifs_firmware_overlay.xml
 @@ -0,0 +1,73 @@
@@ -1461,7 +1455,7 @@ index 00000000..4c0d7e8e
 +  </view>
 +</component>
 diff --git a/ui_xml/settings_hardware_overlay.xml b/ui_xml/settings_hardware_overlay.xml
-index e9991e1f..911397b3 100644
+index 0ed1fe05a7..b9de8bc393 100644
 --- a/ui_xml/settings_hardware_overlay.xml
 +++ b/ui_xml/settings_hardware_overlay.xml
 @@ -75,6 +75,12 @@
@@ -1477,6 +1471,3 @@ index e9991e1f..911397b3 100644
          <!-- ================================================================== -->
          <!-- POWER DEVICES (hidden when no power devices discovered) -->
          <!-- ================================================================== -->
--- 
-2.56.0
-

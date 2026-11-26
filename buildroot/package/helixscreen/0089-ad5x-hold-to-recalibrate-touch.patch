@@ -26,16 +26,17 @@ to a widget:
 
 Signed-off-by: Hunter Laux <hunterlaux@gmail.com>
 ---
- include/touch_calibration_wrapper.h   | 18 ++++++++
- src/api/touch_calibration_wrapper.cpp | 60 +++++++++++++++++++++++++++
- src/application/application.cpp       | 23 ++++++++++
- 3 files changed, 101 insertions(+)
+ include/touch_calibration_wrapper.h           | 18 ++++++
+ src/application/application.cpp               | 22 +++++++
+ src/application/application_shutdown.cpp      |  2 +
+ .../input/touch_calibration_wrapper.cpp       | 60 +++++++++++++++++++
+ 4 files changed, 102 insertions(+)
 
 diff --git a/include/touch_calibration_wrapper.h b/include/touch_calibration_wrapper.h
-index 5d622d1..43616a9 100644
+index 55687ea50e..084be55958 100644
 --- a/include/touch_calibration_wrapper.h
 +++ b/include/touch_calibration_wrapper.h
-@@ -83,6 +83,24 @@ struct CalibrationContext {
+@@ -85,6 +85,24 @@ struct CalibrationContext {
  /// samples within one press.
  inline constexpr int kTransposedGuessCorroboration = 3;
  
@@ -60,10 +61,69 @@ index 5d622d1..43616a9 100644
  /// Read callback wrapper that applies affine touch calibration.
  /// Chains to original_read_cb first, then transforms coordinates.
  void calibrated_read_cb(lv_indev_t* indev, lv_indev_data_t* data);
-diff --git a/src/api/touch_calibration_wrapper.cpp b/src/api/touch_calibration_wrapper.cpp
-index 18b3540..d59e0f6 100644
---- a/src/api/touch_calibration_wrapper.cpp
-+++ b/src/api/touch_calibration_wrapper.cpp
+diff --git a/src/application/application.cpp b/src/application/application.cpp
+index e590950fd6..5a1f7607e0 100644
+--- a/src/application/application.cpp
++++ b/src/application/application.cpp
+@@ -151,6 +151,7 @@
+ #include "ui_theme_editor_overlay.h"
+ #include "ui_tile_rung.h"
+ #include "ui_toast_manager.h"
++#include "touch_calibration_wrapper.h"
+ #include "ui_touch_calibration_overlay.h"
+ #include "ui_unit_art.h"
+ #include "ui_update_notify_modal.h"
+@@ -829,6 +830,27 @@ int Application::run(int argc, char** argv) {
+             }
+         }
+ 
++        // A press held 10 s anywhere opens touch calibration: the touch screen is
++        // the only input, so a calibration that does not fit the panel must be
++        // fixable without hitting anything in particular. Any screen, wizard
++        // included; not while calibration is already open.
++        helix::set_calibration_hold_handler([this]() {
++            DisplayManager* dm = DisplayManager::instance();
++            if (!m_screen || (dm && !dm->supports_touch_calibration()) ||
++                helix::ui::get_touch_calibration_overlay().is_visible()) {
++                return false;
++            }
++            lv_async_call(
++                [](void* screen) {
++                    auto& overlay = helix::ui::get_touch_calibration_overlay();
++                    if (!overlay.is_visible()) {
++                        overlay.show(static_cast<lv_obj_t*>(screen), nullptr);
++                    }
++                },
++                m_screen);
++            return true;
++        });
++
+         // Phase 12: Run wizard if needed
+         if (run_wizard()) {
+             // Wizard is active - it handles its own flow
+diff --git a/src/application/application_shutdown.cpp b/src/application/application_shutdown.cpp
+index 369af75c7c..24816833a9 100644
+--- a/src/application/application_shutdown.cpp
++++ b/src/application/application_shutdown.cpp
+@@ -19,12 +19,14 @@
+ #include "system/crash_handler.h"
+ #include "theme_manager.h"
+ #include "wifi_link_monitor.h"
++#include "touch_calibration_wrapper.h"
+ 
+ #include <spdlog/spdlog.h>
+ 
+ using namespace helix;
+ 
+ void Application::shutdown() {
++    helix::set_calibration_hold_handler(nullptr);
+     // Guard against multiple calls (destructor + explicit shutdown)
+     if (m_shutdown_complete) {
+         return;
+diff --git a/src/platform/input/touch_calibration_wrapper.cpp b/src/platform/input/touch_calibration_wrapper.cpp
+index 6040cb1b90..bf9b0b7554 100644
+--- a/src/platform/input/touch_calibration_wrapper.cpp
++++ b/src/platform/input/touch_calibration_wrapper.cpp
 @@ -7,6 +7,8 @@
  #include "helix_display_telemetry.h"
  #include "pointer_frame_hook.h"
@@ -152,54 +212,3 @@ index 18b3540..d59e0f6 100644
  lv_point_t map_touch_point_to_screen(lv_indev_t* indev, lv_point_t driver_point) {
      Point point{static_cast<int>(driver_point.x), static_cast<int>(driver_point.y)};
      // One calibrated touch indev per process (see s_active_ctx), and a multi-touch
-diff --git a/src/application/application.cpp b/src/application/application.cpp
-index d671e5d..2fce0fb 100644
---- a/src/application/application.cpp
-+++ b/src/application/application.cpp
-@@ -152,6 +152,7 @@
- #include "ui_theme_editor_overlay.h"
- #include "ui_tile_rung.h"
- #include "ui_toast_manager.h"
-+#include "touch_calibration_wrapper.h"
- #include "ui_touch_calibration_overlay.h"
- #include "ui_utils.h"
- #include "ui_wizard.h"
-@@ -891,6 +892,27 @@ int Application::run(int argc, char** argv) {
-             }
-         }
- 
-+        // A press held 10 s anywhere opens touch calibration: the touch screen is
-+        // the only input, so a calibration that does not fit the panel must be
-+        // fixable without hitting anything in particular. Any screen, wizard
-+        // included; not while calibration is already open.
-+        helix::set_calibration_hold_handler([this]() {
-+            DisplayManager* dm = DisplayManager::instance();
-+            if (!m_screen || (dm && !dm->supports_touch_calibration()) ||
-+                helix::ui::get_touch_calibration_overlay().is_visible()) {
-+                return false;
-+            }
-+            lv_async_call(
-+                [](void* screen) {
-+                    auto& overlay = helix::ui::get_touch_calibration_overlay();
-+                    if (!overlay.is_visible()) {
-+                        overlay.show(static_cast<lv_obj_t*>(screen), nullptr);
-+                    }
-+                },
-+                m_screen);
-+            return true;
-+        });
-+
-         // Phase 12: Run wizard if needed
-         if (run_wizard()) {
-             // Wizard is active - it handles its own flow
-@@ -2544,6 +2566,7 @@ void Application::check_timeouts() {
- // ============================================================================
- 
- void Application::shutdown() {
-+    helix::set_calibration_hold_handler(nullptr);
-     // Guard against multiple calls (destructor + explicit shutdown)
-     if (m_shutdown_complete) {
-         return;
--- 
-2.56.0
-
