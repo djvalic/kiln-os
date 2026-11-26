@@ -35,7 +35,7 @@ PRINT_START BED=[bed_temperature_initial_layer_single] EXTRUDER=[nozzle_temperat
    `EXTRUDER`, wait for both.
 3. Purge 90 mm at F300 with the fan off, fan S125 for 3 s, retract 3 mm,
    wipe (Y220/Y229 twice, end at Y220).
-4. Nozzle to 180, brush twice across the box (X65 to X78 at Y229).
+4. Set the nozzle to 180 °C and wait for the target before brushing twice across the box (X65 to X78 at Y229).
    Part fan off (stock leaves the purge's S125 on until the bed-edge
    scrub; `macros/` only, the factory start keeps stock's).
    Then the rest of the bed heat soak, if any ("Heat soak m:ss"): the
@@ -46,7 +46,8 @@ PRINT_START BED=[bed_temperature_initial_layer_single] EXTRUDER=[nozzle_temperat
 5. `_CHECK_Z` (see `docs/bed-weighing-board.md`): tare and probe the front
    edge, scrub the nozzle there while it cools to 140 (screen: "Cleaning
    nozzle on the bed edge"; it runs just above the edge, it isn't
-   printing), then either run `BED_MESH_CALIBRATE ADAPTIVE=1` ("Bed mesh:
+   printing), raise the nozzle and wait for the 140 °C target with the part fan on,
+   then switch the fan off and either run `BED_MESH_CALIBRATE ADAPTIVE=1` ("Bed mesh:
    print area"; with `ADAPTIVE=0` a full `BED_MESH_CALIBRATE`, "Bed mesh:
    whole bed"; `LEVEL=1`, the `macros/` default) or tare, probe the
    centre and set the Z offset from the drift ("Checking Z", `LEVEL=0`,
