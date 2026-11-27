@@ -1,0 +1,976 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 12:19:23 -0500
+Subject: [PATCH] settings: an Advanced settings switch shows every row or only
+ the everyday ones
+
+A switch at the bottom of the Settings root, in its own card: Advanced
+settings.
+Off, the rows outside the everyday set hide: Touch & Input, Purge Box,
+Updates and Plugins on the root; the Printer page's model row and Manage
+Printers; Machine Limits, Retraction Settings, Multi-Filament System
+Management, Z Offset by Material, Allow cold load/unload, Number slots
+from 0, Macro Buttons and Apply start options to prints from other apps
+on Printing; Sensors, IFS firmware and Power Devices on Devices; Cancel
+Escalation and its timeout, Confirm before running macros and the
+nozzle-hit guard's Sensitivity on Safety & Alerts; Printers, Host, API
+Key and Screen Sharing on Connection; Performance, Storage, Firmware
+Update, Share Usage Data, View Telemetry Data, Log Level, Log detail,
+Reset root password, Boot into recovery, Return to Flashforge firmware
+and Extended memory on System; Upload Debug Bundle, Discord Community,
+Getting Started and User Guide on Help & About.
+
+The setting is a PersistedSetting of SystemSettingsManager
+(/advanced_settings, subject settings_advanced). It defaults on, so a
+settings.json from before it keeps every row; Kiln OS's first-install
+seed stores false, and get_default_config() with the user preferences,
+which Config::reset_to_defaults() uses, stores false, so a factory reset
+starts with it off.
+
+Each hidden row or container carries a bind_flag_if_eq on
+settings_advanced. Bindings on one flag compose (lv_xml_bind_compose.c),
+so the rows' own gates keep working in both modes, and no wrapper sits
+at height 0 under a card when a row's own gate hides it. The bindings
+follow the subject, so pages already built change at once.
+double_bind_widgets.inc is regenerated, which also adds four Kiln pairs
+it lacked. English, English (UK, empty) and Russian strings.
+---
+ include/system_settings_manager.h      |  32 +++-
+ src/system/config.cpp                  |   4 +
+ src/system/system_settings_manager.cpp |   4 +
+ src/ui/settings/ui_panel_settings.cpp  |   6 +
+ tests/unit/double_bind_widgets.inc     |  25 ++-
+ tests/unit/test_config.cpp             |  16 ++
+ tests/unit/test_persisted_setting.cpp  |   4 +
+ tests/unit/test_settings_advanced.cpp  | 235 +++++++++++++++++++++++++
+ translations/en-GB.yml                 |   1 +
+ translations/en.yml                    |   2 +
+ translations/ru.yml                    |   2 +
+ ui_xml/printer_manager_overlay.xml     |   6 +-
+ ui_xml/settings_connection_overlay.xml |  14 +-
+ ui_xml/settings_hardware_overlay.xml   |   4 +
+ ui_xml/settings_help_overlay.xml       |  17 +-
+ ui_xml/settings_panel.xml              |  15 +-
+ ui_xml/settings_printing_overlay.xml   |  27 ++-
+ ui_xml/settings_safety_overlay.xml     |  11 +-
+ ui_xml/settings_system_overlay.xml     |  15 +-
+ 19 files changed, 419 insertions(+), 21 deletions(-)
+ create mode 100644 tests/unit/test_settings_advanced.cpp
+
+diff --git a/include/system_settings_manager.h b/include/system_settings_manager.h
+index f56854b4f4..1e3f646e5b 100644
+--- a/include/system_settings_manager.h
++++ b/include/system_settings_manager.h
+@@ -24,6 +24,7 @@ class Config;
+  * - wifi_enabled (radio on/off choice, survives restarts)
+  * - wifi_country (regulatory country, "" = leave it to the system)
+  * - wifi_country_last_seen (last real country the radio reported)
++ * - advanced_settings (Kiln OS: show every setting, or only the everyday ones)
+  *
+  * Thread safety: Single-threaded, main LVGL thread only.
+  */
+@@ -116,6 +117,24 @@ class SystemSettingsManager {
+     /** @brief Set telemetry enabled state (persists to config + notifies TelemetryManager) */
+     void set_telemetry_enabled(bool enabled);
+ 
++    // ADVANCED SETTINGS (Kiln OS)
++
++    /**
++     * @brief Whether Settings shows every row (true) or only the everyday ones
++     *
++     * Default true: a settings.json without the key (every printer that had
++     * HelixScreen before this setting) keeps showing everything. Kiln OS's
++     * first-install seed and Config::reset_to_defaults() store false.
++     */
++    bool get_advanced_settings() const {
++        return settings_.get_bool(Key::AdvancedSettings);
++    }
++
++    /** @brief Persist the choice; the rows' bindings follow the subject */
++    void set_advanced_settings(bool enabled) {
++        settings_.set(Key::AdvancedSettings, enabled);
++    }
++
+     // WIFI SETTINGS
+ 
+     /**
+@@ -217,6 +236,11 @@ class SystemSettingsManager {
+         return settings_.subject(Key::WifiEnabled);
+     }
+ 
++    /** @brief Advanced settings subject (integer: 0=everyday rows only, 1=every row) */
++    lv_subject_t* subject_advanced_settings() {
++        return settings_.subject(Key::AdvancedSettings);
++    }
++
+     /** @brief Log level subject (integer: 0=Warn, 1=Info, 2=Debug, 3=Trace) */
+     lv_subject_t* subject_log_level() {
+         return &log_level_subject_;
+@@ -226,7 +250,13 @@ class SystemSettingsManager {
+     SystemSettingsManager();
+     ~SystemSettingsManager() = default;
+ 
+-    enum class Key : uint8_t { UpdateChannel, TelemetryEnabled, WifiEnabled, COUNT };
++    enum class Key : uint8_t {
++        UpdateChannel,
++        TelemetryEnabled,
++        WifiEnabled,
++        AdvancedSettings,
++        COUNT
++    };
+ 
+     SubjectManager subjects_;
+     settings::PersistedSettings<Key, static_cast<size_t>(Key::COUNT)> settings_;
+diff --git a/src/system/config.cpp b/src/system/config.cpp
+index 6770c75a6c..cbeba3bc74 100644
+--- a/src/system/config.cpp
++++ b/src/system/config.cpp
+@@ -598,6 +598,10 @@ json get_default_config(const std::string& moonraker_host, bool include_user_pre
+         config["wizard_completed"] = false;
+         config["wifi_expected"] = false;
+         config["language"] = "en";
++        // Kiln OS: a factory reset starts with only the everyday settings
++        // shown, as a fresh install does (the seed has the same). Without
++        // the key a settings.json shows every setting.
++        config["advanced_settings"] = false;
+     }
+ 
+     return config;
+diff --git a/src/system/system_settings_manager.cpp b/src/system/system_settings_manager.cpp
+index 7bfe8ab0dc..87a0619b4c 100644
+--- a/src/system/system_settings_manager.cpp
++++ b/src/system/system_settings_manager.cpp
+@@ -63,6 +63,10 @@ static constexpr settings::PersistedSetting kSystemSettings[] = {
+     {"settings_telemetry_enabled", "/telemetry_enabled", Scope::Global, true, 0, 0, 1, nullptr},
+     // Default on: a device that has never seen this setting comes up with WiFi enabled
+     {"settings_wifi_enabled", "/wifi_enabled", Scope::Global, true, 1, 0, 1, "wifi_enabled"},
++    // Kiln OS: Settings > Advanced settings. Default on, so a settings.json
++    // from before the setting keeps every row; the first-install seed and a
++    // factory reset store it off.
++    {"settings_advanced", "/advanced_settings", Scope::Global, true, 1, 0, 1, "advanced_settings"},
+ };
+ 
+ SystemSettingsManager& SystemSettingsManager::instance() {
+diff --git a/src/ui/settings/ui_panel_settings.cpp b/src/ui/settings/ui_panel_settings.cpp
+index a677e4ccc4..b9d18d5789 100644
+--- a/src/ui/settings/ui_panel_settings.cpp
++++ b/src/ui/settings/ui_panel_settings.cpp
+@@ -492,6 +492,12 @@ void register_settings_panel_callbacks() {
+         {"on_ad5x_plugins_clicked", nav_row<get_ad5x_plugins_overlay>()},
+         {"on_ad5x_soak_clicked", nav_row<get_ad5x_soak_overlay>()},
+         {"on_ad5x_refill_clicked", nav_row<get_ad5x_refill_overlay>()},
++        // Kiln OS: Advanced settings, the switch at the bottom of the root.
++        // Rows outside the everyday set bind hidden to settings_advanced.
++        {"on_advanced_settings_changed",
++         [](lv_event_t* e) {
++             SystemSettingsManager::instance().set_advanced_settings(helix::ui::event_checked(e));
++         }},
+ #if HELIX_HAS_PLUGINS
+         {"on_plugins_clicked", nav_row<helix::plugin::get_plugins_overlay>()},
+ #else
+diff --git a/tests/unit/double_bind_widgets.inc b/tests/unit/double_bind_widgets.inc
+index 95af6e77a1..6b50c3e809 100644
+--- a/tests/unit/double_bind_widgets.inc
++++ b/tests/unit/double_bind_widgets.inc
+@@ -21,10 +21,13 @@
+ 
+ // clang-format off
+ static const BindGroup kDoubleBindWidgets[] = {
++    {"ad5x_nozzle_modal", "nozzle_dropdown", 0, {}, 0, BindKind::State, "disabled", {{"machine_motion_blocked", 0}, {"ad5x_nozzle_local", 0}}, 2, {{0, 1}, {1, 1}}, 2, true},
+     {"ams_current_tool", "ams_current_tool", 0, {}, 0, BindKind::Flag, "hidden", {{"ams_slot_count", -1}, {"ams_current_tool", 0}}, 2, {{0, 0}, {1, -1}}, 2, true},
+     {"ams_environment_overlay", "drying_progress_bar", 0, {}, 0, BindKind::Flag, "hidden", {{"env_zone_state", 0}, {"ams_env_overlay_drying_progress", 0}}, 2, {{0, 1}, {1, -1}}, 2, true},
+     {"cold_pull_overlay", "btn_cold_pull_extrude", 0, {}, 0, BindKind::State, "disabled", {{"machine_motion_blocked", 0}, {"cold_pull_busy", 0}}, 2, {{0, 1}, {1, 1}}, 2, true},
+     {"cold_pull_overlay", "btn_cold_pull_more", 0, {}, 0, BindKind::State, "disabled", {{"machine_motion_blocked", 0}, {"cold_pull_busy", 0}}, 2, {{0, 1}, {1, 1}}, 2, true},
++    {"components/ad5x_plugin_row", "update_btn", 0, {}, 0, BindKind::State, "disabled", {{"machine_motion_blocked", 0}, {"ad5x_plugins_busy", 0}}, 2, {{0, 1}, {1, 1}}, 2, true},
++    {"components/ad5x_plugin_row", "remove_btn", 0, {}, 0, BindKind::State, "disabled", {{"machine_motion_blocked", 0}, {"ad5x_plugins_busy", 0}}, 2, {{0, 1}, {1, 1}}, 2, true},
+     {"components/ams_sidebar", "btn_park", 0, {}, 0, BindKind::State, "disabled", {{"machine_motion_blocked", 0}, {"ams_sidebar_park_disabled", 0}}, 2, {{0, 1}, {1, 1}}, 2, true},
+     {"components/filament_operations_group", "btn_load", 0, {}, 0, BindKind::State, "disabled", {{"filament_safety_warning_visible", 0}, {"filament_operation_in_progress", 0}, {"filament_load_disabled", 0}}, 3, {{0, 1}, {1, 1}, {2, 1}}, 3, true},
+     {"components/filament_operations_group", "btn_unload", 0, {}, 0, BindKind::State, "disabled", {{"filament_safety_warning_visible", 0}, {"filament_operation_in_progress", 0}, {"filament_unload_disabled", 0}}, 3, {{0, 1}, {1, 1}, {2, 1}}, 3, true},
+@@ -77,12 +80,30 @@ static const BindGroup kDoubleBindWidgets[] = {
+     {"network_settings_overlay", "wifi_disabled_placeholder", 0, {}, 0, BindKind::Flag, "hidden", {{"wifi_enabled", 0}, {"wifi_hardware_available", -1}}, 2, {{0, 1}, {1, 0}}, 2, true},
+     {"pa_tuning_overlay", "pa_btn_start", 0, {}, 0, BindKind::State, "disabled", {{"machine_motion_blocked", 0}, {"pa_tune_can_start", -1}}, 2, {{0, 1}, {1, 0}}, 2, true},
+     {"print_file_detail", "filament_mapping_card", 0, {}, 0, BindKind::Flag, "hidden", {{"filament_mapping_visible", -1}, {"print_select_button_mode", 0}}, 2, {{0, 0}, {1, 1}}, 2, true},
++    {"settings_ad5x_soak_overlay", "btn_ad5x_soak_calibrate", 0, {}, 0, BindKind::State, "disabled", {{"machine_motion_blocked", 0}, {"ad5x_soak_busy", 0}}, 2, {{0, 1}, {1, 1}}, 2, true},
++    {"settings_connection_overlay", "container_screen_sharing", 0, {}, 0, BindKind::Flag, "hidden", {{"settings_advanced", -1}, {"remote_screen_available", -1}}, 2, {{0, 0}, {1, 0}}, 2, true},
+     {"settings_hardware_overlay", "container_camera", 0, {}, 0, BindKind::Flag, "hidden", {{"printer_has_webcam", -1}, {"platform_camera_supported", -1}}, 2, {{0, 0}, {1, 0}}, 2, true},
++    {"settings_hardware_overlay", "row_ad5x_ifs_firmware", 0, {}, 0, BindKind::Flag, "hidden", {{"settings_advanced", -1}, {"ad5x_ifs_firmware_available", -1}}, 2, {{0, 0}, {1, 0}}, 2, true},
++    {"settings_hardware_overlay", "container_power_devices", 0, {}, 0, BindKind::Flag, "hidden", {{"settings_advanced", -1}, {"power_device_count", -1}}, 2, {{0, 0}, {1, 0}}, 2, true},
++    {"settings_panel", "row_ad5x_purge", 0, {}, 0, BindKind::Flag, "hidden", {{"settings_advanced", -1}, {"settings_show_ad5x_setup", -1}}, 2, {{0, 0}, {1, 0}}, 2, true},
++    {"settings_panel", "row_plugins", 0, {}, 0, BindKind::Flag, "hidden", {{"settings_advanced", -1}, {"settings_plugins_available", -1}}, 2, {{0, 0}, {1, 0}}, 2, true},
++    {"settings_printing_overlay", "container_firmware_retraction", 0, {}, 0, BindKind::Flag, "hidden", {{"settings_advanced", -1}, {"printer_has_firmware_retraction", -1}}, 2, {{0, 0}, {1, 0}}, 2, true},
++    {"settings_printing_overlay", "container_ams_settings", 0, {}, 0, BindKind::Flag, "hidden", {{"settings_advanced", -1}, {"ams_has_device_ops", -1}}, 2, {{0, 0}, {1, 0}}, 2, true},
++    {"settings_safety_overlay", "container_cancel_escalation_timeout", 0, {}, 0, BindKind::Flag, "hidden", {{"settings_advanced", -1}, {"settings_cancel_escalation_enabled", -1}}, 2, {{0, 0}, {1, 0}}, 2, true},
++    {"settings_safety_overlay", "container_ad5x_nozzle_guard_sensitivity", 0, {}, 0, BindKind::Flag, "hidden", {{"settings_advanced", -1}, {"ad5x_nozzle_guard_enabled", -1}}, 2, {{0, 0}, {1, 0}}, 2, true},
++    {"settings_system_overlay", "container_performance", 0, {}, 0, BindKind::Flag, "hidden", {{"settings_advanced", -1}, {"perf_available", -1}}, 2, {{0, 0}, {1, 0}}, 2, true},
++    {"settings_system_overlay", "container_telemetry", 0, {}, 0, BindKind::Flag, "hidden", {{"settings_advanced", -1}, {"platform_extras_available", -1}}, 2, {{0, 0}, {1, 0}}, 2, true},
++    {"settings_system_overlay", "row_log_level", 0, {}, 0, BindKind::Flag, "hidden", {{"settings_advanced", -1}, {"ad5x_log_available", 0}}, 2, {{0, 0}, {1, 1}}, 2, true},
++    {"settings_system_overlay", "row_ad5x_log_mode", 0, {}, 0, BindKind::Flag, "hidden", {{"settings_advanced", -1}, {"ad5x_log_available", -1}}, 2, {{0, 0}, {1, 0}}, 2, true},
++    {"settings_system_overlay", "container_kiln_rootpw", 0, {}, 0, BindKind::Flag, "hidden", {{"settings_advanced", -1}, {"kiln_rootpw_state", -1}}, 2, {{0, 0}, {1, 0}}, 2, true},
++    {"settings_system_overlay", "row_kiln_boot_recovery", 0, {}, 0, BindKind::Flag, "hidden", {{"settings_advanced", -1}, {"kiln_boot_recovery_available", -1}}, 2, {{0, 0}, {1, 0}}, 2, true},
++    {"settings_system_overlay", "row_kiln_return_stock", 0, {}, 0, BindKind::Flag, "hidden", {{"settings_advanced", -1}, {"kiln_boot_recovery_available", -1}}, 2, {{0, 0}, {1, 0}}, 2, true},
++    {"settings_system_overlay", "container_kiln_extended_memory", 0, {}, 0, BindKind::Flag, "hidden", {{"settings_advanced", -1}, {"kiln_extended_memory_available", -1}}, 2, {{0, 0}, {1, 0}}, 2, true},
+     {"spool_wizard", "create_btn", 0, {}, 0, BindKind::State, "disabled", {{"spool_wizard_can_proceed", -1}, {"wizard_creating", 0}}, 2, {{0, 0}, {1, 1}}, 2, true},
+     {"wizard_wifi_setup", "network_list_container", 0, {}, 0, BindKind::State, "disabled", {{"wifi_enabled", -1}, {"wifi_hardware_available", -1}}, 2, {{0, 0}, {1, 0}}, 2, true},
+ };
+ // clang-format on
+ 
+-// Groups in ui_xml/: 59 drivable, 63 that no test can drive (see the header
+-// comment), 122 total. qc_double_binds fails a commit that leaves this file
++// Groups in ui_xml/: 80 drivable, 68 that no test can drive (see the header
++// comment), 148 total. qc_double_binds fails a commit that leaves this file
+ // behind ui_xml/.
+diff --git a/tests/unit/test_config.cpp b/tests/unit/test_config.cpp
+index 6ff905bee8..2f177b0cb6 100644
+--- a/tests/unit/test_config.cpp
++++ b/tests/unit/test_config.cpp
+@@ -646,6 +646,22 @@ TEST_CASE_METHOD(ConfigTestFixture, "Config: reset_to_defaults installs the ship
+     }
+ }
+ 
++TEST_CASE_METHOD(ConfigTestFixture,
++                 "Config: reset_to_defaults turns Advanced settings off (Kiln OS)",
++                 "[config][defaults]") {
++    // A factory reset starts with only the everyday settings, as Kiln OS's
++    // first-install seed does; a settings.json without the key shows them all.
++    config.reset_to_defaults();
++    REQUIRE(config.get<json>("/advanced_settings", kAbsentSentinel) == json(false));
++}
++
++TEST_CASE_METHOD(FreshConfigFixture, "Config: a first-boot config leaves Advanced settings unset",
++                 "[config][defaults]") {
++    // Absent reads as on (SystemSettingsManager's default). Kiln OS's seed
++    // stores false itself, so only an updated settings.json goes without it.
++    REQUIRE_FALSE(config.exists("/advanced_settings"));
++}
++
+ TEST_CASE_METHOD(FreshConfigFixture, "Config: a first-boot config carries the shipped defaults",
+                  "[config][display][defaults]") {
+     // Same table, reached through Config::init() on an empty directory, so this
+diff --git a/tests/unit/test_persisted_setting.cpp b/tests/unit/test_persisted_setting.cpp
+index ad8c653eb6..bc70d9c01a 100644
+--- a/tests/unit/test_persisted_setting.cpp
++++ b/tests/unit/test_persisted_setting.cpp
+@@ -240,6 +240,10 @@ const std::vector<Row>& rows() {
+         {"settings_wifi_enabled", Mgr::System, false, "/wifi_enabled", true, 1, 0, 1,
+          "wifi_enabled", true, SETB(sys().set_wifi_enabled), GET(sys().get_wifi_enabled),
+          SUBJ(sys().subject_wifi_enabled)},
++        // Kiln OS: Settings > Advanced settings, on when settings.json lacks it
++        {"settings_advanced", Mgr::System, false, "/advanced_settings", true, 1, 0, 1,
++         "advanced_settings", true, SETB(sys().set_advanced_settings),
++         GET(sys().get_advanced_settings), SUBJ(sys().subject_advanced_settings)},
+ 
+         // SettingsManager
+         {"settings_z_movement_style", Mgr::Settings, true, "z_movement_style", false, 0, 0, 2,
+diff --git a/tests/unit/test_settings_advanced.cpp b/tests/unit/test_settings_advanced.cpp
+new file mode 100644
+index 0000000000..e4b36b7ad8
+--- /dev/null
++++ b/tests/unit/test_settings_advanced.cpp
+@@ -0,0 +1,235 @@
++// Copyright (C) 2025-2026 356C LLC
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++/**
++ * @file test_settings_advanced.cpp
++ * @brief Kiln OS: Settings > Advanced settings shows every row, or only the
++ *        everyday ones.
++ *
++ * Each page is built once with the setting on, then the setting is switched
++ * off and on again on the live page: the advanced rows hide and come back
++ * without a rebuild, and the everyday rows keep whatever their own bindings
++ * gave them. Every name is looked up, so a renamed row fails here instead of
++ * slipping out of the split.
++ */
++
++#include "ui_panel_settings.h"
++
++#include "../lvgl_ui_test_fixture.h"
++#include "../test_helpers/widget_in_tree.h"
++#include "config.h"
++#include "core/update_queue.h"
++#include "helix-xml/src/xml/lv_xml.h"
++#include "settings_manager.h"
++#include "system_settings_manager.h"
++
++#include <string>
++#include <vector>
++
++#include "../catch_amalgamated.hpp"
++
++using namespace helix;
++
++namespace {
++
++struct AdvancedFixture : LVGLUITestFixture {
++    lv_obj_t* root_ = nullptr;
++    bool before_ = true;
++
++    AdvancedFixture() {
++        SettingsManager::instance().init_subjects();
++        get_global_settings_panel().init_subjects();
++        before_ = SystemSettingsManager::instance().get_advanced_settings();
++        SystemSettingsManager::instance().set_advanced_settings(true);
++        helix::ui::UpdateQueue::instance().drain();
++    }
++
++    ~AdvancedFixture() override {
++        if (root_ && helix::test::widget_in_tree(root_)) {
++            lv_obj_delete(root_);
++        }
++        SystemSettingsManager::instance().set_advanced_settings(before_);
++        helix::ui::UpdateQueue::instance().drain();
++        get_global_settings_panel().deinit_subjects();
++        helix::ui::UpdateQueue::instance().drain();
++    }
++
++    void build(const char* view) {
++        if (root_ && helix::test::widget_in_tree(root_)) {
++            lv_obj_delete(root_);
++        }
++        root_ = static_cast<lv_obj_t*>(lv_xml_create(test_screen(), view, nullptr));
++        REQUIRE(root_ != nullptr);
++        process_lvgl(5);
++    }
++
++    lv_obj_t* find(const char* name) const {
++        lv_obj_t* obj = lv_obj_find_by_name(root_, name);
++        REQUIRE(obj != nullptr);
++        return obj;
++    }
++
++    void set_advanced(bool on) {
++        SystemSettingsManager::instance().set_advanced_settings(on);
++        helix::ui::UpdateQueue::instance().drain();
++        process_lvgl(5);
++    }
++};
++
++struct Split {
++    const char* view;
++    std::vector<const char*> advanced; ///< hidden while Advanced settings is off
++    std::vector<const char*> everyday; ///< left to their own bindings
++};
++
++const std::vector<Split>& splits() {
++    static const std::vector<Split> s = {
++        {"settings_panel",
++         {"row_touch_input", "row_ad5x_purge", "row_updates", "row_plugins"},
++         {"row_display", "row_appearance", "row_sound", "row_printer", "row_printing",
++          "row_devices", "row_safety", "row_connection", "row_ad5x_setup", "row_ad5x_nozzle",
++          "row_ad5x_soak", "row_ad5x_refill", "row_ad5x_plugins", "row_language_time", "row_system",
++          "row_help", "row_advanced_settings"}},
++        {"printer_manager_overlay",
++         {"btn_manage_printers", "pm_printer_model_row"},
++         {"pm_image_container", "pm_printer_name_row"}},
++        {"settings_printing_overlay",
++         {"row_machine_limits", "container_firmware_retraction", "container_ams_settings",
++          "row_material_z_offset", "row_allow_cold_extrude", "row_number_lanes_from_zero",
++          "row_print_hooks", "row_macro_buttons"},
++         {"row_motion", "row_enclosure_style", "row_spoolman_settings", "row_material_temps",
++          "row_print_cost", "row_filament_auto_cooldown", "row_filament_auto_open_editor",
++          "row_material_presets_heat_bed_and_chamber", "row_tool_change_confirm",
++          "container_timelapse_settings", "row_power_loss_recovery", "container_plr_mesh_include"}},
++        {"settings_hardware_overlay",
++         {"container_filament_sensors", "row_ad5x_ifs_firmware", "container_power_devices"},
++         {"container_hardware_health", "container_camera", "container_print_photos",
++          "container_fan_settings", "container_led_light", "row_chamber_light_fitted"}},
++        {"settings_safety_overlay",
++         {"row_cancel_escalation", "container_cancel_escalation_timeout", "row_macro_confirm",
++          "container_ad5x_nozzle_guard_sensitivity"},
++         {"row_estop_confirm", "row_motors_off_confirm", "row_power_confirm",
++          "container_power_target", "row_ad5x_nozzle_guard", "container_ad5x_nozzle_guard",
++          "container_detection", "container_bed_check", "row_fit_check_blocks_autostart",
++          "row_completion_alert", "row_min_toast_severity"}},
++        {"settings_connection_overlay",
++         {"row_printers", "row_printer_host", "row_printer_api_key", "container_screen_sharing"},
++         {"container_network_settings"}},
++        {"settings_system_overlay",
++         {"container_performance", "row_storage", "row_firmware_update", "container_telemetry",
++          "row_telemetry_view_data", "row_log_level", "row_ad5x_log_mode", "container_kiln_rootpw",
++          "row_kiln_boot_recovery", "row_kiln_return_stock", "container_kiln_extended_memory"},
++         {"row_security", "row_restart_helix", "row_factory_reset", "row_restore_stock_screen"}},
++        {"settings_help_overlay",
++         {"row_debug_bundle", "row_discord", "row_getting_started", "row_user_guide"},
++         {"row_replay_tour", "row_about"}},
++    };
++    return s;
++}
++
++} // namespace
++
++TEST_CASE_METHOD(
++    AdvancedFixture,
++    "Advanced settings: off hides the advanced rows on a built page, on brings them back",
++    "[settings][settings_advanced]") {
++    for (const auto& split : splits()) {
++        CAPTURE(split.view);
++        build(split.view);
++
++        std::vector<bool> advanced_on;
++        std::vector<bool> everyday_on;
++        for (const char* name : split.advanced)
++            advanced_on.push_back(lv_obj_is_hidden(find(name)));
++        for (const char* name : split.everyday)
++            everyday_on.push_back(lv_obj_is_hidden(find(name)));
++
++        set_advanced(false);
++        for (const char* name : split.advanced) {
++            CAPTURE(name);
++            CHECK(lv_obj_is_hidden(find(name)));
++        }
++        for (size_t i = 0; i < split.everyday.size(); ++i) {
++            CAPTURE(split.everyday[i]);
++            CHECK(lv_obj_is_hidden(find(split.everyday[i])) == everyday_on[i]);
++        }
++
++        set_advanced(true);
++        for (size_t i = 0; i < split.advanced.size(); ++i) {
++            CAPTURE(split.advanced[i]);
++            CHECK(lv_obj_is_hidden(find(split.advanced[i])) == advanced_on[i]);
++        }
++        for (size_t i = 0; i < split.everyday.size(); ++i) {
++            CAPTURE(split.everyday[i]);
++            CHECK(lv_obj_is_hidden(find(split.everyday[i])) == everyday_on[i]);
++        }
++    }
++}
++
++TEST_CASE_METHOD(AdvancedFixture,
++                 "Advanced settings: a row's own gate still hides it with the setting on",
++                 "[settings][settings_advanced]") {
++    build("settings_panel");
++    lv_subject_t* plugins = lv_xml_get_subject(nullptr, "settings_plugins_available");
++    REQUIRE(plugins != nullptr);
++    const int32_t was = lv_subject_get_int(plugins);
++
++    lv_subject_set_int(plugins, 0);
++    process_lvgl(5);
++    CHECK(lv_obj_is_hidden(find("row_plugins")));
++    lv_subject_set_int(plugins, 1);
++    process_lvgl(5);
++    CHECK_FALSE(lv_obj_is_hidden(find("row_plugins")));
++
++    // Off hides it although its own gate would show it
++    set_advanced(false);
++    CHECK(lv_obj_is_hidden(find("row_plugins")));
++    set_advanced(true);
++    CHECK_FALSE(lv_obj_is_hidden(find("row_plugins")));
++
++    lv_subject_set_int(plugins, was);
++    process_lvgl(5);
++}
++
++TEST_CASE_METHOD(AdvancedFixture, "Advanced settings: the root's switch drives the setting",
++                 "[settings][settings_advanced]") {
++    build("settings_panel");
++    auto& sys = SystemSettingsManager::instance();
++    lv_obj_t* row = find("row_advanced_settings");
++    // Its own group, after the HELIXSCREEN group
++    lv_obj_t* group = find("group_advanced");
++    CHECK(lv_obj_get_parent(row) == group);
++    CHECK(lv_obj_get_index(group) > lv_obj_get_index(find("group_helixscreen")));
++
++    lv_obj_t* toggle = lv_obj_find_by_name(row, "toggle");
++    REQUIRE(toggle != nullptr);
++    CHECK(lv_obj_has_state(toggle, LV_STATE_CHECKED));
++
++    lv_obj_remove_state(toggle, LV_STATE_CHECKED);
++    lv_obj_send_event(toggle, LV_EVENT_VALUE_CHANGED, nullptr);
++    helix::ui::UpdateQueue::instance().drain();
++    process_lvgl(5);
++    CHECK_FALSE(sys.get_advanced_settings());
++    CHECK(Config::get_instance()->get<bool>("/advanced_settings", true) == false);
++    CHECK(lv_obj_is_hidden(find("row_touch_input")));
++    CHECK_FALSE(lv_obj_is_hidden(row));
++
++    lv_obj_add_state(toggle, LV_STATE_CHECKED);
++    lv_obj_send_event(toggle, LV_EVENT_VALUE_CHANGED, nullptr);
++    helix::ui::UpdateQueue::instance().drain();
++    process_lvgl(5);
++    CHECK(sys.get_advanced_settings());
++    CHECK(Config::get_instance()->get<bool>("/advanced_settings", false) == true);
++    CHECK_FALSE(lv_obj_is_hidden(find("row_touch_input")));
++}
++
++TEST_CASE_METHOD(AdvancedFixture, "Advanced settings: the switch follows the setting",
++                 "[settings][settings_advanced]") {
++    build("settings_panel");
++    lv_obj_t* toggle = lv_obj_find_by_name(find("row_advanced_settings"), "toggle");
++    REQUIRE(toggle != nullptr);
++    set_advanced(false);
++    CHECK_FALSE(lv_obj_has_state(toggle, LV_STATE_CHECKED));
++    set_advanced(true);
++    CHECK(lv_obj_has_state(toggle, LV_STATE_CHECKED));
++}
+diff --git a/translations/en-GB.yml b/translations/en-GB.yml
+index cdde1efc6c..3cfb9334cb 100644
+--- a/translations/en-GB.yml
++++ b/translations/en-GB.yml
+@@ -6921,3 +6921,4 @@ translations:
+   'The root password also becomes root.': ''
+   'Settings reset to defaults. Root password is root. Restarting...': ''
+   'Settings reset to defaults. The root password was not reset: {}. Restarting...': ''
++  'Advanced settings': ''
+diff --git a/translations/en.yml b/translations/en.yml
+index 910afd40ae..96be91eeb1 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -6906,3 +6906,5 @@ translations:
+   'The root password also becomes root.': 'The root password also becomes root.'
+   'Settings reset to defaults. Root password is root. Restarting...': 'Settings reset to defaults. Root password is root. Restarting...'
+   'Settings reset to defaults. The root password was not reset: {}. Restarting...': 'Settings reset to defaults. The root password was not reset: {}. Restarting...'
++  # Kiln OS: Settings > Advanced settings (patch 0107)
++  'Advanced settings': 'Advanced settings'
+diff --git a/translations/ru.yml b/translations/ru.yml
+index 9dc027a5f4..ee6d723689 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -7078,3 +7078,5 @@ translations:
+   'The root password also becomes root.': 'Пароль root тоже станет root.'
+   'Settings reset to defaults. Root password is root. Restarting...': 'Настройки сброшены к значениям по умолчанию. Пароль root: root. Перезапуск...'
+   'Settings reset to defaults. The root password was not reset: {}. Restarting...': 'Настройки сброшены к значениям по умолчанию. Пароль root не сброшен: {}. Перезапуск...'
++  # Kiln OS: Settings > Advanced settings (patch 0107)
++  'Advanced settings': 'Расширенные настройки'
+diff --git a/ui_xml/printer_manager_overlay.xml b/ui_xml/printer_manager_overlay.xml
+index 7344625139..6c9c3023d0 100644
+--- a/ui_xml/printer_manager_overlay.xml
++++ b/ui_xml/printer_manager_overlay.xml
+@@ -3,6 +3,7 @@
+ <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+ <!-- Printer Manager Overlay - Shows printer identity, software versions, and hardware capabilities -->
+ <!-- Launched from home screen by tapping the printer image -->
++<!-- Kiln OS: an element bound hidden to settings_advanced shows only with Settings > Advanced settings on -->
+ <component>
+   <consts>
+     <!-- Printer image and identity column: responsive to screen height breakpoints -->
+@@ -49,7 +50,9 @@
+     <!-- Manage Printers: collapses to its icon on the smallest screens. -->
+     <overlay_panel-actions>
+       <header_action name="btn_manage_printers"
+-                     icon="printer_3d" text="Manage Printers" callback="pm_manage_printers_clicked"/>
++                     icon="printer_3d" text="Manage Printers" callback="pm_manage_printers_clicked">
++        <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
++      </header_action>
+     </overlay_panel-actions>
+     <!-- Body. Tapping it while the name is being edited saves the edit (C++). -->
+     <overlay_panel-overlay_content style_pad_all="0" style_pad_top="#space_sm" style_pad_gap="0" scrollable="true">
+@@ -125,6 +128,7 @@
+                   width="100%" height="content" flex_flow="row" style_pad_gap="#space_xs"
+                   style_flex_cross_place="center" scrollable="false" style_bg_opa="0" style_border_width="0"
+                   style_pad_all="0" clickable="true" style_radius="#border_radius">
++            <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
+             <style name="styles.press_wash" selector="pressed"/>
+             <event_cb trigger="clicked" callback="on_change_printer_model_clicked"/>
+             <text_muted name="pm_printer_model"
+diff --git a/ui_xml/settings_connection_overlay.xml b/ui_xml/settings_connection_overlay.xml
+index 1df251b79e..7c8a6657f7 100644
+--- a/ui_xml/settings_connection_overlay.xml
++++ b/ui_xml/settings_connection_overlay.xml
+@@ -3,6 +3,7 @@
+ <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+ <!-- Connection Settings Overlay -->
+ <!-- How this screen reaches its printers and the network: printers, network, Moonraker host, screen sharing -->
++<!-- Kiln OS: an element bound hidden to settings_advanced shows only with Settings > Advanced settings on -->
+ <component>
+   <view name="settings_connection_overlay" extends="overlay_panel" title="Connection" bg_color="#screen_bg">
+     <!-- Content Area - no padding, rows handle their own -->
+@@ -15,7 +16,9 @@
+         <!-- ================================================================== -->
+         <setting_action_row name="row_printers"
+                             label="Printers" icon="printer_3d" description="Manage configured printers"
+-                            callback="on_printers_clicked"/>
++                            callback="on_printers_clicked">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
++        </setting_action_row>
+         <!-- ================================================================== -->
+         <!-- NETWORK SETTINGS (hidden on Android where OS manages WiFi) -->
+         <!-- ================================================================== -->
+@@ -30,17 +33,22 @@
+         <!-- ================================================================== -->
+         <setting_action_row name="row_printer_host"
+                             label="Host" icon="lan" bind_description="printer_host_value"
+-                            callback="on_change_host_clicked"/>
++                            callback="on_change_host_clicked">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
++        </setting_action_row>
+         <!-- ================================================================== -->
+         <!-- API KEY (edited beside the host, in the same dialog) -->
+         <!-- ================================================================== -->
+         <setting_action_row name="row_printer_api_key"
+                             label="API Key" icon="lock" bind_description="printer_api_key_value"
+-                            callback="on_change_host_clicked"/>
++                            callback="on_change_host_clicked">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
++        </setting_action_row>
+         <!-- ================================================================== -->
+         <!-- SCREEN SHARING (hidden where the firmware serves the screen itself) -->
+         <!-- ================================================================== -->
+         <lv_obj name="container_screen_sharing" width="100%" style_pad_all="0" scrollable="false">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
+           <bind_flag_if_eq subject="remote_screen_available" flag="hidden" ref_value="0"/>
+           <setting_action_row name="row_screen_sharing"
+                               label="Screen Sharing" icon="webcam"
+diff --git a/ui_xml/settings_hardware_overlay.xml b/ui_xml/settings_hardware_overlay.xml
+index 06fddd2e53..044f45c6c1 100644
+--- a/ui_xml/settings_hardware_overlay.xml
++++ b/ui_xml/settings_hardware_overlay.xml
+@@ -3,6 +3,7 @@
+ <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+ <!-- Devices Settings Overlay -->
+ <!-- Hardware issues, camera, fans, sensors, LEDs, power devices -->
++<!-- Kiln OS: an element bound hidden to settings_advanced shows only with Settings > Advanced settings on -->
+ <component>
+   <view name="settings_hardware_overlay" extends="overlay_panel" title="Devices" bg_color="#screen_bg">
+     <!-- Content Area - no padding, rows handle their own -->
+@@ -53,6 +54,7 @@
+         <!-- SENSORS: always shown, it holds every sensor type and the chamber assignments -->
+         <!-- ================================================================== -->
+         <lv_obj name="container_filament_sensors" width="100%" style_pad_all="0" scrollable="false">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
+           <setting_action_row name="row_filament_sensors"
+                               label="Sensors" icon="sensor" description="Configure printer sensors"
+                               callback="on_filament_sensors_clicked"/>
+@@ -81,12 +83,14 @@
+         <setting_action_row name="row_ad5x_ifs_firmware"
+                             label="IFS firmware" icon="swap_horizontal" callback="on_ad5x_ifs_firmware_clicked"
+                             bind_description="ad5x_ifs_firmware_text" description_min_bp="0">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
+           <bind_flag_if_eq subject="ad5x_ifs_firmware_available" flag="hidden" ref_value="0"/>
+         </setting_action_row>
+         <!-- ================================================================== -->
+         <!-- POWER DEVICES (hidden when no power devices discovered) -->
+         <!-- ================================================================== -->
+         <lv_obj name="container_power_devices" width="100%" style_pad_all="0" scrollable="false">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
+           <bind_flag_if_eq subject="power_device_count" flag="hidden" ref_value="0"/>
+           <setting_action_row name="row_power_devices"
+                               label="Power Devices" icon="power_plug"
+diff --git a/ui_xml/settings_help_overlay.xml b/ui_xml/settings_help_overlay.xml
+index 9225e2d7e0..9851cd968c 100644
+--- a/ui_xml/settings_help_overlay.xml
++++ b/ui_xml/settings_help_overlay.xml
+@@ -3,6 +3,7 @@
+ <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+ <!-- Help & About Overlay Panel -->
+ <!-- Debug bundle upload, Discord, Getting Started and User Guide links, and about/version info -->
++<!-- Kiln OS: an element bound hidden to settings_advanced shows only with Settings > Advanced settings on -->
+ <component>
+   <view name="settings_help_overlay" extends="overlay_panel" title="Help &amp; About" bg_color="#screen_bg">
+     <!-- Content Area - no padding, rows handle their own -->
+@@ -17,16 +18,24 @@
+                             description="See the quick tour of HelixScreen again" callback="on_replay_tour_clicked"/>
+         <setting_action_row name="row_debug_bundle"
+                             label="Upload Debug Bundle" icon="bug"
+-                            description="Collect logs and system info for support" callback="on_debug_bundle_clicked"/>
++                            description="Collect logs and system info for support" callback="on_debug_bundle_clicked">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
++        </setting_action_row>
+         <setting_action_row name="row_discord"
+                             label="Discord Community" icon="message" description="Get help and share feedback"
+-                            callback="on_discord_clicked"/>
++                            callback="on_discord_clicked">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
++        </setting_action_row>
+         <setting_action_row name="row_getting_started"
+                             label="Getting Started" icon="lightbulb_outline"
+-                            description="Setup, navigation and gestures" callback="on_getting_started_clicked"/>
++                            description="Setup, navigation and gestures" callback="on_getting_started_clicked">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
++        </setting_action_row>
+         <setting_action_row name="row_user_guide"
+                             label="User Guide" icon="book" description="Every screen and setting explained"
+-                            callback="on_user_guide_clicked"/>
++                            callback="on_user_guide_clicked">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
++        </setting_action_row>
+         <setting_action_row name="row_about"
+                             label="About" icon="info" description="Version and printer info" callback="on_about_clicked"/>
+       </setting_group>
+diff --git a/ui_xml/settings_panel.xml b/ui_xml/settings_panel.xml
+index 51866b8f54..50f674b5f3 100644
+--- a/ui_xml/settings_panel.xml
++++ b/ui_xml/settings_panel.xml
+@@ -5,6 +5,7 @@
+ <!-- Three groups (Screen, Printer, HelixScreen) of rows that open sub-panel overlays -->
+ <!-- for grouped settings -->
+ <!-- All styling controlled via XML - C++ only handles callbacks -->
++<!-- Kiln OS: an element bound hidden to settings_advanced shows only with Settings > Advanced settings on -->
+ <component>
+   <styles>
+     <style name="spacer_standard" height="#space_lg"/>
+@@ -24,7 +25,9 @@
+                           label="Appearance" icon="palette" callback="on_appearance_clicked"
+                           bind_description="settings_status_appearance" description_min_bp="0"/>
+       <setting_action_row name="row_touch_input"
+-                          label="Touch &amp; Input" icon="cursor_move" callback="on_touch_input_clicked"/>
++                          label="Touch &amp; Input" icon="cursor_move" callback="on_touch_input_clicked">
++        <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
++      </setting_action_row>
+       <setting_action_row name="row_sound"
+                           label="Sound" icon="volume_high" callback="on_sound_clicked"
+                           bind_description="settings_status_sound" description_min_bp="0">
+@@ -61,6 +64,7 @@
+       <setting_action_row name="row_ad5x_purge"
+                           label="Purge Box" icon="printer_3d" callback="on_ad5x_purge_clicked"
+                           description="Move the trash bin the nozzle purges into" description_min_bp="0">
++        <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
+         <bind_flag_if_eq subject="settings_show_ad5x_setup" flag="hidden" ref_value="0"/>
+       </setting_action_row>
+       <!-- AD5X: how long the print start lets the bed settle before the Z check (ad5x_soak object) -->
+@@ -91,14 +95,23 @@
+       <setting_action_row name="row_updates"
+                           label="Updates" icon="download" callback="on_updates_clicked"
+                           bind_description="settings_status_updates" description_min_bp="0">
++        <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
+         <bind_flag_if cond="show_update_settings eq 0 and updates_firmware_managed eq 0 and updates_unavailable eq 0"
+                       flag="hidden"/>
+       </setting_action_row>
+       <setting_action_row name="row_plugins" label="Plugins" icon="puzzle_outline" callback="on_plugins_clicked">
++        <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
+         <bind_flag_if_eq subject="settings_plugins_available" flag="hidden" ref_value="0"/>
+       </setting_action_row>
+       <setting_action_row name="row_help" label="Help &amp; About" icon="help" callback="on_help_clicked"/>
+     </setting_group>
++    <!-- Kiln OS: Advanced settings. Off, the rows bound to settings_advanced
++         hide and only the everyday settings show; this row always shows. -->
++    <setting_group name="group_advanced">
++      <setting_toggle_row name="row_advanced_settings"
++                          label="Advanced settings" icon="tune"
++                          subject="settings_advanced" callback="on_advanced_settings_changed"/>
++    </setting_group>
+     <!-- Bottom padding for scroll -->
+     <lv_obj width="100%" scrollable="false">
+       <bind_style_if_eq name="spacer_micro" subject="ui_breakpoint" ref_value="0"/>
+diff --git a/ui_xml/settings_printing_overlay.xml b/ui_xml/settings_printing_overlay.xml
+index 0fbf0e9b20..b12a93ad8d 100644
+--- a/ui_xml/settings_printing_overlay.xml
++++ b/ui_xml/settings_printing_overlay.xml
+@@ -5,6 +5,7 @@
+ <!-- Machine limits/motion/retraction/enclosure, multi-filament system management, -->
+ <!-- filament temperature and cooldown behaviour, and print extras (timelapse, macro buttons) -->
+ <!-- Uses setting_* components for consistency with main settings panel -->
++<!-- Kiln OS: an element bound hidden to settings_advanced shows only with Settings > Advanced settings on -->
+ <component>
+   <view name="settings_printing_overlay" extends="overlay_panel" title="Printing" bg_color="#screen_bg">
+     <!-- Content Area - no padding, rows handle their own -->
+@@ -18,12 +19,15 @@
+         <setting_group_header title="MACHINE"/>
+         <setting_action_row name="row_machine_limits"
+                             label="Machine Limits" icon="dashboard" description="Velocity and acceleration limits"
+-                            callback="on_machine_limits_clicked"/>
++                            callback="on_machine_limits_clicked">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
++        </setting_action_row>
+         <setting_action_row name="row_motion"
+                             label="Motion" icon="axis_arrow" description="Jog layout, speeds and step distances"
+                             callback="on_motion_settings_clicked"/>
+         <!-- RETRACTION SETTINGS (conditional) -->
+         <lv_obj name="container_firmware_retraction" width="100%" style_pad_all="0" scrollable="false">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
+           <bind_flag_if_eq subject="printer_has_firmware_retraction" flag="hidden" ref_value="0"/>
+           <setting_action_row name="row_firmware_retraction"
+                               label="Retraction Settings" icon="arrow_up_right"
+@@ -42,6 +46,7 @@
+         <setting_group_header title="FILAMENT"/>
+         <!-- MULTI-FILAMENT MANAGEMENT: same gate as the AMS sidebar's Settings button -->
+         <lv_obj name="container_ams_settings" width="100%" style_pad_all="0" scrollable="false">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
+           <bind_flag_if_eq subject="ams_has_device_ops" flag="hidden" ref_value="0"/>
+           <setting_action_row name="row_ams_settings"
+                               label="Multi-Filament System Management" icon="filament"
+@@ -59,11 +64,15 @@
+         <setting_action_row name="row_material_z_offset"
+                             label="Z Offset by Material" icon="layers"
+                             description="A first-layer offset and bed mesh for each material"
+-                            callback="on_material_z_offset_clicked"/>
++                            callback="on_material_z_offset_clicked">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
++        </setting_action_row>
+         <setting_toggle_row name="row_allow_cold_extrude"
+                             label="Allow cold load/unload" icon="cooldown"
+                             description="Run filament load/unload even when the nozzle is cold (for macros that heat the nozzle themselves)"
+-                            subject="settings_allow_cold_extrude" callback="on_allow_cold_extrude_changed"/>
++                            subject="settings_allow_cold_extrude" callback="on_allow_cold_extrude_changed">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
++        </setting_toggle_row>
+         <setting_toggle_row name="row_filament_auto_cooldown"
+                             label="Cool nozzle after filament ops" icon="cooldown"
+                             description="Turn the extruder heater off after a load or unload finishes"
+@@ -80,7 +89,9 @@
+         <setting_toggle_row name="row_number_lanes_from_zero"
+                             label="Number slots from 0" icon="filament"
+                             description="Show slots, lanes, gates and tools counting from 0, matching T0 in G-code"
+-                            subject="number_lanes_from_zero" callback="on_number_lanes_from_zero_changed"/>
++                            subject="number_lanes_from_zero" callback="on_number_lanes_from_zero_changed">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
++        </setting_toggle_row>
+         <setting_toggle_row name="row_tool_change_confirm"
+                             label="Confirm tool changes" icon="swap_horizontal"
+                             description="Ask before switching to another tool" subject="settings_tool_change_confirm"
+@@ -130,11 +141,15 @@
+                                    feature="print_hooks" label="Apply start options to prints from other apps"
+                                    icon="play_circle"
+                                    description="Sends your standing print options, such as unload at end, when a print starts from another app or the job queue."
+-                                   subject="plugin_feature_on_print_hooks" callback="on_plugin_feature_switch_changed"/>
++                                   subject="plugin_feature_on_print_hooks" callback="on_plugin_feature_switch_changed">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
++        </plugin_feature_toggle_row>
+         <setting_action_row name="row_macro_buttons"
+                             label="Macro Buttons" icon="script_text"
+                             description="Configure quick buttons and standard macros"
+-                            callback="on_macro_buttons_clicked"/>
++                            callback="on_macro_buttons_clicked">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
++        </setting_action_row>
+       </setting_group>
+     </overlay_panel-overlay_content>
+   </view>
+diff --git a/ui_xml/settings_safety_overlay.xml b/ui_xml/settings_safety_overlay.xml
+index 7434127d39..06b772342f 100644
+--- a/ui_xml/settings_safety_overlay.xml
++++ b/ui_xml/settings_safety_overlay.xml
+@@ -3,6 +3,7 @@
+ <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+ <!-- Safety & Alerts Settings Overlay Panel -->
+ <!-- E-Stop confirmation, cancel escalation, escalation timeout, print completion alert -->
++<!-- Kiln OS: an element bound hidden to settings_advanced shows only with Settings > Advanced settings on -->
+ <component>
+   <view name="settings_safety_overlay" extends="overlay_panel" title="Safety &amp; Alerts" bg_color="#screen_bg">
+     <!-- Content Area - no padding, rows handle their own -->
+@@ -25,11 +26,14 @@
+         <setting_toggle_row name="row_cancel_escalation"
+                             label="Cancel Escalation" icon="alert_octagon"
+                             description="Escalate to emergency stop if cancel doesn't respond"
+-                            subject="settings_cancel_escalation_enabled" callback="on_cancel_escalation_changed"/>
++                            subject="settings_cancel_escalation_enabled" callback="on_cancel_escalation_changed">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
++        </setting_toggle_row>
+         <!-- ================================================================== -->
+         <!-- CANCEL ESCALATION TIMEOUT (visible only when escalation enabled) -->
+         <!-- ================================================================== -->
+         <lv_obj name="container_cancel_escalation_timeout" width="100%" style_pad_all="0" scrollable="false">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
+           <bind_flag_if_eq subject="settings_cancel_escalation_enabled" flag="hidden" ref_value="0"/>
+           <setting_dropdown_row name="row_cancel_escalation_timeout"
+                                 label="Escalation Timeout" icon="clock"
+@@ -45,7 +49,9 @@
+         <setting_toggle_row name="row_macro_confirm"
+                             label="Confirm before running macros" icon="script_text"
+                             description="Show a confirmation dialog when tapping a macro"
+-                            subject="settings_macro_confirm" callback="on_macro_confirm_changed"/>
++                            subject="settings_macro_confirm" callback="on_macro_confirm_changed">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
++        </setting_toggle_row>
+         <!-- ================================================================== -->
+         <!-- DISABLE MOTORS CONFIRMATION -->
+         <!-- ================================================================== -->
+@@ -97,6 +103,7 @@
+           </lv_obj>
+           <lv_obj name="container_ad5x_nozzle_guard_sensitivity" width="100%" style_pad_all="0"
+                   scrollable="false">
++            <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
+             <bind_flag_if_eq subject="ad5x_nozzle_guard_enabled" flag="hidden" ref_value="0"/>
+             <setting_dropdown_row name="row_ad5x_nozzle_guard_sensitivity"
+                                   label="Sensitivity" icon="weight" options="Low&#10;Medium&#10;High"
+diff --git a/ui_xml/settings_system_overlay.xml b/ui_xml/settings_system_overlay.xml
+index fd2c596fc7..aff13da825 100644
+--- a/ui_xml/settings_system_overlay.xml
++++ b/ui_xml/settings_system_overlay.xml
+@@ -3,6 +3,7 @@
+ <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+ <!-- System Settings Overlay -->
+ <!-- Security, performance, telemetry, log level, restart, reset root password, boot into recovery, return to Flashforge firmware and extended memory (Kiln OS), factory reset, restore stock screen -->
++<!-- Kiln OS: an element bound hidden to settings_advanced shows only with Settings > Advanced settings on -->
+ <component>
+   <view name="settings_system_overlay" extends="overlay_panel" title="System" bg_color="#screen_bg">
+     <!-- Content Area - no padding, rows handle their own -->
+@@ -22,6 +23,7 @@
+         <!-- PERFORMANCE (live host CPU/memory + per-MCU load) -->
+         <!-- ================================================================== -->
+         <lv_obj name="container_performance" width="100%" style_pad_all="0" scrollable="false">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
+           <bind_flag_if_eq subject="perf_available" flag="hidden" ref_value="0"/>
+           <setting_action_row name="row_performance"
+                               label="Performance" icon="speed" bind_description="perf_about_summary"
+@@ -32,7 +34,9 @@
+         <!-- ================================================================== -->
+         <setting_action_row name="row_storage"
+                             label="Storage" icon="sd" description="What fills the printer's disk, and cleanup"
+-                            callback="on_storage_clicked"/>
++                            callback="on_storage_clicked">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
++        </setting_action_row>
+         <!-- ================================================================== -->
+         <!-- FIRMWARE UPDATE: Moonraker update_manager, and this printer's own
+              firmware where its row may apply. settings_firmware_update is 0 on
+@@ -41,6 +45,7 @@
+         <setting_action_row name="row_firmware_update"
+                             label="Firmware Update" icon="update" callback="on_firmware_update_clicked"
+                             bind_description="settings_status_firmware_update" description_min_bp="0">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
+           <bind_flag_if cond="settings_firmware_update eq 0 or (settings_firmware_update eq 1 and printer_has_update_manager eq 0)"
+                         flag="hidden"/>
+         </setting_action_row>
+@@ -49,12 +54,14 @@
+         <!-- ================================================================== -->
+         <!-- The firmware sends no telemetry: platform_extras_available is 0 there -->
+         <lv_obj name="container_telemetry" width="100%" style_pad_all="0" scrollable="false">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
+           <bind_flag_if_eq subject="platform_extras_available" flag="hidden" ref_value="0"/>
+           <telemetry_opt_in_row/>
+         </lv_obj>
+         <setting_action_row name="row_telemetry_view_data"
+                             label="View Telemetry Data" icon="list" description="See exactly what data will be sent"
+                             callback="on_telemetry_view_data">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
+           <bind_flag_if cond="settings_telemetry_enabled eq 0 or platform_extras_available eq 0" flag="hidden"/>
+         </setting_action_row>
+         <!-- ================================================================== -->
+@@ -65,6 +72,7 @@
+                               options="Warn&#10;Info&#10;Debug&#10;Trace"
+                               options_tag="Warn&#10;Info&#10;Debug&#10;Trace" bind_selected="settings_log_level"
+                               callback="on_log_level_changed">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
+           <!-- Kiln OS: Log detail below sets this screen's level from Klipper's LOG_MODE -->
+           <bind_flag_if_eq subject="ad5x_log_available" flag="hidden" ref_value="1"/>
+         </setting_dropdown_row>
+@@ -75,6 +83,7 @@
+                               description="Short: warnings and errors, and Klipper's statistics once a minute. Extended: everything, for troubleshooting; the logs fill faster."
+                               bind_selected="ad5x_log_mode" callback="on_ad5x_log_mode_changed"
+                               disabled="ad5x_log_busy" dropdown_width="40%">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
+           <bind_flag_if_eq subject="ad5x_log_available" flag="hidden" ref_value="0"/>
+         </setting_dropdown_row>
+         <!-- ================================================================== -->
+@@ -93,6 +102,7 @@
+         <lv_obj name="container_kiln_rootpw"
+                 width="100%" height="content" style_pad_all="0" style_bg_opa="0" style_border_width="0"
+                 flex_flow="column" scrollable="false">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
+           <bind_flag_if_eq subject="kiln_rootpw_state" flag="hidden" ref_value="0"/>
+           <setting_action_row name="row_kiln_rootpw"
+                               label="Reset root password" icon="lock_open" description="Hold 5 seconds: SSH login root / root"
+@@ -124,6 +134,7 @@
+                             label="Boot into recovery" icon="power_cycle"
+                             description="Restart into the recovery OS (install an update from a USB stick or the web page on port 8080)"
+                             callback="on_kiln_boot_recovery_clicked" disabled="print_active">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
+           <bind_flag_if_eq subject="kiln_boot_recovery_available" flag="hidden" ref_value="0"/>
+         </setting_action_row>
+         <!-- Kiln OS: machine.kiln_os.return_stock, the recovery OS then offers
+@@ -132,6 +143,7 @@
+                             label="Return to Flashforge firmware" icon="undo"
+                             description="Restart into the recovery OS to put Flashforge's own firmware back"
+                             callback="on_kiln_return_stock_clicked" disabled="print_active">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
+           <bind_flag_if_eq subject="kiln_boot_recovery_available" flag="hidden" ref_value="0"/>
+         </setting_action_row>
+         <!-- Kiln OS: Extended memory, all 512 MiB from the next start
+@@ -143,6 +155,7 @@
+         <lv_obj name="container_kiln_extended_memory"
+                 width="100%" height="content" style_pad_all="0" style_bg_opa="0" style_border_width="0"
+                 flex_flow="column" scrollable="false">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
+           <bind_flag_if_eq subject="kiln_extended_memory_available" flag="hidden" ref_value="0"/>
+           <setting_toggle_row name="row_kiln_extended_memory"
+                               label="Extended memory" icon="database"

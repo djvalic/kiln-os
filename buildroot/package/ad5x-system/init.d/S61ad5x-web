@@ -1,69 +1,37 @@
 #!/bin/sh
-# Fluidd that Moonraker can update (moonraker-updates.conf): a copy of the
-# image's Fluidd in /data/ad5x/web/fluidd, made when it is missing, broken
-# or older than the image's (so a Kiln OS update never brings an older
-# Fluidd back). Before Moonraker (S62), which checks the copy at its
-# start; nginx (S63) serves it, or the image's own if there is no copy.
-# Back to the image's version: delete /data/ad5x/web/fluidd and reboot.
+# The web interface on port 80 (docs/web-interface.md): Fluidd, or
+# Mainsail once the owner picked it (ad5x-webui; /data/ad5x/webui). Each
+# is served from a copy Moonraker can update (moonraker-updates.conf,
+# components/kiln_os.py) in /data/ad5x/web/NAME, made when it is missing,
+# broken or older than the image's (so a Kiln OS update never brings an
+# older UI back). Fluidd's copy is kept up to date whichever is chosen,
+# as before Mainsail was in; Mainsail's once it is chosen. Before
+# Moonraker (S62), which checks the copies at its start; nginx (S63)
+# serves the chosen one (/run/nginx/fluidd-root.conf; its service worker
+# cookie maps in /run/nginx/webui-map.conf), or the image's own files if
+# there is no copy. Without a valid choice: Fluidd, exactly as
+# before.
+# Back to the image's version: delete /data/ad5x/web/NAME and reboot.
+# The code is in /usr/lib/ad5x/webui.sh (AD5X_LIB overrides /usr/lib/ad5x).
 
 # Files this creates are readable by klipper and www-data, whoever started
 # it (a root SSH session may run with umask 077; issue #31)
 umask 022
 
-IMG=/usr/share/fluidd
-WEB=/data/ad5x/web
-F=$WEB/fluidd
-
-# Version from release_info.json ("v1.37.6" -> 1.37.6). Read only when it
-# is a regular file, not a link: the copy in $WEB is klipper's, and a FIFO
-# there would stop the boot at this read. Anything else: no version (the
-# copy counts as broken and is made again from the image).
-ver() {
-	[ -f "$1/release_info.json" ] && [ ! -L "$1/release_info.json" ] || return 0
-	sed -n 's/.*"version" *: *"v\{0,1\}\([^"]*\)".*/\1/p' \
-		"$1/release_info.json" 2>/dev/null
-}
-
-# True when version $1 is older than $2 (numeric, dot by dot)
-older() {
-	awk -v a="$1" -v b="$2" 'BEGIN {
-		na = split(a, x, "."); nb = split(b, y, ".")
-		n = na > nb ? na : nb
-		for (i = 1; i <= n; i++) {
-			if (x[i] + 0 < y[i] + 0) exit 0
-			if (x[i] + 0 > y[i] + 0) exit 1
-		}
-		exit 1
-	}'
-}
-
-root_conf() {
-	mkdir -p /run/nginx
-	echo "root $1;" > /run/nginx/fluidd-root.conf
-}
+. ${AD5X_LIB:-/usr/lib/ad5x}/webui.sh
 
 case "$1" in
 start)
-	[ -f $IMG/index.html ] || exit 0
-	if mkdir -p $WEB 2>/dev/null; then
-		chown klipper:klipper $WEB
-		have=$(ver $F)
-		want=$(ver $IMG)
-		if [ ! -f $F/index.html ] || [ -z "$have" ] || older "$have" "$want"; then
-			echo "web: Fluidd ${want:-?} from the image (was ${have:-none})"
-			rm -rf $F.new
-			if cp -a $IMG $F.new && chown -R klipper:klipper $F.new; then
-				rm -rf $F && mv $F.new $F
-			else
-				rm -rf $F.new
-			fi
-		fi
+	[ -f "$(webui_image fluidd)/index.html" ] || exit 0
+	webui_copy fluidd
+	ui=$(webui_choice)
+	if [ $ui != fluidd ] && ! webui_copy $ui && \
+			[ ! -f "$(webui_image $ui)/index.html" ]; then
+		ui=fluidd
 	fi
-	if [ -f $F/index.html ]; then
-		root_conf $F
-	else
-		root_conf $IMG
-	fi
+	[ $ui = fluidd ] || echo "web: $(webui_title $ui) on port 80 ($WEBUI_CHOICE)"
+	webui_root_conf $ui
+	webui_map_conf $ui
 	;;
 esac
 exit 0

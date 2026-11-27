@@ -150,7 +150,7 @@ in the format the AFC filament changer uses (Moonraker component
 
 | Record | Fields |
 |---|---|
-| `lane1` .. `lane4` (IFS slot 1-4) | `lane`: slicer tool `"0"`..`"3"` (slot 1 = T0); `material` (`""` when the slot has no filament or no type); `color` (`#RRGGBB`); `nozzle_temp`; `bed_temp` (0, or the touch screen's); `filament_id` (Kiln's OrcaSlicer profile for the slot's type, see below; no key for other types or an empty slot); `spool_id` (null, or the touch screen's); `scan_time` (UTC, set when the slot changes; empty until the first change). No `vendor` or `name` key: HelixScreen treats `vendor` as its own and would not adopt a later edit |
+| `lane1` .. `lane4` (IFS slot 1-4) | `lane`: slicer tool `"0"`..`"3"` (slot 1 = T0); `material` (`""` when the slot has no filament or no type); `color` (`#RRGGBB`); `nozzle_temp`; `bed_temp` (the slot's `BED_TEMP`, else 0 or the touch screen's); `filament_id` (the slot's `FILAMENT_ID` exactly as set, else Kiln's OrcaSlicer profile for the slot's type, see below; no key for other types or an empty slot); `spool_id` (the slot's `SPOOL_ID`, else null or the touch screen's); `vendor_name`, `name` (the slot's `VENDOR` and `NAME`, else the touch screen's or no key); `scan_time` (UTC, set when the slot changes; empty until the first change). The slot's values are set with `IFS_SET_MATERIAL` (plugin API 1.12). No `vendor` key: HelixScreen treats `vendor` as its own and would not adopt a later edit |
 
 It's updated whenever a slot's material, colour or temperature changes
 (touch screen, `IFS_SET_MATERIAL`) or a spool goes in or out, only the

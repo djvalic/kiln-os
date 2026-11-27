@@ -222,7 +222,8 @@ come back in line, see [docs/ifs-troubleshooting.md](docs/ifs-troubleshooting.md
   first)
   ([docs/serial-console.md](docs/serial-console.md)).
 - **Back to stock**: Settings > System > Return to Flashforge firmware on
-  the touch screen (or the recovery screen's Restore stock tile, a stick
+  the touch screen (turn on Settings > Advanced settings first; or the
+  recovery screen's Restore stock tile, a stick
   with `kiln-return-to-stock`, or `ad5x-restore-stock` over SSH) restarts
   into the recovery OS. There, Return to Flashforge puts Flashforge's
   firmware back, and its boot loader too when the printer's saved copy is

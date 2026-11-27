@@ -15,6 +15,9 @@ start)
 	# Fluidd's directory (S61ad5x-web); the image's if S61 didn't run
 	[ -f /run/nginx/fluidd-root.conf ] ||
 		echo "root /usr/share/fluidd;" > /run/nginx/fluidd-root.conf
+	# The service worker maps nginx.conf needs (lib/webui.sh); Fluidd's
+	[ -f /run/nginx/webui-map.conf ] || {
+		. /usr/lib/ad5x/webui.sh && webui_map_conf fluidd; }
 	start-stop-daemon -S -x $NGINX -p $PID
 	;;
 stop)

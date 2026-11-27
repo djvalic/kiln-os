@@ -41,7 +41,8 @@ shows the message and offers Retry / Skip.
 
 **Taps land in the wrong place?** Hold a finger still anywhere on the
 screen for 10 seconds. The touch calibration opens (the same as Settings >
-Touch & Input > Touch Calibration); lift your finger and tap the targets.
+Touch & Input > Touch Calibration, shown with Settings > Advanced
+settings on); lift your finger and tap the targets.
 In the setup wizard it goes back to the wizard's own touch calibration
 step (step 1); a step that was running stops, as when you leave it. In
 Settings > Printer > Run Setup Wizard, which has no touch step, it ends

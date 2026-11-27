@@ -127,6 +127,8 @@ both paths name the same files.
 | `plugins-root/init.d/` | Plugins' boot scripts (`S<NN><plugin>[.suffix]`), put there by their root scripts | the plugins' root scripts | `S69ad5x-plugin-boot` |
 | `plugins-root/.off` | Skips all plugin boot scripts (create it from the recovery OS's SSH when one keeps the printer from working) | you | `S69ad5x-plugin-boot` |
 | `web/fluidd/` | Fluidd that Moonraker can update (owned by `klipper`). Delete it and reboot to go back to the image's Fluidd. | `S61ad5x-web`, Moonraker's update manager | nginx (through `/run/nginx/fluidd-root.conf`) |
+| `web/mainsail/` | Mainsail that Moonraker can update (owned by `klipper`), made the first time Mainsail is chosen (the mainsail-kiln plugin uses the same folder). Delete it and reboot to go back to the image's Mainsail. | `ad5x-webui`, `S61ad5x-web`, Moonraker's update manager | nginx (through `/run/nginx/fluidd-root.conf`) while Mainsail is chosen |
+| `webui` | The web interface on port 80: one line `fluidd` or `mainsail`; missing or anything else is Fluidd ([web-interface.md](web-interface.md)) | `ad5x-webui` (root; the root agent for `POST /machine/kiln_os/webui`) | `S61ad5x-web`, `ad5x-webui`, Moonraker `kiln_os` |
 | `apps/klipper/`, `apps/moonraker/` | Daily Klipper/Moonraker packages. Used only while newer than the image's copy and the OS is at least the package's `os_min`. Delete to go back to the image's copy. | `S68ad5x-update-agent` | `/usr/lib/ad5x/apps.sh` (`S61klipper`, `S62moonraker`), Moonraker `kiln_os` |
 | `umask.log` | Log of `ad5x-umask` changes | `ad5x-umask` | you |
 

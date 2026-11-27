@@ -1,0 +1,115 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 10:39:02 -0500
+Subject: [PATCH] network and printer image lists: long names and addresses end
+ in ... instead of being cut off
+
+The Wi-Fi list's network names, the IPv4 values (a static address), the
+IP and MAC lines and the printer image names were content-width labels.
+Beside the page arrows' gutter the row cut them off with no dots, the
+IPv4 chevron included. They take the rest of their row now and end in
+..., as the connected network's name does since 0105.
+---
+ ui_xml/network_settings_overlay.xml | 20 ++++++++++++--------
+ ui_xml/printer_image_list_item.xml  |  2 +-
+ ui_xml/wifi_network_item.xml        |  5 +++--
+ 3 files changed, 16 insertions(+), 11 deletions(-)
+
+diff --git a/ui_xml/network_settings_overlay.xml b/ui_xml/network_settings_overlay.xml
+index 7fba56ecb7..845618d640 100644
+--- a/ui_xml/network_settings_overlay.xml
++++ b/ui_xml/network_settings_overlay.xml
+@@ -121,7 +121,7 @@
+                         height="content" style_pad_all="0" scrollable="false" flex_flow="row"
+                         style_flex_cross_place="center" style_pad_gap="#space_xs">
+                   <text_small text="IP:"/>
+-                  <text_small name="ip_label" bind_text="wifi_ip_display"/>
++                  <text_small name="ip_label" width="1" flex_grow="1" long_mode="dots" bind_text="wifi_ip_display"/>
+                 </lv_obj>
+                 <!-- MAC Address: the line micro screens give up for the Country row -->
+                 <lv_obj width="100%"
+@@ -129,7 +129,7 @@
+                         style_flex_cross_place="center" style_pad_gap="#space_xs">
+                   <bind_flag_if_eq subject="ui_breakpoint" flag="hidden" ref_value="0"/>
+                   <text_small text="MAC:"/>
+-                  <text_small name="mac_label" bind_text="mac_address"/>
++                  <text_small name="mac_label" width="1" flex_grow="1" long_mode="dots" bind_text="mac_address"/>
+                 </lv_obj>
+               </lv_obj>
+               <!-- Disconnected (shown when wifi_connected == 0 AND hardware available) -->
+@@ -155,8 +155,10 @@
+                     flex_flow="row" style_flex_cross_place="center" style_pad_gap="#space_xs" clickable="true">
+               <bind_flag_if_eq subject="wifi_ipv4_row_visible" flag="hidden" ref_value="0"/>
+               <text_small text="IPv4" clickable="false" event_bubble="true"/>
+-              <lv_obj height="1" flex_grow="1" scrollable="false" clickable="false" event_bubble="true"/>
+-              <text_small name="wifi_ipv4_summary_label"
++              <!-- Kiln: the value takes the rest of the row and ends in ... (a static
++                   address beside the page arrows was cut off, chevron included) -->
++              <text_small name="wifi_ipv4_summary_label" width="1" flex_grow="1" long_mode="dots"
++                          style_text_align="right"
+                           bind_text="wifi_ipv4_summary" clickable="false" event_bubble="true"/>
+               <icon src="chevron_right" size="sm" variant="secondary" clickable="false" event_bubble="true"/>
+               <event_cb trigger="clicked" callback="on_network_settings_wifi_ipv4"/>
+@@ -199,7 +201,7 @@
+                         height="content" style_pad_all="0" scrollable="false" flex_flow="row"
+                         style_flex_cross_place="center" style_pad_gap="#space_xs">
+                   <text_small text="IP:"/>
+-                  <text_small name="eth_ip_label" bind_text="eth_ip_address"/>
++                  <text_small name="eth_ip_label" width="1" flex_grow="1" long_mode="dots" bind_text="eth_ip_address"/>
+                 </lv_obj>
+                 <!-- MAC Address: the line micro screens give up for the Country row -->
+                 <lv_obj width="100%"
+@@ -207,7 +209,7 @@
+                         style_flex_cross_place="center" style_pad_gap="#space_xs">
+                   <bind_flag_if_eq subject="ui_breakpoint" flag="hidden" ref_value="0"/>
+                   <text_small text="MAC:"/>
+-                  <text_small name="eth_mac_label" bind_text="eth_mac_address"/>
++                  <text_small name="eth_mac_label" width="1" flex_grow="1" long_mode="dots" bind_text="eth_mac_address"/>
+                 </lv_obj>
+               </lv_obj>
+               <!-- Disconnected State (shown when eth_connected == 0) -->
+@@ -225,8 +227,10 @@
+                     flex_flow="row" style_flex_cross_place="center" style_pad_gap="#space_xs" clickable="true">
+               <bind_flag_if_eq subject="eth_ipv4_row_visible" flag="hidden" ref_value="0"/>
+               <text_small text="IPv4" clickable="false" event_bubble="true"/>
+-              <lv_obj height="1" flex_grow="1" scrollable="false" clickable="false" event_bubble="true"/>
+-              <text_small name="eth_ipv4_summary_label"
++              <!-- Kiln: the value takes the rest of the row and ends in ... (a static
++                   address beside the page arrows was cut off, chevron included) -->
++              <text_small name="eth_ipv4_summary_label" width="1" flex_grow="1" long_mode="dots"
++                          style_text_align="right"
+                           bind_text="eth_ipv4_summary" clickable="false" event_bubble="true"/>
+               <icon src="chevron_right" size="sm" variant="secondary" clickable="false" event_bubble="true"/>
+               <event_cb trigger="clicked" callback="on_network_settings_eth_ipv4"/>
+diff --git a/ui_xml/printer_image_list_item.xml b/ui_xml/printer_image_list_item.xml
+index 31916bd012..ccc268dfd9 100644
+--- a/ui_xml/printer_image_list_item.xml
++++ b/ui_xml/printer_image_list_item.xml
+@@ -17,7 +17,7 @@
+         style_flex_cross_place="center" style_radius="0">
+     <style name="checked_style" selector="checked"/>
+     <style name="disabled_style" selector="disabled"/>
+-    <text_body name="item_label" text="$label_text" clickable="false" event_bubble="true"/>
++    <text_body name="item_label" width="1" flex_grow="1" long_mode="dots" text="$label_text" clickable="false" event_bubble="true"/>
+     <event_cb trigger="clicked" callback="$callback"/>
+   </view>
+ </component>
+diff --git a/ui_xml/wifi_network_item.xml b/ui_xml/wifi_network_item.xml
+index 7466f1cc49..bfe21de382 100644
+--- a/ui_xml/wifi_network_item.xml
++++ b/ui_xml/wifi_network_item.xml
+@@ -58,11 +58,12 @@
+             hidden_if_prop_not_eq="$signal_state|8"/>
+     </lv_obj>
+     <!-- SSID and security type column (center) -->
+-    <lv_obj flex_grow="1"
++    <lv_obj width="1" flex_grow="1"
+             style_pad_all="0" style_radius="0" style_pad_gap="#space_xs" scrollable="false" clickable="false"
+             flex_flow="row" style_flex_main_place="space_between" style_flex_cross_place="center">
+       <!-- Network SSID - uses responsive font_body from theme -->
+-      <text_body name="ssid_label" clickable="false"/>
++      <!-- Kiln: a long name ends in ... before the band and security text -->
++      <text_body name="ssid_label" width="1" flex_grow="1" long_mode="dots" clickable="false"/>
+       <!-- Right-justified metadata: band badge then security type -->
+       <lv_obj width="content"
+               height="content" style_pad_all="0" style_radius="0" style_pad_gap="#space_xs" scrollable="false"

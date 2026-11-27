@@ -23,8 +23,8 @@ for `LW` `https://github.com/Hrybmo/lesswaste/blob/3d42421a6ed020baaa7563c94a56a
 
 ## Our patches
 
-`buildroot/package/helixscreen/*.patch` on HelixScreen v1.2.0-alpha.1: 93
-files, `0001` to `0103` (the missing numbers were dropped because upstream
+`buildroot/package/helixscreen/*.patch` on HelixScreen v1.2.0-alpha.1: 100
+files, `0001` to `0110` (the missing numbers were dropped because upstream
 has them, or with the move to 1.2: 0061, the Z offset arrows, whose buttons
 1.2 names for what moves, and 0073, a test fix 1.2 has). `docs/setup-wizard.md` ("HelixScreen side") lists `0001` to
 `0019` with what each does: among them the AD5X setup steps (0001, 0002,
@@ -61,7 +61,7 @@ of the real configs. Not run against HelixScreen itself.
 | `IFS_EJECT SLOT=n` | Idle lane: `F24`, `F11 L1000 S1200` (until the IFS is ready), `F39`, no heat, no toolhead moves. Loaded lane: `IFS_UNLOAD` first. Refused when the toolhead holds filament of an unknown lane |
 | `T0`-`T3` | `IFS_SWAP CHANNEL={tool_map[n]}`; `PRINT_START TOOL=` goes through the map too |
 | `IFS_MAP_TOOL TOOL= SLOT=` / `RESET=1` | As `FX`: refused without a reading or for a lane without filament |
-| `IFS_SET_MATERIAL SLOT= TYPE= COLOR= [TEMP=]` | As `FX`: absent = keep, empty = clear, bare or `#` hex, `RGB` or `RRGGBB`. `IFS_SET_COLOR CHANNEL= COLOR=` kept (slicer start G-code) |
+| `IFS_SET_MATERIAL SLOT= TYPE= COLOR= [TEMP=] [SPOOL_ID=] [VENDOR=] [NAME=] [FILAMENT_ID=] [BED_TEMP=]` | As `FX`: absent = keep, empty = clear, bare or `#` hex, `RGB` or `RRGGBB`. The spool's details (not `FX`'s; plugin API 1.12, issue #101) go into `lane_data` through kiln_lanes. `IFS_SET_COLOR CHANNEL= COLOR=` kept (slicer start G-code) |
 | `IFS_STOP` | `F112`; during a background pre-feed it ends the pre-feed (F15) |
 | `IFS_RESET_DRIVER` | `F15` (= `IFS_RESET`), clears `error` |
 | Heat | `IFS_LOAD`/`IFS_UNLOAD`/`IFS_EJECT`/`IFS_SWAP`/`T<n>`: with `TEMP=` that; otherwise only when the nozzle target is below `min_extrude_temp` (idle): hottest slot material involved, else `default_temp` 220. Old target restored afterwards |
@@ -607,7 +607,8 @@ slow answer only makes the request too old).
 
 ### The button: Settings > System > Reset root password
 
-- Just above Boot into recovery. Shown only when
+- Just above Boot into recovery. Shown only with Settings > Advanced
+  settings on (patch 0107) and when
   `/run/ad5x/screen-request/root-password-reset.state` exists (a plain file,
   not a link); it holds `unlocked` or `locked` (the agent rewrites it within
   3 s of a change). The screen reads it when the System page first opens, every
@@ -714,3 +715,218 @@ HelixScreen's test pump runs no periodic timer. `perform_factory_reset()`
 itself is not run in a test (it resets the shared config and asks for a
 restart); its request is `request_factory_reset()`, tested above, and the
 source check pins the one call to it.
+
+## Advanced settings (implemented: HelixScreen patch 0107)
+
+A switch at the bottom of the Settings root, **Advanced settings** (no
+subtitle), in its own card
+under HELIXSCREEN. It is always shown. Off, Settings shows only the
+everyday rows; on, every row as before. The navbar's Advanced tab is not
+touched.
+
+### The setting
+
+- `advanced_settings` in `settings.json` (global, a JSON boolean), a
+  `PersistedSetting` row of `SystemSettingsManager` (subject
+  `settings_advanced`, default 1, telemetry key `advanced_settings`;
+  `get_advanced_settings()` / `set_advanced_settings()`). The switch's
+  callback `on_advanced_settings_changed` is registered with the root's
+  callbacks (`register_settings_panel_callbacks`).
+- **Updated printers keep it on**: a `settings.json` without the key
+  reads 1, so a printer that had HelixScreen before sees every row.
+- **New installs start with it off**: the seed
+  `buildroot/board/ad5x/rootfs-overlay/usr/share/ad5x/helixscreen-settings.json`
+  (copied by `S70helixscreen` only when there is no `settings.json`) has
+  `"advanced_settings": false`.
+- **Factory reset turns it off**: `Config::reset_to_defaults()` builds the
+  document from `get_default_config(..., include_user_prefs=true)`, which
+  now writes `advanced_settings: false`, and saves it before the restart.
+  `S70helixscreen` then finds a `settings.json` and does not seed again, so
+  the reset's own value is the one that counts. A first start without any
+  `settings.json` and without the seed (not on Kiln OS) leaves the key out:
+  on.
+
+### What hides
+
+Each hidden row (or its container) carries
+`<bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>`.
+helix-xml composes bindings on one flag (`lv_xml_bind_compose.c`: the flag
+is set while any of them holds), so a row's own capability or AD5X gate
+keeps working in both modes, and the rows need no wrapper (a wrapper would
+stay laid out at height 0 over a row its own gate hides).
+`tests/unit/double_bind_widgets.inc` is regenerated
+(`scripts/scan_double_binds.py --emit-cpp`) so `[bind_compose]` drives the
+new pairs. The bindings follow the subject on pages already built, so the
+switch takes effect at once, no restart. A `setting_group` hides its header
+by itself when none of its rows shows.
+
+| Page | Hidden while off |
+|---|---|
+| Settings | Touch & Input, Purge Box, Updates, Plugins (HelixScreen's own, under HELIXSCREEN; Kiln's Plugins under PRINTER stays) |
+| Printer | the model row, Manage Printers (header button); name and image stay |
+| Printing | Machine Limits, Retraction Settings, Multi-Filament System Management, Z Offset by Material, Allow cold load/unload, Number slots from 0, Apply start options to prints from other apps, Macro Buttons |
+| Devices | Sensors, IFS firmware, Power Devices |
+| Safety & Alerts | Cancel Escalation and Escalation Timeout, Confirm before running macros, the nozzle-hit guard's Sensitivity (the guard's switch stays) |
+| Connection | Printers, Host, API Key, Screen Sharing (Network Settings stays) |
+| System | Performance, Storage, Firmware Update, Share Usage Data and View Telemetry Data, Log Level and Log detail, Reset root password, Boot into recovery, Return to Flashforge firmware, Extended memory (with its notes) |
+| Help & About | Upload Debug Bundle, Discord Community, Getting Started, User Guide |
+
+Confirm shutdown and reboot (Safety & Alerts) stays hidden from C++ as
+before (`ui_settings_safety.cpp`). A hidden setting keeps its value and
+keeps working.
+
+### Texts
+
+"Advanced settings" and its description are in `translations/en.yml`,
+`en-GB.yml` (empty: English) and `ru.yml` («Расширенные настройки»,
+«Показывать все настройки, в том числе те, которые могут нарушить работу»;
+not «Дополнительно», which is the Advanced tab). The other languages are
+not shipped (`docs/setup-wizard.md`, "Language") and fall back to English.
+
+### Tests
+
+`tests/unit/test_settings_advanced.cpp`: each page built with the setting
+on, then switched off and on again on the live page: every row above
+hides and comes back to what its own gates gave it, and the everyday rows
+around it don't change; a row's own gate (HelixScreen's Plugins) still
+hides it with the setting on; the root's switch drives the setting and
+`settings.json`, and follows it. `tests/unit/test_persisted_setting.cpp`
+mirrors the new row (default, absent key, clamping, telemetry key).
+`tests/unit/test_config.cpp`: a factory reset stores false, a first start
+without the seed leaves the key out.
+
+## Web interface (implemented: HelixScreen patch 0108)
+
+Settings > System > **Web interface**: Fluidd or Mainsail at the
+printer's address (`docs/web-interface.md`), under Extended memory. In
+System, not Connection: it changes the printer's own system (Kiln's root
+agent points nginx at the other interface), as the Kiln rows around it
+do; Connection is about how this screen reaches printers. Behind
+Settings > Advanced settings (patch 0107's binding on its container).
+
+- **Shown** only on the AD5X build (`HELIX_KILN_AD5X`), when
+  `machine.kiln_os.info` lists the `webui` feature (an older Kiln OS:
+  hidden, nothing else asked) and `machine.kiln_os.get_webui` answered
+  with at least one known interface. Both are asked in the discovery
+  sequence (every connect and Klipper restart) and each time the System
+  page opens (`SystemSettingsOverlay::on_activate`).
+- **The choice**: a dropdown with only the interfaces in `available`
+  (Fluidd, Mainsail; names Kiln OS doesn't know are left out), showing
+  `webui`. `setting_dropdown_row` gained a `bind_options` prop for it
+  (a string subject, one option per line; empty: none).
+- **A pick** sends `machine.kiln_os.post_webui` `{"name": NAME}` (45 s
+  timeout; the agent has 30 s) and greys the dropdown until the answer.
+  Done with `changed`: a toast "Web interface is now Mainsail. Reload the
+  printer's page in your browser." (or Fluidd). A second pick, or a
+  fetch, while one is on its way sends nothing.
+- **mainsail-kiln**: `plugin` set in the GET, or a `plugin_manages_webui`
+  refusal: the row is replaced by a greyed one, "Managed by the
+  mainsail-kiln plugin", showing the current interface (the refusal also
+  says so in a toast).
+- **Any other error** (`bad_parameter`, `not_available`, `agent_failed`,
+  `agent_timeout`, `agent_unavailable`, a timeout): a toast "Can't switch
+  the web interface: <Kiln's message>" and the dropdown back on the
+  interface Kiln last reported.
+
+Code: `include/ui_settings_kiln_webui.h`,
+`src/ui/ui_settings_kiln_webui.cpp` (`helix::kiln_webui::WebuiModel`;
+subjects `kiln_webui_state` 0 hidden / 1 the choice / 2 plugin,
+`kiln_webui_options`, `kiln_webui_selected`, `kiln_webui_busy`,
+`kiln_webui_locked`), the rows in `ui_xml/settings_system_overlay.xml`
+(`container_kiln_webui`, `row_kiln_webui`, `row_kiln_webui_plugin`),
+callback `on_kiln_webui_changed`.
+
+Texts in `translations/en.yml`, `en-GB.yml` (empty) and `ru.yml`:
+«Веб-интерфейс», «Что открывается по адресу принтера в браузере»,
+«Управляется плагином mainsail-kiln», «Теперь веб-интерфейс — {}.
+Обновите страницу принтера в браузере.», «Не удалось переключить
+веб-интерфейс: {}». Fluidd and Mainsail are names, the same in every
+language.
+
+Tests: `tests/unit/test_settings_kiln_webui.cpp`: Kiln's object read
+field by field (unknown names left out, the plugin, no interface); no
+webui feature (and no `machine.kiln_os.info`) asks nothing more and
+keeps the row hidden; nothing on another build; the GET's choice among
+what Kiln has (one or two), the plugin's greyed row, the feature gone
+again; a pick posts the name, greys the control, ignores a second pick
+and a fetch, and on the answer shows the toast; the current one and a
+line that isn't there send nothing, nor a pick before Kiln answered; a
+refusal and a timeout put the choice back with the error; the
+`plugin_manages_webui` refusal greys the row; on the built System page
+the container hidden without the feature and with Advanced settings off,
+the options and the selection from the GET, the dropdown's pick posting
+and greying it, the rollback, the plugin row greyed, and the one-line
+list. `tests/unit/test_settings_advanced.cpp` lists the container among
+the advanced rows.
+
+## Tips and problems behind Advanced settings (implemented: HelixScreen patch 0109)
+
+With Settings > Advanced settings off (patch 0107), on-screen texts that
+send the owner to a hidden row are handled by kind (owner's rule: a tip
+that only leads to an advanced row isn't shown; a real problem is always
+shown and says how to get there; unsure counts as a problem).
+
+| Text | Kind | While off |
+|---|---|---|
+| Extended memory notice (0074, "You can switch Extended memory on in Settings > System") | Tip | Not posted. Kiln keeps `notice_pending` (nothing marks it seen), so it is posted when the root switch is turned on (`MemoryModel::advanced_turned_on`) or at the next connect with it on |
+| Boot loader notices (0094, "Settings > System > Boot into recovery > ...", update and install) | Tip | A new gate `Gates::advanced_off`: the notice waits, not marked shown; it shows at the next look after the switch is turned on (the root switch looks at once, otherwise the 10 s poll) |
+| "New plugin available: {}. Enable it in Settings > Plugins." and "{} new plugins available..." (HelixScreen's own plugins) | Tip | No toast. Not queued: a toast for the session, the plugins count as known as before |
+| "{} firmware {} is available. Open Settings > System > Firmware Update to install it." | Tip | Not posted; the version announced is kept apart from the one found, so the first check with the switch on posts it |
+| Tour step "Customize your home screen" ("turn on Allow Home Screen Editing in Settings > Touch & Input") | Tip | Step left out (`build_kiln_tour_steps(..., advanced)`); the tour is seen as usual and Replay Welcome Tour with the switch on has it |
+| "An internal error occurred ... send a debug bundle from Settings > Help & About" | Problem | Shown; "(turn on Settings > Advanced settings first)" |
+| "Not enough free space on the printer for this file. Free some in Settings > System > Storage." | Problem | Shown; the same addition |
+| "This printer's Moonraker rejected its API key. Check the key in Settings > Connection." | Problem | Shown; the same addition |
+| "This printer's Moonraker requires a login. Add its API key in Settings > Connection." | Problem | Shown; the same addition |
+| "This printer's start macro sets a Z offset for each material ... Turn on Settings > Printing > Z Offset by Material ..." | Problem | Shown; "(shown with Settings > Advanced settings on)" |
+| Telemetry explanation ("You can view the exact data in Settings > System > View Telemetry Data anytime", untranslated upstream text) | Problem (privacy statement, kept) | Shown; "(turn on Settings > Advanced settings first)" |
+
+A problem text is one text for both modes (with the switch on, the
+addition does no harm), so the call sites and their tests stay as they
+were. The new English keys are in `translations/en.yml`, `en-GB.yml`
+(empty) and `ru.yml` («сначала включите Настройки > Расширенные
+настройки»); the old keys stay in the files, unused.
+
+Shortcuts to a hidden page do nothing while the switch is off (no
+navigation; the item stays as read-only information):
+
+| Shortcut | Opens | While off |
+|---|---|---|
+| Printer page chips Filament Sensors and Width Sensors | Sensors | Tap does nothing; not clickable, so no press effect (`cap_chip_needs_advanced`, a `clickable` binding on the chip) |
+| Printer page chip Retraction | Retraction Settings | The same |
+| Printer page chip Power | Power Devices | The same |
+| Controls, "N more sensors" link under the heaters | Sensors | Tap does nothing; the count stays. The link stays clickable (it takes the tap), so the tap doesn't reach the temperature card behind it and open the nozzle temperature |
+| Home screen filament sensor tile, when its tap would open the sensor settings (no sensor state to show) | Sensors | Tap does nothing; its other taps (status, Load/Unload dialog) as before |
+| HelixScreen's update banner (Update opens Settings > Updates) | Updates | Not shown: it hides as soon as the switch is turned off and comes back as soon as it is turned on (it observes `settings_advanced`; not dismissed); Update does nothing |
+
+Left as they are: the navbar's Advanced tab and what it opens (the
+owner's exception, including the HelixScreen plugin overview's Storage
+link); the IFS screen's own Settings button (the device operations Multi-Filament
+System Management also opens: Auto-Refill, Tune IFS and Pre-feed live
+there and the tour points at it); the 10 s hold that opens the touch
+calibration (a way out when taps land wrong, not a settings page); the
+printer type mismatch review (a problem, its own dialog); the MCUs chip
+(opens System, which shows). Inside a hidden page, its own links are
+unreachable anyway.
+
+Tests: `tests/unit/test_upgrade_banner.cpp` (the banner hides when the switch
+is turned off and shows again when it is turned on, not dismissed),
+`tests/unit/test_printer_manager_overlay.cpp` (which chips are gated; with
+the switch off the Retraction chip is not clickable and its tap opens
+nothing, an ungated chip keeps its tap; on, it opens its page again),
+`tests/unit/test_settings_kiln_memory.cpp` (no notice while off,
+not marked seen, posted once when turned on),
+`tests/unit/test_kiln_bootloader_notice.cpp` (the gate; not shown and not
+marked while off, shown once on), `tests/unit/test_settings_advanced_texts.cpp`
+(the tour step, the problem texts in English and in Russian). The plugin
+toast, the firmware notice, the Controls link and the filament sensor
+tile have no unit test. A chip that is not clickable passes a tap to the
+page body, which only ends a name edit.
+
+## IFS status light follows screen sleep (implemented: HelixScreen patch 0110)
+
+With Display > "light off when the screen sleeps" on, the screen sends
+`IFS_LED SLEEP=1` to Klipper when it goes to sleep and `IFS_LED SLEEP=0`
+when it wakes (only a change, and only when the printer has the `ifs`
+object). Klipper's IFS module (`klipper/extras/ifs.py`) then switches the
+IFS status light off while the printer is idle; during a print or IFS work
+it stays on, and red always shows. No setting of its own.

@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 21:24:15 -0500
+Subject: [PATCH] network settings: the connected network's name ends in ...
+ instead of being cut off
+
+With the page-scroll arrows on, PageScrollController reserves their
+52 px strip out of status_cards, the left column, which is only 40% of
+the overlay. The SSID row's name label was content width and a flex row
+never shrinks an item, so the row ran past its card and the end of the
+name was cut off beside the arrows (AD5X, 800x480, Wi-Fi and Ethernet
+both connected). The label now takes the free width (width 1, flex
+grow, as pa_tuning_overlay's rows do) and ends in dots, so the signal
+and forget icons stay in view. Kiln OS issue #4 came back this way.
+---
+ ui_xml/network_settings_overlay.xml | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/ui_xml/network_settings_overlay.xml b/ui_xml/network_settings_overlay.xml
+index b1841cd169..7fba56ecb7 100644
+--- a/ui_xml/network_settings_overlay.xml
++++ b/ui_xml/network_settings_overlay.xml
+@@ -103,8 +103,11 @@
+                         height="content" style_pad_all="0" scrollable="false" flex_flow="row"
+                         style_flex_main_place="start" style_flex_cross_place="center" style_pad_gap="#space_xs">
+                   <icon src="check_circle" size="sm" variant="success"/>
+-                  <text_body name="ssid_label" bind_text="connected_ssid"/>
+-                  <lv_obj height="1" flex_grow="1" scrollable="false"/>
++                  <!-- Takes the free width and ends in "...": a content-width name
++                       can't shrink in the row, so with the page-scroll arrows on
++                       (their strip comes out of this column) its end was cut off -->
++                  <text_body name="ssid_label" bind_text="connected_ssid"
++                             width="1" flex_grow="1" long_mode="dots"/>
+                   <icon src="wifi_strength_4" size="sm" variant="primary"/>
+                   <!-- Forget the currently connected network (with confirmation) -->
+                   <icon name="forget_network_icon"
+-- 
+2.56.1
+

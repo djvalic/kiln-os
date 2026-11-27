@@ -1,0 +1,974 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 13:33:16 -0500
+Subject: [PATCH] settings: tips that lead to a row Advanced settings hides
+ stay away while it is off
+
+With Settings > Advanced settings off (0107), a tip whose only point is a
+hidden row isn't shown: the Extended memory notice (posted once the switch
+is turned on; Kiln keeps it pending), the boot loader notices (a new gate:
+they wait, unmarked, and show at the next look once it is on), the new
+plugin toasts, the firmware update notice (posted by the first check with
+it on) and the tour's home-editing step. Problems stay shown and say how
+to get there: the internal error toast's debug bundle, a full disk's
+Storage, a rejected or missing API key and the Z Offset by Material
+warning add "(turn on Settings > Advanced settings first)" or "(shown with
+Settings > Advanced settings on)", as does the telemetry explanation's
+View Telemetry Data. One text serves both modes. English, English (UK,
+empty) and Russian strings.
+
+Shortcuts to a page it hides do nothing while it is off, the item kept
+as read-only information: the Printer page's Filament Sensors, Width
+Sensors, Retraction and Power chips (not clickable, so no press effect),
+Controls' "N more sensors" link (it keeps its tap, so the tap doesn't
+reach the temperature card behind it), the filament sensor tile's tap to
+the sensor settings, and HelixScreen's update banner (it observes the
+setting: hidden at once when it is turned off, back when it is turned
+on; not dismissed).
+---
+ include/printer_manager_chips.h               |  6 ++
+ include/storage_report.h                      |  3 +-
+ include/system_settings_manager.h             |  5 ++
+ include/tour_steps.h                          |  5 +-
+ include/ui_kiln_bootloader_notice.h           |  3 +
+ include/ui_settings_kiln_memory.h             |  4 +
+ include/upgrade_banner.h                      |  1 +
+ src/application/application.cpp               |  7 +-
+ src/application/moonraker_event_routing.cpp   |  7 +-
+ src/application/printer_session.cpp           |  8 ++
+ src/system/firmware_update_check.cpp          | 15 +++-
+ src/ui/calibration/z_offset_utils.cpp         |  4 +-
+ src/ui/controls/ui_panel_controls.cpp         |  6 ++
+ .../panel_widgets/filament_sensor_widget.cpp  |  4 +-
+ src/ui/printers/printer_manager_chips.cpp     | 12 +++
+ src/ui/settings/ui_panel_settings.cpp         | 10 ++-
+ src/ui/tour/tour_steps.cpp                    |  4 +-
+ src/ui/tour/tour_steps_kiln.cpp               |  7 +-
+ src/ui/ui_kiln_bootloader_notice.cpp          | 10 ++-
+ src/ui/ui_settings_kiln_memory.cpp            | 13 ++-
+ src/ui/upgrade_banner.cpp                     | 25 +++++-
+ src/ui/wizard/ui_wizard_telemetry.cpp         |  2 +-
+ tests/unit/test_kiln_bootloader_notice.cpp    | 30 +++++++
+ tests/unit/test_printer_manager_overlay.cpp   | 46 ++++++++++
+ tests/unit/test_settings_advanced_texts.cpp   | 88 +++++++++++++++++++
+ tests/unit/test_settings_kiln_memory.cpp      | 29 ++++++
+ tests/unit/test_upgrade_banner.cpp            | 32 +++++++
+ translations/en-GB.yml                        |  5 ++
+ translations/en.yml                           |  6 ++
+ translations/ru.yml                           |  6 ++
+ ui_xml/printer_manager_overlay.xml            |  8 ++
+ 31 files changed, 389 insertions(+), 22 deletions(-)
+ create mode 100644 tests/unit/test_settings_advanced_texts.cpp
+
+diff --git a/include/printer_manager_chips.h b/include/printer_manager_chips.h
+index f0a37d4a8f..3b5ca6731f 100644
+--- a/include/printer_manager_chips.h
++++ b/include/printer_manager_chips.h
+@@ -31,7 +31,13 @@ const CapChipSpec* find_cap_chip_spec(std::string_view name);
+ /// AmsState and the sensor managers.
+ CapabilityChipFacts gather_capability_chip_facts();
+ 
++/// Kiln OS: the chips whose screen is a page Settings > Advanced settings
++/// hides (Filament Sensors and Width Sensors: Sensors; Retraction: Retraction
++/// Settings; Power: Power Devices). While it is off their tap does nothing.
++bool cap_chip_needs_advanced(CapChip chip);
++
+ /// A tapped chip's action: its screen, or its info popup when it has none.
++/// Nothing for a cap_chip_needs_advanced() chip while Advanced settings is off.
+ void open_cap_chip(const CapChipSpec& spec);
+ 
+ } // namespace helix
+diff --git a/include/storage_report.h b/include/storage_report.h
+index 085b64490c..a2ea363ef0 100644
+--- a/include/storage_report.h
++++ b/include/storage_report.h
+@@ -213,8 +213,9 @@ constexpr bool is_no_space_refusal(int rpc_code) {
+ const char* print_start_failure_tag(int rpc_code);
+ 
+ /// What the app says when the printer has no room for a print's copy.
++/// Kiln OS: Storage shows with Settings > Advanced settings on.
+ inline constexpr const char* kNoUploadSpaceMessage =
+     TR_NOOP("Not enough free space on the printer for this file. Free some in Settings > "
+-            "System > Storage.");
++            "System > Storage (turn on Settings > Advanced settings first).");
+ 
+ } // namespace helix::storage
+diff --git a/include/system_settings_manager.h b/include/system_settings_manager.h
+index 1e3f646e5b..c910cbecd5 100644
+--- a/include/system_settings_manager.h
++++ b/include/system_settings_manager.h
+@@ -236,6 +236,11 @@ class SystemSettingsManager {
+         return settings_.subject(Key::WifiEnabled);
+     }
+ 
++    /// Whether init_subjects() has run (the subjects exist to observe)
++    bool subjects_initialized() const {
++        return subjects_initialized_;
++    }
++
+     /** @brief Advanced settings subject (integer: 0=everyday rows only, 1=every row) */
+     lv_subject_t* subject_advanced_settings() {
+         return settings_.subject(Key::AdvancedSettings);
+diff --git a/include/tour_steps.h b/include/tour_steps.h
+index 67c836be59..913ac8a0d1 100644
+--- a/include/tour_steps.h
++++ b/include/tour_steps.h
+@@ -65,7 +65,10 @@ inline constexpr int kKilnTourVersion = 3;
+ /// Kiln OS (AD5X): the tour of Kiln's screens (tour_steps_kiln.cpp);
+ /// build_tour_steps() returns it on HELIX_KILN_AD5X builds. Declared on every
+ /// build so tests can call it.
+-std::vector<TourStep> build_kiln_tour_steps(bool has_ams, int seen_version = 0);
++/// Kiln OS: @p advanced false (Settings > Advanced settings off) leaves out the
++/// step that points at Touch & Input, which is hidden then.
++std::vector<TourStep> build_kiln_tour_steps(bool has_ams, int seen_version = 0,
++                                            bool advanced = true);
+ 
+ /// The `seen_version` for an automatic start, from the persisted tour state. Someone
+ /// who has never finished a tour, or whose state predates versioning, gets the full tour.
+diff --git a/include/ui_kiln_bootloader_notice.h b/include/ui_kiln_bootloader_notice.h
+index 98dd95bebd..f571678ea5 100644
+--- a/include/ui_kiln_bootloader_notice.h
++++ b/include/ui_kiln_bootloader_notice.h
+@@ -77,6 +77,9 @@ struct Gates {
+     bool wizard_pending = false; ///< a re-run requested, or the 0088 offer waiting
+     bool printing = false;       ///< a print holds the printer (motion blocked)
+     bool dialog_up = false;      ///< another dialog is on the screen
++    /// Settings > Advanced settings is off: Boot into recovery is hidden, so
++    /// the notice waits (not marked shown) until it is turned on
++    bool advanced_off = false;
+ };
+ 
+ /// Show it now? (pure) A notice there, not shown already, nothing in the way
+diff --git a/include/ui_settings_kiln_memory.h b/include/ui_settings_kiln_memory.h
+index 31a16e3fcf..02576edeb0 100644
+--- a/include/ui_settings_kiln_memory.h
++++ b/include/ui_settings_kiln_memory.h
+@@ -144,6 +144,10 @@ class MemoryModel {
+     /// a failed try).
+     void notice_seen();
+ 
++    /// Settings > Advanced settings was turned on: the notice it held back,
++    /// if Kiln still has it pending
++    void advanced_turned_on();
++
+     const std::optional<State>& state() const {
+         return state_;
+     }
+diff --git a/include/upgrade_banner.h b/include/upgrade_banner.h
+index b7578d5f1a..270afa835d 100644
+--- a/include/upgrade_banner.h
++++ b/include/upgrade_banner.h
+@@ -65,6 +65,7 @@ class UpgradeBanner {
+ 
+     ObserverGuard status_observer_;
+     ObserverGuard version_observer_;
++    ObserverGuard advanced_observer_; ///< Kiln OS: settings_advanced
+     AsyncLifetimeGuard lifetime_;
+ 
+     std::string last_rendered_version_;
+diff --git a/src/application/application.cpp b/src/application/application.cpp
+index 645c618a55..dcab851307 100644
+--- a/src/application/application.cpp
++++ b/src/application/application.cpp
+@@ -1407,9 +1407,10 @@ int Application::main_loop() {
+             try {
+                 ToastManager::instance().show(
+                     ToastSeverity::ERROR,
+-                    lv_tr("An internal error occurred. The app continues running. Please "
+-                          "send a debug bundle from Settings > Help & About if it "
+-                          "repeats."),
++                    // Kiln OS: Upload Debug Bundle shows with Advanced settings on
++                    lv_tr("An internal error occurred. The app continues running. If it "
++                          "repeats, send a debug bundle from Settings > Help & About (turn on "
++                          "Settings > Advanced settings first)."),
+                     8000);
+             } catch (...) {
+                 // Toast subsystem itself in trouble — keep running anyway.
+diff --git a/src/application/moonraker_event_routing.cpp b/src/application/moonraker_event_routing.cpp
+index 47a066dc62..8c8dc56ce7 100644
+--- a/src/application/moonraker_event_routing.cpp
++++ b/src/application/moonraker_event_routing.cpp
+@@ -98,10 +98,13 @@ MoonrakerEventDecision decide_moonraker_event(MoonrakerEventType type, bool is_e
+ }
+ 
+ const char* login_refused_message(bool key_configured) {
++    // Kiln OS: Connection's API Key row shows with Settings > Advanced settings on
+     return key_configured ? TR_NOOP("This printer's Moonraker rejected its API key. Check the key "
+-                                    "in Settings > Connection.")
++                                    "in Settings > Connection (turn on Settings > Advanced "
++                                    "settings first).")
+                           : TR_NOOP("This printer's Moonraker requires a login. Add its API key in "
+-                                    "Settings > Connection.");
++                                    "Settings > Connection (turn on Settings > Advanced settings "
++                                    "first).");
+ }
+ 
+ } // namespace helix
+diff --git a/src/application/printer_session.cpp b/src/application/printer_session.cpp
+index ca79f72e76..b9146eedd5 100644
+--- a/src/application/printer_session.cpp
++++ b/src/application/printer_session.cpp
+@@ -70,6 +70,7 @@
+ #include "sensor_state.h"
+ #include "session_wiring.h"
+ #include "settings_manager.h"
++#include "system_settings_manager.h"
+ #include "sound_manager.h"
+ #include "spoolman_active_spool_sync.h"
+ #include "spoolman_catalog_search.h"
+@@ -380,6 +381,13 @@ void PrinterSession::on_plugin_sync(const helix::plugin::SyncResult& result) {
+     fresh = helix::plugin::loadable_plugin_ids(fresh, m_plugin_host->plugins());
+     if (fresh.empty())
+         return;
++    // Kiln OS: Settings > Plugins (HelixScreen's) shows with Advanced settings
++    // on; off, the offer to enable them isn't made
++    if (!SystemSettingsManager::instance().get_advanced_settings()) {
++        spdlog::info("[PrinterSession] {} new plugin(s); no toast while Advanced settings is off",
++                     fresh.size());
++        return;
++    }
+     if (fresh.size() == 1) {
+         // Prefer the manifest's display name; an unreadable manifest falls back
+         // to the directory name.
+diff --git a/src/system/firmware_update_check.cpp b/src/system/firmware_update_check.cpp
+index 79b03ae9c5..47afe13703 100644
+--- a/src/system/firmware_update_check.cpp
++++ b/src/system/firmware_update_check.cpp
+@@ -12,6 +12,7 @@
+ #include "notice.h"
+ #include "print_lifecycle_state.h"
+ #include "printer_state.h"
++#include "system_settings_manager.h"
+ 
+ #include <spdlog/fmt/fmt.h>
+ #include <spdlog/spdlog.h>
+@@ -101,6 +102,10 @@ std::pair<int, std::string> http_get(const std::string& url) {
+ struct Checker {
+     CheckState state;
+     std::optional<RemoteFirmware> found;
++    /// Kiln OS: the version the notice was posted for. A find while Settings >
++    /// Advanced settings is off (the Firmware Update row hidden) posts nothing
++    /// and leaves this, so the first check with it on posts it.
++    std::string announced;
+     bool in_flight = false;
+ };
+ 
+@@ -206,10 +211,14 @@ void on_update_check_tick() {
+                              c.state.consecutive_failures);
+                 return;
+             }
+-            const bool newly_found =
+-                outcome.update && (!c.found || c.found->version != outcome.update->version);
+             c.found = outcome.update;
+-            if (newly_found) {
++            const bool newly_found = outcome.update && c.announced != outcome.update->version;
++            if (newly_found && !SystemSettingsManager::instance().get_advanced_settings()) {
++                spdlog::info("[FirmwareUpdate] {} firmware {} is available; no notice while "
++                             "Advanced settings is off",
++                             owner, outcome.update->version);
++            } else if (newly_found) {
++                c.announced = outcome.update->version;
+                 spdlog::info("[FirmwareUpdate] {} firmware {} is available", owner,
+                              outcome.update->version);
+                 publish_notification(
+diff --git a/src/ui/calibration/z_offset_utils.cpp b/src/ui/calibration/z_offset_utils.cpp
+index 83ac10101d..9bb441e781 100644
+--- a/src/ui/calibration/z_offset_utils.cpp
++++ b/src/ui/calibration/z_offset_utils.cpp
+@@ -870,10 +870,12 @@ void save_dirty_offsets_shared() {
+                                        "switched off on the printer; tap Save again to store the "
+                                        "offset in the probe."));
+         } else {
++            // Kiln OS: Z Offset by Material shows with Advanced settings on
+             NOTIFY_WARNING("{}", lv_tr("This printer's start macro sets a Z offset for each "
+                                        "material, so saving it into the probe would apply it "
+                                        "twice. Turn on Settings > Printing > Z Offset by Material "
+-                                       "to save it for the print's material."));
++                                       "(shown with Settings > Advanced settings on) to save it "
++                                       "for the print's material."));
+         }
+         return;
+     }
+diff --git a/src/ui/controls/ui_panel_controls.cpp b/src/ui/controls/ui_panel_controls.cpp
+index 4cac8d855c..3f57421faf 100644
+--- a/src/ui/controls/ui_panel_controls.cpp
++++ b/src/ui/controls/ui_panel_controls.cpp
+@@ -43,6 +43,7 @@
+ #include "standard_macros.h"
+ #include "subject_managed_panel.h"
+ #include "system/subject_registry.h"
++#include "system_settings_manager.h"
+ #include "target_tool.h"
+ #include "temperature_controller.h"
+ #include "temperature_sensor_manager.h"
+@@ -1028,6 +1029,11 @@ void ControlsPanel::update_secondary_fan_speed(const std::string& object_name, i
+ // MORE-SENSORS LINK
+ 
+ void ControlsPanel::handle_secondary_temps_clicked() {
++    // Kiln OS: Sensors is hidden with Settings > Advanced settings off; the
++    // link then only says how many more there are
++    if (!SystemSettingsManager::instance().get_advanced_settings()) {
++        return;
++    }
+     spdlog::debug("[{}] Secondary temps overflow clicked - opening sensors overlay", get_name());
+     auto& overlay = helix::settings::get_sensor_settings_overlay();
+     overlay.show(parent_screen_);
+diff --git a/src/ui/panel_widgets/filament_sensor_widget.cpp b/src/ui/panel_widgets/filament_sensor_widget.cpp
+index 93c3f60d79..a07253f547 100644
+--- a/src/ui/panel_widgets/filament_sensor_widget.cpp
++++ b/src/ui/panel_widgets/filament_sensor_widget.cpp
+@@ -21,6 +21,7 @@
+ #include "panel_widget_registry.h"
+ #include "print_control_buttons.h"
+ #include "printer_state.h"
++#include "system_settings_manager.h"
+ #include "widget_subjects.h"
+ 
+ #include <spdlog/spdlog.h>
+@@ -204,7 +205,8 @@ void FilamentSensorWidget::handle_click() {
+ }
+ 
+ void FilamentSensorWidget::open_sensor_settings() {
+-    if (!parent_screen_) {
++    // Kiln OS: Sensors is hidden with Settings > Advanced settings off: no tap
++    if (!parent_screen_ || !SystemSettingsManager::instance().get_advanced_settings()) {
+         return;
+     }
+     helix::settings::get_sensor_settings_overlay().show(parent_screen_);
+diff --git a/src/ui/printers/printer_manager_chips.cpp b/src/ui/printers/printer_manager_chips.cpp
+index 6907c65b82..4ff352a817 100644
+--- a/src/ui/printers/printer_manager_chips.cpp
++++ b/src/ui/printers/printer_manager_chips.cpp
+@@ -32,6 +32,7 @@
+ #include "printer_state.h"
+ #include "probe_sensor_manager.h"
+ #include "probe_sensor_types.h"
++#include "system_settings_manager.h"
+ #include "tool_state.h"
+ #include "translation_loader.h"
+ #include "width_sensor_manager.h"
+@@ -425,8 +426,19 @@ CapabilityChipFacts gather_capability_chip_facts() {
+     return f;
+ }
+ 
++bool cap_chip_needs_advanced(CapChip chip) {
++    using C = CapChip;
++    return chip == C::FilamentSensors || chip == C::WidthSensors || chip == C::Retraction ||
++           chip == C::Power;
++}
++
+ void open_cap_chip(const CapChipSpec& spec) {
+     spdlog::debug("[Printer Manager] {} chip clicked", spec.name);
++    if (cap_chip_needs_advanced(spec.chip) &&
++        !SystemSettingsManager::instance().get_advanced_settings()) {
++        // Its page is hidden with Advanced settings off: the chip is read-only
++        return;
++    }
+     if (spec.open) {
+         spec.open();
+         return;
+diff --git a/src/ui/settings/ui_panel_settings.cpp b/src/ui/settings/ui_panel_settings.cpp
+index b9d18d5789..e9632cc8d2 100644
+--- a/src/ui/settings/ui_panel_settings.cpp
++++ b/src/ui/settings/ui_panel_settings.cpp
+@@ -6,6 +6,7 @@
+ #include "ui_callback_helpers.h"
+ #include "ui_debug_bundle_modal.h"
+ #include "ui_info_qr_modal.h"
++#include "ui_kiln_bootloader_notice.h"
+ #include "ui_modal.h"
+ #if HELIX_HAS_PLUGINS
+ #include "plugins_overlay.h"
+@@ -27,6 +28,7 @@
+ #include "ui_settings_hardware.h"
+ #include "ui_settings_hardware_health.h"
+ #include "ui_settings_help.h"
++#include "ui_settings_kiln_memory.h"
+ #include "ui_settings_language_time.h"
+ #include "ui_settings_printing.h"
+ #include "ui_settings_safety.h"
+@@ -496,7 +498,13 @@ void register_settings_panel_callbacks() {
+         // Rows outside the everyday set bind hidden to settings_advanced.
+         {"on_advanced_settings_changed",
+          [](lv_event_t* e) {
+-             SystemSettingsManager::instance().set_advanced_settings(helix::ui::event_checked(e));
++             const bool on = helix::ui::event_checked(e);
++             SystemSettingsManager::instance().set_advanced_settings(on);
++             if (on) {
++                 // Kiln OS: the notices held back while it was off (patch 0109)
++                 helix::kiln_memory::model().advanced_turned_on();
++                 helix::kiln_bl_notice::check_now();
++             }
+          }},
+ #if HELIX_HAS_PLUGINS
+         {"on_plugins_clicked", nav_row<helix::plugin::get_plugins_overlay>()},
+diff --git a/src/ui/tour/tour_steps.cpp b/src/ui/tour/tour_steps.cpp
+index 41ba0dc6a5..61b4492a41 100644
+--- a/src/ui/tour/tour_steps.cpp
++++ b/src/ui/tour/tour_steps.cpp
+@@ -4,6 +4,7 @@
+ #include "tour_steps.h"
+ 
+ #include "ams_state.h"
++#include "system_settings_manager.h"
+ 
+ #include <algorithm>
+ #include <utility>
+@@ -24,7 +25,8 @@ bool hardware_has_ams() {
+ // means renaming it in translations/*.yml too.
+ std::vector<TourStep> build_tour_steps(bool has_ams, int seen_version) {
+ #if defined(HELIX_KILN_AD5X)
+-    return build_kiln_tour_steps(has_ams, seen_version);
++    return build_kiln_tour_steps(has_ams, seen_version,
++                                 SystemSettingsManager::instance().get_advanced_settings());
+ #endif
+     std::vector<TourStep> steps;
+     steps.reserve(11);
+diff --git a/src/ui/tour/tour_steps_kiln.cpp b/src/ui/tour/tour_steps_kiln.cpp
+index cc96631dfa..484409fd19 100644
+--- a/src/ui/tour/tour_steps_kiln.cpp
++++ b/src/ui/tour/tour_steps_kiln.cpp
+@@ -15,7 +15,7 @@
+ 
+ namespace helix::tour {
+ 
+-std::vector<TourStep> build_kiln_tour_steps(bool has_ams, int seen_version) {
++std::vector<TourStep> build_kiln_tour_steps(bool has_ams, int seen_version, bool advanced) {
+     std::vector<TourStep> steps;
+     steps.reserve(12);
+ 
+@@ -67,7 +67,10 @@ std::vector<TourStep> build_kiln_tour_steps(bool has_ams, int seen_version) {
+                        TooltipAnchor::PreferBelow,
+                        {}};
+     customize.fallback_target_name = "print_status";
+-    steps.push_back(std::move(customize));
++    // Its switch is on Touch & Input, hidden while Advanced settings is off
++    if (advanced) {
++        steps.push_back(std::move(customize));
++    }
+ 
+     steps.push_back({"nav_btn_controls",
+                      "Controls",
+diff --git a/src/ui/ui_kiln_bootloader_notice.cpp b/src/ui/ui_kiln_bootloader_notice.cpp
+index cac83629c3..b975022afa 100644
+--- a/src/ui/ui_kiln_bootloader_notice.cpp
++++ b/src/ui/ui_kiln_bootloader_notice.cpp
+@@ -12,6 +12,7 @@
+ #include "lvgl/lvgl.h"
+ #include "lvgl/src/others/translation/lv_translation.h"
+ #include "printer_state.h"
++#include "system_settings_manager.h"
+ 
+ #include <spdlog/spdlog.h>
+ 
+@@ -159,7 +160,8 @@ bool should_show(const Notice& notice, bool shown, const Gates& gates) {
+     if (notice.kind == Kind::None || shown) {
+         return false;
+     }
+-    return !gates.wizard_active && !gates.wizard_pending && !gates.printing && !gates.dialog_up;
++    return !gates.wizard_active && !gates.wizard_pending && !gates.printing && !gates.dialog_up &&
++           !gates.advanced_off;
+ }
+ 
+ std::string title(Kind kind) {
+@@ -200,12 +202,14 @@ void check_now() {
+     gates.wizard_pending = wizard_pending();
+     gates.printing = motion_blocked();
+     gates.dialog_up = Modal::any_visible();
++    gates.advanced_off = !SystemSettingsManager::instance().get_advanced_settings();
+     if (!should_show(notice, shown, gates)) {
+         if (!shown) {
+-            spdlog::debug("[Kiln boot loader notice] {} waits (wizard {}{}, printing {}, dialog {})",
++            spdlog::debug("[Kiln boot loader notice] {} waits (wizard {}{}, printing {}, "
++                          "dialog {}, advanced off {})",
+                           notice.key, gates.wizard_active ? "running" : "-",
+                           gates.wizard_pending ? ", pending" : "", gates.printing,
+-                          gates.dialog_up);
++                          gates.dialog_up, gates.advanced_off);
+         }
+         return;
+     }
+diff --git a/src/ui/ui_settings_kiln_memory.cpp b/src/ui/ui_settings_kiln_memory.cpp
+index 0aec224949..71ef98119f 100644
+--- a/src/ui/ui_settings_kiln_memory.cpp
++++ b/src/ui/ui_settings_kiln_memory.cpp
+@@ -17,6 +17,7 @@
+ #include "lvgl/src/others/translation/lv_translation.h"
+ #include "moonraker_error.h"
+ #include "panel_widgets/shutdown_widget.h"
++#include "system_settings_manager.h"
+ #include "core/static_panel_registry.h"
+ 
+ #include <spdlog/spdlog.h>
+@@ -239,7 +240,10 @@ void MemoryModel::apply(const State& state) {
+         return;
+     }
+     // A notice for a mode that can't work before a boot loader update: none
+-    if (state.notice_pending && !state.bootloader_update_needed && !notice_posted_) {
++    // Kiln OS: and none while Settings > Advanced settings is off (the row is
++    // hidden then): Kiln keeps it pending, so it comes when that is turned on
++    if (state.notice_pending && !state.bootloader_update_needed && !notice_posted_ &&
++        SystemSettingsManager::instance().get_advanced_settings()) {
+         post_notice();
+     }
+     if (!state.failed.empty()) {
+@@ -247,6 +251,13 @@ void MemoryModel::apply(const State& state) {
+     }
+ }
+ 
++void MemoryModel::advanced_turned_on() {
++    if (state_ && state_->available && state_->notice_pending &&
++        !state_->bootloader_update_needed && !notice_posted_) {
++        post_notice();
++    }
++}
++
+ void MemoryModel::post_notice() {
+     notice_posted_ = true;
+     helix::ui::set_notification_action_handler(kNoticeAction,
+diff --git a/src/ui/upgrade_banner.cpp b/src/ui/upgrade_banner.cpp
+index 82bee298dc..3b9d05e50f 100644
+--- a/src/ui/upgrade_banner.cpp
++++ b/src/ui/upgrade_banner.cpp
+@@ -14,6 +14,7 @@
+ #include "lvgl/lvgl.h"
+ #include "printer_state.h"
+ #include "system/update_checker.h"
++#include "system_settings_manager.h"
+ #include "upgrade_nudge.h"
+ 
+ #include <spdlog/fmt/fmt.h>
+@@ -99,6 +100,21 @@ void UpgradeBanner::init() {
+         },
+         UpdateChecker::instance().get_subjects_lifetime());
+ 
++    // Kiln OS: Settings > Advanced settings hides Updates, and the banner with
++    // it: hide at once when it is turned off, look again when it is turned on
++    // (the app makes the settings subjects before this; a bare test may not)
++    SystemSettingsManager& sys = SystemSettingsManager::instance();
++    if (sys.subjects_initialized()) {
++        advanced_observer_ = helix::ui::observe<int>(
++            sys.subject_advanced_settings(), this,
++            [tok](UpgradeBanner* self, int /*on*/) {
++                if (tok.expired())
++                    return;
++                self->refresh();
++            },
++            sys.get_subjects_lifetime());
++    }
++
+     refresh();
+     spdlog::info("[UpgradeBanner] Initialized (hidden)");
+ }
+@@ -108,6 +124,7 @@ void UpgradeBanner::shutdown() {
+     lifetime_.invalidate();
+     status_observer_.reset();
+     version_observer_.reset();
++    advanced_observer_.reset();
+ 
+     if (banner_ && lv_is_initialized()) {
+         lv_obj_delete(banner_);
+@@ -153,7 +170,10 @@ void UpgradeBanner::evaluate_visibility() {
+         return;
+     }
+ 
+-    bool should_show = UpgradeNudge::instance().should_show_banner();
++    // Kiln OS: Updates is hidden with Settings > Advanced settings off, so the
++    // offer waits (not dismissed) until it is on
++    bool should_show = UpgradeNudge::instance().should_show_banner() &&
++                       SystemSettingsManager::instance().get_advanced_settings();
+     if (should_show) {
+         update_message_text();
+         lv_obj_set_hidden(banner_, false);
+@@ -163,6 +183,9 @@ void UpgradeBanner::evaluate_visibility() {
+ }
+ 
+ void UpgradeBanner::on_update_clicked(lv_event_t* /*e*/) {
++    if (!SystemSettingsManager::instance().get_advanced_settings()) {
++        return;
++    }
+     spdlog::info("[UpgradeBanner] Update clicked - opening Settings > Updates");
+     helix::nav::set_active(PanelId::Settings);
+     helix::settings::get_updates_settings_overlay().show(lv_screen_active());
+diff --git a/src/ui/wizard/ui_wizard_telemetry.cpp b/src/ui/wizard/ui_wizard_telemetry.cpp
+index c0c1ea201b..c8137e59d1 100644
+--- a/src/ui/wizard/ui_wizard_telemetry.cpp
++++ b/src/ui/wizard/ui_wizard_telemetry.cpp
+@@ -66,7 +66,7 @@ void WizardTelemetryStep::init_info_text_subject() {
+         "With just a few hundred users reporting anonymously, we can see which "
+         "printers crash most, which features nobody uses, and where to spend our "
+         "limited time. **You can view the exact data in Settings > System > View "
+-        "Telemetry Data anytime.**";
++        "Telemetry Data anytime (turn on Settings > Advanced settings first).**";
+     UI_SUBJECT_INIT_AND_REGISTER_STRING(telemetry_info_text_, telemetry_info_text_buffer_,
+                                         telemetry_info_md, "telemetry_info_text");
+ }
+diff --git a/tests/unit/test_kiln_bootloader_notice.cpp b/tests/unit/test_kiln_bootloader_notice.cpp
+index cbcff18120..0c0cc148f2 100644
+--- a/tests/unit/test_kiln_bootloader_notice.cpp
++++ b/tests/unit/test_kiln_bootloader_notice.cpp
+@@ -25,6 +25,8 @@
+ #include "config.h"
+ #include "lvgl/src/others/translation/lv_translation.h"
+ #include "printer_state.h"
++#include "settings_manager.h"
++#include "system_settings_manager.h"
+ #include "translation_loader.h"
+ 
+ #include <cstdint>
+@@ -413,3 +415,31 @@ TEST_CASE("Kiln boot loader notice: Boot into recovery in every language, the no
+         }
+     }
+ }
++
++TEST_CASE("Kiln boot loader notice: waits while Advanced settings is off",
++          "[kiln][kiln_bl_notice][settings_advanced]") {
++    const bln::Notice update{bln::Kind::Update, "update 1"};
++    bln::Gates gates;
++    gates.advanced_off = true;
++    CHECK_FALSE(bln::should_show(update, false, gates));
++    gates.advanced_off = false;
++    CHECK(bln::should_show(update, false, gates));
++}
++
++TEST_CASE_METHOD(NoticeFixture,
++                 "Kiln boot loader notice: not shown or marked while Advanced settings is off",
++                 "[kiln][kiln_bl_notice][settings_advanced]") {
++    SettingsManager::instance().init_subjects();
++    auto& sys = SystemSettingsManager::instance();
++    const bool before = sys.get_advanced_settings();
++    sys.set_advanced_settings(false);
++    write_update();
++    check();
++    CHECK_FALSE(dialog());
++    CHECK_FALSE(fs::exists(seen_dir / "update-seen"));
++
++    sys.set_advanced_settings(true);
++    check();
++    CHECK(dialog());
++    sys.set_advanced_settings(before);
++}
+diff --git a/tests/unit/test_printer_manager_overlay.cpp b/tests/unit/test_printer_manager_overlay.cpp
+index 3a6ef8fa3e..9443f65c1c 100644
+--- a/tests/unit/test_printer_manager_overlay.cpp
++++ b/tests/unit/test_printer_manager_overlay.cpp
+@@ -33,7 +33,9 @@
+ #include "printer_capabilities_state.h"
+ #include "printer_manager_chips.h"
+ #include "printer_state.h"
++#include "settings_manager.h"
+ #include "subject_debug_registry.h"
++#include "system_settings_manager.h"
+ #include "tool_state.h"
+ #include "width_sensor_manager.h"
+ 
+@@ -545,6 +547,50 @@ TEST_CASE_METHOD(CapabilityChipsFixture, "PrinterManagerOverlay: a chip pushes i
+     CHECK(ModalStack::instance().empty());
+ }
+ 
++TEST_CASE("PrinterManagerOverlay: the chips whose page Advanced settings hides",
++          "[printer_manager][settings_advanced]") {
++    using helix::CapChip;
++    for (const auto& spec : helix::cap_chip_specs()) {
++        CAPTURE(spec.name);
++        const bool gated = spec.chip == CapChip::FilamentSensors ||
++                           spec.chip == CapChip::WidthSensors || spec.chip == CapChip::Retraction ||
++                           spec.chip == CapChip::Power;
++        CHECK(helix::cap_chip_needs_advanced(spec.chip) == gated);
++    }
++}
++
++TEST_CASE_METHOD(CapabilityChipsFixture,
++                 "PrinterManagerOverlay: with Advanced settings off a gated chip is read-only",
++                 "[printer_manager][settings_advanced]") {
++    SettingsManager::instance().init_subjects();
++    auto& sys = SystemSettingsManager::instance();
++    const bool before = sys.get_advanced_settings();
++    sys.set_advanced_settings(false);
++    lv_obj_t* root = show();
++    REQUIRE(root != nullptr);
++    lv_obj_t* chip = lv_obj_find_by_name(root, "pm_chip_retraction");
++    REQUIRE(chip != nullptr);
++    CHECK_FALSE(lv_obj_has_flag(chip, LV_OBJ_FLAG_CLICKABLE));
++    // An ungated chip keeps its tap
++    CHECK(lv_obj_has_flag(lv_obj_find_by_name(root, "pm_chip_job_queue"), LV_OBJ_FLAG_CLICKABLE));
++
++    // A tap that still reaches it (the callback) does nothing
++    click("pm_chip_retraction");
++    lv_obj_t* retraction = get_global_retraction_settings().get_root();
++    CHECK((retraction == nullptr || !helix::nav::is_in_stack(retraction)));
++    CHECK(ModalStack::instance().empty());
++
++    // On again: the same chip opens its page
++    sys.set_advanced_settings(true);
++    settle();
++    CHECK(lv_obj_has_flag(chip, LV_OBJ_FLAG_CLICKABLE));
++    click("pm_chip_retraction");
++    retraction = get_global_retraction_settings().get_root();
++    REQUIRE(retraction != nullptr);
++    CHECK(helix::nav::is_in_stack(retraction));
++    sys.set_advanced_settings(before);
++}
++
+ TEST_CASE_METHOD(CapabilityChipsFixture, "PrinterManagerOverlay: a chip opens its modal",
+                  "[printer_manager]") {
+     REQUIRE(show() != nullptr);
+diff --git a/tests/unit/test_settings_advanced_texts.cpp b/tests/unit/test_settings_advanced_texts.cpp
+new file mode 100644
+index 0000000000..2ebae2e1bf
+--- /dev/null
++++ b/tests/unit/test_settings_advanced_texts.cpp
+@@ -0,0 +1,88 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++/**
++ * @file test_settings_advanced_texts.cpp
++ * @brief Kiln OS: texts that point at rows Settings > Advanced settings hides.
++ *
++ * A tip that only leads to such a row is left out while the setting is off
++ * (here the tour's home-editing step; the Extended memory and boot loader
++ * notices are tested beside their own cases). A problem the user has to fix
++ * is always shown and says to turn the setting on first, in English and in
++ * Russian.
++ */
++
++#include "../lvgl_ui_test_fixture.h"
++#include "lvgl/src/others/translation/lv_translation.h"
++#include "moonraker_event_routing.h"
++#include "storage_report.h"
++#include "tour_steps.h"
++#include "translation_loader.h"
++
++#include <algorithm>
++#include <string>
++#include <vector>
++
++#include "../catch_amalgamated.hpp"
++
++using Catch::Matchers::ContainsSubstring;
++
++namespace {
++
++bool has_step(const std::vector<helix::tour::TourStep>& steps, const char* title) {
++    return std::any_of(steps.begin(), steps.end(),
++                       [&](const helix::tour::TourStep& s) { return s.title_key == title; });
++}
++
++/// The problem texts, as the code hands them to lv_tr
++std::vector<std::string> problem_texts() {
++    return {
++        "An internal error occurred. The app continues running. If it repeats, send a debug "
++        "bundle from Settings > Help & About (turn on Settings > Advanced settings first).",
++        helix::storage::kNoUploadSpaceMessage,
++        helix::login_refused_message(true),
++        helix::login_refused_message(false),
++        "This printer's start macro sets a Z offset for each material, so saving it into the "
++        "probe would apply it twice. Turn on Settings > Printing > Z Offset by Material (shown "
++        "with Settings > Advanced settings on) to save it for the print's material.",
++    };
++}
++
++struct RestoreLanguage {
++    ~RestoreLanguage() {
++        lv_translation_set_language(helix::ui::kIdentityLocale);
++    }
++};
++
++} // namespace
++
++TEST_CASE("Advanced settings: the tour leaves out the home-editing tip while it is off",
++          "[settings_advanced][tour]") {
++    const auto on = helix::tour::build_kiln_tour_steps(true, 0, true);
++    const auto off = helix::tour::build_kiln_tour_steps(true, 0, false);
++    CHECK(has_step(on, "Customize your home screen"));
++    CHECK_FALSE(has_step(off, "Customize your home screen"));
++    CHECK(off.size() + 1 == on.size());
++    // The default is the full tour
++    CHECK(helix::tour::build_kiln_tour_steps(true, 0).size() == on.size());
++}
++
++TEST_CASE("Advanced settings: problem texts say to turn it on first", "[settings_advanced][i18n]") {
++    for (const auto& text : problem_texts()) {
++        CAPTURE(text);
++        CHECK_THAT(text, ContainsSubstring("Settings > Advanced settings"));
++    }
++}
++
++TEST_CASE_METHOD(LVGLUITestFixture, "Advanced settings: problem texts in Russian, only Russian",
++                 "[settings_advanced][i18n]") {
++    RestoreLanguage restore;
++    helix::ui::ensure_translation_loaded("ru");
++    lv_translation_set_language("ru");
++    for (const auto& text : problem_texts()) {
++        CAPTURE(text);
++        const std::string ru = lv_tr(text.c_str());
++        CHECK(ru != text);
++        CHECK_THAT(ru, ContainsSubstring("Расширенные настройки"));
++        CHECK_THAT(ru, !ContainsSubstring("Advanced"));
++    }
++}
+diff --git a/tests/unit/test_settings_kiln_memory.cpp b/tests/unit/test_settings_kiln_memory.cpp
+index 25e8009856..05916bafeb 100644
+--- a/tests/unit/test_settings_kiln_memory.cpp
++++ b/tests/unit/test_settings_kiln_memory.cpp
+@@ -16,6 +16,8 @@
+ #include "config.h"
+ #include "helix-xml/src/xml/lv_xml.h"
+ #include "moonraker_error.h"
++#include "settings_manager.h"
++#include "system_settings_manager.h"
+ 
+ #include <cstring>
+ #include <string>
+@@ -455,3 +457,30 @@ TEST_CASE_METHOD(KilnMemoryFixture, "Kiln memory: opening the bell marks the not
+     panel.reset();
+     drain();
+ }
++
++TEST_CASE_METHOD(KilnMemoryFixture,
++                 "Kiln memory: no notice while Advanced settings is off, then once it is on",
++                 "[kiln][kiln_memory][settings_advanced]") {
++    SettingsManager::instance().init_subjects();
++    auto& sys = SystemSettingsManager::instance();
++    const bool before = sys.get_advanced_settings();
++    sys.set_advanced_settings(false);
++
++    fetched(memory_object(false, "standard", false, nullptr, /*notice_pending=*/true));
++    CHECK_FALSE(memory::model().notice_posted());
++    CHECK(entries_with_action(memory::kNoticeAction) == 0);
++    // Not seen either: Kiln keeps it pending
++    memory::model().notice_seen();
++    CHECK(client.rpc_calls.empty());
++
++    // Turned on: it comes now, once
++    sys.set_advanced_settings(true);
++    memory::model().advanced_turned_on();
++    CHECK(memory::model().notice_posted());
++    CHECK(entries_with_action(memory::kNoticeAction) == 1);
++    memory::model().advanced_turned_on();
++    CHECK(entries_with_action(memory::kNoticeAction) == 1);
++
++    sys.set_advanced_settings(before);
++    drain();
++}
+diff --git a/tests/unit/test_upgrade_banner.cpp b/tests/unit/test_upgrade_banner.cpp
+index d57d3a3988..0705b072c2 100644
+--- a/tests/unit/test_upgrade_banner.cpp
++++ b/tests/unit/test_upgrade_banner.cpp
+@@ -9,7 +9,9 @@
+ #include "config.h"
+ #include "core/update_queue.h"
+ #include "printer_state.h"
++#include "settings_manager.h"
+ #include "system/update_checker.h"
++#include "system_settings_manager.h"
+ #include "test_helpers/printer_state_test_access.h"
+ #include "test_helpers/update_checker_test_access.h"
+ #include "upgrade_banner.h"
+@@ -74,3 +76,33 @@ TEST_CASE_METHOD(UpgradeBannerFixture, "upgrade banner: dismiss hides the banner
+ 
+     CHECK(lv_obj_is_hidden(root));
+ }
++
++TEST_CASE_METHOD(UpgradeBannerFixture,
++                 "upgrade banner: follows Settings > Advanced settings at once",
++                 "[upgrade-banner][updates][settings_advanced]") {
++    SettingsManager::instance().init_subjects();
++    auto& sys = SystemSettingsManager::instance();
++    const bool before = sys.get_advanced_settings();
++    sys.set_advanced_settings(true);
++    REQUIRE(UpgradeNudge::instance().should_show_banner());
++
++    banner.init();
++    helix::ui::UpdateQueue::instance().drain();
++    lv_obj_t* root = find("upgrade_banner");
++    REQUIRE(root != nullptr);
++    CHECK_FALSE(lv_obj_is_hidden(root));
++
++    // Off: hidden now, not dismissed
++    sys.set_advanced_settings(false);
++    helix::ui::UpdateQueue::instance().drain();
++    CHECK(lv_obj_is_hidden(root));
++    CHECK(UpgradeNudge::instance().should_show_banner());
++
++    // On again: back without waiting for the next check
++    sys.set_advanced_settings(true);
++    helix::ui::UpdateQueue::instance().drain();
++    CHECK_FALSE(lv_obj_is_hidden(root));
++
++    sys.set_advanced_settings(before);
++    helix::ui::UpdateQueue::instance().drain();
++}
+diff --git a/translations/en-GB.yml b/translations/en-GB.yml
+index fa95c7b736..6ff471357b 100644
+--- a/translations/en-GB.yml
++++ b/translations/en-GB.yml
+@@ -6927,3 +6927,8 @@ translations:
+   'Managed by the mainsail-kiln plugin': ''
+   'Web interface is now {}. Reload the printer''s page in your browser.': ''
+   'Can''t switch the web interface: {}': ''
++  'An internal error occurred. The app continues running. If it repeats, send a debug bundle from Settings > Help & About (turn on Settings > Advanced settings first).': ''
++  'Not enough free space on the printer for this file. Free some in Settings > System > Storage (turn on Settings > Advanced settings first).': ''
++  'This printer''s Moonraker rejected its API key. Check the key in Settings > Connection (turn on Settings > Advanced settings first).': ''
++  'This printer''s Moonraker requires a login. Add its API key in Settings > Connection (turn on Settings > Advanced settings first).': ''
++  'This printer''s start macro sets a Z offset for each material, so saving it into the probe would apply it twice. Turn on Settings > Printing > Z Offset by Material (shown with Settings > Advanced settings on) to save it for the print''s material.': ''
+diff --git a/translations/en.yml b/translations/en.yml
+index 15ae0b64ae..c3f16f0d14 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -6914,3 +6914,9 @@ translations:
+   'Managed by the mainsail-kiln plugin': 'Managed by the mainsail-kiln plugin'
+   'Web interface is now {}. Reload the printer''s page in your browser.': 'Web interface is now {}. Reload the printer''s page in your browser.'
+   'Can''t switch the web interface: {}': 'Can''t switch the web interface: {}'
++  # Kiln OS: texts that point at rows Settings > Advanced settings hides (patch 0109)
++  'An internal error occurred. The app continues running. If it repeats, send a debug bundle from Settings > Help & About (turn on Settings > Advanced settings first).': 'An internal error occurred. The app continues running. If it repeats, send a debug bundle from Settings > Help & About (turn on Settings > Advanced settings first).'
++  'Not enough free space on the printer for this file. Free some in Settings > System > Storage (turn on Settings > Advanced settings first).': 'Not enough free space on the printer for this file. Free some in Settings > System > Storage (turn on Settings > Advanced settings first).'
++  'This printer''s Moonraker rejected its API key. Check the key in Settings > Connection (turn on Settings > Advanced settings first).': 'This printer''s Moonraker rejected its API key. Check the key in Settings > Connection (turn on Settings > Advanced settings first).'
++  'This printer''s Moonraker requires a login. Add its API key in Settings > Connection (turn on Settings > Advanced settings first).': 'This printer''s Moonraker requires a login. Add its API key in Settings > Connection (turn on Settings > Advanced settings first).'
++  'This printer''s start macro sets a Z offset for each material, so saving it into the probe would apply it twice. Turn on Settings > Printing > Z Offset by Material (shown with Settings > Advanced settings on) to save it for the print''s material.': 'This printer''s start macro sets a Z offset for each material, so saving it into the probe would apply it twice. Turn on Settings > Printing > Z Offset by Material (shown with Settings > Advanced settings on) to save it for the print''s material.'
+diff --git a/translations/ru.yml b/translations/ru.yml
+index 859bfcf86f..ab8f33cdfa 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -7086,3 +7086,9 @@ translations:
+   'Managed by the mainsail-kiln plugin': 'Управляется плагином mainsail-kiln'
+   'Web interface is now {}. Reload the printer''s page in your browser.': 'Теперь веб-интерфейс — {}. Обновите страницу принтера в браузере.'
+   'Can''t switch the web interface: {}': 'Не удалось переключить веб-интерфейс: {}'
++  # Kiln OS: texts that point at rows Settings > Advanced settings hides (patch 0109)
++  'An internal error occurred. The app continues running. If it repeats, send a debug bundle from Settings > Help & About (turn on Settings > Advanced settings first).': 'Произошла внутренняя ошибка. Приложение продолжает работать. Если она повторится, отправьте отладочный пакет из Настройки > Помощь и о программе (сначала включите Настройки > Расширенные настройки).'
++  'Not enough free space on the printer for this file. Free some in Settings > System > Storage (turn on Settings > Advanced settings first).': 'На принтере недостаточно свободного места для этого файла. Освободите место в разделе Настройки > Система > Хранилище (сначала включите Настройки > Расширенные настройки).'
++  'This printer''s Moonraker rejected its API key. Check the key in Settings > Connection (turn on Settings > Advanced settings first).': 'Moonraker этого принтера отклонил его API-ключ. Проверьте ключ в Настройки > Соединение (сначала включите Настройки > Расширенные настройки).'
++  'This printer''s Moonraker requires a login. Add its API key in Settings > Connection (turn on Settings > Advanced settings first).': 'Moonraker этого принтера требует входа. Добавьте его API-ключ в Настройки > Соединение (сначала включите Настройки > Расширенные настройки).'
++  'This printer''s start macro sets a Z offset for each material, so saving it into the probe would apply it twice. Turn on Settings > Printing > Z Offset by Material (shown with Settings > Advanced settings on) to save it for the print''s material.': 'Стартовый макрос этого принтера задаёт смещение по Z для каждого материала, поэтому сохранение в зонд применит его дважды. Включите Настройки > Печать > Смещение по Z для материалов (видно, когда включены Настройки > Расширенные настройки), чтобы сохранить его для материала печати.'
+diff --git a/ui_xml/printer_manager_overlay.xml b/ui_xml/printer_manager_overlay.xml
+index 6c9c3023d0..462b8524e6 100644
+--- a/ui_xml/printer_manager_overlay.xml
++++ b/ui_xml/printer_manager_overlay.xml
+@@ -255,12 +255,18 @@
+             </capability_chip>
+             <capability_chip name="pm_chip_filament_sensors"
+                              icon="filament_sensor_alert" text="pm_chip_text_filament_sensors">
++              <!-- Kiln OS: its page is hidden with Advanced settings off: read-only then -->
++              <bind_flag_if cond="settings_advanced eq 0" flag="clickable" invert="true"/>
+               <bind_flag_if_eq subject="filament_sensor_count" flag="hidden" ref_value="0"/>
+             </capability_chip>
+             <capability_chip name="pm_chip_width_sensors" icon="ruler" text="pm_chip_text_width_sensors">
++              <!-- Kiln OS: its page is hidden with Advanced settings off: read-only then -->
++              <bind_flag_if cond="settings_advanced eq 0" flag="clickable" invert="true"/>
+               <bind_flag_if_eq subject="width_sensor_count" flag="hidden" ref_value="0"/>
+             </capability_chip>
+             <capability_chip name="pm_chip_retraction" icon="arrow_up_right" text="pm_chip_text_retraction">
++              <!-- Kiln OS: its page is hidden with Advanced settings off: read-only then -->
++              <bind_flag_if cond="settings_advanced eq 0" flag="clickable" invert="true"/>
+               <bind_flag_if_eq subject="printer_has_firmware_retraction" flag="hidden" ref_value="0"/>
+             </capability_chip>
+             <capability_chip name="pm_chip_pa_cal" icon="chart_line" text="pm_chip_text_pa_cal">
+@@ -309,6 +315,8 @@
+               <bind_flag_if_eq subject="pm_has_mcus" flag="hidden" ref_value="0"/>
+             </capability_chip>
+             <capability_chip name="pm_chip_power" icon="power_plug" text="pm_chip_text_power">
++              <!-- Kiln OS: its page is hidden with Advanced settings off: read-only then -->
++              <bind_flag_if cond="settings_advanced eq 0" flag="clickable" invert="true"/>
+               <bind_flag_if_eq subject="power_device_count" flag="hidden" ref_value="0"/>
+             </capability_chip>
+             <capability_chip name="pm_chip_leds" icon="lightbulb_on" text="pm_chip_text_leds">

@@ -78,6 +78,12 @@ define AD5X_SYSTEM_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/usr/bin/ad5x-touch-units
 	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-kernel \
 		$(TARGET_DIR)/usr/bin/ad5x-kernel
+	# The web interface on port 80, Fluidd or Mainsail (S61ad5x-web;
+	# ad5x-webui is root's, S68ad5x-update-agent; docs/web-interface.md)
+	$(INSTALL) -D -m 0644 $(@D)/lib/webui.sh \
+		$(TARGET_DIR)/usr/lib/ad5x/webui.sh
+	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-webui \
+		$(TARGET_DIR)/usr/sbin/ad5x-webui
 	# Extended memory on 512 MiB boards (root's; S68ad5x-update-agent)
 	$(INSTALL) -D -m 0755 $(@D)/bin/ad5x-memory \
 		$(TARGET_DIR)/usr/sbin/ad5x-memory

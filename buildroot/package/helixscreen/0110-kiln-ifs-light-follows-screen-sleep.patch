@@ -1,0 +1,113 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 01:44:27 -0500
+Subject: [PATCH] screen sleep: the IFS status light follows "light off when
+ the screen sleeps"
+
+Kiln OS: with the switch on, a sleeping screen sends IFS_LED SLEEP=1 and a
+wake SLEEP=0 to Klipper's IFS module (only when the printer has the ifs
+object, only a change). ifs.py keeps the light on during a print or IFS
+work and red always shows; it goes dark only while idle.
+---
+ include/led/led_screen_light.h |  8 +++++++-
+ src/led/led_screen_light.cpp   | 31 +++++++++++++++++++++++++++++++
+ 2 files changed, 38 insertions(+), 1 deletion(-)
+
+diff --git a/include/led/led_screen_light.h b/include/led/led_screen_light.h
+index c1ec7a5260..f29e0ab581 100644
+--- a/include/led/led_screen_light.h
++++ b/include/led/led_screen_light.h
+@@ -16,7 +16,8 @@ namespace helix::led {
+ /// Turns the chamber light off while the screen sleeps and back on at wake or when a
+ /// print starts. Opt-in (Display settings, default off). The light is only turned off
+ /// when no print is preparing, printing or paused, so it stays on during a print. It
+-/// only turns back on a light it turned off. With LedAutoState enabled the light still
++/// only turns back on a light it turned off. Kiln OS: the IFS status light follows
++/// the same switch (IFS_LED SLEEP=), dark only while idle. With LedAutoState enabled the light still
+ /// goes off at idle; on wake LedAutoState re-applies its own colour. Plain on and off:
+ /// no brightness or dimming.
+ class ScreenSleepLight {
+@@ -50,9 +51,14 @@ class ScreenSleepLight {
+     /// action when auto-state is enabled. Keeps the record when the LED controller
+     /// cannot send yet, so a later wake or print start retries.
+     void restore_light();
++    /// Kiln OS: tells Klipper's IFS module the screen sleeps (IFS_LED SLEEP=1) or woke
++    /// (SLEEP=0), so the IFS status light goes dark while idle. Sends only a change,
++    /// and only when the printer has the ifs object.
++    void set_ifs_sleep(bool asleep);
+ 
+     PrinterState* printer_state_ = nullptr;
+     std::string light_id_; // the light turned off by a sleep; empty when none
++    bool ifs_asleep_ = false; // IFS_LED SLEEP=1 sent and not yet undone
+     ObserverGuard print_state_observer_;
+ };
+ 
+diff --git a/src/led/led_screen_light.cpp b/src/led/led_screen_light.cpp
+index a87156e15f..2b7d15f835 100644
+--- a/src/led/led_screen_light.cpp
++++ b/src/led/led_screen_light.cpp
+@@ -1,7 +1,9 @@
+ // SPDX-License-Identifier: GPL-3.0-or-later
+ #include "led/led_screen_light.h"
+ 
++#include "app_globals.h"
+ #include "display_settings_manager.h"
++#include "i_moonraker_api.h"
+ #include "led/led_auto_state.h"
+ #include "led/led_controller.h"
+ #include "core/observer_factory.h"
+@@ -9,6 +11,8 @@
+ 
+ #include <spdlog/spdlog.h>
+ 
++#include <algorithm>
++
+ namespace helix::led {
+ 
+ ScreenSleepLight& ScreenSleepLight::instance() {
+@@ -41,11 +45,15 @@ void ScreenSleepLight::deinit() {
+ void ScreenSleepLight::on_screen_sleep_changed(bool sleeping) {
+     if (!sleeping) {
+         restore_light();
++        set_ifs_sleep(false);
+         return;
+     }
+     if (!DisplaySettingsManager::instance().get_chamber_light_off_on_sleep()) {
+         return;
+     }
++    // Kiln OS: the IFS status light follows the same switch. Klipper's ifs.py keeps
++    // it on during a print or IFS work and shows red always; it only goes dark idle.
++    set_ifs_sleep(true);
+     if (print_holds_machine()) {
+         return; // a print is preparing, printing or paused: the light stays on
+     }
+@@ -65,6 +73,29 @@ void ScreenSleepLight::on_screen_sleep_changed(bool sleeping) {
+     light_id_ = light;
+ }
+ 
++void ScreenSleepLight::set_ifs_sleep(bool asleep) {
++    if (asleep == ifs_asleep_) {
++        return; // only a sleep this sent is undone at wake
++    }
++    auto* api = get_moonraker_api();
++    if (api == nullptr) {
++        return;
++    }
++    const auto& objects = api->hardware().printer_objects();
++    if (std::find(objects.begin(), objects.end(), "ifs") == objects.end()) {
++        return; // no Kiln IFS module: nothing to tell
++    }
++    const std::string gcode = asleep ? "IFS_LED SLEEP=1" : "IFS_LED SLEEP=0";
++    spdlog::info("[ScreenSleepLight] {}", gcode);
++    ifs_asleep_ = asleep;
++    api->execute_gcode(
++        gcode, nullptr,
++        [gcode](const MoonrakerError& err) {
++            spdlog::warn("[ScreenSleepLight] {} failed: {}", gcode, err.message);
++        },
++        0, /*silent=*/true);
++}
++
+ void ScreenSleepLight::on_print_lifecycle_changed(PrintState state) {
+     if (::job_holds_machine(state)) {
+         restore_light();

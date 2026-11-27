@@ -134,7 +134,8 @@ is kept in the run's log folder (`update-<version>.zip`). It is never published,
   own boot loader is never written by an update: when the printer has it
   and slot A's build is newer, the touch screen says once that a boot
   loader update is ready and where to start it (Settings > System > Boot
-  into recovery > Reboot / Power > Update Kiln's boot loader;
+  into recovery > Reboot / Power > Update Kiln's boot loader, with
+  Settings > Advanced settings on;
   docs/own-boot-loader.md, "The main OS tells you").
 - Releases are public on GitHub (github.com/djvalic/kiln-os): no token
   needed. For a private repository, put a read token in

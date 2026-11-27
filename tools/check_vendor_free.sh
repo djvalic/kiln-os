@@ -63,7 +63,12 @@ UPSTREAM = ("usr/prog/Python-", "usr/prog/klipper/", "usr/prog/moonraker/",
             # D-Bus's system.conf and the packages' policies (wpa_supplicant's
             # system.d file), readline's inputrc (Buildroot's): unchanged
             # upstream files, in the image since NetworkManager (PR #53)
-            "etc/dbus-1/", "etc/inputrc")
+            "etc/dbus-1/", "etc/inputrc",
+            # Mainsail's web files: stock ships Mainsail in usr/data/mainsail,
+            # and the images and fonts it took unchanged from Mainsail's
+            # release equal those of the Mainsail Kiln builds in
+            # (buildroot/package/mainsail, from mainsail.zip)
+            "usr/data/mainsail/")
 MIN_HASH_SIZE = 64
 
 args = sys.argv[1:]

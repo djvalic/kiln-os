@@ -41,6 +41,11 @@
 # Also: "memory-mode" (POST /machine/kiln_os/memory, the KILN_MEMORY_MODE
 # macro; docs/memory.md): "on" or "off", runs "ad5x-memory extended on|off",
 # see memory_request. Allowed while printing: it only writes the switch.
+# Also: "webui" (POST /machine/kiln_os/webui; docs/web-interface.md):
+# "fluidd" or "mainsail", runs "ad5x-webui --no-sync NAME" (the choice in
+# /data/ad5x/webui, nginx reloaded), see webui_request. Allowed while
+# printing and while the IFS firmware is switched: only the web page
+# changes, a print and Klipper are not touched.
 # Also: "ifs-firmware" (POST /machine/kiln_os/ifs_firmware; docs/
 # mcu-flashing.md, "IFS firmware switch"): "stock" or "klipper". Checked
 # here (owner opt-in for klipper, not while a print may run or the
@@ -433,6 +438,35 @@ memory_request() {
 	esac
 }
 
+# webui_request: Moonraker's "webui", one line "fluidd" or "mainsail":
+# runs "ad5x-webui --no-sync NAME" and passes its one-line answer on
+# ("done: ...", "refused: ..." or "failed: ..."). No print check: nginx
+# reloads gracefully, nothing else restarts.
+webui_request() {
+	local req r out
+	if ! req=$(stage webui); then
+		log "ignored a web interface request that is not a plain file"
+		say "failed: bad request"; return
+	fi
+	r=$(head -c 64 "$req" | head -n 1)
+	unstage "$req"
+	case $r in
+	fluidd|mainsail) ;;
+	*)
+		log "ignored a web interface request without fluidd or mainsail"
+		say "failed: bad request"; return ;;
+	esac
+	out=$(ad5x-webui --no-sync $r 2>&1 < /dev/null)
+	# One line of printable ASCII for the log and the answer
+	out=$(printf '%s\n' "$out" | head -n 1 | head -c 300 | tr -c ' -~' ' ' |
+		sed 's/ *$//')
+	log "web interface $r: ${out:-no output}"
+	case $out in
+	done:*|refused:*|failed:*) say "$out" ;;
+	*) say "failed: ad5x-webui $r: ${out:-no output}" ;;
+	esac
+}
+
 # The IFS firmware switch's job runs
 ifs_switching() { [ -f $IFS_PID ] && kill -0 "$(cat $IFS_PID 2>/dev/null)" 2>/dev/null; }
 
@@ -701,6 +735,9 @@ agent_once() {
 	if [ -e $D/memory-mode ] || [ -L $D/memory-mode ]; then
 		memory_request
 	fi
+	if [ -e $D/webui ] || [ -L $D/webui ]; then
+		webui_request
+	fi
 	for p in reboot shutdown; do
 		if [ -e $D/$p ] || [ -L $D/$p ]; then
 			rm -f $D/$p
@@ -940,7 +977,7 @@ start)
 		chown root:klipper /data/ad5x/kiln-os.token &&
 		chmod 640 /data/ad5x/kiln-os.token
 	rm -f $D/install $D/kernel-retry $D/boot-recovery $D/return-stock \
-		$D/service $D/reboot $D/shutdown $D/memory-mode $D/ifs-firmware $D/status
+		$D/service $D/reboot $D/shutdown $D/memory-mode $D/webui $D/ifs-firmware $D/status
 	# The IFS firmware switch's status folder; a switch that was running
 	# when the printer went off (power cut, reset) is reported as such
 	mkdir -p $IFSD && chown root:root $IFSD && chmod 755 $IFSD

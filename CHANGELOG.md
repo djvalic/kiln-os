@@ -11,6 +11,116 @@ the issue: it is closed by hand after the release.
 
 ## Unreleased
 
+## v1.0.1-rc4 (2026-11-27)
+
+- **`LOAD_FILAMENT` is refused while a print is running** (it would push
+  filament into the part). Paused, for a filament change, it works as
+  before.
+- **Three more community plugins in the catalog**, by DIEHARDave: AFC
+  (the AFC add-on with the IFS as an AFC unit), NFC filament tags (needs a
+  USB NFC reader) and pushraker notifications. Install them from the
+  Community tab in Settings > Plugins. Like Happy Hare, each installs at
+  the author's release that Kiln tested.
+- **Happy Hare in the catalog** now credits both authors (moggieuk for
+  Happy Hare, Hunter Laux for the IFS port) and follows its release tags.
+- **Community plugins that follow release tags skip pre-releases**, such
+  as `-rc1` or `-beta` tags.
+- **The IFS status light works on Klipper firmware.** It is green when
+  the IFS is ready, blinks green while it works and turns red on a
+  problem. Red stays until the next load or unload works, or until
+  `IFS_RESET`. Before, it was always red. `IFS_LED ENABLE=0` switches it
+  off, `IFS_LED ENABLE=1` on again. With "light off when the screen
+  sleeps" on, the IFS light goes off too while the printer is idle; it
+  stays on during prints and IFS work, and red always shows. Its two
+  switches no longer show in Fluidd's and Mainsail's outputs.
+- **Mainsail now has the same macro groups as Fluidd.** Filament, IFS,
+  Calibration, During print, Light & sound, System and Uncategorized, each
+  its own panel on Mainsail's dashboard, instead of one long list of every
+  macro. A printer that updates gets them too, unless you already changed
+  Mainsail's macro settings yourself.
+- **The macro groups have colours**, the same in Fluidd and Mainsail:
+  Filament green, IFS teal, Calibration purple, During print blue,
+  Light & sound amber, System grey. A printer that updates gets them
+  once, except where you already picked a colour yourself.
+- **The Advanced settings switch on the touch screen** no longer has a
+  line of text under it.
+- **New plugin in the catalog: Macro pack.** Everyday printer macros for
+  Fluidd and Mainsail, one click each and sorted into groups: light,
+  preheat and cool down, park, purge, IFS slots, calibration and
+  maintenance, and the camera (snapshots by hand or after the first layer
+  and at the end of a print, cameras on, off or restarted). Install it
+  from Settings > Plugins on the touch screen or
+  with `INSTALL_PLUGIN NAME=macro-pack`. Its guide is on its GitHub wiki.
+- **`IFS_PURGE_TEST` no longer pools filament around the nozzle.** Each
+  dot was pushed out in one spot 0.6 mm above the bed, so the plastic
+  went up around the nozzle and into its silicone sock. The nozzle now
+  rises to 4 mm while each dot comes out, at the same speed, so the
+  measurement is unchanged. More dots than fit one row (15) now go on
+  in rows further back instead of stopping with "Move out of range"
+  (`COUNT=` up to 90), and `STEP=0` is refused instead of failing.
+- **Experimental: retract before the cut at colour changes** (thanks to
+  painlessjeff2016, PR #99). Off by default; nothing changes unless you
+  set `pre_cut_retract_length` (up to 20 mm) under `[ifs]` in
+  `local.cfg`. Then, in prints where the slicer flushes at the purge box
+  (zMod mode 2), a PLA to PLA colour change first pulls the old filament
+  back that far, so less of the old colour stays in the nozzle and a
+  smaller flush in the slicer may be enough; the new colour is pushed in
+  that much further to fill the nozzle again. The same thing as zMod's
+  `filament_unload_before_cutting` (`docs/zmod-compat.md`). Start low and
+  watch the first changes.
+- **Print start: the nozzle is at temperature before it brushes and probes**
+  (thanks to painlessjeff2016, PR #100). The start now waits for the
+  nozzle to cool to 180 °C before brushing it at the purge box, and to
+  140 °C (part fan on, nozzle lifted) before the bed mesh or Z check, so
+  less soft filament oozes onto the bed while it probes. Both the Kiln and
+  the stock-style start do this; each cool-down can add up to a minute or
+  so to the start, and a cancel still ends it within a second.
+- **Mainsail is now built in, next to Fluidd.** You can choose which web
+  interface opens at the printer's address. Fluidd stays the default, also
+  on printers that update, so nothing changes until you pick Mainsail.
+  Switch from the touch screen (Settings > System > Web interface, with
+  Advanced settings on) or with
+  `ad5x-webui mainsail` over SSH (`ad5x-webui fluidd` to go back);
+  `KILN_WEBUI NAME=mainsail` in the console does the same. The switch
+  takes a second, needs no restart and works while printing. Only the
+  chosen interface can control the printer: a tab still open on the
+  other one is disconnected with "This printer now uses Mainsail: reload
+  the page", and a reload brings up the new one (if the browser first
+  shows its stored copy of the old one, it clears it and reloads by
+  itself). The unused interface is only files and takes no memory. If
+  you use a hosted Fluidd or Mainsail (app.fluidd.xyz, my.mainsail.xyz)
+  or one running elsewhere (Docker, Home Assistant) with this printer,
+  it only connects while the printer is set to that same interface. Each
+  interface keeps its own settings and gets its own updates. Mainsail
+  doesn't list Kiln OS's own update entries: update Kiln OS from the
+  touch screen or Fluidd. The mainsail-kiln plugin keeps
+  working as before; while it is on, it decides which interface is on
+  port 80, and the touch screen's Web interface row says "Managed by the
+  mainsail-kiln plugin".
+- **Touch screen: Settings can hide the settings most people never need.** A new switch, **Advanced settings**, sits at the bottom of Settings. Off, Settings shows only the everyday settings; on, it shows everything as before. A printer that updates keeps it on, so nothing disappears; a new install and a factory reset start with it off. While it is off these are hidden (they keep their values and keep working): Touch & Input, Purge Box, Updates and HelixScreen's own Plugins (Kiln's Plugins stay); on the Printer page the printer model and Manage Printers; on Printing: Machine Limits, Retraction Settings, Multi-Filament System Management, Z Offset by Material, Allow cold load/unload, Number slots from 0, Macro Buttons and Apply start options to prints from other apps; on Devices: Sensors, IFS firmware and Power Devices; on Safety & Alerts: Cancel Escalation, Confirm before running macros and the nozzle-hit guard's Sensitivity; on Connection: Printers, Host, API Key and Screen Sharing; on System: Performance, Storage, Firmware Update, Share Usage Data, Log detail, Reset root password, Boot into recovery, Return to Flashforge firmware and Extended memory; on Help & About: Upload Debug Bundle, Discord Community, Getting Started and User Guide. The guides say where to turn it on when a step needs one of these. While it is off, the screen's tips that would only lead to a hidden setting stay away (the Extended memory and boot loader notices wait until it is turned on), and messages about a real problem, such as a full disk or a rejected API key, say to turn it on first. Shortcuts to a hidden page, such as the Sensors, Retraction and Power chips on the Printer page, do nothing then.
+- **Smaller system image.** Unused programs and leftover files are no
+  longer in the image, to make room for Mainsail: build-only Python
+  files, unused parts of Python, pictures of other Flashforge printers on
+  the touch screen, and tools nothing on the printer runs. If you used
+  the `sqlite3`, `tc` or `bridge` commands over SSH: they are gone (the
+  database itself is unchanged).
+- **Touch screen: the Wi-Fi network's name is no longer cut off.** In
+  Settings > Network, a long network name ran under the page arrows and its
+  end was hidden. It now ends in "..." before the arrows (issue #4). The
+  same goes for long names in the Wi-Fi list, a static IPv4 address
+  (which also pushed its arrow off the card), the IP and MAC lines, and
+  long custom printer image names.
+- **A slot can now carry its spool's details.** `IFS_SET_MATERIAL` takes
+  `SPOOL_ID=` (the Spoolman spool), `VENDOR=`, `NAME=`, `FILAMENT_ID=`
+  (OrcaSlicer's filament id, kept exactly as sent) and `BED_TEMP=` for each
+  IFS slot, next to the type and colour, and keeps them over restarts. Kiln
+  puts them into the slot list OrcaSlicer reads, so an NFC or Spoolman
+  plugin can hand a scanned spool to Kiln instead of writing that list
+  itself. Setting a different material type on a slot clears its spool
+  details, as it means another spool; a new colour or temperature keeps
+  them. Without a filament id Kiln still names its own profile for the
+  slot's type. Plugins check for plugin API 1.12 (issue #101).
+
 ## v1.0.1-rc3 (2026-11-26)
 
 - **Heads-up: the touch screen's Wi-Fi code changed again.** This candidate moves HelixScreen up to v1.2.0-alpha.1 to stay current with HelixScreen and to pick up its Wi-Fi fix (HelixScreen issue #2101, below). The network behind it (NetworkManager, or the old way with `/data/ad5x/network-legacy`) is unchanged, and all of Kiln's own Wi-Fi fixes are carried over, but the screen's part of joining a network is new code that has only had a short test on one printer. Please watch for Wi-Fi trouble after updating: the screen not joining, a saved network forgotten or its password lost, an address that never shows, or Wi-Fi gone after a restart. Report it as a GitHub issue with the printer's logs (docs/network.md, "If Wi-Fi misbehaves"). Ethernet is not affected.

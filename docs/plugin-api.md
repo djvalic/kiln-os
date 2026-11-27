@@ -8,11 +8,11 @@ with any system update ("Public and internal names" below).
 
 ## Version
 
-Current: **1.11**.
+Current: **1.12**.
 
 - In Klipper: `printer.ad5x_plugins.api_version` (also printed by
   `LIST_PLUGINS`).
-- On the system: `AD5X_PLUGIN_API="1.11"` in `/usr/lib/os-release`
+- On the system: `AD5X_PLUGIN_API="1.12"` in `/usr/lib/os-release`
   (`/etc/os-release`), for scripts.
 - In the code: `PLUGIN_API_VERSION` in `klipper/extras/ad5x_plugins.py`
   (the build copies it to os-release). `tools/test_plugin_api_doc.py`
@@ -64,6 +64,7 @@ they are loaded".
 | 1.9 | 2026-11-18 | v1.0.0-rc5 | The setup wizard's filament step (`SETUP_WIZARD_STEP STEP=filament`, `MATERIAL_<n>=`, `HEAD=`), `printer.ad5x_setup` `action`, `action_arg`, `step_started`, `prompt`, `filament`, `zoffset_plan`; `IFS_FIND_HEAD_SLOT`, `printer.ifs` `find_result`, `head_found`, `tube_blocked`, `loaded_source` (a slot only adopted at startup is a guess: `IFS_SWAP` to it loads it again, its unload is checked, the find and the wizard don't trust it). A Z offset step ends after a second `accept` (the test print is off the bed). `HOME=1` on `IFS_LOAD`, `IFS_UNLOAD`, `IFS_SWAP`, `IFS_EJECT`, `IFS_FIND_HEAD_SLOT`, `IFS_TUNE`: an idle printer that isn't homed homes first instead of the error, `printer.ifs` `phase` `homing_printer` meanwhile |
 | 1.10 | 2026-11-24 | v1.0.1-rc2 | The bed weighing board's background reading (`WEIGHT_MONITOR START=1 [RATE=] / START=0 / RESET_PEAK=1 / REBASE=1`; `printer.ad5x_weight` `monitor`, `rate`, `raw`, `baseline`, `force`, `peak`, `samples`, `errors`, `counts_per_gram`), the event `"ad5x_weight:sample"` and the module calls `monitor_start(rate)`, `monitor_stop()`, `monitor_rebase()`; the shipped `nozzle-guard` plugin (`NOZZLE_GUARD`, `printer.ad5x_nozzle_guard`, docs/nozzle-guard.md) |
 | 1.11 | 2026-11-25 | v1.0.1-rc2 | Community plugins (docs/plugins.md): catalog entries may name a `commit` (pinned: `INSTALL_PLUGIN` installs exactly it, `UPDATE_PLUGIN` moves to the catalog's commit), a `follow` (what `tools/update_community_pins.py` follows) and an `author`; `printer.ad5x_plugins` `catalog.<name>` `author`, `commit`, `community` and `available.<name>` `community`, `pinned`; a pinned install's own `[update_manager]` (the one whose `path` is the plugin's folder; others stay, from v1.0.1-rc3) is left out of what Moonraker loads. Installs made by hand are not pinned |
+| 1.12 | 2026-11-26 | v1.0.1 | The spool's details per IFS slot (issue #101): `IFS_SET_MATERIAL` `SPOOL_ID=` (Spoolman spool, a whole number from 1 without leading zeros), `VENDOR=`, `NAME=`, `FILAMENT_ID=` (up to 64 printable characters; `"`, `'`, `\`, `;` and `%` are refused inside the value; text with spaces or `#` must be in double quotes, `NAME="Silk Red"`, `NAME="Red#2"`: unquoted, a space gives "Malformed command" and a `#` cuts the rest of the line; `FILAMENT_ID` kept exactly as sent, e.g. OrcaSlicer's own `OFDSrzZ8` (Generic PLA; `GFL99`-style ids are Bambu's and only match on Bambu printers)) and `BED_TEMP=` (0-130 C, a whole number or plain decimal, rounded; a value above 0 that rounds to 0 is refused); absent = keep, empty = clear (`BED_TEMP=0` too); a `TYPE=` other than the slot's type (another spool) clears all five, except those given in the same command; the same `TYPE=` again, `COLOR=`, `TEMP=` and `IFS_SET_COLOR` keep them; saved with the slot's type and colour. `printer.ifs_materials` `slots.<n>` (and `loaded`) `spool_id`, `vendor`, `name`, `filament_id`, `bed_temp`. kiln_lanes writes them into the slot's `lane_data` record as `spool_id`, `vendor_name`, `name`, `filament_id` (Kiln's `PKLN*` id only when the slot has none) and `bed_temp` (docs/api.md, "Database namespace lane_data"). A plugin sending them checks `printer.ad5x_plugins.api_version` >= 1.12 first: on older releases a call with only the new parameters is refused, and one with `TYPE=`, `COLOR=` or `TEMP=` as well (`TYPE=PLA SPOOL_ID=3`) sets those and silently ignores the new ones; the web interface on port 80, Fluidd or Mainsail (`docs/web-interface.md`): the macro `KILN_WEBUI [NAME=fluidd\|mainsail]` (macros/ `system.cfg`), Moonraker's `GET`/`POST /machine/kiln_os/webui` and the feature name `webui` (`docs/api.md`) |
 
 **1.5\*** marks the few items that came with a later 1.5 release:
 `LOG_MODE` and `printer.ad5x_log` (v0.0.53), `printer.ad5x_soak.cancel`
@@ -482,7 +483,7 @@ printer` before calling one.
 | `IFS_PREFEED` | `CHANNEL=` (not the loaded one) | Feed a new spool up to the IFS, as stock does | 1.0 |
 | `IFS_MAP_TOOL` | `TOOL=` `SLOT=`, or `RESET=1` | Tool map for this print | 1.0 |
 | `IFS_MAP_MODE` | `[MODE=fixed\|loaded]` `[ZMOD=1]` | Tool map mode, saved: fixed (`T0`-`T3` -> slots 1-4) or loaded (tools use the slots with filament); `ZMOD=1` puts the mode back at the print's end (zmod-compat's `START_PRINT`); shows it without `MODE` | 1.5 |
-| `IFS_SET_MATERIAL` | `SLOT=` `[TYPE=]` `[COLOR=]` `[TEMP=]` | Slot material | 1.0 |
+| `IFS_SET_MATERIAL` | `SLOT=` `[TYPE=]` `[COLOR=]` `[TEMP=]`; 1.12: `[SPOOL_ID=]` `[VENDOR=]` `[NAME=]` `[FILAMENT_ID=]` `[BED_TEMP=]` (the spool's details, absent = keep, empty = clear, a new `TYPE=` clears those not given with it; text with spaces or `#` in double quotes; into `lane_data`; see History, 1.12) | Slot material | 1.0 |
 | `IFS_SET_COLOR` | `CHANNEL=` `COLOR=` | Slot colour | 1.0 |
 | `IFS_SET_CHANNEL` | `CHANNEL=` (0 = none loaded) | Tell the module what is loaded (`loaded_source` `user`, 1.9). While `tube_blocked` only `CHANNEL=0` (pulled out by hand), which lifts it (1.9) | 1.0 |
 | `IFS_STATUS`, `IFS_MATERIALS`, `IFS_STOP`, `IFS_RESET_DRIVER` | | Show state / materials, stop feeding, recover after a fault | 1.0 |
@@ -553,6 +554,7 @@ each, for its macro panel.
 | `IFS_TUNE_RUN [CHANNEL=]`, `IFS_TUNE_CLEAR`, `IFS_INFO` | `IFS_TUNE`, `IFS_TUNE_RESET`, `IFS_STATUS` | 1.1 |
 | `CONFIG_BACKUPS_SHOW [ACK=1]` | `CONFIG_BACKUPS` | 1.1 |
 | `KILN_MEMORY_MODE [ENABLE=0\|1]` | Moonraker's remote method `kiln_memory_mode` (`docs/api.md`, `/machine/kiln_os/memory`): Extended memory on or off from the next start, or the mode without `ENABLE`; the answer in the console. Printers with 256 MiB answer "not available" | 1.8 |
+| `KILN_WEBUI [NAME=fluidd\|mainsail]` | Moonraker's remote method `kiln_webui` (`docs/api.md`, `/machine/kiln_os/webui`): the web interface on port 80, Fluidd or Mainsail, switched at once (no reboot; reload the page), or which one without `NAME`; the answer in the console. Refused while the mainsail-kiln plugin serves both | 1.12 |
 
 ## Public and internal names
 
@@ -570,6 +572,9 @@ names and parameters within a major version.
 - These commands, bench and debugging tools: `IFS_SEND`, `IFS_SELECT`,
   `IFS_FEED`, `IFS_RETRACT`, `IFS_RELEASE`, `IFS_RESET`,
   `IFS_SET_CURRENT`, `WEIGHT_READ`, `WEIGHT_SEND`.
+- `IFS_LED` (`[ENABLE=0|1] [SLEEP=0|1]`, the IFS's status light on
+  Klipper firmware): for the user and the touch screen, not for plugins
+  yet (`docs/api.md`).
 
 The test `tools/test_plugin_api_doc.py` keeps this list and the code in
 step.
@@ -579,7 +584,7 @@ step.
 | Object | Fields | Since |
 |---|---|---|
 | `printer.ifs` | `connected`, `version`, `busy`, `channel` (loaded, 0 none), `state`, `selected`, `inserted[4]`, `colors[4]`, `silk[4]`, `stall[4]` (raw per-slot sensor counts as the IFS reports them, for diagnostics), `channel_count`, `active_channel`, `loaded_channels`, `pending_insert_channels`, `activity`, `activity_channel`, `error`, `tool_map` (`"0"`-`"3"` -> slot), `tune` (`speed`, `load_dist` (`"1"`-`"4"`), `unload_dist`, `tube_unload`, `running`, `progress`, `message`; tuned values, null where the `[ifs]` defaults apply); 1.2: `auto_refill`, `refill` (last auto-refill message); 1.4: `refill_match`, `refill_backups` (`"1"`-`"4"` -> the slots that would take over, nearest colour first; `[]` none), `refill_notice` (a print loaded a slot with no backup; "" otherwise); 1.5: `map_mode` (`fixed`/`loaded`), `mode` (`mcu`/`serial`), `operation`, `phase`, `target_channel`, `error_channel`, `tune.flush` (`docs/helixscreen-integration.md`, section 0); 1.9: `find_result` (the last `IFS_FIND_HEAD_SLOT`: `found`, `pick`, `tube`, `none`, `error`; "" none), `head_found` (its slot, 0 none), `tube_blocked` (a strand sits in the tube above the toolhead sensor, after a `tube` result, or a find or an unload (`IFS_UNLOAD`, a swap's first half) that failed or was stopped after the strand had left the sensor (nothing recorded as loaded then): loads, `IFS_UNLOAD`, `IFS_SET_CHANNEL CHANNEL=n`, tuning and pre-feeds are refused until `IFS_FIND_HEAD_SLOT SLOT=n` pulls lane n back or `IFS_SET_CHANNEL CHANNEL=0` says it was pulled out by hand), `loaded_source` (how `channel` is known: `kiln` a load of Kiln's own, also a channel saved before 1.9; `user` named with `IFS_SET_CHANNEL` or `IFS_FIND_HEAD_SLOT SLOT=n`; `adopted` only a guess at startup (no slot saved, filament at the toolhead, the IFS pointing at it); "" nothing loaded; saved, kept across restarts. An `adopted` slot: `IFS_SWAP` to it loads it again, its first unload must clear the toolhead sensor or nothing is recorded as loaded, `IFS_FIND_HEAD_SLOT` finds the slot (that one first), the setup wizard treats it as unknown) | 1.0 |
-| `printer.ifs_materials` | `available`, `channel_count`, `slots` (`"1"`-`"4"`: `type`, `color`, `temp`), `loaded`, `temperatures` | 1.0 |
+| `printer.ifs_materials` | `available`, `channel_count`, `slots` (`"1"`-`"4"`: `type`, `color`, `temp`; 1.12: `spool_id`, `vendor`, `name`, `filament_id`, `bed_temp`, null when not set), `loaded`, `temperatures` | 1.0 |
 | `printer.ad5x_setup` | `step`, `state`, `message`, `progress`, `results`, `checks`, `pending_save`, `zoffset`; 1.5: `estimate` (the Z offset step uses `Z_OFFSET_ESTIMATE`: setup.cfg `zoffset_estimate`); 1.9: `action` (what the step does now, a short key; "" idle), `action_arg` (its slot or patch number, 0 none), `step_started` (Unix time the step started, 0 none), `prompt` (null, `clear_bed`, `head_unknown`, `pick_slot`), `filament` (`present`, `materials`, `head`, `head_source` (`loaded`, `user`, `found`, `unknown`, `kept`, `tube`, `empty`), `head_filament`; null without Kiln's IFS module), `zoffset_plan` (`slot`, `material`, `nozzle`, `bed`, `guess`, `source`; null before the Z offset step) (`docs/setup-wizard.md`) | 1.0 |
 | `printer.ad5x_weight` | `connected`, `weight` | 1.0 |
 | `printer.ad5x_weight` | `monitor` (background reading on), `rate` (readings/s, 0 when off), `raw` (last raw count), `baseline` (raw count the force is measured from), `force` (g above the baseline, + = pushed), `peak` (largest \|force\| since the start or `RESET_PEAK`), `samples`, `errors` (readings without a reply), `counts_per_gram` (56) | 1.10 |

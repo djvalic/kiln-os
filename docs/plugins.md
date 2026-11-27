@@ -321,6 +321,7 @@ below) and updated from Fluidd, separately from Kiln OS:
 | `spoolman` | [kiln-spoolman](https://github.com/djvalic/kiln-spoolman) | A Spoolman spool per IFS slot: the loaded slot's spool is the active one, and the slot takes the spool's material, colour and temperature (plugin API 1.3, `ifs:loaded`, Moonraker component `spoolman_slots`) |
 | `notify` | [kiln-notify](https://github.com/djvalic/kiln-notify) | Notifications with a camera photo through Apprise (Telegram, Discord, ntfy, e-mail, ...): print events, progress, auto-refill, interrupted prints; set up with `NOTIFY_SETUP` (plugin API 1.3) |
 | `timelapse` | [kiln-timelapse](https://github.com/djvalic/kiln-timelapse) | moonraker-timelapse with an ffmpeg built from source for the printer; Fluidd's Timelapse tab (plugin API 1.3) |
+| `macro-pack` | [kiln-macro-pack](https://github.com/djvalic/kiln-macro-pack) | Everyday printer macros (`KILN_LIGHT`, `KILN_PREHEAT`, `KILN_PARK`, `KILN_PURGE`, IFS slots, calibration, camera snapshots...) grouped in Fluidd's and Mainsail's macro panels; refused while printing where they move or heat (plugin API 1.12) |
 
 Community plugins in the catalog (next section) are listed there too.
 
@@ -339,7 +340,10 @@ with their author's name; in `printer.ad5x_plugins` they have
 
 | Plugin | Author | Repository | What |
 |---|---|---|---|
-| `happy-hare` | jolting | [kiln-happy-hare](https://github.com/KilnOS-Plugins/kiln-happy-hare) | Happy Hare v4 drives the IFS instead of Kiln's `[ifs]`: tool changes parked at the toolhead, the IFS feeder synced with the extruder, FlowGuard clog detection from the IFS stall sensors; needs the IFS on Klipper firmware (plugin API 1.5, `owns_ifs`) |
+| `happy-hare` | moggieuk (Happy Hare), Hunter Laux (AD5X IFS) | [kiln-happy-hare](https://github.com/KilnOS-Plugins/kiln-happy-hare) | Happy Hare v4 drives the IFS instead of Kiln's `[ifs]`: tool changes parked at the toolhead, the IFS feeder synced with the extruder, FlowGuard clog detection from the IFS stall sensors; needs the IFS on Klipper firmware (plugin API 1.5, `owns_ifs`); follows its release tags |
+| `afc` | DIEHARDave | [afc-kiln](https://github.com/DIEHARDave/afc-kiln) | AFC-Klipper-Add-On with the AD5X IFS as an AFC unit, Kiln doing the loads, unloads and swaps; needs the AD5X IFS or an AFC unit through AFC_FF (plugin API 1.7); follows its release tags |
+| `ff_nfc` | DIEHARDave | [FF_NFC](https://github.com/DIEHARDave/FF_NFC) | NFC/RFID filament tags: scan a spool, pick the IFS slot, and its material, colour and Spoolman spool are set; needs a USB NFC reader (PN532 or ACR122U); root part: a USB watcher; conflicts with `nfc` (plugin API 1.6); follows its release tags |
+| `diehard-pushraker` | DIEHARDave (pushraker by noon92) | [diehard-pushraker](https://github.com/DIEHARDave/diehard-pushraker) | pushraker notifications (ntfy, Pushover, Telegram, Discord, e-mail ... with snapshots), Discord status cards and update notices; root part: its settings page in nginx (port 82); conflicts with `notify` and `pushraker` (plugin API 1.6); follows its release tags |
 
 **Made and supported by their authors.** Kiln OS doesn't write these
 plugins or test every change to them, and offers them as they are: you

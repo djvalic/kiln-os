@@ -162,9 +162,32 @@ Differences from zMod:
 - The prime length: zMod inserts 12 mm (plus its
   `filament_unload_before_cutting`, 0 by default); QuickSwap's
   `insert_base_distance` was 8 mm on the developer's printer, plus its own
-  pre-cut retract. This system doesn't retract before the cut, so 12 mm
-  is the starting point. Thin first prime-tower lines: raise
-  `prime_length` in `local.cfg` (`[ifs]`); blobs on the tower: lower it.
+  pre-cut retract. This system doesn't retract before the cut by
+  default, so 12 mm is the starting point. Thin first prime-tower lines:
+  raise `prime_length` in `local.cfg` (`[ifs]`); blobs on the tower:
+  lower it.
+- Pre-cut retract (experimental, off by default; PR #99): zMod's
+  `filament_unload_before_cutting` here is `[ifs] pre_cut_retract_length`
+  (mm, 0 = off, at most 20) with `pre_cut_retract_speed` (mm/min, at most
+  600, default 600). Only in a print in mode 2 (the slicer's flush at the
+  box), PLA to PLA, with the slot loaded by Kiln itself, the toolhead
+  sensor seeing filament, the nozzle hot and flow and speed at 100 %: the
+  lane is released and the extruder pulls the old strand back that far
+  before the cut, and the prime then feeds `prime_length` plus that much,
+  so the nozzle ends up as full as without it. Less of the old colour
+  stays below the cutter, so a smaller flush in the slicer may do (not
+  guaranteed: check the colour). Any other swap (mode 0 and 1, outside a
+  print, an auto-refill, PETG) runs as before; `klippy.log` says why
+  (`pre-cut retract skipped: ...`). If the toolhead sensor clears during
+  the retract the swap stops before the cut with an error, as any failed
+  swap does. Start with 5 to 10 mm and watch the filament path:
+  retracting soft PLA far up the hotend can jam it.
+
+  ```
+  [ifs]
+  pre_cut_retract_length: 10
+  pre_cut_retract_speed: 600
+  ```
 - After every tool change the head goes back to the print position
   (`after_gcode`); in mode 2 the slicer's `_GOTO_TRASH` then goes to the
   box again. zMod stayed at the box in mode 2.
@@ -181,6 +204,7 @@ Differences from zMod:
 | `use_kamp = 1`, `print_leveling = 1` | the default: `PRINT_START` meshes the print area every print (`variable_mesh_every_print: 1`, `variable_adaptive_mesh: 1` in `macros/print_start.cfg`; set 0 in `local.cfg` for the stock Z check); no KAMP include needed ("KAMP" below) |
 | `[extruder] pressure_advance: 0.035` (0.6 nozzle) | the files set it with `SET_PRESSURE_ADVANCE`; for others put it in `local.cfg` |
 | `[quickswap] insert_base_distance: 8.0` | `[ifs] prime_length` (see above) |
+| `filament_unload_before_cutting` | `[ifs] pre_cut_retract_length` (experimental, mode 2 PLA only; see above) |
 | `[zmod_ifs]` | none needed (`klipper/extras/ifs.py`) |
 
 Example `local.cfg` lines:

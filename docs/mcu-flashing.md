@@ -135,7 +135,8 @@ default. A switch to stock on an IFS that had `ifs-klipper.enable` creates
 `ifs-switch.enable` to turn the switch off again.
 
 **The touch screen**: Settings > Devices > IFS firmware (HelixScreen
-patches 0076 and 0077), shown only when `available`. It shows the
+patches 0076 and 0077), shown only when `available` and with Settings >
+Advanced settings on (patch 0107). It shows the
 firmware now and the switch to the other one (both when the IFS answers
 neither), asks first, then shows the phase ("Unplug the IFS cable and
 plug it back in" when the bootloader doesn't answer) and the result once
@@ -207,6 +208,29 @@ firmware, so the IFS can always be written again:
   SWCK/SWIO/3.3V/GND pads ("Community projects" below); the bootloader
   below `0x08010000` must be written too then, so only from a full dump
   of a working IFS.
+
+**Status light.** On Klipper firmware Kiln drives the light on the IFS
+(`generic-flashforge-ifs.cfg`: `[output_pin _ifs_led_red]` on PB5,
+`[output_pin _ifs_led_green]` on PB6; the leading `_` keeps them out of
+Fluidd's and Mainsail's outputs). Both are off until Klipper is ready.
+Then:
+
+| The IFS | Light |
+|---|---|
+| Ready, nothing to do | Green |
+| Working (load, unload, swap, pre-feed, auto-refill, tuning) | Green, blinking once a second |
+| A problem (a load or unload failed, a jam) | Red, until the next operation works or `IFS_RESET` |
+| A strand of an unknown slot left in the tube (`tube_blocked`) | Red, until the slot is named or `IFS_SET_CHANNEL CHANNEL=0` |
+| The screen sleeps (`IFS_LED SLEEP=1`) and no print runs | Off (red still shows) |
+| `IFS_LED ENABLE=0` | Off |
+
+`IFS_LED ENABLE=0` switches the light off, `ENABLE=1` on again; the
+setting is kept (`ifs_led` in `variables.cfg`). `IFS_LED SLEEP=1|0` says
+the screen went to sleep or woke up (the touch screen sends it; not kept,
+awake at every Klipper start). `IFS_LED` alone shows both. On
+Flashforge's firmware the IFS drives its own light and Kiln leaves it
+alone. Before v1.0.2 the config held PB5 on, so the IFS showed red all
+the time.
 
 Tests: `tools/test_update_agent_ifs.sh` (the agent: opt-in, refusals, the
 background job, the other requests while it runs, interrupted at start),

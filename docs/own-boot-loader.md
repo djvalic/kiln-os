@@ -154,8 +154,8 @@ only at idle (not during the setup wizard, not while a print runs), and
 never again once closed (`/data/ad5x/bootloader-notice/install-dismissed`;
 the same script as the update notice below, "The main OS tells you").
 
-1. Boot into recovery (touch screen: Settings > System > Boot into
-   recovery).
+1. Boot into recovery (touch screen: turn on Settings > Advanced
+   settings, then Settings > System > Boot into recovery).
 2. Tap **Reboot / Power**. On a known board without Kiln's boot loader
    there is a button **Install Kiln's boot loader**. It
    isn't there on other boards.
@@ -302,8 +302,8 @@ writing anything. Nothing there writes the boot loader.
 
 ### On the recovery screen
 
-1. Boot into recovery (touch screen: Settings > System > Boot into
-   recovery).
+1. Boot into recovery (touch screen: turn on Settings > Advanced
+   settings, then Settings > System > Boot into recovery).
 2. Tap **Reboot / Power**. When the printer has Kiln's boot loader of
    an older build (on a known board), there is a button **Update Kiln's
    boot loader**. No opt-in file is needed: you installed Kiln's boot

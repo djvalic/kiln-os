@@ -98,6 +98,12 @@ BR2_PACKAGE_KLIPPER=y
 BR2_PACKAGE_MOONRAKER=y
 # Fluidd on port 80 through nginx (S63nginx, board/ad5x/rootfs-overlay/etc/nginx)
 BR2_PACKAGE_FLUIDD=y
+# Mainsail beside it, served instead of Fluidd once the owner picks it
+# (ad5x-webui, docs/web-interface.md)
+BR2_PACKAGE_MAINSAIL=y
+# Web files gzipped only in the image (board/ad5x/web-trim.py): unpacked
+# for a client without gzip (nginx.conf, /assets/)
+BR2_PACKAGE_NGINX_HTTP_GUNZIP_MODULE=y
 # Only static files and the proxy: no PCRE, FastCGI, uWSGI, SCGI
 # BR2_PACKAGE_NGINX_HTTP_REWRITE_MODULE is not set
 # BR2_PACKAGE_NGINX_HTTP_FASTCGI_MODULE is not set

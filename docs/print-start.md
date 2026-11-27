@@ -35,7 +35,9 @@ PRINT_START BED=[bed_temperature_initial_layer_single] EXTRUDER=[nozzle_temperat
    `EXTRUDER`, wait for both.
 3. Purge 90 mm at F300 with the fan off, fan S125 for 3 s, retract 3 mm,
    wipe (Y220/Y229 twice, end at Y220).
-4. Nozzle to 180, brush twice across the box (X65 to X78 at Y229).
+4. Nozzle to 180 and wait until it is there (Kiln, both starts: stock
+   brushes while it is still cooling from the print temperature), brush
+   twice across the box (X65 to X78 at Y229).
    Part fan off (stock leaves the purge's S125 on until the bed-edge
    scrub; `macros/` only, the factory start keeps stock's).
    Then the rest of the bed heat soak, if any ("Heat soak m:ss"): the
@@ -46,9 +48,12 @@ PRINT_START BED=[bed_temperature_initial_layer_single] EXTRUDER=[nozzle_temperat
 5. `_CHECK_Z` (see `docs/bed-weighing-board.md`): tare and probe the front
    edge, scrub the nozzle there while it cools to 140 (screen: "Cleaning
    nozzle on the bed edge"; it runs just above the edge, it isn't
-   printing), then either run `BED_MESH_CALIBRATE ADAPTIVE=1` ("Bed mesh:
-   print area"; with `ADAPTIVE=0` a full `BED_MESH_CALIBRATE`, "Bed mesh:
-   whole bed"; `LEVEL=1`, the `macros/` default) or tare, probe the
+   printing), up to Z5 and wait there with the part fan on until the
+   nozzle is at 140 (Kiln, both starts: stock probes on while it is
+   still hotter and can ooze onto the bed), fan off, then either run
+   `BED_MESH_CALIBRATE ADAPTIVE=1` ("Bed mesh: print area"; with
+   `ADAPTIVE=0` a full `BED_MESH_CALIBRATE`, "Bed mesh: whole bed";
+   `LEVEL=1`, the `macros/` default) or tare, probe the
    centre and set the Z offset from the drift ("Checking Z", `LEVEL=0`,
    the stock default). Loads the mesh. The Z offset is then
    the saved one (`zoffset` in `variables.cfg`, written by every
@@ -164,7 +169,8 @@ while a print starts that is the whole `PRINT_START`. `ad5x_soak` wraps
 Klipper's `pause_resume/cancel` endpoint (Moonraker `printer.print.cancel`:
 the touch screen, Fluidd, Mainsail) and notes the cancel when it arrives
 (`printer.ad5x_soak.cancel`). The heating waits (`_PRINT_START_HEAT`, as
-`TEMPERATURE_WAIT MINIMUM=` or M109) and the bed heat soak then end within
+`TEMPERATURE_WAIT MINIMUM=` or M109; also the cooling waits to 180 and
+140) and the bed heat soak then end within
 a second, and `_PRINT_START_CHECK` ends the start between steps (after the
 homing and the box purge, before the edge scrub, before the mesh, after
 the Z check, before the first colour), always with the toolhead still. A

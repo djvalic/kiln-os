@@ -18,3 +18,13 @@ show the reason) until it answers again.
 4. If it is still not connected after a reboot, check the error text in the
    IFS panel. It gives the port and the reason. Report it with the Klipper log
    (`klippy.log`).
+
+## The light on the IFS
+
+With the IFS on Klipper firmware, the light shows what the IFS does:
+green when it is ready, blinking green while it works, red after a
+problem. Red stays until the next load or unload works, or until
+`IFS_RESET`. Off means Klipper is still starting, the touch screen is
+asleep and no print runs, or the light was switched off with
+`IFS_LED ENABLE=0` (`IFS_LED ENABLE=1` turns it on again). See
+`docs/mcu-flashing.md`, "Status light".

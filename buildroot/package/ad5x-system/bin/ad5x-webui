@@ -1,0 +1,142 @@
+#!/bin/sh
+# The web interface on port 80 (docs/web-interface.md): Fluidd (the
+# default) or Mainsail, one at a time.
+#   ad5x-webui                    the one on port 80: fluidd or mainsail
+#   ad5x-webui status             key=value lines:
+#       webui=fluidd|mainsail     the choice (/data/ad5x/webui; fluidd
+#                                 when nothing valid is stored)
+#       served=fluidd|mainsail|   what nginx's port 80 root names now
+#       available=fluidd mainsail what this printer has
+#       plugin=mainsail-kiln|     a plugin that serves both UIs and picks
+#                                 port 80 itself (switching is refused)
+#       fluidd_version=, mainsail_version=   of the copy (else the image's)
+#   ad5x-webui fluidd|mainsail    switch (root): stores the choice, makes
+#                                 the UI's copy in /data/ad5x/web, points
+#                                 nginx at it (root line and service
+#                                 worker maps; checked with nginx -t; the
+#                                 old files back on failure) and reloads
+#                                 nginx (no reboot). Then Moonraker's
+#                                 update list follows (GET /machine/
+#                                 kiln_os/webui); --no-sync leaves that out
+#                                 (the root agent: Moonraker asked, and
+#                                 brings it in line itself).
+# The answer is one line, first: "done: ...", "refused: ..." (exit 1) or
+# "failed: ..." (exit 2). Used by S68ad5x-update-agent for POST
+# /machine/kiln_os/webui (the touch screen, Fluidd, Mainsail).
+# AD5X_LIB overrides /usr/lib/ad5x, AD5X_NGINX nginx, AD5X_NGINX_PID its
+# pid file, AD5X_MOONRAKER Moonraker's address (tools/test_ad5x_webui.sh);
+# lib/webui.sh has the others.
+
+# The choice and the copies are readable by klipper and www-data, whoever
+# runs this (a root SSH session may run with umask 077; issue #31)
+umask 022
+
+. ${AD5X_LIB:-/usr/lib/ad5x}/webui.sh || { echo "failed: no webui.sh"; exit 2; }
+NGINX=${AD5X_NGINX:-/usr/sbin/nginx}
+NGINX_PID=${AD5X_NGINX_PID:-/run/nginx/nginx.pid}
+MOONRAKER=${AD5X_MOONRAKER:-http://127.0.0.1:7125}
+
+sync=1
+if [ "$1" = --no-sync ]; then
+	sync= ; shift
+fi
+
+nginx_running() {
+	[ -f $NGINX_PID ] && kill -0 "$(cat $NGINX_PID 2>/dev/null)" 2>/dev/null
+}
+
+# restore FILE: FILE.old back (or FILE removed when there was none)
+restore() {
+	if [ -f "$1.old" ]; then mv -f "$1.old" "$1"; else rm -f "$1"; fi
+}
+
+switch() {
+	local ui=$1 old was
+	if ! webui_known "$ui"; then
+		echo "refused: unknown web interface '$ui' (fluidd or mainsail)"; return 1
+	fi
+	if [ -n "$(webui_plugin)" ]; then
+		echo "refused: the mainsail-kiln plugin serves both web interfaces (its WEB macro swaps ports 80 and 81); disable it to switch here"
+		return 1
+	fi
+	if ! webui_available "$ui"; then
+		echo "refused: this image has no $(webui_title "$ui")"; return 1
+	fi
+	old=$(webui_choice)
+	# what nginx serves now (the choice and this differ after a failed
+	# reload, or after a plugin put its own root line back)
+	was=$(webui_served)
+	webui_copy "$ui" > /dev/null ||
+		[ -f "$(webui_image "$ui")/index.html" ] || {
+		echo "failed: can't make the copy of $(webui_title "$ui") in $WEBUI_WEB"; return 2; }
+	# The choice and nginx's root line, the old ones kept until nginx -t
+	rm -f $WEBUI_CHOICE.old $WEBUI_ROOT_CONF.old $WEBUI_MAP_CONF.old
+	[ -f $WEBUI_CHOICE ] && cp -p $WEBUI_CHOICE $WEBUI_CHOICE.old
+	[ -f $WEBUI_ROOT_CONF ] && cp -p $WEBUI_ROOT_CONF $WEBUI_ROOT_CONF.old
+	[ -f $WEBUI_MAP_CONF ] && cp -p $WEBUI_MAP_CONF $WEBUI_MAP_CONF.old
+	if ! { echo "$ui" > $WEBUI_CHOICE.new && chmod 644 $WEBUI_CHOICE.new &&
+			mv -f $WEBUI_CHOICE.new $WEBUI_CHOICE; } 2>/dev/null; then
+		rm -f $WEBUI_CHOICE.new $WEBUI_CHOICE.old $WEBUI_ROOT_CONF.old $WEBUI_MAP_CONF.old
+		echo "failed: can't write $WEBUI_CHOICE (root only)"; return 2
+	fi
+	if ! webui_root_conf "$ui" || ! webui_map_conf "$ui"; then
+		restore $WEBUI_CHOICE; restore $WEBUI_ROOT_CONF; restore $WEBUI_MAP_CONF
+		echo "failed: can't write $WEBUI_RUN"; return 2
+	fi
+	if [ -x $NGINX ] && ! $NGINX -t -q > /dev/null 2>&1; then
+		restore $WEBUI_CHOICE; restore $WEBUI_ROOT_CONF; restore $WEBUI_MAP_CONF
+		echo "failed: nginx -t refused the new configuration; nothing changed"
+		return 2
+	fi
+	# The files stay what nginx runs with: on a failed reload the old
+	# ones go back (Moonraker reads the root line to know what is served)
+	if nginx_running && ! $NGINX -s reload > /dev/null 2>&1; then
+		restore $WEBUI_CHOICE; restore $WEBUI_ROOT_CONF; restore $WEBUI_MAP_CONF
+		echo "failed: nginx -s reload; nothing changed"
+		return 2
+	fi
+	rm -f $WEBUI_CHOICE.old $WEBUI_ROOT_CONF.old $WEBUI_MAP_CONF.old
+	logger -t ad5x-webui "web interface: $old -> $ui" 2>/dev/null
+	if [ "$was" = "$ui" ] && [ "$old" = "$ui" ]; then
+		echo "done: $(webui_title "$ui") stays on port 80"
+	else
+		echo "done: $(webui_title "$ui") on port 80; reload the page in the browser"
+	fi
+	return 0
+}
+
+case "$1" in
+"")
+	webui_choice
+	;;
+status)
+	echo "webui=$(webui_choice)"
+	echo "served=$(webui_served)"
+	a=
+	for n in $WEBUI_NAMES; do webui_available $n && a="$a${a:+ }$n"; done
+	echo "available=$a"
+	echo "plugin=$(webui_plugin)"
+	for n in $WEBUI_NAMES; do echo "${n}_version=$(webui_ver "$(webui_dir $n)")"; done
+	;;
+fluidd|mainsail)
+	out=$(switch "$1"); rc=$?
+	echo "$out"
+	if [ $rc = 0 ] && [ -n "$sync" ]; then
+		# Moonraker's update list (Fluidd's or Mainsail's entry) follows
+		if wget -q -T 5 -O /dev/null "$MOONRAKER/machine/kiln_os/webui" 2>/dev/null; then
+			echo "Moonraker's update list follows"
+		else
+			echo "Moonraker didn't answer: its update list follows at its next start"
+		fi
+	fi
+	exit $rc
+	;;
+-h|--help|help)
+	sed -n '2,24s/^# \{0,1\}//p' "$0"
+	;;
+*)
+	echo "usage: ad5x-webui [status | fluidd | mainsail | --no-sync fluidd|mainsail]" >&2
+	exit 2
+	;;
+esac
+exit 0

@@ -95,6 +95,14 @@ RECONNECT_INTERVAL = 10.
 MCU_FEED_STEP_TIME = .5
 # Toolhead runout sensor stays off this long after a pre-feed (seconds)
 RUNOUT_SETTLE_TIME = 2.
+# MCU mode: the IFS's status light, two output pins of
+# generic-flashforge-ifs.cfg (a leading "_" keeps them out of Fluidd's and
+# Mainsail's outputs). Green while ready, blinking while an operation runs,
+# red after a failure (IFS_LED). Seconds between updates: one blink half,
+# so green blinks at 1 Hz.
+LED_RED = "output_pin _ifs_led_red"
+LED_GREEN = "output_pin _ifs_led_green"
+LED_INTERVAL = .5
 # IFS_FIND_HEAD_SLOT: the extruder-only retract goes in steps this long
 # (mm), the toolhead sensor read after each (it reports about every 0.3 s)
 FIND_STEP = 5.
@@ -196,6 +204,79 @@ def parse_material(text):
     if not re.match(r"^[A-Za-z0-9+_.-]{1,16}$", text):
         raise ValueError(text)
     return text.upper()
+
+# A slot's spool details (IFS_SET_MATERIAL SPOOL_ID= VENDOR= NAME=
+# FILAMENT_ID= BED_TEMP=, plugin API 1.12, issue #101): kept per slot with
+# the type, colour and temperature, written by kiln_lanes into lane_data.
+SPOOL_FIELDS = ('spool_id', 'vendor', 'name', 'filament_id', 'bed_temp')
+SPOOL_TEXT_MAX = 64
+# Characters a slot text can't hold: quotes and the backslash would break
+# the SAVE_VARIABLE line the materials are saved with (a Python repr in
+# double quotes), ";" starts a G-code comment, "%" breaks save_variables'
+# file (configparser interpolation: the save fails, Klipper shuts down;
+# "%(x)s" is written but the file can't be read back at the next start)
+SPOOL_TEXT_BAD = frozenset('"\'\\;%')
+# [heater_bed] max_temp in ad5x.cfg
+BED_TEMP_MAX = 130
+SPOOL_ID_MAX = 2 ** 31 - 1
+
+def empty_material():
+    m = {'type': None, 'color': None, 'temp': None}
+    m.update((f, None) for f in SPOOL_FIELDS)
+    return m
+
+def set_material_type(m, mtype):
+    """Set a slot entry's type (parsed). Another type is another spool:
+    its details (SPOOL_FIELDS) are cleared; the same type keeps them (the
+    screen and the setup wizard send TYPE= again). Every change of a
+    slot's type goes through here."""
+    if mtype != m.get('type'):
+        m.update((f, None) for f in SPOOL_FIELDS)
+    m['type'] = mtype
+
+def parse_slot_text(text):
+    """VENDOR=, NAME=, FILAMENT_ID=: the text as sent (spaces around
+    dropped), None for empty; raises ValueError if it can't be kept."""
+    text = ("" if text is None else str(text)).strip()
+    if not text:
+        return None
+    if (len(text) > SPOOL_TEXT_MAX or not text.isprintable()
+            or SPOOL_TEXT_BAD.intersection(text)):
+        raise ValueError(text)
+    return text
+
+def parse_spool_id(text):
+    """SPOOL_ID=: a Spoolman spool id (whole number from 1), None for
+    empty; raises ValueError otherwise."""
+    if isinstance(text, bool):
+        raise ValueError(text)
+    text = ("" if text is None else str(text)).strip()
+    if not text:
+        return None
+    # No leading zeros: "012" is refused, not read as 12
+    if not re.match(r"^[1-9][0-9]{0,9}$", text) or \
+            int(text) > SPOOL_ID_MAX:
+        raise ValueError(text)
+    return int(text)
+
+def parse_bed_temp(text):
+    """BED_TEMP=: degrees 0..BED_TEMP_MAX, a plain whole number or decimal
+    (rounded to whole degrees); None for empty or 0. Raises ValueError
+    otherwise, also for a value above 0 that rounds to 0."""
+    if isinstance(text, bool):
+        raise ValueError(text)
+    text = ("" if text is None else str(text)).strip()
+    if not text:
+        return None
+    if not re.match(r"^[0-9]{1,3}(\.[0-9]{1,3})?$", text):
+        raise ValueError(text)
+    t = float(text)
+    if t > BED_TEMP_MAX:
+        raise ValueError(text)
+    deg = int(round(t))
+    if t > 0. and not deg:
+        raise ValueError(text)
+    return deg or None
 
 def flush_volume(old, new):
     """Purge volume for a colour change, in the slicer's units (60..800).
@@ -436,6 +517,18 @@ class IFS:
         self.refill_noticed = set()
         self.refill_notice = ""
         self.prime_length = config.getfloat('prime_length', 12., minval=0.)
+        # Pre-cut retract (experimental, off by default; PR #99, after
+        # QuickSwap and zMod's filament_unload_before_cutting): in a mode 2
+        # swap (the slicer flushes at the box) in a print, the extruder
+        # pulls the old strand back this many mm before the cut, so less of
+        # it is left below the cutter; the prime then feeds as much more.
+        # Only PLA to PLA, the loaded slot Kiln's own, the toolhead sensor
+        # seeing filament, the nozzle hot, flow and speed at 100 %; any
+        # other swap as before. 0 = off.
+        self.pre_cut_retract_length = config.getfloat(
+            'pre_cut_retract_length', 0., minval=0., maxval=20.)
+        self.pre_cut_retract_speed = config.getfloat(
+            'pre_cut_retract_speed', 600., above=0., maxval=600.)
         self.select_timeout = config.getfloat('select_timeout', 30., above=0.)
         self.load_timeout = config.getfloat('load_timeout', 60., above=0.)
         self.unload_timeout = config.getfloat('unload_timeout', 60., above=0.)
@@ -475,9 +568,9 @@ class IFS:
         self.channel = 0          # channel loaded to the toolhead, 0 = none
         self.channel_source = ""  # LOADED_SOURCES, "" with channel 0
         self.saved_source = None  # ifs_loaded_source as variables.cfg has it
-        # Per slot: material type, colour '#RRGGBB', temperature override
-        self.materials = [{'type': None, 'color': None, 'temp': None}
-                          for c in CHANNELS]
+        # Per slot: material type, colour '#RRGGBB', temperature override,
+        # the spool's details (SPOOL_FIELDS)
+        self.materials = [empty_material() for c in CHANNELS]
         self.tool_map = [c for c in CHANNELS]   # slicer tool n -> channel
         self.map_mode = "fixed"                 # see MAP_MODES
         # Set by a zMod-compat START_PRINT (IFS_MAP_MODE ZMOD=1): the map mode
@@ -488,6 +581,18 @@ class IFS:
         self.stall = [0] * len(CHANNELS)
         self.busy = False
         self.is_ready = False     # klippy:ready seen (MCU mode pre-feeds after it)
+        # MCU mode: the status light (LED_RED, LED_GREEN). led_enabled:
+        # IFS_LED ENABLE= (saved: ifs_led); led_pins: (red, green) output_pin
+        # objects, None without them (stock firmware, a config without the
+        # pins); led_sent: the value last sent to each, so only a change is
+        # sent to the IFS; led_sleep: the screen sleeps (IFS_LED SLEEP=,
+        # from HelixScreen; not saved, off at start)
+        self.led_enabled = True
+        self.led_sleep = False
+        self.led_pins = None
+        self.led_sent = [None, None]
+        self.led_blink = False
+        self.led_timer = None
         self.error = None         # last failure, for printer.ifs.error
         self.error_channel = 0    # slot it concerns, 0 = none or unknown
         self.driver_fault = False  # a motor fault: activity driver_error
@@ -562,7 +667,8 @@ class IFS:
                     "IFS_SET_MATERIAL", "IFS_MATERIALS", "IFS_PREFEED",
                     "IFS_TUNE", "IFS_TUNE_SPEED", "IFS_TUNE_LOAD",
                     "IFS_TUNE_UNLOAD", "IFS_TUNE_RESET", "IFS_SET_FLUSH",
-                    "IFS_AUTO_REFILL", "IFS_MAP_MODE", "IFS_FIND_HEAD_SLOT"):
+                    "IFS_AUTO_REFILL", "IFS_MAP_MODE", "IFS_FIND_HEAD_SLOT",
+                    "IFS_LED"):
             self.gcode.register_command(cmd, getattr(self, "cmd_" + cmd),
                                         desc=getattr(self, "cmd_%s_help" % cmd))
     # Serial link
@@ -677,6 +783,19 @@ class IFS:
                 t = m.get('temp')
                 slot['temp'] = float(t) if isinstance(t, (int, float)) \
                     and t > 0 else None
+                # Spool details (1.12); one that can't be used is dropped
+                for f, parse in (('spool_id', parse_spool_id),
+                                 ('vendor', parse_slot_text),
+                                 ('name', parse_slot_text),
+                                 ('filament_id', parse_slot_text),
+                                 ('bed_temp', parse_bed_temp)):
+                    val = m.get(f)
+                    if parse is parse_slot_text and not isinstance(val, str):
+                        val = None
+                    try:
+                        slot[f] = parse(val)
+                    except (TypeError, ValueError):
+                        slot[f] = None
         elif isinstance(colors, (list, tuple)) and len(colors) == len(CHANNELS):
             for slot, c in zip(self.materials, colors):
                 slot['color'] = format_color(c)
@@ -690,6 +809,9 @@ class IFS:
         ar = v.get('ifs_auto_refill')
         if isinstance(ar, (bool, int)):
             self.auto_refill = bool(ar)
+        led = v.get('ifs_led')
+        if isinstance(led, (bool, int)):
+            self.led_enabled = bool(led)
         rm = v.get('ifs_refill_match')
         if rm in REFILL_MATCHES:
             self.refill_match = rm
@@ -714,6 +836,7 @@ class IFS:
         if self.retry_timer is not None:
             self.reactor.unregister_timer(self.retry_timer)
             self.retry_timer = None
+        self._led_stop()
         self._close()
     def _open(self):
         fd = os.open(self.serial_port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
@@ -905,6 +1028,7 @@ class IFS:
         if self.zmod_prev is not None and not self._in_print():
             self.reactor.register_callback(self._ready_zmod_restore)
         self.is_ready = True
+        self._led_setup()
         if self.prefeed and (self.is_mcu_mode or self.fd is not None):
             self.reactor.register_callback(self._ready_prefeed)
         self.reactor.register_timer(self._watch_print, self.reactor.NOW)
@@ -1201,8 +1325,21 @@ class IFS:
         return self.material_temps.get(m['type']) if m['type'] else None
     def _slot_status(self, chan):
         m = self.materials[chan - 1]
-        return {'type': m['type'], 'color': m['color'],
-                'temp': self._slot_temp(chan)}
+        st = {'type': m['type'], 'color': m['color'],
+              'temp': self._slot_temp(chan)}
+        st.update((f, m.get(f)) for f in SPOOL_FIELDS)
+        return st
+    def _slot_spool_text(self, st):
+        """The spool details of a _slot_status for a reply, "" none."""
+        parts = []
+        if st['spool_id'] is not None:
+            parts.append("spool %d" % (st['spool_id'],))
+        parts.extend(st[f] for f in ('vendor', 'name') if st[f])
+        if st['filament_id']:
+            parts.append("[%s]" % (st['filament_id'],))
+        if st['bed_temp']:
+            parts.append("bed %dC" % (st['bed_temp'],))
+        return (" " + " ".join(parts)) if parts else ""
     def materials_status(self):
         return {
             'available': True,
@@ -2246,19 +2383,26 @@ class IFS:
         self.materials[chan - 1]['color'] = format_color(color)
         self._save_materials()
     cmd_IFS_SET_MATERIAL_help = ("Set a slot's material: SLOT= TYPE= COLOR= "
-                                 "(bare hex) TEMP=; absent = keep, "
-                                 "empty = clear")
+                                 "(bare hex) TEMP= SPOOL_ID= VENDOR= NAME= "
+                                 "FILAMENT_ID= BED_TEMP=; absent = keep, "
+                                 "empty = clear, a new TYPE clears the "
+                                 "spool's; text with spaces or # in "
+                                 "double quotes")
     def cmd_IFS_SET_MATERIAL(self, gcmd):
         slot = gcmd.get_int('SLOT', minval=CHANNELS[0], maxval=CHANNELS[-1])
         mtype = gcmd.get('TYPE', None)
         color = gcmd.get('COLOR', None)
         temp = gcmd.get('TEMP', None)
-        if mtype is None and color is None and temp is None:
-            raise gcmd.error("IFS_SET_MATERIAL needs TYPE=, COLOR= or TEMP=")
+        spool = {f: gcmd.get(f.upper(), None) for f in SPOOL_FIELDS}
+        if mtype is None and color is None and temp is None and all(
+                v is None for v in spool.values()):
+            raise gcmd.error("IFS_SET_MATERIAL needs TYPE=, COLOR=, TEMP=, "
+                             "SPOOL_ID=, VENDOR=, NAME=, FILAMENT_ID= or "
+                             "BED_TEMP=")
         m = dict(self.materials[slot - 1])
         if mtype is not None:
             try:
-                m['type'] = parse_material(mtype)
+                set_material_type(m, parse_material(mtype))
             except ValueError:
                 raise gcmd.error("IFS_SET_MATERIAL: bad TYPE '%s'" % (mtype,))
         if color is not None:
@@ -2274,20 +2418,44 @@ class IFS:
             if t and not 150. <= t <= 350.:
                 raise gcmd.error("IFS_SET_MATERIAL: TEMP must be 150-350")
             m['temp'] = t or None
+        # The spool's details (1.12): stored as sent, empty = clear; given
+        # with a new TYPE, set after the type change cleared them
+        for f, parse, what in (
+                ('spool_id', parse_spool_id,
+                 "must be a whole number from 1, no leading zeros"),
+                ('vendor', parse_slot_text, None),
+                ('name', parse_slot_text, None),
+                ('filament_id', parse_slot_text, None),
+                ('bed_temp', parse_bed_temp,
+                 "must be 0-%d (whole degrees or a plain decimal, 0 "
+                 "clears)" % (BED_TEMP_MAX,))):
+            v = spool[f]
+            if v is None:
+                continue
+            try:
+                m[f] = parse(v)
+            except ValueError:
+                raise gcmd.error("IFS_SET_MATERIAL: %s %s" % (
+                    f.upper(), what or "must be at most %d printable "
+                    "characters, without \" ' \\ ; or %% (text with "
+                    "spaces or # goes in double quotes)"
+                    % (SPOOL_TEXT_MAX,)))
         self.materials[slot - 1] = m
         self._save_materials()
         st = self._slot_status(slot)
-        gcmd.respond_info("IFS: slot %d: %s %s%s" % (
+        gcmd.respond_info("IFS: slot %d: %s %s%s%s" % (
             slot, st['type'] or "(no type)", st['color'] or "(no colour)",
-            " %.0fC" % st['temp'] if st['temp'] else ""))
+            " %.0fC" % st['temp'] if st['temp'] else "",
+            self._slot_spool_text(st)))
     cmd_IFS_MATERIALS_help = "Report each slot's material"
     def cmd_IFS_MATERIALS(self, gcmd):
         lines = []
         for c in CHANNELS:
             st = self._slot_status(c)
-            lines.append("slot %d: %s %s%s%s" % (
+            lines.append("slot %d: %s %s%s%s%s" % (
                 c, st['type'] or "-", st['color'] or "-",
                 " %.0fC" % st['temp'] if st['temp'] else "",
+                self._slot_spool_text(st),
                 " (loaded)" if c == self.channel else ""))
         gcmd.respond_info("\n".join(lines))
     # Auto-refill
@@ -2434,6 +2602,98 @@ class IFS:
                               " (tolerance %.0f)" % self.refill_color_tolerance
                               if self.refill_match == "similar" else "",
                               " ".join(pairs) or "none"))
+    # Status light (MCU mode)
+    def _led_setup(self):
+        """At klippy:ready: find the status light's pins (MCU mode only;
+        the stock firmware drives its own) and start updating them."""
+        self.led_pins = None
+        if not self.is_mcu_mode:
+            return
+        pins = [self.printer.lookup_object(n, None)
+                for n in (LED_RED, LED_GREEN)]
+        if any(p is None or not hasattr(p, 'gcrq') for p in pins):
+            logging.info("ifs: no status light pins (%s, %s)",
+                         LED_RED, LED_GREEN)
+            return
+        # Both start off (value: 0); the timer's first update shows the
+        # state. From a klippy:ready handler: nothing sent here.
+        self.led_pins = pins
+        self.led_sent = [0., 0.]
+        if self.led_enabled:
+            self._led_start()
+    def _led_start(self):
+        if self.led_pins is not None and self.led_timer is None:
+            self.led_timer = self.reactor.register_timer(
+                self._led_event, self.reactor.monotonic() + LED_INTERVAL)
+    def _led_stop(self):
+        if self.led_timer is not None:
+            self.reactor.unregister_timer(self.led_timer)
+            self.led_timer = None
+    def _led_state(self):
+        """(red, green) for the status light now, from the module's own
+        state: off before ready or when switched off (IFS_LED ENABLE=0),
+        green blinking while busy, red while printer.ifs.error is set (or
+        a strand blocks the tube) until a success or IFS_RESET clears it,
+        off while the screen sleeps (IFS_LED SLEEP=1) and no print runs,
+        else green."""
+        if not self.led_enabled or not self.is_ready:
+            return 0., 0.
+        if self.busy or self.refill_busy:
+            return 0., 1. if self.led_blink else 0.
+        if self.error or self.tube_blocked:
+            return 1., 0.
+        if self.led_sleep and not self._print_holds_printer():
+            return 0., 0.
+        return 0., 1.
+    def _led_show(self):
+        """Send the state to the pins that differ from the last send.
+        output_pin's request queue (as SET_PIN TEMPLATE= uses from its
+        timer): safe from a reactor timer, no G-code."""
+        if self.led_pins is None or self.printer.is_shutdown():
+            return
+        for i, value in enumerate(self._led_state()):
+            if self.led_sent[i] == value:
+                continue
+            try:
+                self.led_pins[i].gcrq.send_async_request(value)
+            except Exception:
+                logging.exception("ifs: status light update failed")
+                return
+            self.led_sent[i] = value
+    def _led_event(self, eventtime):
+        if self.printer.is_shutdown():
+            self.led_timer = None
+            return self.reactor.NEVER
+        self.led_blink = not self.led_blink
+        self._led_show()
+        return eventtime + LED_INTERVAL
+    cmd_IFS_LED_help = ("IFS status light (IFS on Klipper firmware): green "
+                        "ready, blinking busy, red on a problem: [ENABLE=0|1] "
+                        "[SLEEP=0|1]")
+    def cmd_IFS_LED(self, gcmd):
+        enable = gcmd.get_int('ENABLE', None, minval=0, maxval=1)
+        sleep = gcmd.get_int('SLEEP', None, minval=0, maxval=1)
+        if sleep is not None:
+            # The screen went to sleep or woke up: the next update follows
+            self.led_sleep = bool(sleep)
+            self._led_show()
+        if enable is not None:
+            self.led_enabled = bool(enable)
+            self._save_variable('ifs_led', self.led_enabled)
+            if self.led_enabled:
+                self._led_start()
+            else:
+                self._led_stop()
+            self._led_show()
+        if not self.is_mcu_mode:
+            note = " (it works with the IFS on Klipper firmware only)"
+        elif self.led_pins is None:
+            note = " (no status light pins in the config)"
+        else:
+            note = ""
+        gcmd.respond_info("IFS: status light %s, screen %s%s" % (
+            "on" if self.led_enabled else "off",
+            "asleep" if self.led_sleep else "awake", note))
     # Tool map (per print, as FX)
     cmd_IFS_MAP_TOOL_help = ("Aim a slicer tool at a slot for this print: "
                              "TOOL= SLOT=, or RESET=1")
@@ -2639,8 +2899,67 @@ class IFS:
                              "toolhead" % (chan,))
         self._run(self._prefeed_channel, chan, op="prefeed", target=chan)
     # Full operations
+    def _pre_cut_retract(self, old, new):
+        """pre_cut_retract_length: before the cut of OLD (the swap to NEW
+        only primes, mode 2, in a print), release the lane and retract the
+        extruder alone. Returns the mm retracted (commanded, not measured),
+        which the prime adds; 0 when it doesn't apply (the reason goes to
+        the log). The toolhead sensor clear after it stops the swap: the
+        strand may have left the extruder."""
+        length = self.pre_cut_retract_length
+        if not length:
+            return 0.
+        now = self.reactor.monotonic()
+        extruder = self.printer.lookup_object('extruder', None)
+        heater = extruder.get_heater() if extruder is not None else None
+        gmove = self.printer.lookup_object('gcode_move', None)
+        factors = gmove.get_status(now) if gmove is not None else {}
+        reason = None
+        if self.channel != old or self.channel_source != "kiln":
+            reason = "slot %d not loaded by Kiln" % (old,)
+        elif self.refill_busy:
+            reason = "auto-refill"
+        elif not self._in_print():
+            reason = "not printing"
+        elif self._purge_mode() != 2:
+            reason = "purge mode is not 2"
+        elif any(self.materials[c - 1].get('type') != 'PLA'
+                 for c in (old, new)):
+            reason = "not PLA to PLA"
+        elif heater is None or heater.get_status(now)['temperature'] \
+                < heater.min_extrude_temp:
+            reason = "nozzle below min_extrude_temp"
+        elif any(abs(factors.get(k, 1.) - 1.) > 1e-6
+                 for k in ('extrude_factor', 'speed_factor')):
+            # The retract (G1, scaled) and the prime would differ
+            reason = "flow or speed override not 100 %"
+        elif self._head_has_filament() is not True:
+            reason = "toolhead sensor doesn't see filament"
+        elif not all(c in mask_channels(self._query_status().get(
+                'silk_state')) for c in (old, new)):
+            reason = "no filament at the IFS for slot %d or %d" % (old, new)
+        if reason:
+            logging.info("ifs: pre-cut retract skipped: %s", reason)
+            return 0.
+        self._check_stop("pre-cut retract")
+        self._release(old)
+        self._check_stop("pre-cut retract")
+        # The strand moves from here on (_unload_left_in_tube)
+        self.unload_strand = old
+        self._track("cutting", "unloading", old)
+        self.gcode.run_script_from_command("M83\nG1 E-%s F%s" % (
+            self._fmt(length), self._fmt(self.pre_cut_retract_speed)))
+        if self._head_settled() is not True:
+            raise IfsError("pre-cut retract: the toolhead sensor cleared, "
+                           "the strand may have left the extruder; check "
+                           "the filament path (or lower "
+                           "pre_cut_retract_length)", fault=False)
+        self._check_stop("pre-cut retract")
+        logging.info("ifs: pre-cut retract of slot %d: %s mm", old,
+                     self._fmt(length))
+        return length
     def _swap(self, old, new, flush=None, rounds=None, purge=True,
-              at_print=False):
+              at_print=False, allow_pre_cut=False):
         toolhead = self.printer.lookup_object('toolhead')
         if old:
             self._track("cutting", "unloading", old)
@@ -2654,6 +2973,7 @@ class IFS:
         # Priming at the print needs the cut: cut_gcode takes the head back
         # there. Without a cut the head is still lifted: the box then.
         at_print = at_print and not purge and bool(old) and head is not False
+        compensation = 0.
         if old and head is False:
             logging.info("ifs: toolhead empty, skipping cut of channel %d",
                          old)
@@ -2667,6 +2987,10 @@ class IFS:
             # An abort during the heat wait (heater held off) ends it here,
             # before the cut's extruder move
             self._check_stop("swap")
+            # pre_cut_retract_length (off by default): the prime puts back
+            # what it took
+            if allow_pre_cut and not purge and not at_print and old != new:
+                compensation = self._pre_cut_retract(old, new)
             extra = {'AT_PRINT': 1} if at_print else {}
             # The strand moves from the cut on (_unload_left_in_tube)
             self.unload_strand = old
@@ -2678,7 +3002,7 @@ class IFS:
         self._select(new)
         self._load(new, self.load_length, self.load_speed)
         if not purge:
-            self._prime(old, new, at_print)
+            self._prime(old, new, at_print, compensation)
             self.swap_open = None
             return
         # Stock purge, in rounds: at the purge box, push the new strand
@@ -2720,19 +3044,22 @@ class IFS:
             self._clear_inserted(new)
         self._run_template(self.after_template, OLD=old, NEW=new)
         self.swap_open = None
-    def _prime(self, old, new, at_print=False):
+    def _prime(self, old, new, at_print=False, compensation=0.):
         """Second half of a swap without purge (the slicer purges: prime
         tower or its own flush): at the purge box, feed the new strand
-        prime_length into the nozzle (IFS and extruder together, as zMod's
-        nopoop insert), release the IFS, prime_gcode, F23, after_gcode.
+        prime_length (plus compensation, the pre-cut retract) into the
+        nozzle (IFS and extruder together, as zMod's nopoop insert),
+        release the IFS, prime_gcode, F23, after_gcode.
         Done at the box, not over the print, so the bead and any ooze stay
         off the part. at_print (prime_at_print, _at_print_ok): cut_gcode
         went back to the print position (the prime tower), so the prime is
         done there, as zMod does from layer 2 on, then prime_at_print_gcode
         instead of prime_gcode."""
         toolhead = self.printer.lookup_object('toolhead')
-        logging.info("ifs: swap %d -> %d without purge, prime %.0f mm%s",
-                     old, new, self.prime_length,
+        # compensation: what the pre-cut retract took back (none without)
+        insert_length = self.prime_length + compensation
+        logging.info("ifs: swap %d -> %d without purge, prime %s mm%s",
+                     old, new, self._fmt(insert_length),
                      " at the print position" if at_print else "")
         self._track("priming", "loading", new)
         if not at_print:
@@ -2740,8 +3067,8 @@ class IFS:
                                ROUND=1, ROUNDS=1)
         toolhead.wait_moves()
         self._ensure_hot()
-        if self.prime_length:
-            self._push(new, self.prime_length)
+        if insert_length:
+            self._push(new, insert_length)
         self._release(new)
         self._set_channel(new)
         self._track("priming", "loading", new)
@@ -2913,13 +3240,17 @@ class IFS:
                              "done (nothing was cut)" % (new,))
         flush = gcmd.get_float('FLUSH', None, minval=0.)
         rounds = gcmd.get_int('ROUNDS', None, minval=1, maxval=5)
+        # The pre-cut retract only for the print's own tool changes (not
+        # an auto-refill's swap, nor one while paused or idle)
+        allow_pre_cut = not self.refill_busy and self._in_print()
         purge = self._swap_purges(gcmd)
         # Read here, before anything moves: the position is the print's
         at_print = not purge and self._at_print_ok()
         home = self._require_homed(gcmd)
         # "swap" takes a slot out of the nozzle first, "load" fills it
         self._with_heat(gcmd, (old, new), self._swap, old, new, flush, rounds,
-                        purge, at_print, op="swap" if old else "load",
+                        purge, at_print, allow_pre_cut,
+                        op="swap" if old else "load",
                         target=new, home=home)
     cmd_IFS_SWAP_help = ("Change to another IFS channel (cut, unload, load, "
                          "purge): CHANNEL= [TEMP=] [FLUSH=mm] [ROUNDS=] "
@@ -3670,7 +4001,8 @@ class IFS:
         gcmd.respond_info("IFS: tuning reset, swaps use the [ifs] values")
 
 class IfsMaterials:
-    """printer.ifs_materials: per-slot type, colour and temperature."""
+    """printer.ifs_materials: per-slot type, colour, temperature and the
+    spool's details."""
     def __init__(self, ifs):
         self.ifs = ifs
     def get_status(self, eventtime):

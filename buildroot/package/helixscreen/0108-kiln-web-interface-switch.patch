@@ -1,0 +1,1225 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 12:38:47 -0500
+Subject: [PATCH] settings: Kiln OS's web interface, Fluidd or Mainsail, on
+ System
+
+Settings > System > Web interface picks what opens at the printer's
+address in a browser, through Moonraker's kiln_os component: the row
+shows where machine.kiln_os.info lists the webui feature, lists only the
+interfaces machine.kiln_os.get_webui says the printer has and shows the
+choice. A pick sends machine.kiln_os.post_webui with the control greyed
+until Kiln answers, then a toast says the new one and to reload the
+printer's page in the browser. While the mainsail-kiln plugin serves both
+(plugin in the GET, or a plugin_manages_webui refusal) the row is greyed,
+"Managed by the mainsail-kiln plugin"; any other refusal shows Kiln's
+message and puts the choice back. Picking the choice again sends it when
+the GET says another one is served (served), which puts them in line;
+only the choice that is also served sends nothing. Asked at every
+connect and each time the System page opens; behind Settings > Advanced
+settings; on the AD5X build only.
+
+setting_dropdown_row takes bind_options for the list. English, English
+(UK, empty) and Russian strings.
+---
+ include/ui_settings_kiln_webui.h         | 179 ++++++++++
+ include/ui_settings_system.h             |   2 +
+ src/api/moonraker_discovery_sequence.cpp |   4 +
+ src/ui/settings/ui_settings_system.cpp   |  13 +
+ src/ui/ui_settings_kiln_webui.cpp        | 340 ++++++++++++++++++
+ tests/unit/double_bind_widgets.inc       |   5 +-
+ tests/unit/test_settings_advanced.cpp    |   3 +-
+ tests/unit/test_settings_kiln_webui.cpp  | 433 +++++++++++++++++++++++
+ translations/en-GB.yml                   |   5 +
+ translations/en.yml                      |   6 +
+ translations/ru.yml                      |   6 +
+ ui_xml/setting_dropdown_row.xml          |   4 +-
+ ui_xml/settings_system_overlay.xml       |  26 +-
+ 13 files changed, 1021 insertions(+), 5 deletions(-)
+ create mode 100644 include/ui_settings_kiln_webui.h
+ create mode 100644 src/ui/ui_settings_kiln_webui.cpp
+ create mode 100644 tests/unit/test_settings_kiln_webui.cpp
+
+diff --git a/include/ui_settings_kiln_webui.h b/include/ui_settings_kiln_webui.h
+new file mode 100644
+index 0000000000..74c07add93
+--- /dev/null
++++ b/include/ui_settings_kiln_webui.h
+@@ -0,0 +1,179 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++/**
++ * @file ui_settings_kiln_webui.h
++ * @brief Kiln OS: Settings > System > Web interface (Fluidd or Mainsail)
++ *
++ * The printer's address in a browser opens Fluidd or Mainsail, one at a time
++ * (Kiln's docs/web-interface.md). Moonraker's kiln_os component answers:
++ *
++ * - `GET /machine/kiln_os/info` (`machine.kiln_os.info`): its `features`
++ *   list holds `webui` on a Kiln OS that has the switch. Without it nothing
++ *   else is asked and the row stays hidden.
++ * - `GET /machine/kiln_os/webui` (`machine.kiln_os.get_webui`): {webui,
++ *   default, served, available, versions, plugin, update_entries,
++ *   moonraker_restart_needed}. webui: the choice, fluidd or mainsail;
++ *   available: the ones this printer has; plugin: "mainsail-kiln" while that
++ *   community plugin serves both and picks port 80 itself.
++ * - `POST /machine/kiln_os/webui` with name (`machine.kiln_os.post_webui`):
++ *   Kiln's root agent switches nginx (a second, no restart, allowed while
++ *   printing) and answers the GET object plus {previous, changed, message}.
++ *   Errors carry their reason: 400 bad_parameter, 409 not_available or
++ *   plugin_manages_webui, 500 agent_failed, 503 agent_timeout or
++ *   agent_unavailable.
++ *
++ * The state is fetched in the discovery sequence (every connect and Klipper
++ * restart) and each time Settings > System opens. The row lists only the
++ * interfaces in `available` and shows the choice; a pick POSTs it with the
++ * control greyed until Kiln answers. Done: a toast says the new one and to
++ * reload the page in the browser. plugin_manages_webui (or `plugin` in the
++ * GET): the row is shown greyed, "Managed by the mainsail-kiln plugin". Any
++ * other error: the error in a toast and the choice back as it was. The row
++ * is behind Settings > Advanced settings (patch 0107's binding).
++ *
++ * HELIX_KILN_AD5X builds only: elsewhere nothing is asked and the row stays
++ * hidden.
++ *
++ * @threading Main thread; Moonraker's answers hop over through lifetime tokens
++ */
++
++#pragma once
++
++#include "async_lifetime_guard.h"
++#include "json_fwd.h"
++#include "lvgl/lvgl.h"
++#include "subject_managed_panel.h"
++
++#include <cstdint>
++#include <optional>
++#include <string>
++#include <vector>
++
++namespace helix {
++class IMoonrakerClient;
++}
++
++namespace helix::kiln_webui {
++
++/// The JSON-RPC method of GET /machine/kiln_os/info
++inline constexpr const char* kInfoMethod = "machine.kiln_os.info";
++
++/// The JSON-RPC method of GET /machine/kiln_os/webui
++inline constexpr const char* kGetMethod = "machine.kiln_os.get_webui";
++
++/// The JSON-RPC method of POST /machine/kiln_os/webui
++inline constexpr const char* kSetMethod = "machine.kiln_os.post_webui";
++
++/// The feature name in machine.kiln_os.info's features
++inline constexpr const char* kFeature = "webui";
++
++/// The reason Kiln refuses a switch while the mainsail-kiln plugin serves both
++inline constexpr const char* kPluginReason = "plugin_manages_webui";
++
++/// The POST waits for Kiln's update agent (up to 30 s); a little more here
++inline constexpr uint32_t kTimeoutMs = 45000;
++
++/// What the row shows: kiln_webui_state's values
++enum class RowState : int { Hidden = 0, Switch = 1, Plugin = 2 };
++
++/// True on HELIX_KILN_AD5X builds; tests override it.
++bool built_in();
++void set_built_in_for_test(std::optional<bool> value);
++
++/// Kiln's web interface object
++struct State {
++    std::string webui;                  ///< the choice
++    std::string served;                 ///< what nginx serves (empty: unknown)
++    std::vector<std::string> available; ///< known names only, in Kiln's order
++    std::string plugin;                 ///< empty: none
++};
++
++/// The object (a JSON-RPC result); nullopt when @p result is not one.
++/// Names other than fluidd and mainsail are left out of available.
++std::optional<State> parse_state(const nlohmann::json& result);
++
++/// Whether machine.kiln_os.info's result lists the webui feature
++bool has_feature(const nlohmann::json& info_result);
++
++/// "Fluidd" or "Mainsail" (product names, the same in every language)
++std::string display_name(const std::string& name);
++
++/// The dropdown's options: one display name per line, in available's order
++std::string options_text(const State& state);
++
++/// What the row shows for @p state
++RowState row_state(const State& state);
++
++/// The Web interface row.
++///
++/// Subjects: `kiln_webui_state` (RowState), `kiln_webui_options` (string,
++/// the dropdown's lines), `kiln_webui_selected` (the choice's line),
++/// `kiln_webui_busy` (1 while a switch is on its way: the control greys) and
++/// `kiln_webui_locked` (always 1: greys the plugin-managed row).
++class WebuiModel {
++  public:
++    WebuiModel() = default;
++    ~WebuiModel();
++    WebuiModel(const WebuiModel&) = delete;
++    WebuiModel& operator=(const WebuiModel&) = delete;
++
++    void init_subjects();
++
++    /// Ask Kiln: the features, then the web interface object (nothing off a
++    /// Kiln build, without a connection, or while a switch is on its way).
++    void fetch();
++
++    /// The dropdown picked line @p index: POST it. Nothing for the current
++    /// one, before Kiln has answered, or while a switch is on its way.
++    void select(int index);
++
++    /// Kiln's answer: the subjects
++    void apply(const State& state);
++
++    /// Kiln's features did not list webui (an older Kiln OS): hide the row
++    void apply_no_feature();
++
++    const std::optional<State>& state() const {
++        return state_;
++    }
++    bool busy() const {
++        return busy_;
++    }
++    /// The last toast's text (tests)
++    const std::string& last_message() const {
++        return last_message_;
++    }
++
++    /// Tests: forget the state (the subjects stay).
++    void reset_for_test();
++    /// Tests: the client the requests go over; nullptr: the screen's own.
++    void set_client_for_test(IMoonrakerClient* client) {
++        client_override_ = client;
++    }
++
++  private:
++    void publish();
++    void get_webui(IMoonrakerClient& c);
++    void toast_success(const std::string& text);
++    void toast_warning(const std::string& text);
++    IMoonrakerClient* client() const;
++
++    SubjectManager subjects_;
++    helix::Subject state_subject_{};
++    helix::Subject options_{};
++    helix::Subject selected_{};
++    helix::Subject busy_subject_{};
++    helix::Subject locked_{};
++    char options_buf_[64] = {};
++    bool subjects_initialized_ = false;
++
++    std::optional<State> state_;
++    bool busy_ = false;
++    std::string last_message_;
++    IMoonrakerClient* client_override_ = nullptr;
++    AsyncLifetimeGuard lifetime_;
++};
++
++WebuiModel& model();
++
++} // namespace helix::kiln_webui
+diff --git a/include/ui_settings_system.h b/include/ui_settings_system.h
+index 2d105c7d91..91efbbcb2c 100644
+--- a/include/ui_settings_system.h
++++ b/include/ui_settings_system.h
+@@ -53,6 +53,8 @@ class SystemSettingsOverlay : public OverlayBase {
+     /// Extended memory rows' subjects, before the XML
+     void init_subjects() override;
+     void register_callbacks() override;
++    /// Kiln OS: asks for the web interface each time the page opens
++    void on_activate() override;
+ 
+     /// The Performance row's action: open the Performance overlay.
+     void open_performance();
+diff --git a/src/api/moonraker_discovery_sequence.cpp b/src/api/moonraker_discovery_sequence.cpp
+index 5b78c0b2bc..c21d0d3641 100644
+--- a/src/api/moonraker_discovery_sequence.cpp
++++ b/src/api/moonraker_discovery_sequence.cpp
+@@ -7,6 +7,7 @@
+ #include "ui_notification.h"
+ #include "ui_settings_ad5x_ifs_firmware.h"
+ #include "ui_settings_kiln_memory.h"
++#include "ui_settings_kiln_webui.h"
+ #include "accel_sensor_manager.h"
+ #include "ams_backend.h"
+ #include "ams_state.h"
+@@ -754,6 +755,9 @@ void MoonrakerDiscoverySequence::on_server_info(uint64_t seq, const json& info_r
+         // firmware it found
+         helix::ui::queue_update("ad5x_ifs_firmware::fetch",
+                                 []() { helix::ad5x_ifs_firmware::model().fetch(); });
++        // Kiln OS: the web interface (the Settings > System row) from kiln_os,
++        // on every run
++        helix::ui::queue_update("kiln_webui::fetch", []() { helix::kiln_webui::model().fetch(); });
+         apply_server_info(seq, *result);
+     }
+ 
+diff --git a/src/ui/settings/ui_settings_system.cpp b/src/ui/settings/ui_settings_system.cpp
+index c3104c6f3b..222a06de3c 100644
+--- a/src/ui/settings/ui_settings_system.cpp
++++ b/src/ui/settings/ui_settings_system.cpp
+@@ -12,6 +12,7 @@
+ #include "ui_settings_kiln_memory.h"
+ #include "ui_settings_kiln_recovery.h"
+ #include "ui_settings_kiln_rootpw.h"
++#include "ui_settings_kiln_webui.h"
+ #include "ui_settings_security.h"
+ #include "ui_settings_storage.h"
+ #if !defined(HELIX_PLATFORM_ESP32)
+@@ -53,6 +54,14 @@ void SystemSettingsOverlay::init_subjects() {
+     helix::kiln_memory::model().init_subjects();
+     // Kiln OS: Reset root password shows while Kiln's root agent is there
+     helix::kiln_rootpw::row().init_subjects();
++    // Kiln OS: Web interface shows where Kiln reports the webui feature
++    helix::kiln_webui::model().init_subjects();
++}
++
++void SystemSettingsOverlay::on_activate() {
++    OverlayBase::on_activate();
++    // Kiln OS: the web interface now, each time the page opens
++    helix::kiln_webui::model().fetch();
+ }
+ 
+ void SystemSettingsOverlay::register_callbacks() {
+@@ -131,6 +140,10 @@ void SystemSettingsOverlay::register_callbacks() {
+          [](lv_event_t* e) {
+              helix::kiln_memory::model().set_enabled(helix::ui::event_checked(e));
+          }},
++        // Kiln OS: Fluidd or Mainsail at the printer's address
++        // (machine.kiln_os.post_webui)
++        {"on_kiln_webui_changed",
++         [](lv_event_t* e) { helix::kiln_webui::model().select(event_selected(e)); }},
+         {"on_factory_reset_clicked",
+          [](lv_event_t*) { get_system_settings_overlay().handle_factory_reset_clicked(); }},
+         {"on_restore_stock_screen_clicked",
+diff --git a/src/ui/ui_settings_kiln_webui.cpp b/src/ui/ui_settings_kiln_webui.cpp
+new file mode 100644
+index 0000000000..6bf64a3ac8
+--- /dev/null
++++ b/src/ui/ui_settings_kiln_webui.cpp
+@@ -0,0 +1,340 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include "ui_settings_kiln_webui.h"
++
++#include "ui_settings_kiln_recovery.h"
++#include "ui_toast_manager.h"
++
++#include "app_globals.h"
++#include "core/static_panel_registry.h"
++#include "core/update_queue.h"
++#include "i_moonraker_client.h"
++#include "json_utils.h"
++#include "lvgl/src/others/translation/lv_translation.h"
++#include "moonraker_error.h"
++
++#include <spdlog/fmt/fmt.h>
++#include <spdlog/spdlog.h>
++
++#include <algorithm>
++
++namespace helix::kiln_webui {
++
++namespace {
++
++// The touch screen is the AD5X's own (HELIX_KILN_AD5X, set in
++// buildroot/package/helixscreen/helixscreen.mk); other builds have no
++// kiln_os component to ask.
++#if defined(HELIX_KILN_AD5X)
++constexpr bool kBuiltIn = true;
++#else
++constexpr bool kBuiltIn = false;
++#endif
++
++std::optional<bool> g_built_in_override;
++
++/// The web interfaces Kiln OS knows, the order the row lists them in when
++/// Kiln's own order says nothing
++constexpr const char* kKnown[] = {"fluidd", "mainsail"};
++
++bool known(const std::string& name) {
++    return std::find(std::begin(kKnown), std::end(kKnown), name) != std::end(kKnown);
++}
++
++bool connected(const IMoonrakerClient* client) {
++    return client && client->get_connection_state() == ConnectionState::CONNECTED;
++}
++
++std::string string_field(const json& object, const char* key) {
++    const json* v = json_util::find_member(object, key);
++    return v && v->is_string() ? v->get<std::string>() : std::string();
++}
++
++/// Set @p subject, notifying also when the value is unchanged (a dropdown the
++/// user moved shows its own line until its subject says otherwise).
++void set_and_notify(lv_subject_t* subject, int value) {
++    if (lv_subject_get_int(subject) == value) {
++        lv_subject_notify(subject);
++    } else {
++        lv_subject_set_int(subject, value);
++    }
++}
++
++constexpr uint32_t kToastMs = 6000;
++
++} // namespace
++
++bool built_in() {
++    return g_built_in_override.value_or(kBuiltIn);
++}
++
++void set_built_in_for_test(std::optional<bool> value) {
++    g_built_in_override = value;
++}
++
++std::optional<State> parse_state(const json& result) {
++    if (!result.is_object()) {
++        return std::nullopt;
++    }
++    const json* available = json_util::find_member(result, "available");
++    if (!available || !available->is_array() || !json_util::find_member(result, "webui")) {
++        return std::nullopt;
++    }
++    State s;
++    s.webui = string_field(result, "webui");
++    s.served = string_field(result, "served");
++    for (const auto& item : *available) {
++        if (item.is_string() && known(item.get<std::string>()) &&
++            std::find(s.available.begin(), s.available.end(), item.get<std::string>()) ==
++                s.available.end()) {
++            s.available.push_back(item.get<std::string>());
++        }
++    }
++    s.plugin = string_field(result, "plugin");
++    return s;
++}
++
++bool has_feature(const json& info_result) {
++    const json* features = json_util::find_member(info_result, "features");
++    if (!features || !features->is_array()) {
++        return false;
++    }
++    return std::any_of(features->begin(), features->end(), [](const json& f) {
++        return f.is_string() && f.get<std::string>() == kFeature;
++    });
++}
++
++std::string display_name(const std::string& name) {
++    if (name == "fluidd") {
++        return "Fluidd";
++    }
++    if (name == "mainsail") {
++        return "Mainsail";
++    }
++    return name;
++}
++
++std::string options_text(const State& state) {
++    std::string text;
++    for (const auto& name : state.available) {
++        if (!text.empty()) {
++            text += "\n";
++        }
++        text += display_name(name);
++    }
++    return text;
++}
++
++RowState row_state(const State& state) {
++    if (state.available.empty()) {
++        return RowState::Hidden;
++    }
++    return state.plugin.empty() ? RowState::Switch : RowState::Plugin;
++}
++
++WebuiModel::~WebuiModel() {
++    lifetime_.invalidate();
++    subjects_.deinit_all();
++}
++
++void WebuiModel::init_subjects() {
++    if (subjects_initialized_) {
++        return;
++    }
++    UI_MANAGED_SUBJECT_INT(state_subject_, 0, "kiln_webui_state", subjects_);
++    UI_MANAGED_SUBJECT_STRING(options_, options_buf_, "", "kiln_webui_options", subjects_);
++    UI_MANAGED_SUBJECT_INT(selected_, 0, "kiln_webui_selected", subjects_);
++    UI_MANAGED_SUBJECT_INT(busy_subject_, 0, "kiln_webui_busy", subjects_);
++    UI_MANAGED_SUBJECT_INT(locked_, 1, "kiln_webui_locked", subjects_);
++    subjects_initialized_ = true;
++    // An answer that came before Settings > System was first opened
++    publish();
++}
++
++void WebuiModel::publish() {
++    if (!subjects_initialized_) {
++        return;
++    }
++    if (!state_) {
++        lv_subject_set_int(&state_subject_, static_cast<int>(RowState::Hidden));
++        lv_subject_set_int(&busy_subject_, busy_ ? 1 : 0);
++        return;
++    }
++    const State& s = *state_;
++    const std::string options = options_text(s);
++    if (options != lv_subject_get_string(&options_)) {
++        lv_subject_set_string(&options_, options.c_str());
++    }
++    const auto it = std::find(s.available.begin(), s.available.end(), s.webui);
++    set_and_notify(&selected_,
++                   it == s.available.end() ? 0 : static_cast<int>(it - s.available.begin()));
++    lv_subject_set_int(&busy_subject_, busy_ ? 1 : 0);
++    lv_subject_set_int(&state_subject_, static_cast<int>(row_state(s)));
++}
++
++IMoonrakerClient* WebuiModel::client() const {
++    IMoonrakerClient* c = client_override_ ? client_override_ : get_moonraker_client();
++    return connected(c) ? c : nullptr;
++}
++
++void WebuiModel::fetch() {
++    IMoonrakerClient* c = built_in() && !busy_ ? client() : nullptr;
++    if (!c) {
++        return;
++    }
++    const auto token = lifetime_.token();
++    c->send_jsonrpc(
++        kInfoMethod, json::object(),
++        [this, token](const json& response) {
++            const json* result = json_util::find_member(response, "result");
++            const bool feature = result && has_feature(*result);
++            token.defer("kiln_webui::info", [this, feature]() {
++                if (!feature) {
++                    apply_no_feature();
++                    return;
++                }
++                if (IMoonrakerClient* again = client()) {
++                    get_webui(*again);
++                }
++            });
++        },
++        [](const MoonrakerError& err) {
++            // Not a Kiln OS, or one from before machine.kiln_os.info
++            spdlog::debug("[Kiln webui] {} failed: {}", kInfoMethod, err.message);
++        },
++        0, /*silent=*/true);
++}
++
++void WebuiModel::get_webui(IMoonrakerClient& c) {
++    const auto token = lifetime_.token();
++    c.send_jsonrpc(
++        kGetMethod, json::object(),
++        [this, token](const json& response) {
++            const json* result = json_util::find_member(response, "result");
++            std::optional<State> s = result ? parse_state(*result) : std::nullopt;
++            if (!s) {
++                spdlog::debug("[Kiln webui] Unexpected answer to {}", kGetMethod);
++                return;
++            }
++            token.defer("kiln_webui::state", [this, state = *s]() {
++                if (!busy_) {
++                    apply(state);
++                }
++            });
++        },
++        [](const MoonrakerError& err) {
++            spdlog::debug("[Kiln webui] {} failed: {}", kGetMethod, err.message);
++        },
++        0, /*silent=*/true);
++}
++
++void WebuiModel::select(int index) {
++    if (busy_ || !state_ || row_state(*state_) != RowState::Switch || index < 0 ||
++        index >= static_cast<int>(state_->available.size())) {
++        // Nothing to send: the dropdown shows the choice again
++        publish();
++        return;
++    }
++    const std::string name = state_->available[static_cast<size_t>(index)];
++    // Nothing to do only when it is the choice and also what is served:
++    // where they differ (a plugin put its own line back), the stored one
++    // is sent again and puts them in line
++    if (name == state_->webui && (state_->served.empty() || state_->served == name)) {
++        return;
++    }
++    IMoonrakerClient* c = client();
++    if (!c) {
++        toast_warning(lv_tr("Not connected to the printer"));
++        publish();
++        return;
++    }
++    spdlog::info("[Kiln webui] Web interface {} -> {}", state_->webui, name);
++    busy_ = true;
++    if (subjects_initialized_) {
++        lv_subject_set_int(&busy_subject_, 1);
++    }
++    const auto token = lifetime_.token();
++    c->send_jsonrpc(
++        kSetMethod, json{{"name", name}},
++        [this, token](const json& response) {
++            const json* result = json_util::find_member(response, "result");
++            std::optional<State> s = result ? parse_state(*result) : std::nullopt;
++            const json* changed = result ? json_util::find_member(*result, "changed") : nullptr;
++            const bool was_changed = changed && changed->is_boolean() && changed->get<bool>();
++            token.defer("kiln_webui::set_done", [this, s, was_changed]() {
++                busy_ = false;
++                if (!s) {
++                    spdlog::warn("[Kiln webui] Unexpected answer to {}", kSetMethod);
++                    toast_warning(lv_tr("Failed"));
++                    publish();
++                    return;
++                }
++                apply(*s);
++                if (was_changed) {
++                    toast_success(fmt::format(
++                        fmt::runtime(lv_tr("Web interface is now {}. Reload the printer's page "
++                                           "in your browser.")),
++                        display_name(s->webui)));
++                }
++            });
++        },
++        [this, token](const MoonrakerError& err) {
++            spdlog::warn("[Kiln webui] Refused ({}, {}): {}", err.code, err.kiln_reason(),
++                         err.message);
++            const bool plugin = err.kiln_reason() == kPluginReason;
++            const std::string text = helix::kiln_recovery::refusal_text(err.message);
++            token.defer("kiln_webui::set_refused", [this, plugin, text]() {
++                busy_ = false;
++                if (plugin && state_) {
++                    // The plugin turned on since the last GET: grey the row
++                    state_->plugin = "mainsail-kiln";
++                    toast_warning(lv_tr("Managed by the mainsail-kiln plugin"));
++                } else {
++                    toast_warning(fmt::format(fmt::runtime(lv_tr("Can't switch the web "
++                                                                 "interface: {}")),
++                                              text.empty() ? std::string(lv_tr("Failed")) : text));
++                }
++                // The choice back as Kiln last said it
++                publish();
++            });
++        },
++        kTimeoutMs, /*silent=*/true);
++}
++
++void WebuiModel::apply(const State& state) {
++    state_ = state;
++    publish();
++}
++
++void WebuiModel::apply_no_feature() {
++    state_.reset();
++    publish();
++}
++
++void WebuiModel::toast_success(const std::string& text) {
++    last_message_ = text;
++    ToastManager::instance().show(ToastSeverity::SUCCESS, text.c_str(), kToastMs);
++}
++
++void WebuiModel::toast_warning(const std::string& text) {
++    last_message_ = text;
++    ToastManager::instance().show(ToastSeverity::WARNING, text.c_str(), kToastMs);
++}
++
++void WebuiModel::reset_for_test() {
++    lifetime_.invalidate();
++    state_.reset();
++    busy_ = false;
++    last_message_.clear();
++    if (subjects_initialized_) {
++        lv_subject_set_string(&options_, "");
++        lv_subject_set_int(&selected_, 0);
++    }
++    publish();
++}
++
++WebuiModel& model() {
++    return helix::lazy_global<WebuiModel>("KilnWebuiModel");
++}
++
++} // namespace helix::kiln_webui
+diff --git a/tests/unit/double_bind_widgets.inc b/tests/unit/double_bind_widgets.inc
+index 6b50c3e809..9919a4e7f4 100644
+--- a/tests/unit/double_bind_widgets.inc
++++ b/tests/unit/double_bind_widgets.inc
+@@ -99,11 +99,12 @@ static const BindGroup kDoubleBindWidgets[] = {
+     {"settings_system_overlay", "row_kiln_boot_recovery", 0, {}, 0, BindKind::Flag, "hidden", {{"settings_advanced", -1}, {"kiln_boot_recovery_available", -1}}, 2, {{0, 0}, {1, 0}}, 2, true},
+     {"settings_system_overlay", "row_kiln_return_stock", 0, {}, 0, BindKind::Flag, "hidden", {{"settings_advanced", -1}, {"kiln_boot_recovery_available", -1}}, 2, {{0, 0}, {1, 0}}, 2, true},
+     {"settings_system_overlay", "container_kiln_extended_memory", 0, {}, 0, BindKind::Flag, "hidden", {{"settings_advanced", -1}, {"kiln_extended_memory_available", -1}}, 2, {{0, 0}, {1, 0}}, 2, true},
++    {"settings_system_overlay", "container_kiln_webui", 0, {}, 0, BindKind::Flag, "hidden", {{"settings_advanced", -1}, {"kiln_webui_state", -1}}, 2, {{0, 0}, {1, 0}}, 2, true},
+     {"spool_wizard", "create_btn", 0, {}, 0, BindKind::State, "disabled", {{"spool_wizard_can_proceed", -1}, {"wizard_creating", 0}}, 2, {{0, 0}, {1, 1}}, 2, true},
+     {"wizard_wifi_setup", "network_list_container", 0, {}, 0, BindKind::State, "disabled", {{"wifi_enabled", -1}, {"wifi_hardware_available", -1}}, 2, {{0, 0}, {1, 0}}, 2, true},
+ };
+ // clang-format on
+ 
+-// Groups in ui_xml/: 80 drivable, 68 that no test can drive (see the header
+-// comment), 148 total. qc_double_binds fails a commit that leaves this file
++// Groups in ui_xml/: 81 drivable, 68 that no test can drive (see the header
++// comment), 149 total. qc_double_binds fails a commit that leaves this file
+ // behind ui_xml/.
+diff --git a/tests/unit/test_settings_advanced.cpp b/tests/unit/test_settings_advanced.cpp
+index e4b36b7ad8..e11a4fc170 100644
+--- a/tests/unit/test_settings_advanced.cpp
++++ b/tests/unit/test_settings_advanced.cpp
+@@ -118,7 +118,8 @@ const std::vector<Split>& splits() {
+         {"settings_system_overlay",
+          {"container_performance", "row_storage", "row_firmware_update", "container_telemetry",
+           "row_telemetry_view_data", "row_log_level", "row_ad5x_log_mode", "container_kiln_rootpw",
+-          "row_kiln_boot_recovery", "row_kiln_return_stock", "container_kiln_extended_memory"},
++          "row_kiln_boot_recovery", "row_kiln_return_stock", "container_kiln_extended_memory",
++          "container_kiln_webui"},
+          {"row_security", "row_restart_helix", "row_factory_reset", "row_restore_stock_screen"}},
+         {"settings_help_overlay",
+          {"row_debug_bundle", "row_discord", "row_getting_started", "row_user_guide"},
+diff --git a/tests/unit/test_settings_kiln_webui.cpp b/tests/unit/test_settings_kiln_webui.cpp
+new file mode 100644
+index 0000000000..1203272cf4
+--- /dev/null
++++ b/tests/unit/test_settings_kiln_webui.cpp
+@@ -0,0 +1,433 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++//
++// Kiln OS: Settings > System > Web interface. Moonraker's kiln_os component
++// lists the webui feature in machine.kiln_os.info and answers
++// machine.kiln_os.get_webui and machine.kiln_os.post_webui with {webui,
++// default, served, available, versions, plugin, update_entries,
++// moonraker_restart_needed} (the POST adds previous, changed, message). A
++// refusal is an error whose data carries the reason.
++
++#include "ui_panel_settings.h"
++#include "ui_settings_kiln_webui.h"
++#include "ui_settings_system.h"
++
++#include "../../src/ui/panel_widgets/shutdown_widget.h"
++#include "../fake_moonraker_client.h"
++#include "../lvgl_ui_test_fixture.h"
++#include "../test_helpers/widget_in_tree.h"
++#include "core/update_queue.h"
++#include "helix-xml/src/xml/lv_xml.h"
++#include "moonraker_error.h"
++#include "settings_manager.h"
++#include "system_settings_manager.h"
++
++#include <string>
++
++#include "../catch_amalgamated.hpp"
++
++using helix::test::FakeMoonrakerClient;
++using nlohmann::json;
++namespace webui = helix::kiln_webui;
++
++namespace {
++
++json info(bool with_webui) {
++    json features = json::array({"ifs", "soak", "plugins", "memory"});
++    if (with_webui) {
++        features.push_back("webui");
++    }
++    return json{{"os_version", "v1.0.1"}, {"api_version", "1.12"}, {"features", features}};
++}
++
++json webui_object(const char* choice, json available = json::array({"fluidd", "mainsail"}),
++                  json plugin = nullptr, json served = nullptr) {
++    return json{{"webui", choice},
++                {"default", "fluidd"},
++                {"served", served.is_null() ? json(choice) : served},
++                {"available", available},
++                {"versions", {{"fluidd", "v1.38.0"}, {"mainsail", "v2.19.0"}}},
++                {"plugin", plugin},
++                {"update_entries", json::array({choice})},
++                {"moonraker_restart_needed", false}};
++}
++
++json post_answer(const char* choice, const char* previous) {
++    json o = webui_object(choice);
++    o["previous"] = previous;
++    o["changed"] = std::string(choice) != previous;
++    o["message"] = "Mainsail on port 80; reload the page in the browser";
++    return o;
++}
++
++json rpc_result(const json& result) {
++    return json{{"jsonrpc", "2.0"}, {"result", result}};
++}
++
++MoonrakerError refusal(int code, const char* reason, const char* text) {
++    return MoonrakerError::from_json_rpc({{"code", code},
++                                          {"message", std::string("[") + reason + "] " + text},
++                                          {"data", {{"reason", reason}}}},
++                                         webui::kSetMethod);
++}
++
++int subject(const char* name) {
++    lv_subject_t* s = lv_xml_get_subject(nullptr, name);
++    REQUIRE(s != nullptr);
++    return lv_subject_get_int(s);
++}
++
++std::string string_subject(const char* name) {
++    lv_subject_t* s = lv_xml_get_subject(nullptr, name);
++    REQUIRE(s != nullptr);
++    return lv_subject_get_string(s);
++}
++
++struct KilnWebuiFixture : LVGLUITestFixture {
++    FakeMoonrakerClient client;
++
++    KilnWebuiFixture() {
++        webui::set_built_in_for_test(true);
++        webui::model().init_subjects();
++        webui::model().set_client_for_test(&client);
++        webui::model().reset_for_test();
++    }
++
++    ~KilnWebuiFixture() override {
++        webui::model().reset_for_test();
++        webui::model().set_client_for_test(nullptr);
++        webui::set_built_in_for_test(std::nullopt);
++        drain();
++    }
++
++    static void drain() {
++        helix::ui::UpdateQueue::instance().drain();
++    }
++
++    /// Fetch; Kiln answers the info with @p info_result and, when it asks,
++    /// the web interface with @p result
++    void fetched(const json& info_result, const json& result) {
++        client.rpc_calls.clear();
++        webui::model().fetch();
++        REQUIRE(client.rpc_calls.size() == 1);
++        CHECK(client.rpc_calls[0].method == webui::kInfoMethod);
++        client.rpc_calls[0].success_cb(rpc_result(info_result));
++        drain();
++        if (client.rpc_calls.size() == 2) {
++            CHECK(client.rpc_calls[1].method == webui::kGetMethod);
++            client.rpc_calls[1].success_cb(rpc_result(result));
++            drain();
++        }
++        client.rpc_calls.clear();
++    }
++};
++
++/// The System page built as the overlay builds it, for the row's bindings
++struct WebuiPageFixture : KilnWebuiFixture {
++    lv_obj_t* root_ = nullptr;
++    bool advanced_before_ = true;
++
++    WebuiPageFixture() {
++        SettingsManager::instance().init_subjects();
++        get_global_settings_panel().init_subjects();
++        advanced_before_ = SystemSettingsManager::instance().get_advanced_settings();
++        SystemSettingsManager::instance().set_advanced_settings(true);
++        helix::deinit_kiln_power_lock_subject();
++        helix::init_kiln_power_lock_subject(state(), /*register_xml=*/true);
++        helix::settings::get_system_settings_overlay().init_subjects();
++        helix::settings::get_system_settings_overlay().register_callbacks();
++        root_ = static_cast<lv_obj_t*>(
++            lv_xml_create(test_screen(), "settings_system_overlay", nullptr));
++        REQUIRE(root_ != nullptr);
++        process_lvgl(5);
++    }
++
++    ~WebuiPageFixture() override {
++        if (root_ && helix::test::widget_in_tree(root_)) {
++            lv_obj_delete(root_);
++        }
++        SystemSettingsManager::instance().set_advanced_settings(advanced_before_);
++        drain();
++        helix::deinit_kiln_power_lock_subject();
++        get_global_settings_panel().deinit_subjects();
++        drain();
++    }
++
++    lv_obj_t* find(const char* name) const {
++        lv_obj_t* obj = lv_obj_find_by_name(root_, name);
++        REQUIRE(obj != nullptr);
++        return obj;
++    }
++
++    lv_obj_t* dropdown(const char* row) const {
++        lv_obj_t* d = lv_obj_find_by_name(find(row), "dropdown");
++        REQUIRE(d != nullptr);
++        return d;
++    }
++
++    std::string options(const char* row) const {
++        return lv_dropdown_get_options(dropdown(row));
++    }
++};
++
++} // namespace
++
++TEST_CASE("Kiln webui: Kiln's object is read field by field", "[kiln][kiln_webui]") {
++    const auto s = webui::parse_state(webui_object("mainsail"));
++    REQUIRE(s.has_value());
++    CHECK(s->webui == "mainsail");
++    CHECK(s->served == "mainsail");
++    CHECK(s->available == std::vector<std::string>{"fluidd", "mainsail"});
++    CHECK(s->plugin.empty());
++    CHECK(webui::options_text(*s) == "Fluidd\nMainsail");
++    CHECK(webui::row_state(*s) == webui::RowState::Switch);
++
++    // Only the ones this printer has, and no names Kiln OS doesn't know
++    const auto one = webui::parse_state(webui_object("fluidd", json::array({"fluidd", "octo"})));
++    REQUIRE(one.has_value());
++    CHECK(one->available == std::vector<std::string>{"fluidd"});
++    CHECK(webui::options_text(*one) == "Fluidd");
++
++    const auto plugin = webui::parse_state(
++        webui_object("mainsail", json::array({"fluidd", "mainsail"}), "mainsail-kiln"));
++    REQUIRE(plugin.has_value());
++    CHECK(plugin->plugin == "mainsail-kiln");
++    CHECK(webui::row_state(*plugin) == webui::RowState::Plugin);
++
++    const auto none = webui::parse_state(webui_object("fluidd", json::array()));
++    REQUIRE(none.has_value());
++    CHECK(webui::row_state(*none) == webui::RowState::Hidden);
++
++    CHECK_FALSE(webui::parse_state(json::object()).has_value());
++    CHECK_FALSE(webui::parse_state(json::array()).has_value());
++    CHECK_FALSE(webui::parse_state(json{{"webui", "fluidd"}}).has_value());
++
++    CHECK(webui::has_feature(info(true)));
++    CHECK_FALSE(webui::has_feature(info(false)));
++    CHECK_FALSE(webui::has_feature(json::object()));
++    CHECK(webui::display_name("fluidd") == "Fluidd");
++    CHECK(webui::display_name("mainsail") == "Mainsail");
++}
++
++TEST_CASE_METHOD(KilnWebuiFixture,
++                 "Kiln webui: an older Kiln without the feature asks nothing more",
++                 "[kiln][kiln_webui]") {
++    webui::model().fetch();
++    REQUIRE(client.rpc_calls.size() == 1);
++    CHECK(client.rpc_calls[0].method == webui::kInfoMethod);
++    client.rpc_calls[0].success_cb(rpc_result(info(false)));
++    drain();
++    CHECK(client.rpc_calls.size() == 1); // no get_webui
++    CHECK(subject("kiln_webui_state") == 0);
++    CHECK_FALSE(webui::model().state().has_value());
++
++    // A Kiln OS older still, without machine.kiln_os.info
++    client.rpc_calls.clear();
++    webui::model().fetch();
++    REQUIRE(client.rpc_calls.size() == 1);
++    client.rpc_calls[0].error_cb(MoonrakerError::from_json_rpc(
++        {{"code", -32601}, {"message", "Method not found"}}, webui::kInfoMethod));
++    drain();
++    CHECK(subject("kiln_webui_state") == 0);
++}
++
++TEST_CASE_METHOD(KilnWebuiFixture, "Kiln webui: not on another build", "[kiln][kiln_webui]") {
++    webui::set_built_in_for_test(false);
++    webui::model().fetch();
++    CHECK(client.rpc_calls.empty());
++    CHECK(subject("kiln_webui_state") == 0);
++}
++
++TEST_CASE_METHOD(KilnWebuiFixture, "Kiln webui: the GET shows the choice among what Kiln has",
++                 "[kiln][kiln_webui]") {
++    fetched(info(true), webui_object("mainsail"));
++    CHECK(subject("kiln_webui_state") == 1);
++    CHECK(string_subject("kiln_webui_options") == "Fluidd\nMainsail");
++    CHECK(subject("kiln_webui_selected") == 1);
++    CHECK(subject("kiln_webui_busy") == 0);
++
++    fetched(info(true), webui_object("fluidd", json::array({"fluidd"})));
++    CHECK(subject("kiln_webui_state") == 1);
++    CHECK(string_subject("kiln_webui_options") == "Fluidd");
++    CHECK(subject("kiln_webui_selected") == 0);
++
++    // The plugin serves both: greyed
++    fetched(info(true),
++            webui_object("fluidd", json::array({"fluidd", "mainsail"}), "mainsail-kiln"));
++    CHECK(subject("kiln_webui_state") == 2);
++
++    // The feature gone again (a downgrade): hidden
++    fetched(info(false), json::object());
++    CHECK(subject("kiln_webui_state") == 0);
++}
++
++TEST_CASE_METHOD(KilnWebuiFixture, "Kiln webui: a pick posts it and says to reload the page",
++                 "[kiln][kiln_webui]") {
++    fetched(info(true), webui_object("fluidd"));
++
++    webui::model().select(1);
++    REQUIRE(client.rpc_calls.size() == 1);
++    const auto call = client.rpc_calls[0];
++    CHECK(call.method == webui::kSetMethod);
++    CHECK(call.params == json{{"name", "mainsail"}});
++    CHECK(call.timeout_ms == webui::kTimeoutMs);
++    CHECK(webui::model().busy());
++    CHECK(subject("kiln_webui_busy") == 1);
++
++    // A second pick while the first is on its way sends nothing, and a fetch
++    // waits for the answer
++    webui::model().select(0);
++    webui::model().fetch();
++    CHECK(client.rpc_calls.size() == 1);
++
++    call.success_cb(rpc_result(post_answer("mainsail", "fluidd")));
++    drain();
++    CHECK_FALSE(webui::model().busy());
++    CHECK(subject("kiln_webui_busy") == 0);
++    CHECK(subject("kiln_webui_selected") == 1);
++    CHECK(webui::model().state()->webui == "mainsail");
++    CHECK(webui::model().last_message() ==
++          "Web interface is now Mainsail. Reload the printer's page in your browser.");
++}
++
++TEST_CASE_METHOD(KilnWebuiFixture, "Kiln webui: the current one sends nothing",
++                 "[kiln][kiln_webui]") {
++    fetched(info(true), webui_object("fluidd"));
++    webui::model().select(0);
++    CHECK(client.rpc_calls.empty());
++    CHECK_FALSE(webui::model().busy());
++    // Nor a line that isn't there
++    webui::model().select(5);
++    webui::model().select(-1);
++    CHECK(client.rpc_calls.empty());
++}
++
++TEST_CASE_METHOD(KilnWebuiFixture,
++                 "Kiln webui: the choice while another is served is sent again",
++                 "[kiln][kiln_webui]") {
++    // The choice mainsail, but nginx serves Fluidd (a plugin put its line
++    // back): tapping Mainsail re-applies it
++    fetched(info(true),
++            webui_object("mainsail", json::array({"fluidd", "mainsail"}), nullptr, "fluidd"));
++    CHECK(webui::model().state()->served == "fluidd");
++    webui::model().select(1);
++    REQUIRE(client.rpc_calls.size() == 1);
++    CHECK(client.rpc_calls[0].method == webui::kSetMethod);
++    CHECK(client.rpc_calls[0].params == json{{"name", "mainsail"}});
++    client.rpc_calls[0].success_cb(rpc_result(post_answer("mainsail", "mainsail")));
++    drain();
++    CHECK_FALSE(webui::model().busy());
++
++    // served unknown (null): the choice alone counts, nothing is sent
++    client.rpc_calls.clear();
++    json unknown = webui_object("mainsail");
++    unknown["served"] = nullptr;
++    fetched(info(true), unknown);
++    CHECK(webui::model().state()->served.empty());
++    webui::model().select(1);
++    CHECK(client.rpc_calls.empty());
++}
++
++TEST_CASE_METHOD(KilnWebuiFixture, "Kiln webui: no pick before Kiln has answered",
++                 "[kiln][kiln_webui]") {
++    webui::model().select(1);
++    CHECK(client.rpc_calls.empty());
++}
++
++TEST_CASE_METHOD(KilnWebuiFixture, "Kiln webui: a refusal shows why and puts the choice back",
++                 "[kiln][kiln_webui]") {
++    fetched(info(true), webui_object("fluidd"));
++    webui::model().select(1);
++    REQUIRE(client.rpc_calls.size() == 1);
++    client.rpc_calls[0].error_cb(
++        refusal(500, "agent_failed", "nginx -t refused the new configuration; nothing changed"));
++    drain();
++    CHECK_FALSE(webui::model().busy());
++    CHECK(subject("kiln_webui_busy") == 0);
++    CHECK(subject("kiln_webui_selected") == 0);
++    CHECK(subject("kiln_webui_state") == 1);
++    CHECK(webui::model().state()->webui == "fluidd");
++    CHECK(webui::model().last_message() ==
++          "Can't switch the web interface: nginx -t refused the new configuration; nothing "
++          "changed");
++
++    // A timeout too
++    webui::model().select(1);
++    REQUIRE(client.rpc_calls.size() == 2);
++    client.rpc_calls[1].error_cb(MoonrakerError::timeout(webui::kSetMethod, webui::kTimeoutMs));
++    drain();
++    CHECK(subject("kiln_webui_selected") == 0);
++    CHECK_FALSE(webui::model().busy());
++}
++
++TEST_CASE_METHOD(KilnWebuiFixture, "Kiln webui: the mainsail-kiln plugin greys the row",
++                 "[kiln][kiln_webui]") {
++    fetched(info(true), webui_object("fluidd"));
++    webui::model().select(1);
++    REQUIRE(client.rpc_calls.size() == 1);
++    client.rpc_calls[0].error_cb(
++        refusal(409, webui::kPluginReason, "The mainsail-kiln plugin serves both web interfaces"));
++    drain();
++    CHECK(subject("kiln_webui_state") == 2);
++    CHECK(subject("kiln_webui_selected") == 0);
++    CHECK(webui::model().last_message() == "Managed by the mainsail-kiln plugin");
++    // Greyed: a pick sends nothing
++    client.rpc_calls.clear();
++    webui::model().select(1);
++    CHECK(client.rpc_calls.empty());
++}
++
++TEST_CASE_METHOD(WebuiPageFixture, "Kiln webui: the System page's row follows the model",
++                 "[kiln][kiln_webui][settings]") {
++    // No feature: hidden
++    CHECK(lv_obj_is_hidden(find("container_kiln_webui")));
++
++    fetched(info(true), webui_object("mainsail"));
++    process_lvgl(5);
++    CHECK_FALSE(lv_obj_is_hidden(find("container_kiln_webui")));
++    CHECK_FALSE(lv_obj_is_hidden(find("row_kiln_webui")));
++    CHECK(lv_obj_is_hidden(find("row_kiln_webui_plugin")));
++    CHECK(options("row_kiln_webui") == "Fluidd\nMainsail");
++    CHECK(lv_dropdown_get_selected(dropdown("row_kiln_webui")) == 1);
++    CHECK_FALSE(lv_obj_has_state(dropdown("row_kiln_webui"), LV_STATE_DISABLED));
++
++    // Advanced settings off hides it
++    SystemSettingsManager::instance().set_advanced_settings(false);
++    drain();
++    process_lvgl(5);
++    CHECK(lv_obj_is_hidden(find("container_kiln_webui")));
++    SystemSettingsManager::instance().set_advanced_settings(true);
++    drain();
++    process_lvgl(5);
++    CHECK_FALSE(lv_obj_is_hidden(find("container_kiln_webui")));
++
++    // The dropdown's pick posts it, greyed until Kiln answers
++    lv_obj_t* dd = dropdown("row_kiln_webui");
++    lv_dropdown_set_selected(dd, 0);
++    lv_obj_send_event(dd, LV_EVENT_VALUE_CHANGED, nullptr);
++    REQUIRE(client.rpc_calls.size() == 1);
++    CHECK(client.rpc_calls[0].method == webui::kSetMethod);
++    CHECK(client.rpc_calls[0].params == json{{"name", "fluidd"}});
++    process_lvgl(5);
++    CHECK(lv_obj_has_state(dd, LV_STATE_DISABLED));
++
++    // Refused: the dropdown shows Mainsail again and works again
++    client.rpc_calls[0].error_cb(refusal(503, "agent_timeout", "The update agent didn't answer"));
++    drain();
++    process_lvgl(5);
++    CHECK(lv_dropdown_get_selected(dd) == 1);
++    CHECK_FALSE(lv_obj_has_state(dd, LV_STATE_DISABLED));
++
++    // The plugin's row instead, greyed
++    fetched(info(true),
++            webui_object("mainsail", json::array({"fluidd", "mainsail"}), "mainsail-kiln"));
++    process_lvgl(5);
++    CHECK(lv_obj_is_hidden(find("row_kiln_webui")));
++    CHECK_FALSE(lv_obj_is_hidden(find("row_kiln_webui_plugin")));
++    CHECK(lv_obj_has_state(dropdown("row_kiln_webui_plugin"), LV_STATE_DISABLED));
++    CHECK(lv_dropdown_get_selected(dropdown("row_kiln_webui_plugin")) == 1);
++
++    // Only Fluidd on this printer: one line
++    fetched(info(true), webui_object("fluidd", json::array({"fluidd"})));
++    process_lvgl(5);
++    CHECK(options("row_kiln_webui") == "Fluidd");
++}
+diff --git a/translations/en-GB.yml b/translations/en-GB.yml
+index 3cfb9334cb..fa95c7b736 100644
+--- a/translations/en-GB.yml
++++ b/translations/en-GB.yml
+@@ -6922,3 +6922,8 @@ translations:
+   'Settings reset to defaults. Root password is root. Restarting...': ''
+   'Settings reset to defaults. The root password was not reset: {}. Restarting...': ''
+   'Advanced settings': ''
++  'Web interface': ''
++  'What opens at the printer''s address in a browser': ''
++  'Managed by the mainsail-kiln plugin': ''
++  'Web interface is now {}. Reload the printer''s page in your browser.': ''
++  'Can''t switch the web interface: {}': ''
+diff --git a/translations/en.yml b/translations/en.yml
+index 96be91eeb1..15ae0b64ae 100644
+--- a/translations/en.yml
++++ b/translations/en.yml
+@@ -6908,3 +6908,9 @@ translations:
+   'Settings reset to defaults. The root password was not reset: {}. Restarting...': 'Settings reset to defaults. The root password was not reset: {}. Restarting...'
+   # Kiln OS: Settings > Advanced settings (patch 0107)
+   'Advanced settings': 'Advanced settings'
++  # Kiln OS: Settings > System > Web interface, Fluidd or Mainsail (patch 0108)
++  'Web interface': 'Web interface'
++  'What opens at the printer''s address in a browser': 'What opens at the printer''s address in a browser'
++  'Managed by the mainsail-kiln plugin': 'Managed by the mainsail-kiln plugin'
++  'Web interface is now {}. Reload the printer''s page in your browser.': 'Web interface is now {}. Reload the printer''s page in your browser.'
++  'Can''t switch the web interface: {}': 'Can''t switch the web interface: {}'
+diff --git a/translations/ru.yml b/translations/ru.yml
+index ee6d723689..859bfcf86f 100644
+--- a/translations/ru.yml
++++ b/translations/ru.yml
+@@ -7080,3 +7080,9 @@ translations:
+   'Settings reset to defaults. The root password was not reset: {}. Restarting...': 'Настройки сброшены к значениям по умолчанию. Пароль root не сброшен: {}. Перезапуск...'
+   # Kiln OS: Settings > Advanced settings (patch 0107)
+   'Advanced settings': 'Расширенные настройки'
++  # Kiln OS: Settings > System > Web interface, Fluidd or Mainsail (patch 0108)
++  'Web interface': 'Веб-интерфейс'
++  'What opens at the printer''s address in a browser': 'Что открывается по адресу принтера в браузере'
++  'Managed by the mainsail-kiln plugin': 'Управляется плагином mainsail-kiln'
++  'Web interface is now {}. Reload the printer''s page in your browser.': 'Теперь веб-интерфейс — {}. Обновите страницу принтера в браузере.'
++  'Can''t switch the web interface: {}': 'Не удалось переключить веб-интерфейс: {}'
+diff --git a/ui_xml/setting_dropdown_row.xml b/ui_xml/setting_dropdown_row.xml
+index bdf9df6909..2a6e4f43d2 100644
+--- a/ui_xml/setting_dropdown_row.xml
++++ b/ui_xml/setting_dropdown_row.xml
+@@ -13,6 +13,8 @@
+     <prop name="options" type="string" default=""/>
+     <prop name="options_tag" type="string" default=""/>
+     <prop name="bind_selected" type="string"/>
++    <!-- A string subject with the options, one per line, kept current (empty: options) -->
++    <prop name="bind_options" type="string" default=""/>
+     <prop name="callback" type="string" default=""/>
+     <prop name="disabled" type="string" default=""/>
+     <prop name="dropdown_width" type="string" default="33%"/>
+@@ -26,7 +28,7 @@
+         info_callback="$info_callback">
+     <lv_dropdown name="dropdown"
+                  width="$dropdown_width" height="content" options="$options" options_tag="$options_tag"
+-                 bind_selected="$bind_selected" style_radius="#border_radius">
++                 bind_options="$bind_options" bind_selected="$bind_selected" style_radius="#border_radius">
+       <bind_state_if_eq subject="$disabled" state="disabled" ref_value="1"/>
+       <event_cb trigger="value_changed" callback="$callback"/>
+     </lv_dropdown>
+diff --git a/ui_xml/settings_system_overlay.xml b/ui_xml/settings_system_overlay.xml
+index aff13da825..8ea41ec095 100644
+--- a/ui_xml/settings_system_overlay.xml
++++ b/ui_xml/settings_system_overlay.xml
+@@ -2,7 +2,7 @@
+ <!-- Copyright (C) 2025-2026 356C LLC -->
+ <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+ <!-- System Settings Overlay -->
+-<!-- Security, performance, telemetry, log level, restart, reset root password, boot into recovery, return to Flashforge firmware and extended memory (Kiln OS), factory reset, restore stock screen -->
++<!-- Security, performance, telemetry, log level, restart, reset root password, boot into recovery, return to Flashforge firmware, extended memory and web interface (Kiln OS), factory reset, restore stock screen -->
+ <!-- Kiln OS: an element bound hidden to settings_advanced shows only with Settings > Advanced settings on -->
+ <component>
+   <view name="settings_system_overlay" extends="overlay_panel" title="System" bg_color="#screen_bg">
+@@ -184,6 +184,30 @@
+             <bind_flag_if_eq subject="kiln_extended_memory_failed" flag="hidden" ref_value="0"/>
+           </text_small>
+         </lv_obj>
++        <!-- Kiln OS: Fluidd or Mainsail at the printer's address
++             (machine.kiln_os.get_webui / post_webui, ui_settings_kiln_webui.h).
++             kiln_webui_state 0 hidden (no webui feature), 1 the choice (greyed
++             while a switch is on its way), 2 greyed: the mainsail-kiln plugin
++             picks the interface itself. Only the interfaces Kiln has are listed. -->
++        <lv_obj name="container_kiln_webui"
++                width="100%" height="content" style_pad_all="0" style_bg_opa="0" style_border_width="0"
++                flex_flow="column" scrollable="false">
++          <bind_flag_if_eq subject="settings_advanced" flag="hidden" ref_value="0"/>
++          <bind_flag_if_eq subject="kiln_webui_state" flag="hidden" ref_value="0"/>
++          <setting_dropdown_row name="row_kiln_webui"
++                                label="Web interface" icon="view_dashboard"
++                                description="What opens at the printer's address in a browser"
++                                bind_options="kiln_webui_options" bind_selected="kiln_webui_selected"
++                                callback="on_kiln_webui_changed" disabled="kiln_webui_busy">
++            <bind_flag_if_not_eq subject="kiln_webui_state" flag="hidden" ref_value="1"/>
++          </setting_dropdown_row>
++          <setting_dropdown_row name="row_kiln_webui_plugin"
++                                label="Web interface" icon="view_dashboard"
++                                description="Managed by the mainsail-kiln plugin" bind_options="kiln_webui_options"
++                                bind_selected="kiln_webui_selected" disabled="kiln_webui_locked">
++            <bind_flag_if_not_eq subject="kiln_webui_state" flag="hidden" ref_value="2"/>
++          </setting_dropdown_row>
++        </lv_obj>
+         <!-- ================================================================== -->
+         <!-- FACTORY RESET -->
+         <!-- ================================================================== -->

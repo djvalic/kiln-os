@@ -5,6 +5,7 @@ config BR2_PACKAGE_FLUIDD
 	select BR2_PACKAGE_NGINX_HTTP
 	select BR2_PACKAGE_NGINX_HTTP_PROXY_MODULE
 	select BR2_PACKAGE_NGINX_HTTP_MAP_MODULE
+	select BR2_PACKAGE_NGINX_HTTP_GUNZIP_MODULE # nginx.conf, assets/
 	select BR2_PACKAGE_NGINX_HTTP_GZIP_STATIC_MODULE
 	help
 	  Fluidd, the web front end for Klipper/Moonraker: the prebuilt

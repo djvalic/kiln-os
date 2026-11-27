@@ -1,19 +1,31 @@
 #!/bin/sh
 # Fluidd's macro categories (Filament, IFS, Calibration, During print,
-# Light & sound; slicer and internal macros hidden), written into Moonraker's
+# Light & sound, System; slicer and internal macros hidden), written into Moonraker's
 # database once, only while Fluidd has no macro settings yet: a user's own
 # arrangement is never changed. Source: /usr/share/ad5x/fluidd-macros.json.
+# Mainsail (docs/web-interface.md) gets the same list from the same file:
+# its macro groups (expert mode) with the same names, macros and hidden
+# macros, plus "Uncategorized" for the macros in no group (Fluidd lists
+# those under its own Uncategorized). Written only while Mainsail has no
+# macro settings yet, or still has the plain ones older Kiln OS wrote;
+# whichever UI is chosen, so switching later finds them. Uncategorized is
+# refreshed at each start while that group exists (delete it to stop).
+# Each group has a colour ("colors" in the file): every button of the group
+# in Fluidd (its categories have none), the group in Mainsail. Printers set
+# up before the colours get them once (/data/ad5x/.macro-colors-done),
+# only where the colour is still the default: a colour you chose stays.
 
 # Files this creates are readable by klipper and www-data, whoever started
 # it (a root SSH session may run with umask 077; issue #31)
 umask 022
 
 SPEC=/usr/share/ad5x/fluidd-macros.json
+COLORS_DONE=/data/ad5x/.macro-colors-done
 case "$1" in
 start)
 	[ -f $SPEC ] || exit 0
-	( /usr/bin/python3 - $SPEC <<'PY' >/dev/null 2>&1 & )
-import json, sys, time, urllib.request
+	( /usr/bin/python3 - $SPEC $COLORS_DONE <<'PY' >/dev/null 2>&1 & )
+import json, sys, time, urllib.error, urllib.request
 U = "http://localhost:7125"
 for _ in range(90):                     # Moonraker up (up to 3 min)
     try:
@@ -23,33 +35,146 @@ for _ in range(90):                     # Moonraker up (up to 3 min)
         time.sleep(2)
 else:
     sys.exit(0)
-try:
-    cur = json.load(urllib.request.urlopen(
-        U + "/server/database/item?namespace=fluidd&key=macros",
-        timeout=5))["result"]["value"]
-except Exception:
-    cur = None                          # no entry yet
-if cur and (cur.get("stored") or cur.get("categories")):
-    sys.exit(0)                         # the user's own settings
+def get(ns, key, strict=False):
+    """The value; None for no entry yet. STRICT: any other error ends
+    the script (nothing is written over what couldn't be read)"""
+    try:
+        return json.load(urllib.request.urlopen(
+            U + f"/server/database/item?namespace={ns}&key={key}",
+            timeout=5))["result"]["value"]
+    except urllib.error.HTTPError as e:
+        if strict and e.code != 404:
+            sys.exit(0)
+    except Exception:
+        if strict:
+            sys.exit(0)
+    return None                         # no entry yet
+
+def post(ns, key, value):
+    req = urllib.request.Request(
+        U + "/server/database/item", method="POST",
+        data=json.dumps({"namespace": ns, "key": key,
+                         "value": value}).encode(),
+        headers={"Content-Type": "application/json"})
+    urllib.request.urlopen(req, timeout=10)
+
 spec = json.load(open(sys.argv[1]))
-stored = []
-for cid, items in spec["groups"].items():
-    for order, (name, alias, busy) in enumerate(items):
-        stored.append({"name": name.lower(), "alias": alias, "visible": True,
-                       "disabledWhilePrinting": bool(busy), "color": "",
-                       "categoryId": cid, "order": order})
-for name in spec["hidden"]:
-    stored.append({"name": name.lower(), "alias": "", "visible": False,
-                   "disabledWhilePrinting": False, "color": "",
-                   "categoryId": "0", "order": None})
-value = {"categories": spec["categories"], "stored": stored,
-         "expanded": list(range(len(spec["categories"]) + 1))}
-req = urllib.request.Request(
-    U + "/server/database/item", method="POST",
-    data=json.dumps({"namespace": "fluidd", "key": "macros",
-                     "value": value}).encode(),
-    headers={"Content-Type": "application/json"})
-urllib.request.urlopen(req, timeout=10)
+colors = spec.get("colors", {})
+cur = get("fluidd", "macros")
+if not (isinstance(cur, dict) and (cur.get("stored") or cur.get("categories"))):
+    stored = []
+    for cid, items in spec["groups"].items():
+        for order, (name, alias, busy) in enumerate(items):
+            stored.append({"name": name.lower(), "alias": alias,
+                           "visible": True,
+                           "disabledWhilePrinting": bool(busy),
+                           "color": colors.get(cid, ""),
+                           "categoryId": cid, "order": order})
+    for name in spec["hidden"]:
+        stored.append({"name": name.lower(), "alias": "", "visible": False,
+                       "disabledWhilePrinting": False, "color": "",
+                       "categoryId": "0", "order": None})
+    post("fluidd", "macros", {
+        "categories": spec["categories"], "stored": stored,
+        "expanded": list(range(len(spec["categories"]) + 1))})
+# Mainsail's macro settings, the same list as Fluidd's (upper case as
+# Mainsail keeps them). Its group ids are the category ids; a macro that
+# Fluidd disables while printing is hidden while printing or paused.
+# Anything there already is the user's, except the plain settings older
+# Kiln OS wrote (simple mode, no groups, our hidden macros), replaced once.
+OTHER = "ad5x-other"
+hidden = [n.upper() for n in spec["hidden"]]
+def group(name, items, color=""):
+    look = ({"color": "custom", "colorCustom": color} if color
+            else {"color": "primary"})
+    return {"name": name, **look, "showInStandby": True,
+            "showInPrinting": True, "showInPause": True,
+            "macros": [{"pos": i + 1, "name": n.upper(), "color": "group",
+                        "showInStandby": True, "showInPrinting": not busy,
+                        "showInPause": not busy}
+                       for i, (n, busy) in enumerate(items)]}
+cur = get("mainsail", "macros", strict=True)
+old_kiln = (isinstance(cur, dict) and cur.get("mode") == "simple"
+            and not cur.get("macrogroups")
+            and sorted(cur.get("hiddenMacros") or []) == sorted(hidden)
+            and set(cur) <= {"mode", "macrogroups", "hiddenMacros"})
+if cur is None or old_kiln:
+    groups = {c["id"]: group(c["name"], [(n, b) for n, _, b in
+                                         spec["groups"].get(c["id"], [])],
+                             colors.get(c["id"], ""))
+              for c in spec["categories"]}
+    groups[OTHER] = group("Uncategorized", [])
+    post("mainsail", "macros", {"mode": "expert", "macrogroups": groups,
+                                "hiddenMacros": hidden})
+    cur = get("mainsail", "macros", strict=True)
+
+# The colours, once, for settings written before Kiln OS had them: only
+# Kiln's own entries and groups still at the default colour (Fluidd "",
+# Mainsail "primary" without a colour of its own)
+import os
+if colors and not os.path.exists(sys.argv[2]):
+    fl = get("fluidd", "macros", strict=True)
+    if isinstance(fl, dict) and isinstance(fl.get("stored"), list):
+        mine = {(n.lower(), cid) for cid, items in spec["groups"].items()
+                for n, _, _ in items}
+        changed = False
+        for e in fl["stored"]:
+            if (isinstance(e, dict) and not e.get("color")
+                    and (str(e.get("name", "")).lower(), e.get("categoryId"))
+                    in mine and e.get("categoryId") in colors):
+                e["color"] = colors[e["categoryId"]]
+                changed = True
+        if changed:
+            post("fluidd", "macros", fl)
+    ms = get("mainsail", "macros", strict=True)
+    if isinstance(ms, dict) and isinstance(ms.get("macrogroups"), dict):
+        for gid, color in colors.items():
+            g = ms["macrogroups"].get(gid)
+            if (isinstance(g, dict) and g.get("color") == "primary"
+                    and g.get("colorCustom") in (None, "", "#fff")):
+                post("mainsail", "macros.macrogroups." + gid,
+                     dict(g, color="custom", colorCustom=color))
+    if fl is not None or ms is not None:
+        open(sys.argv[2], "w").close()
+    cur = get("mainsail", "macros", strict=True)
+
+# Uncategorized: every macro Mainsail would show that no group has
+# (plugins add macros), kept in step while the group is there
+if not (isinstance(cur, dict) and OTHER in (cur.get("macrogroups") or {})):
+    sys.exit(0)
+objs = cfg = None
+for _ in range(90):                     # Klipper ready (up to 3 min)
+    try:
+        r = json.load(urllib.request.urlopen(
+            U + "/printer/objects/query?configfile=settings", timeout=5))
+        cfg = r["result"]["status"]["configfile"]["settings"]
+        objs = json.load(urllib.request.urlopen(
+            U + "/printer/objects/list", timeout=5))["result"]["objects"]
+        break
+    except Exception:
+        time.sleep(2)
+else:
+    sys.exit(0)
+grouped = {m.get("name", "").upper()
+           for gid, g in cur["macrogroups"].items() if gid != OTHER
+           for m in (g.get("macros") or [])}
+skip = grouped | {n.upper() for n in cur.get("hiddenMacros") or []}
+names = sorted(o[12:].upper() for o in objs
+               if o.lower().startswith("gcode_macro ")
+               and not o[12:].startswith("_")
+               and "rename_existing" not in cfg.get(o.lower(), {})
+               and o[12:].upper() not in skip)
+other = cur["macrogroups"][OTHER]
+old = {m.get("name", "").upper(): m for m in other.get("macros") or []}
+if names != sorted(old):
+    keep = [old[n] for n in sorted(old, key=lambda n: old[n].get("pos", 0))
+            if n in names]
+    new = [{"name": n, "color": "group", "showInStandby": True,
+            "showInPrinting": True, "showInPause": True}
+           for n in names if n not in old]
+    macros = [dict(m, pos=i + 1) for i, m in enumerate(keep + new)]
+    post("mainsail", "macros.macrogroups." + OTHER,
+         dict(other, macros=macros))
 PY
 	;;
 esac

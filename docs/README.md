@@ -26,6 +26,7 @@ not yet in the public copy on GitHub.
 - [logs.md](logs.md): where the logs are and how to get more detail.
 - [network.md](network.md): Ethernet and Wi-Fi with NetworkManager, the files you edit, the old way and the safety net.
 - [memory.md](memory.md): 256 MiB and 512 MiB boards, and what Kiln OS changes at start-up for each.
+- [web-interface.md](web-interface.md): Fluidd or Mainsail on the printer's address, and how to switch.
 - [ifs-troubleshooting.md](ifs-troubleshooting.md): when the IFS drops off.
 - [pinout-ad5x.md](pinout-ad5x.md): the connectors on the main board (J5, J8, J19, J28 and others), their pins and voltages, by alexshev86.
 - [ad5x-board-diagram.png](img/ad5x-board-diagram.png): a block diagram of how the main board's parts connect, by jolting (drawn by `tools/make_board_diagram.py`).

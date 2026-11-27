@@ -360,7 +360,8 @@ and on printers with Kiln's own boot loader.
 Any of these:
 
 - On the touch screen: **Settings > System > Return to Flashforge
-  firmware**, then **Restart**. The printer restarts into the recovery OS.
+  firmware** (turn on **Settings > Advanced settings** first), then
+  **Restart**. The printer restarts into the recovery OS.
 - On the recovery screen: the **Restore stock** tile.
 - With a USB stick: an empty file named `kiln-return-to-stock` in the
   stick's top folder opens the page whenever the recovery OS starts, for
@@ -554,7 +555,8 @@ is the same command; `ad5x-passwd --stock` goes back to stock's password,
 
 **Forgot it, or never had one** (installed straight from stock):
 
-1. On the printer's touch screen open Settings > System.
+1. On the printer's touch screen turn on Settings > Advanced settings
+   (at the bottom of Settings), then open Settings > System.
 2. Hold **Reset root password** for 5 seconds.
 3. Log in with `ssh root@<printer>`, password `root`.
 4. Run `passwd` and choose your own.

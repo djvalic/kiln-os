@@ -96,7 +96,10 @@ HELIXSCREEN_INSTDIR = $(TARGET_DIR)/usr/lib/helixscreen
 # The layout of upstream's release package (bin, ui_xml, config, assets),
 # under /usr/lib/helixscreen: the XML minified as upstream's release does
 # (it stays resident in RAM), font sources, macOS icons and test data left
-# out, and printer pictures only for FlashForge and the generic fallback.
+# out, and printer pictures only for the AD5X and the generic fallback (a
+# printer without its picture shows the generic one, and the picture
+# picker lists only the files there, prerendered_images.cpp and
+# printer_image_manager.cpp).
 # Only helix-screen: S70helixscreen starts it directly (no upstream
 # launcher, splash or watchdog). No CA bundle (HTTPS is only for upstream's
 # update/report servers).
@@ -122,7 +125,7 @@ define HELIXSCREEN_INSTALL_TARGET_CMDS
 	find $(HELIXSCREEN_INSTDIR)/assets -name '*.icns' -delete
 	rm -f "$(HELIXSCREEN_INSTDIR)/assets/images/orcaslicer test cube.PNG"
 	find $(HELIXSCREEN_INSTDIR)/assets/images/printers -maxdepth 1 -name '*.png' \
-		! -name 'flashforge-*' ! -name 'generic-corexy.png' -delete
+		! -name 'flashforge-adventurer-5x*' ! -name 'generic-corexy*' -delete
 	# HelixScreen 1.2's pictures of other filament units (AMS, Box Turtle,
 	# ERCF, ...): an AD5X only ever shows its IFS (about 20 MB saved)
 	find $(HELIXSCREEN_INSTDIR)/assets/images/units -mindepth 1 -maxdepth 1 \

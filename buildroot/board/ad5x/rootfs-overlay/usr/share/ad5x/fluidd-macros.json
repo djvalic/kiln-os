@@ -25,6 +25,14 @@
       "name": "System"
     }
   ],
+  "colors": {
+    "ad5x-filament": "#43A047",
+    "ad5x-ifs": "#00897B",
+    "ad5x-calibration": "#8E24AA",
+    "ad5x-print": "#1E88E5",
+    "ad5x-light": "#FFA000",
+    "ad5x-system": "#757575"
+  },
   "groups": {
     "ad5x-filament": [
       [

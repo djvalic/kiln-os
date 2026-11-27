@@ -403,7 +403,8 @@ Flashforge firmware only takes the kernel and root out of it).
 Puts Flashforge's stock system back into slot B and makes the printer start
 it, with only the touch screen, a USB stick and a power cycle. The ways in:
 the recovery screen's Restore stock tile; HelixScreen's Settings > System >
-Return to Flashforge firmware or `POST /machine/kiln_os/return_stock` (the
+Return to Flashforge firmware (with Settings > Advanced settings on) or
+`POST /machine/kiln_os/return_stock` (the
 main OS restarts into this recovery OS, which opens the page); the main
 OS's `ad5x-restore-stock`; a stick with `kiln-return-to-stock`. The page
 opens by itself in those cases and waits for a tap.

@@ -116,7 +116,8 @@ A 512 MiB board can use all of its RAM. It is off by default and not
 needed: Kiln OS is made to run in 256 MiB.
 
 Switch it on (as root over SSH; Kiln's API, the touch screen's Settings >
-System and the `KILN_MEMORY_MODE` macro use the same command):
+System > Extended memory (with Settings > Advanced settings on) and the
+`KILN_MEMORY_MODE` macro use the same command):
 
 ```
 ad5x-memory extended on     # from the next start

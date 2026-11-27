@@ -109,7 +109,7 @@ inside Moonraker's `result`; their replies keep that inner `result`
 
 | Reason | Status | When | Endpoints |
 |---|---|---|---|
-| `bad_parameter` | 400 | A parameter is missing, unknown or out of range | `channel`, `memory`, `ifs_firmware`, service actions, `ad5x_setup/control`, upload `plate` |
+| `bad_parameter` | 400 | A parameter is missing, unknown or out of range | `channel`, `memory`, `ifs_firmware`, `webui`, service actions, `ad5x_setup/control`, upload `plate` |
 | `bad_3mf` | 400 | The uploaded `.3mf` can't be printed (no sliced plate, not a zip, encrypted, damaged, too large) | upload |
 | `printing` | 409 | A print is running or paused | `kernel_retry`, `boot_recovery`, `ifs_firmware`, service actions, reboot and shutdown, Kiln OS and package updates, `ad5x_setup/control` |
 | `print_state_unknown` | 409 | The agent couldn't tell whether a print is running (Klipper or Moonraker didn't say); try again | as `printing`, not `ad5x_setup/control` |
@@ -119,21 +119,22 @@ inside Moonraker's `result`; their replies keep that inner `result`
 | `refused` | 409 | Another refusal of the agent (the message says why) | `boot_recovery` |
 | `nothing_to_retry` | 409 | Kiln's kernel runs and nothing is recorded as failed | `kernel_retry` |
 | `no_own_kernel` | 409 | This image has no kernel of its own | `kernel_retry` |
-| `not_available` | 409 | Extended memory needs a printer with 512 MiB (this one has 256 MiB, or its size is unknown); the image has no Klipper firmware for the IFS | `memory` (POST), `ifs_firmware` (POST) |
+| `not_available` | 409 | Extended memory needs a printer with 512 MiB (this one has 256 MiB, or its size is unknown); the image has no Klipper firmware for the IFS; the printer has no copy of that web interface | `memory` (POST), `ifs_firmware` (POST), `webui` (POST) |
+| `plugin_manages_webui` | 409 | The mainsail-kiln plugin serves both web interfaces (ports 80 and 81) and picks port 80 itself (its `WEB` macro); disable it to switch with Kiln | `webui` (POST) |
 | `not_enabled` | 409 | The owner hasn't turned the IFS firmware switch on (`/data/ad5x/ifs-switch.enable`) | `ifs_firmware` (POST, `klipper`) |
 | `ifs_switching` | 409 | The IFS firmware is being switched (Klipper is stopped); try again in a few minutes | `ifs_firmware` (POST), `kernel_retry`, `boot_recovery`, `return_stock`, service actions, reboot and shutdown, Kiln OS and package updates |
 | `printer_busy` | 409 | Klipper is running a command (`idle_timeout` `Printing`, such as a filament load from the console) | `ifs_firmware` (POST) |
 | `step_running` | 409 | Another setup step is running or waiting (abort it first) | `ad5x_setup/control` |
 | `not_waiting` | 409 | `adjust`/`accept` while no step waits for it | `ad5x_setup/control` |
 | `restart_needed` | 409 | An aborted PID test left a heater off: restart Klipper first | `ad5x_setup/control` |
-| `agent_failed` | 500 | The root agent's action failed (`ad5x-kernel retry`, an init script, `ad5x-update`, the boot flag, `ad5x-memory`) | `kernel_retry`, `boot_recovery`, `memory` (POST), `ifs_firmware` (POST), service actions, updates |
+| `agent_failed` | 500 | The root agent's action failed (`ad5x-kernel retry`, an init script, `ad5x-update`, the boot flag, `ad5x-memory`, `ad5x-webui`) | `kernel_retry`, `boot_recovery`, `memory` (POST), `ifs_firmware` (POST), `webui` (POST), service actions, updates |
 | `kernel_records_unreadable` | 500 | The kernel fallback's records can't be read | `kernel`, `kernel_retry` |
 | `unpack_failed` | 500 | Writing the G-code of a `.3mf` failed | upload |
 | `failed` | 500 (400 through Moonraker) | Another failure in a Kiln Klipper module (the message says what) | `ad5x_setup/control` |
 | `internal_error` | 500 (400 through Moonraker) | An unexpected error in a Kiln Klipper module (a bug: please report it) | `ad5x_setup/control` |
 | `download_failed` | 502 | The update download failed or doesn't match `SHA256SUMS` | Kiln OS and package updates |
-| `agent_unavailable` | 503 | The root update agent's request folder isn't there (`S68ad5x-update-agent` never started) | `kernel_retry`, `boot_recovery`, `memory` (POST), service actions, reboot and shutdown, updates |
-| `agent_timeout` | 503 | The root update agent didn't answer in time | `kernel_retry`, `boot_recovery`, `memory` (POST), service actions, reboot and shutdown, updates |
+| `agent_unavailable` | 503 | The root update agent's request folder isn't there (`S68ad5x-update-agent` never started) | `kernel_retry`, `boot_recovery`, `memory` (POST), `webui` (POST), service actions, reboot and shutdown, updates |
+| `agent_timeout` | 503 | The root update agent didn't answer in time | `kernel_retry`, `boot_recovery`, `memory` (POST), `webui` (POST), service actions, reboot and shutdown, updates |
 | `database_unavailable` | 503 | Moonraker's database isn't loaded | `channel`, `memory_notice_seen` |
 | `no_space` | 507 | Not enough free space for the G-code of a `.3mf` | upload |
 
@@ -178,6 +179,7 @@ manager's `Kiln OS` entry (`version`) there.
 | `lane_data` | The `lane_data` database namespace is kept up to date (`[kiln_lanes]` loaded); with AFC in Klipper by AFC, not Kiln ([lane_data](#database-namespace-lane_data)) |
 | `memory_mode` | This printer has 512 MiB and can use Extended memory mode: `/machine/kiln_os/memory`, `KILN_MEMORY_MODE`. Absent on 256 MiB printers |
 | `ifs_firmware` | `GET`/`POST /machine/kiln_os/ifs_firmware`, the IFS firmware switch. Whether it can be offered on this printer is its `available` |
+| `webui` | `GET`/`POST /machine/kiln_os/webui`, `KILN_WEBUI`: the web interface on port 80, Fluidd or Mainsail. Which ones this printer has is its `available` |
 
 A feature is listed when Moonraker's side of it is there. The Klipper
 objects behind `ifs`, `soak`, `setup_wizard` and `plugins` exist once
@@ -196,10 +198,11 @@ Klipper has started (`printer.objects.list`).
 | `GET\|POST /machine/kiln_os/memory` | `machine.kiln_os.get_memory`, `machine.kiln_os.post_memory` | v1.0.0 |
 | `POST /machine/kiln_os/memory_notice_seen` | `machine.kiln_os.memory_notice_seen` | v1.0.0 |
 | `GET\|POST /machine/kiln_os/ifs_firmware` | `machine.kiln_os.get_ifs_firmware`, `machine.kiln_os.post_ifs_firmware` | (v1.0.0) |
+| `GET\|POST /machine/kiln_os/webui` | `machine.kiln_os.get_webui`, `machine.kiln_os.post_webui` | (v1.0.1) |
 | `GET\|POST /printer/ad5x_setup/control` | `printer.ad5x_setup.control` | v0.0.1 |
 | `GET\|POST /printer/ad5x_soak/abort` | `printer.ad5x_soak.abort` | v0.0.10 |
 
-The first nine are Moonraker's `kiln_os` component
+The first ten are Moonraker's `kiln_os` component
 (`moonraker/components/kiln_os.py`); the last two come from Klipper
 (`klipper/extras/ad5x_setup.py`, `ad5x_soak.py`) and Moonraker passes them
 on.
@@ -595,6 +598,103 @@ updates, `kernel_retry`, `boot_recovery` and `return_stock` with 409
 
 Since v1.0.0 (API 1.8).
 
+### GET /machine/kiln_os/webui
+
+The web interface on port 80 (`docs/web-interface.md`): Fluidd (the
+default) or Mainsail, one at a time. The printer's address
+(`http://PRINTER/`) opens the chosen one; both use the same Moonraker,
+cameras and touch screen view, and keep their settings apart. No
+parameters. Never fails while Moonraker runs. It also brings the update
+manager's entries in line with the choice (after `ad5x-webui` over SSH,
+which asks for it itself).
+
+```sh
+curl http://PRINTER/machine/kiln_os/webui
+```
+
+```json
+{"result": {
+  "webui": "fluidd",
+  "default": "fluidd",
+  "served": "fluidd",
+  "mismatch": false,
+  "available": ["fluidd", "mainsail"],
+  "versions": {"fluidd": "1.38.0", "mainsail": "2.19.0"},
+  "plugin": null,
+  "update_entries": ["fluidd"],
+  "update_entries_pending": false,
+  "moonraker_restart_needed": false
+}}
+```
+
+| Field | Type | |
+|---|---|---|
+| `webui` | string | The choice: `fluidd` or `mainsail` (`/data/ad5x/webui`; `fluidd` when nothing valid is stored, or the chosen one isn't on this printer) |
+| `default` | string | `fluidd` |
+| `served` | string or null | What nginx's port 80 serves now (its root line, which Kiln keeps in line with what nginx runs: a failed reload puts the old one back); null when it is neither |
+| `mismatch` | boolean | `served` is known and isn't `webui`, and no `plugin` serves both: a plugin put its own line back (mainsail-kiln's `DISABLE_PLUGIN` restores Fluidd's). Shut-out and update entries follow `served`. Choosing `webui` again (`POST`) puts them in line; so does the next start |
+| `available` | list of strings | The web interfaces this printer has (in the image, or a copy in `/data/ad5x/web`). Offer the switch when it has two |
+| `versions` | object | `release_info.json`'s version of each available one without a leading `v` (what would be served: the updated copy, else the image's); null when unreadable |
+| `plugin` | string or null | `mainsail-kiln` while that community plugin serves both UIs (Mainsail and Fluidd on ports 80 and 81, swapped by its `WEB` macro): Kiln's switch is refused then |
+| `update_entries` | list of strings | The web interfaces that have an update manager entry now: the served one (both while `plugin` serves both) |
+| `update_entries_pending` | boolean | The entries are being brought in line in the background (right after a switch, or while an update holds the update manager): `update_entries` is the state before. The request never waits for it |
+| `moonraker_restart_needed` | boolean | The update entries couldn't be brought in line while Moonraker runs (not expected; false while pending); Moonraker's next start sets them up. Restart it with `POST /machine/services/restart?service=moonraker` |
+
+Only the chosen interface may use Moonraker: a websocket that identifies
+(`server.connection.identify`) with `type` `web` and `client_name`
+`fluidd` or `mainsail` but isn't the one `served` gets
+`notify_gcode_response` `!! This printer now uses NAME: reload the page`
+and is closed a second later (close code 1008), at every reconnect; at a
+switch the open ones are closed the same way. Other clients (any other
+name or type, or none) are never touched; neither is either interface
+while `plugin` is set or while `served` is null. Each page nginx sends sets the cookie
+`kiln_webui=NAME` for the service worker change-over
+(`docs/web-interface.md`).
+
+Since v1.0.1 (API 1.12).
+
+### POST /machine/kiln_os/webui
+
+Puts a web interface on port 80. Parameter `name`: `fluidd` or
+`mainsail` (any case). The root update agent runs `ad5x-webui --no-sync
+NAME`: it stores the choice, makes the UI's updatable copy in
+`/data/ad5x/web/NAME` the first time (from the image, its text files
+unpacked as Moonraker's own update writes them: about 10 MB for
+Mainsail), points nginx at it (checked with `nginx -t`; the old setup back
+when that or the reload fails) and reloads nginx. No reboot and no Moonraker restart;
+allowed while printing (a print, Klipper and Moonraker aren't touched).
+Pages of the old UI that are open lose their connection (see `GET`)
+and show the old UI until they are reloaded: tell the user to reload.
+The update manager's entries follow in the background, without
+delaying the answer (`update_entries_pending`): the UI that is no longer
+served loses its entry, the other gets its own back (its copy and its
+updates stay). Choosing the stored one again re-applies it (useful when
+`mismatch`). The reply is the `GET` object, plus:
+
+| Field | Type | |
+|---|---|---|
+| `previous` | string | The choice before |
+| `changed` | boolean | `webui` differs from `previous`, or `served` changed |
+| `message` | string or null | The agent's text, for people (`Mainsail on port 80; reload the page in the browser`) |
+
+Waits up to 30 s for the agent.
+
+```sh
+curl -X POST 'http://PRINTER/machine/kiln_os/webui?name=mainsail'
+```
+
+Errors:
+
+| Status | Reason | When |
+|---|---|---|
+| 400 | `bad_parameter` | No `name`, or not `fluidd` or `mainsail` |
+| 409 | `not_available` | This printer has no copy of that web interface |
+| 409 | `plugin_manages_webui` | The mainsail-kiln plugin serves both (`plugin`) |
+| 500 | `agent_failed` | `ad5x-webui` failed (the message has its answer, such as `nginx -t refused the new configuration; nothing changed`) |
+| 503 | `agent_timeout`, `agent_unavailable` | As `kernel_retry` |
+
+Since v1.0.1 (API 1.12).
+
 ### /printer/ad5x_setup/control
 
 The setup wizard's steps (calibrations), the same actions as the G-code
@@ -848,6 +948,20 @@ Kiln adds entries to upstream's update manager (`/machine/update/status`,
 `/machine/update/refresh`, `/machine/update/upgrade`); Fluidd's Software
 updates card uses them.
 
+The web interface has upstream's own `web` entry, `fluidd` or
+`mainsail`: only the one served on port 80 ([webui](#get-machinekiln_oswebui)
+`update_entries`), for its copy in `/data/ad5x/web/<name>`. Fluidd's is
+in `moonraker-updates.conf`, Mainsail's is added by Kiln with the same
+settings (`type: web`, `channel: stable`, `repo: mainsail-crew/mainsail`);
+a `[update_manager mainsail]` of your own in `moonraker.conf` (or a
+plugin's) is used instead. Since v1.0.1.
+
+Mainsail (v2.19.0) lists only entries of the types it knows (`git_repo`,
+`zip`, `web`, `python`, `executable`): the `Kiln OS`, `klipper` and
+`moonraker` entries below (`kiln_os`, `kiln_app`) don't show in its
+update panel. Update Kiln OS from the touch screen or Fluidd then, or
+with the endpoints below.
+
 ### "Kiln OS"
 
 The OS itself. `name` and key are both `Kiln OS` (with the space).
@@ -944,12 +1058,23 @@ curl 'http://PRINTER/server/database/item?namespace=lane_data'
 | `material` | string | Material type, "" when the slot has no filament or no type set |
 | `color` | string | `#RRGGBB`, "" with no material |
 | `nozzle_temp` | int | The slot's nozzle temperature (its own or the material's default), 0 none |
-| `bed_temp` | int | 0 (Kiln doesn't know it). A positive one HelixScreen stored stays until the slot's material changes or the slot empties. Since v1.0.1 |
-| `filament_id` | string | OrcaSlicer filament id of Kiln's profile for the type (kiln-orca): PLA `PKLNPLA`, SILK `PKLNSLK`, PLA-CF `PKLNPCF`, PETG `PKLNPET`, PETG-CF `PKLNPGC`, ABS `PKLNABS`, TPU `PKLNTPU` (type matched in any case). No key for any other type or an empty slot. HelixScreen's own string id (with `helix_filament_id_source` or `helix_catalog_id` in the record) is kept instead, also over an empty slot or a material change. Since v1.0.1 |
-| `spool_id` | int or null | Not Kiln's: kept as stored (HelixScreen's linked Spoolman spool, also over an empty slot); null in a record Kiln creates |
+| `bed_temp` | int | The slot's `IFS_SET_MATERIAL BED_TEMP=` (plugin API 1.12), else 0. Without one, a positive one HelixScreen stored stays until the slot's material changes or the slot empties. Since v1.0.1 |
+| `filament_id` | string | The slot's `IFS_SET_MATERIAL FILAMENT_ID=`, exactly as sent (an id from OrcaSlicer's own filament library, e.g. `OFDSrzZ8` for Generic PLA; plugin API 1.12). Without one: the OrcaSlicer filament id of Kiln's profile for the type (kiln-orca): PLA `PKLNPLA`, SILK `PKLNSLK`, PLA-CF `PKLNPCF`, PETG `PKLNPET`, PETG-CF `PKLNPGC`, ABS `PKLNABS`, TPU `PKLNTPU` (type matched in any case); no key for any other type or an empty slot; HelixScreen's own string id (with `helix_filament_id_source` or `helix_catalog_id` in the record) is kept instead, also over an empty slot or a material change. Since v1.0.1 |
+| `spool_id` | int or null | The slot's `IFS_SET_MATERIAL SPOOL_ID=` (plugin API 1.12). Without one, kept as stored (HelixScreen's linked Spoolman spool, also over an empty slot); null in a record Kiln creates |
+| `vendor_name`, `name` | string | The slot's `IFS_SET_MATERIAL VENDOR=` and `NAME=` (plugin API 1.12). Without one, kept as stored (HelixScreen's); no key in a record Kiln creates |
 | `scan_time` | string | UTC `YYYY-MM-DDTHH:MM:SSZ` of the slot's last change Kiln saw, or of the last HelixScreen write; "" in a record Kiln creates |
 
-No `vendor` or `name` keys from Kiln, and never `writer`. Since v0.0.5.
+The slot's own `SPOOL_ID`, `VENDOR`, `NAME`, `FILAMENT_ID` and
+`BED_TEMP` (all optional, `IFS_SET_MATERIAL`) win over what another
+writer stored; one Kiln wrote and the slot no longer has (cleared, or
+the slot's filament out) is taken out again, unless HelixScreen wrote
+the record since (then the value counts as HelixScreen's). After a
+Moonraker restart, a record without `writer` counts as Kiln's: its
+spool details follow the slot as it is now. A change of spool details
+alone leaves HelixScreen's `bed_temp`. Like the type and colour,
+they are left out while the slot has no filament or no type. No `vendor`
+or `spool_name` keys from Kiln (HelixScreen's own spellings), and never
+`writer`. Since v0.0.5.
 HelixScreen writes records under the same keys too (`"writer":
 "helixscreen"` and more fields: `filament_type`, `vendor_name`, `name`,
 `spool_id`, `helix_*`, its `filament_id` a string or null), each time the
@@ -969,7 +1094,9 @@ Klipper restart. Since v1.0.1 (issue #101).
 
 Kiln also writes Fluidd's own namespace `fluidd` once (key `macros`: macro
 categories, internal macros hidden), only while Fluidd has no macro
-settings yet.
+settings yet, and the same hidden macros into Mainsail's namespace
+`mainsail` (key `macros`: `mode` `simple`, `hiddenMacros`, no groups),
+only while Mainsail has none (since v1.0.1).
 
 ## Warnings and notifications
 
@@ -1009,6 +1136,8 @@ Lines Kiln sends that a client may act on:
 | `// action:ad5x_setup_wizard` | Someone asked for the setup wizard (`SETUP_WIZARD`); the touch screen opens it | v0.0.1 |
 | `!! Upload <file>: print not started: <reason>` | An upload's print didn't start (see `print_error`) | v0.0.45 |
 | `// Extended memory: on\|off (this start: standard\|extended)`, `// Extended memory: not available (...)`, `// Needs a boot loader update to take effect: ...`, `!! KILN_MEMORY_MODE: [reason] ...` | `KILN_MEMORY_MODE`'s answer (Moonraker sends it, so only clients see it, not `klippy.log`) | v1.0.0 |
+| `// Web interface on port 80: Fluidd\|Mainsail ...`, `// The mainsail-kiln plugin serves both ...`, `!! KILN_WEBUI: [reason] ...` | `KILN_WEBUI`'s answer (Moonraker sends it) | v1.0.1 |
+| `!! This printer now uses Fluidd\|Mainsail: reload the page` | Sent only to a connection of the web interface that isn't chosen, just before it is closed | v1.0.1 |
 | `// IFS: ...`, `// Bed heat soak: ...`, ... | Information for people; not an API | |
 
 Kiln adds no websocket notification methods of its own; status changes
@@ -1076,7 +1205,7 @@ What is in each slot. Since v0.0.1.
 |---|---|---|
 | `available` | bool | Always true |
 | `channel_count` | int | 4 |
-| `slots` | object | `"1"`-`"4"` → `{"type": string or null, "color": "#RRGGBB" or null, "temp": number or null}`; `temp` is the slot's own temperature or the material's default |
+| `slots` | object | `"1"`-`"4"` → `{"type": string or null, "color": "#RRGGBB" or null, "temp": number or null, "spool_id": int or null, "vendor": string or null, "name": string or null, "filament_id": string or null, "bed_temp": int or null}`; `temp` is the slot's own temperature or the material's default; the last five are the spool's details as `IFS_SET_MATERIAL` set them (since v1.0.1, plugin API 1.12) |
 | `loaded` | object or null | The loaded slot's entry, null none |
 | `temperatures` | object | Material → handling temperature (`PLA` 220, `PETG` 250, ...) |
 
@@ -1190,12 +1319,13 @@ are not API and may change in any release. Commands from plugins
 | `IFS_PREFEED` | `CHANNEL=` | Feed a new spool up to the IFS | v0.0.1 |
 | `IFS_STOP` | | Stop the IFS | v0.0.1 |
 | `IFS_STATUS`, `IFS_MATERIALS` | | Report | v0.0.1 |
-| `IFS_SET_MATERIAL` | `SLOT=` `[TYPE=] [COLOR=] [TEMP=]` (absent = keep, empty = clear) | Slot material | v0.0.1 |
+| `IFS_SET_MATERIAL` | `SLOT=` `[TYPE=] [COLOR=] [TEMP=]` (absent = keep, empty = clear); since v1.0.1 (plugin API 1.12) also the spool's `[SPOOL_ID=] [VENDOR=] [NAME=] [FILAMENT_ID=] [BED_TEMP=]` (`printer.ifs_materials`, `lane_data`): a `TYPE=` other than the slot's type clears the spool's details except those given in the same command (the same `TYPE=`, `COLOR=` and `TEMP=` keep them); `SPOOL_ID` a whole number from 1 (no leading zeros), `BED_TEMP` 0-130, texts up to 64 characters without `"` `'` `\` `;` `%`, in double quotes when they hold spaces or `#` (`NAME="Silk Red"`; unquoted, a space gives "Malformed command" and `#` cuts the line). Releases before plugin API 1.12 ignore these next to `TYPE=`/`COLOR=`/`TEMP=`: check `printer.ad5x_plugins.api_version` | Slot material | v0.0.1 |
 | `IFS_SET_COLOR` | `CHANNEL=` `COLOR=` | Slot colour | v0.0.1 |
 | `IFS_SET_CHANNEL` | `CHANNEL=` (0 none) | Tell Kiln which slot is loaded; while `tube_blocked` only `CHANNEL=0` (the strand pulled out by hand), which lifts it | v0.0.1 |
 | `IFS_MAP_TOOL` | `TOOL=` `SLOT=` or `RESET=1` | Tool map for this print | v0.0.1 |
 | `IFS_MAP_MODE` | `[MODE=fixed\|loaded]` `[ZMOD=1]` | Tool map mode | v0.0.23 |
 | `IFS_AUTO_REFILL` | `[ENABLE=0\|1] [MATCH=exact\|similar\|any]` | Auto-refill | v0.0.5 |
+| `IFS_LED` | `[ENABLE=0\|1] [SLEEP=0\|1]` | The IFS's status light on Klipper firmware: `ENABLE` (kept), `SLEEP` (the screen sleeps: off while idle and no print runs; not kept); shows both without parameters (`docs/mcu-flashing.md`, "Status light") | v1.0.2 |
 | `IFS_RESET_DRIVER` | | Recover after a fault | v0.0.1 |
 | `IFS_TUNE`, `IFS_TUNE_SPEED`, `IFS_TUNE_LOAD`, `IFS_TUNE_UNLOAD`, `IFS_TUNE_RESET` | `[CHANNEL=]` ... | Swap tuning | v0.0.1 |
 | `IFS_PURGE_TEST`, `IFS_PURGE_RESULT`, `IFS_SET_FLUSH` | | Purge tuning | v0.0.1 |
@@ -1220,6 +1350,7 @@ clients.
 | `LOG_MODE` | `[MODE=short\|extended] [HOURS=]` | How much `klippy.log` keeps | v0.0.53 |
 | `M300`, `PLAY_MIDI`, `PLAY_SOUND`, `SOUND_STOP`, `SOUND_SETUP` | | Speaker | v0.0.7 |
 | `KILN_MEMORY_MODE` | `[ENABLE=0\|1]` | Extended memory from the next start, as `POST /machine/kiln_os/memory`; without `ENABLE` the mode. A macro (macros/ `system.cfg`) calling Moonraker's remote method `kiln_memory_mode`; the answer comes in the console | v1.0.0 |
+| `KILN_WEBUI` | `[NAME=fluidd\|mainsail]` | The web interface on port 80, as `POST /machine/kiln_os/webui`; without `NAME` which one. A macro (macros/ `system.cfg`) calling Moonraker's remote method `kiln_webui`; the answer comes in the console | v1.0.1 |
 
 `PLUGINS_LIST`, `PLUGIN_ENABLE`, `PLUGIN_DISABLE`, `IFS_TUNE_RUN`,
 `IFS_TUNE_CLEAR`, `IFS_INFO` and `CONFIG_BACKUPS_SHOW` are buttons for

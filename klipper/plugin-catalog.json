@@ -34,6 +34,14 @@
       "components": ["microspool"]
     },
     {
+      "name": "macro-pack",
+      "title": "Macro pack",
+      "description": "Everyday printer macros for Fluidd and Mainsail (light, preheat, park, purge, IFS, calibration, camera snapshots), grouped and coloured in their macro panels",
+      "url": "https://github.com/djvalic/kiln-macro-pack.git",
+      "requires_os": "1.12",
+      "components": ["kiln_macro_pack"]
+    },
+    {
       "name": "tailscale",
       "title": "Tailscale (remote access)",
       "description": "Fluidd and Moonraker from anywhere through your own Tailscale tailnet, no ports opened on your router (needs Extended memory on a 512 MiB printer)",
@@ -47,9 +55,43 @@
       "description": "Happy Hare MMU software in place of Kiln's IFS driver: tool changes parked at the toolhead, the IFS synced with the extruder, clog detection from the IFS stall sensors (needs the IFS on Klipper firmware)",
       "url": "https://github.com/KilnOS-Plugins/kiln-happy-hare.git",
       "commit": "98c1248039bf322963b23663bc44a4252ad8d82b",
-      "author": "jolting",
+      "author": "moggieuk (Happy Hare), Hunter Laux (AD5X IFS)",
       "requires_os": "1.5",
+      "components": [],
+      "follow": "tags"
+    },
+    {
+      "name": "afc",
+      "title": "AFC (Armored Turtle)",
+      "description": "AFC-Klipper-Add-On with the AD5X IFS as an AFC unit: Kiln does the loads, unloads and swaps (needs the AD5X IFS, or an AFC unit through AFC_FF)",
+      "url": "https://github.com/DIEHARDave/afc-kiln.git",
+      "commit": "8788c142eb967cccf82595d14f10912163fce347",
+      "follow": "tags",
+      "author": "DIEHARDave",
+      "requires_os": "1.7",
       "components": []
+    },
+    {
+      "name": "ff_nfc",
+      "title": "NFC filament tags",
+      "description": "Scan a spool's NFC/RFID tag, pick the IFS slot, and its material, colour and Spoolman spool are set (needs a USB NFC reader: PN532 or ACR122U)",
+      "url": "https://github.com/DIEHARDave/FF_NFC.git",
+      "commit": "7b15a271d08fcf0642ff3b8a358472c224ec486b",
+      "follow": "tags",
+      "author": "DIEHARDave",
+      "requires_os": "1.6",
+      "components": []
+    },
+    {
+      "name": "diehard-pushraker",
+      "title": "pushraker notifications",
+      "description": "Push notifications (ntfy, Pushover, Telegram, Discord, e-mail ... with snapshots), Discord status cards and update notices; settings page on port 82. Replaces the notify plugin",
+      "url": "https://github.com/DIEHARDave/diehard-pushraker.git",
+      "commit": "1ce04ae568fc668d48ba3435e0da475a1f5615bb",
+      "follow": "tags",
+      "author": "DIEHARDave (pushraker by noon92)",
+      "requires_os": "1.6",
+      "components": ["pushraker", "pushraker_cards", "pushraker_updates"]
     }
   ]
 }

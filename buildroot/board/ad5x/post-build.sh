@@ -62,7 +62,44 @@ if [ -n "$PYLIB" ]; then
 	rm -rf "$PYLIB/ensurepip" "$PYLIB/site-packages/numpy/f2py" \
 		"$PYLIB/site-packages/numpy/_core/include" \
 		"$PYLIB"/site-packages/numpy/_pyinstaller
+	# The libraries' build-only files: C/C++ sources and headers and Cython
+	# declarations (greenlet, wrapt, cffi, streaming_form_data, numpy,
+	# dbus_fast) next to their compiled modules. Klipper's chelper sources
+	# are in /usr/lib/klipper, not here.
+	find "$PYLIB/site-packages" -type f \( -name '*.c' -o -name '*.cpp' \
+		-o -name '*.h' -o -name '*.hpp' -o -name '*.pxd' \) -delete
+	# Bytecode never loaded: Python picks a compiled module (.so) over a
+	# .pyc of the same name (dbus_fast ships both)
+	find "$PYLIB/site-packages" -name '*.cpython-3*.so' | while read -r so; do
+		rm -f "${so%%.cpython-3*}.pyc"
+	done
+	# Standard library parts nothing here uses: subinterpreters,
+	# remote debugging (python -m asyncio ps), the profiler (cProfile),
+	# demos and jokes, the build Makefile (config-3.*), numpy's test tools
+	# (numpy imports numpy.testing only when asked for it)
+	rm -rf "$PYLIB"/lib-dynload/_interp*.so \
+		"$PYLIB"/lib-dynload/_remote_debugging.*.so \
+		"$PYLIB"/lib-dynload/_lsprof.*.so \
+		"$PYLIB/turtledemo" "$PYLIB/__phello__" "$PYLIB"/antigravity.py* \
+		"$PYLIB"/this.py* "$PYLIB"/config-3.* \
+		"$PYLIB/site-packages/numpy/testing" \
+		"$PYLIB"/site-packages/numpy/conftest.py*
 fi
+
+# Room in the 100 MiB slot: programs nothing on the printer runs, which no
+# Buildroot option leaves out. The sqlite3 shell (Moonraker uses the
+# library through Python's sqlite3 module), sudo's log server, log sender
+# and sudoers converter, iproute2's tc and bridge (NetworkManager and the
+# network scripts use ip only) with tc's data, ustreamer-dump, lzo's
+# example programs, git's Perl modules (no Perl), libstdc++'s gdb script
+# and libevent's RPC generator.
+rm -rf "$TARGET/usr/bin/sqlite3" "$TARGET/usr/bin/cvtsudoers" \
+	"$TARGET/usr/sbin/sudo_logsrvd" "$TARGET/usr/sbin/sudo_sendlog" \
+	"$TARGET/etc/sudo_logsrvd.conf" "$TARGET/sbin/tc" "$TARGET/sbin/bridge" \
+	"$TARGET/usr/lib/tc" "$TARGET/usr/bin/ustreamer-dump" \
+	"$TARGET/usr/libexec/lzo/examples" "$TARGET/usr/share/perl5" \
+	"$TARGET"/usr/lib/libstdc++*-gdb.py "$TARGET/usr/bin/event_rpcgen.py"
+rmdir "$TARGET/usr/libexec/lzo" 2>/dev/null || true
 
 # git: only what cloning and updating a plugin over https needs (all
 # builtins, plus git-remote-http(s), and git-submodule, a shell script

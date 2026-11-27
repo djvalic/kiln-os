@@ -17,6 +17,7 @@ endmenu
 source "$BR2_EXTERNAL_AD5X_PATH/package/klipper/Config.in"
 source "$BR2_EXTERNAL_AD5X_PATH/package/moonraker/Config.in"
 source "$BR2_EXTERNAL_AD5X_PATH/package/fluidd/Config.in"
+source "$BR2_EXTERNAL_AD5X_PATH/package/mainsail/Config.in"
 source "$BR2_EXTERNAL_AD5X_PATH/package/helixscreen/Config.in"
 source "$BR2_EXTERNAL_AD5X_PATH/package/python-inotify-simple/Config.in"
 source "$BR2_EXTERNAL_AD5X_PATH/package/python-libnacl/Config.in"

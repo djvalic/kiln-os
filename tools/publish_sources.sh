@@ -28,6 +28,7 @@
 #                                        from (+ klipper/mcu-patches, -configs)
 #   src-fluidd-source-<version>.tar.gz   Fluidd's source (the image ships its
 #                                        built web files)
+#   src-mainsail-source-<version>.tar.gz Mainsail's source (the same)
 #   src-buildroot-<version>.tar.gz       Buildroot itself
 # Our own packages (ad5x-*, local source) are this repository at TAG.
 # SOURCES_DRY=DIR: nothing on GitHub; the archives are written to DIR
@@ -206,6 +207,17 @@ if ! have "$a"; then
 	rm -f "$work/$a"
 fi
 printf '%s\t%s\t%s\t%s\n' fluidd-source "$fv" GPL-3.0 "$a (the image's fluidd.zip is built from it)" >> "$LIST"
+
+# Mainsail: the image ships its built web files too (mainsail.zip)
+msv=$(sed -n 's/^MAINSAIL_VERSION = //p' buildroot/package/mainsail/mainsail.mk)
+a=src-mainsail-source-$msv.tar.gz
+if ! have "$a"; then
+	curl -fsSL -o "$work/$a" "https://github.com/mainsail-crew/mainsail/archive/refs/tags/v$msv.tar.gz" ||
+		die "downloading Mainsail $msv"
+	upload "$work/$a"
+	rm -f "$work/$a"
+fi
+printf '%s\t%s\t%s\t%s\n' mainsail-source "$msv" GPL-3.0 "$a (the image's mainsail.zip is built from it)" >> "$LIST"
 
 # Buildroot (the build scripts around everything above)
 bv=$(git -C buildroot/src describe --tags --exact-match 2>/dev/null) ||

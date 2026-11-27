@@ -74,7 +74,8 @@ patches in `buildroot/package/helixscreen/`). It talks to Moonraker. See
 filament changer. Its controller (an N32G455) is on `/dev/ttyS4` over
 RS-485. Kiln OS drives it with `klipper/extras/ifs.py`, on Flashforge's
 firmware by default, or as a Klipper MCU (Settings > Devices > IFS
-firmware, an owner opt-in; [mcu-flashing.md](mcu-flashing.md)). See
+firmware with Settings > Advanced settings on, an owner opt-in;
+[mcu-flashing.md](mcu-flashing.md)). See
 [ifs-protocol.md](ifs-protocol.md).
 
 **Kiln OS** — The product name. Use it in anything people read.

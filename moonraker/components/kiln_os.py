@@ -96,6 +96,30 @@
 #                                       only with the owner's opt-in,
 #                                       refused while printing or while a
 #                                       switch runs. No G-code starts it.
+# The web interface on port 80 (docs/web-interface.md): Fluidd (the
+# default) or Mainsail, one at a time:
+#   GET  /machine/kiln_os/webui         the choice (/data/ad5x/webui), what
+#                                       nginx serves, the UIs this printer
+#                                       has, their versions, the update
+#                                       entries; also brings the update
+#                                       manager's entries in line with the
+#                                       choice (ad5x-webui over SSH asks
+#                                       for it after a switch)
+#   POST /machine/kiln_os/webui         ?name=fluidd|mainsail: the agent
+#                                       runs "ad5x-webui --no-sync NAME"
+#                                       (nginx reloaded, no reboot), also
+#                                       while printing; refused while the
+#                                       mainsail-kiln plugin serves both
+# Only the chosen UI may use Moonraker: a websocket that identifies as
+# the other one (client_name fluidd or mainsail, type web) is told "!!
+# This printer now uses NAME: reload the page" and closed, at a switch and
+# at every reconnect (not while the mainsail-kiln plugin serves both;
+# other clients, such as the touch screen, slicers or agents, never).
+# Only the served UI has an update entry (Fluidd's from moonraker-
+# updates.conf, Mainsail's registered here with the same settings): the
+# other's is parked in this component and comes back at a switch, with
+# no Moonraker restart. Klipper's macro KILN_WEBUI [NAME=] (macros/
+# system.cfg) calls the remote method kiln_webui, answered in the console.
 # Every endpoint answers an object (Moonraker adds HTTP's one "result");
 # errors are KilnError: an HTTP status by kind and "[REASON] text"
 # (docs/api.md, "Errors").
@@ -153,7 +177,7 @@ OS_RELEASE = pathlib.Path("/usr/lib/os-release")
 # "lane_data" are added while their components run
 FEATURES = ("ifs", "soak", "setup_wizard", "plugins", "kernel_retry",
             "boot_recovery", "3mf_upload", "print_error", "return_stock",
-            "ifs_firmware")
+            "ifs_firmware", "webui")
 # The update channel (docs/updates.md, "Test channel"): in Moonraker's
 # database, so it survives Kiln OS updates; only POST /machine/kiln_os/channel
 # writes it (a protected namespace)
@@ -199,6 +223,35 @@ IFS_ANSWERS_KLIPPER = pathlib.Path("/run/ad5x/ifs-klipper")
 IFS_TARGETS = ("stock", "klipper")
 IFS_STATES = ("running", "done", "failed")
 IFS_KEYS = ("target", "state", "phase", "reason", "message", "version")
+# The web interface on port 80 (lib/webui.sh has the same rules): the
+# choice (root's folder; ad5x-webui writes it), the updatable copies and
+# the image's files, nginx's port 80 root line (the name stays
+# fluidd-root.conf for every UI: plugins read it), and the nginx server
+# the mainsail-kiln plugin writes when it serves both UIs itself
+WEBUI_CHOICE = pathlib.Path("/data/ad5x/webui")
+WEBUI_WEB = pathlib.Path("/data/ad5x/web")
+WEBUI_SHARE = pathlib.Path("/usr/share")
+WEBUI_ROOT_CONF = pathlib.Path("/run/nginx/fluidd-root.conf")
+WEBUI_PLUGIN_CONF = pathlib.Path("/data/ad5x/nginx/mainsail.conf")
+WEBUI_PLUGIN = "mainsail-kiln"
+WEBUIS = ("fluidd", "mainsail")
+DEFAULT_WEBUI = "fluidd"
+WEBUI_TITLES = {"fluidd": "Fluidd", "mainsail": "Mainsail"}
+# The update entry kiln_os registers for a UI the config doesn't have
+# (Mainsail; Fluidd's is in moonraker-updates.conf), as there
+WEBUI_REPOS = {"fluidd": "fluidd-core/fluidd",
+               "mainsail": "mainsail-crew/mainsail"}
+AGENT_WEBUI = WORK_DIR / "webui"
+# Only the chosen interface may use Moonraker: a websocket that identifies
+# as the other (server.connection.identify, type "web", client_name
+# "fluidd" or "mainsail", as Fluidd 1.38 and Mainsail 2.19 send it) gets
+# this line in its console, then is closed after WEBUI_CLOSE_DELAY s (so
+# the line goes out first), at each reconnect too. Close code 1008:
+# policy violation.
+WEBUI_SHUT_OUT_TEXT = "!! This printer now uses {}: reload the page"
+WEBUI_CLOSE_DELAY = 1.0
+WEBUI_CLOSE_CODE = 1008
+REMOTE_WEBUI = "kiln_webui"
 # A Kiln OS release tag (not the daily packages "klipper-v...", not "sources")
 OS_TAG = re.compile(r"v\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?")
 
@@ -248,6 +301,9 @@ AGENT_REFUSALS: Tuple[Tuple[str, str], ...] = (
     ("the IFS firmware switch is off", "not_enabled"),
     ("this image has no Klipper firmware for the IFS", "not_available"),
     ("the printer is busy", "printer_busy"),
+    # ad5x-webui
+    ("the mainsail-kiln plugin serves both", "plugin_manages_webui"),
+    ("this image has no", "not_available"),
 )
 # Refusals that are failures on the printer (500)
 AGENT_REFUSAL_FAILURES = ("can't write the boot flag",)
@@ -560,6 +616,111 @@ def memory_report(st: Dict[str, Any]) -> List[str]:
     if st["restart_needed"]:
         lines.append("Takes effect at the next start (restart the printer)")
     return lines
+
+
+# The web interface on port 80 (docs/web-interface.md, lib/webui.sh)
+
+def webui_dirs(name: str) -> Tuple[pathlib.Path, pathlib.Path]:
+    """NAME's updatable copy in /data and the image's files"""
+    return WEBUI_WEB / name, WEBUI_SHARE / name
+
+
+def webui_dir(name: str) -> pathlib.Path:
+    """The folder nginx serves for NAME: the copy, else the image's"""
+    copy, image = webui_dirs(name)
+    return copy if (copy / "index.html").is_file() else image
+
+
+def webui_available(name: str) -> bool:
+    return name in WEBUIS and any(
+        (d / "index.html").is_file() for d in webui_dirs(name))
+
+
+def webui_stored() -> str:
+    """The stored choice as written ("" when none, not a plain file or
+    unreadable)"""
+    if not WEBUI_CHOICE.is_file() or WEBUI_CHOICE.is_symlink():
+        return ""
+    try:
+        with WEBUI_CHOICE.open("rb") as f:
+            raw = f.read(32)
+    except OSError:
+        return ""
+    # The first line, the whitespace around it taken off (spaces inside
+    # stay: "main sail" is no name); the same rule as lib/webui.sh
+    return raw.decode("ascii", "replace").split("\n", 1)[0].strip(
+        " \t\r\n\v\f")
+
+
+def webui_choice() -> str:
+    """The UI for port 80: the stored one when valid and on this printer,
+    else Fluidd"""
+    c = webui_stored()
+    return c if c in WEBUIS and webui_available(c) else DEFAULT_WEBUI
+
+
+def webui_version(name: str) -> Optional[str]:
+    """release_info.json's version of what nginx would serve for NAME"""
+    f = webui_dir(name) / "release_info.json"
+    if f.is_symlink():
+        return None
+    try:
+        m = re.search(r'"version"\s*:\s*"([^"]*)"', f.read_text()[:4096])
+    except (OSError, ValueError):
+        return None
+    # "v1.38.0" -> "1.38.0", as lib/webui.sh's webui_ver
+    return re.sub(r"^v", "", m.group(1)) if m else None
+
+
+def webui_served() -> Optional[str]:
+    """The UI nginx's port 80 root line names (None: neither, or no line
+    yet)"""
+    line = read_record(WEBUI_ROOT_CONF).strip().splitlines()
+    line = line[0].strip() if line else ""
+    for name in WEBUIS:
+        if line in (f"root {d};" for d in webui_dirs(name)):
+            return name
+    return None
+
+
+def webui_plugin() -> Optional[str]:
+    """The plugin that serves both UIs and picks port 80 itself"""
+    return WEBUI_PLUGIN if WEBUI_PLUGIN_CONF.is_file() else None
+
+
+def webui_active() -> str:
+    """The interface port 80 serves: nginx's root line when it names one
+    (the files ad5x-webui keeps in line with what nginx runs), else the
+    choice. The two differ only when a plugin put its own line back
+    (mainsail-kiln's DISABLE_PLUGIN restores Fluidd's) until the next
+    start or switch."""
+    return webui_served() or webui_choice()
+
+
+def webui_wanted() -> Tuple[str, ...]:
+    """The UIs that get an update entry: the one served, both while the
+    plugin serves both"""
+    return WEBUIS if webui_plugin() else (webui_active(),)
+
+
+def webui_status() -> Dict[str, Any]:
+    """GET /machine/kiln_os/webui's object, without the update part.
+    mismatch: nginx serves the other interface than the choice (no plugin
+    serving both): a switch to the choice (POST) puts them in line, as
+    the next start does."""
+    served, plugin = webui_served(), webui_plugin()
+    mismatch = plugin is None and served is not None \
+        and served != webui_choice()
+    return {
+        "webui": webui_choice(),
+        "default": DEFAULT_WEBUI,
+        "served": webui_served(),
+        "mismatch": mismatch,
+        "available": [n for n in WEBUIS if webui_available(n)],
+        "versions": {n: webui_version(n) for n in WEBUIS
+                     if webui_available(n)},
+        "plugin": webui_plugin(),
+    }
 
 
 def read_ifs_record() -> Dict[str, str]:
@@ -1200,14 +1361,32 @@ class KilnOS:
         self.server.register_endpoint(
             "/machine/kiln_os/ifs_firmware",
             RequestType.GET | RequestType.POST, self._handle_ifs_firmware)
-        # KILN_MEMORY_MODE (macros/system.cfg)
+        # JSON-RPC machine.kiln_os.get_webui and post_webui
+        self.server.register_endpoint(
+            "/machine/kiln_os/webui", RequestType.GET | RequestType.POST,
+            self._handle_webui)
+        # KILN_MEMORY_MODE, KILN_WEBUI (macros/system.cfg)
         self.server.register_remote_method(REMOTE_MEMORY,
                                            self._remote_memory_mode)
+        self.server.register_remote_method(REMOTE_WEBUI,
+                                           self._remote_webui)
+        # A connection of the web interface that isn't chosen is closed
+        self.server.register_event_handler(
+            "websockets:client_identified", self._on_client_identified)
         # Fluidd's and Mainsail's dismiss of the notice's announcement
         self.server.register_event_handler(
             "announcements:dismissed", self._on_announcement_dismissed)
         self.notice_lock = asyncio.Lock()
         self.deploy: Optional[KilnDeploy] = None
+        # The web interfaces' update entries (update_manager's updaters
+        # dict) and the ones parked while their UI isn't served
+        self.um: Any = None
+        self.webui_parked: Dict[str, Any] = {}
+        self.webui_lock = asyncio.Lock()
+        self.webui_tasks: set = set()
+        self.webui_closing: set = set()
+        self.webui_sync_task: Optional[asyncio.Future] = None
+        self.webui_sync_again = False
         self.db = self.server.lookup_component("database", None)
         if self.db is not None:
             try:
@@ -1245,6 +1424,13 @@ class KilnOS:
             self.server.add_warning(
                 "[kiln_os]: needs [update_manager]; Kiln OS updates off")
             return
+        # Before update_manager's own init: it initializes (and later
+        # refreshes) only the entries left in its dict
+        self.um = um
+        try:
+            self._webui_swap()
+        except Exception:
+            logging.exception("kiln_os: web interface update entries")
         src = Source(self.server, server_url, repo, token_file)
         cfg = um.app_config.read_supplemental_dict({"kiln_os": {}})
         self.deploy = KilnDeploy(cfg, src, self.get_channel)
@@ -1485,6 +1671,280 @@ class KilnOS:
             return await self.switch_ifs_firmware(
                 str(target).strip().lower() if target is not None else "")
         return await self.ifs_firmware_status()
+
+    # The web interface on port 80 (docs/web-interface.md)
+
+    def _webui_ours(self, upd: Any, name: str) -> bool:
+        """An update entry for NAME's copy (not one with another path: a
+        user's own entry for something else of that name stays)"""
+        path = getattr(upd, "path", None)
+        try:
+            return path is not None and pathlib.Path(path).resolve() \
+                == (WEBUI_WEB / name).resolve()
+        except (OSError, RuntimeError):
+            return False
+
+    def _webui_swap(self) -> List[Any]:
+        """The update entries in line with webui_wanted(): an unwanted
+        entry for a UI's copy is parked, a wanted one comes back from the
+        park or is registered (only once the copy exists: Moonraker
+        updates the copy). The entries that came in, for initialize()."""
+        um = self.um
+        if um is None:
+            return []
+        wanted = webui_wanted()
+        added: List[Any] = []
+        for name in WEBUIS:
+            upd = um.updaters.get(name)
+            if name in wanted and upd is None:
+                upd = self.webui_parked.pop(name, None)
+                if upd is not None:
+                    um.updaters[name] = upd
+                elif (WEBUI_WEB / name / "index.html").is_file():
+                    um.register_updater(name, {
+                        "type": "web", "channel": "stable",
+                        "repo": WEBUI_REPOS[name],
+                        "path": str(WEBUI_WEB / name)})
+                    upd = um.updaters.get(name)
+                if upd is not None:
+                    added.append(upd)
+                    logging.info(f"kiln_os: update entry {name} on")
+            elif name not in wanted and upd is not None \
+                    and self._webui_ours(upd, name):
+                self.webui_parked[name] = um.updaters.pop(name)
+                logging.info(f"kiln_os: update entry {name} parked (its "
+                             "web interface isn't served)")
+        return added
+
+    def request_webui_sync(self) -> None:
+        """sync_webui_updates in the background: a request never waits
+        for the update manager's lock (an update may hold it for
+        minutes). One runs at a time; a request while one runs makes it
+        run once more afterwards."""
+        if self.um is None:
+            return
+        if self.webui_sync_task is not None \
+                and not self.webui_sync_task.done():
+            self.webui_sync_again = True
+            return
+        self.webui_sync_task = asyncio.ensure_future(self._webui_sync_loop())
+
+    async def _webui_sync_loop(self) -> None:
+        while True:
+            self.webui_sync_again = False
+            try:
+                await self.sync_webui_updates()
+            except Exception:
+                logging.exception("kiln_os: web interface update entries")
+            if not self.webui_sync_again:
+                return
+
+    def webui_sync_pending(self) -> bool:
+        return self.webui_sync_task is not None \
+            and not self.webui_sync_task.done()
+
+    async def sync_webui_updates(self) -> None:
+        """At run time: _webui_swap under the update manager's lock (no
+        update of an entry is cut short), then the new entries
+        initialized and checked in the background"""
+        um = self.um
+        if um is None:
+            return
+        async with self.webui_lock:
+            lock = getattr(um, "cmd_request_lock", None)
+            if lock is not None:
+                async with lock:
+                    added = self._webui_swap()
+            else:
+                added = self._webui_swap()
+            for upd in added:
+                try:
+                    await upd.initialize()
+                except Exception:
+                    logging.exception("kiln_os: web interface entry init")
+                    continue
+                name = getattr(upd, "name", "")
+                if name and hasattr(um, "refresh_updater"):
+                    # kept until done (the loop only holds weak references)
+                    t = asyncio.ensure_future(self._webui_refresh(name))
+                    self.webui_tasks.add(t)
+                    t.add_done_callback(self.webui_tasks.discard)
+
+    async def _webui_refresh(self, name: str) -> None:
+        try:
+            await self.um.refresh_updater(name)
+        except Exception:
+            logging.exception(f"kiln_os: refreshing {name}")
+
+    def webui_entries(self) -> List[str]:
+        """The web interfaces with an update entry now"""
+        if self.um is None:
+            return []
+        return [n for n in WEBUIS if n in self.um.updaters]
+
+    async def webui_full_status(self) -> Dict[str, Any]:
+        """The GET object. Never waits for the update manager: the update
+        entries follow in the background (update_entries_pending)."""
+        st = webui_status()
+        # after a switch over SSH (ad5x-webui asks for this GET)
+        self.shut_out_webui_clients()
+        um = self.um
+        wanted = webui_wanted()
+        entries = self.webui_entries()
+        if um is not None and (
+                any(n not in entries for n in wanted
+                    if (WEBUI_WEB / n / "index.html").is_file()
+                    or n in self.webui_parked)
+                or any(n not in wanted and self._webui_ours(
+                    um.updaters[n], n) for n in entries)):
+            self.request_webui_sync()
+        st["update_entries"] = entries
+        st["update_entries_pending"] = self.webui_sync_pending()
+        # Only when the entries couldn't be brought in line (a wanted UI
+        # without an entry, nothing left to do): Moonraker's next start
+        # sets them up
+        st["moonraker_restart_needed"] = um is not None \
+            and not st["update_entries_pending"] and any(
+                n not in entries and (WEBUI_WEB / n).is_dir()
+                for n in wanted)
+        return st
+
+    def webui_shut_out(self, sc: Any) -> Optional[str]:
+        """The interface a connection SC identified as when it is the one
+        not chosen (None: leave it, also for every other client and while
+        the mainsail-kiln plugin serves both)"""
+        data = getattr(sc, "client_data", None)
+        if not isinstance(data, dict):
+            return None
+        name = str(data.get("name", "")).strip().lower()
+        if str(data.get("type", "")).lower() != "web" or name not in WEBUIS:
+            return None
+        # Against what nginx serves (not the stored choice: they differ
+        # when a plugin put its own line back); unknown: nobody is shut out
+        served = webui_served()
+        if webui_plugin() or served is None or name == served:
+            return None
+        return name
+
+    def _webui_close(self, sc: Any) -> None:
+        """Tell SC the chosen interface, then close it (once: a second
+        call while it waits for the close does nothing)"""
+        if sc in self.webui_closing:
+            return
+        self.webui_closing.add(sc)
+        title = WEBUI_TITLES[webui_active()]
+        text = WEBUI_SHUT_OUT_TEXT.format(title)
+        try:
+            sc.call_method("notify_gcode_response", [text])
+        except Exception:
+            logging.exception("kiln_os: telling a web interface to reload")
+
+        def close() -> None:
+            self.webui_closing.discard(sc)
+            if getattr(sc, "is_closed", False):
+                return
+            try:
+                sc.close_socket(WEBUI_CLOSE_CODE,
+                                f"This printer now uses {title}")
+            except Exception:
+                logging.exception("kiln_os: closing a web interface")
+        try:
+            asyncio.get_running_loop().call_later(WEBUI_CLOSE_DELAY, close)
+        except RuntimeError:
+            close()
+
+    def _on_client_identified(self, sc: Any) -> None:
+        name = self.webui_shut_out(sc)
+        if name is None:
+            return
+        logging.info(f"kiln_os: websocket {getattr(sc, 'uid', '?')} is "
+                     f"{name}, not the chosen web interface: closed")
+        self._webui_close(sc)
+
+    def shut_out_webui_clients(self) -> int:
+        """Close the connections of the interface not chosen (after a
+        switch); the number closed"""
+        wsm = self.server.lookup_component("websockets", None)
+        if wsm is None:
+            return 0
+        n = 0
+        for name in WEBUIS:
+            try:
+                clients = list(wsm.get_clients_by_name(name))
+            except Exception:
+                logging.exception("kiln_os: listing websocket clients")
+                return n
+            for sc in clients:
+                if self.webui_shut_out(sc) is not None:
+                    self._webui_close(sc)
+                    n += 1
+        if n:
+            logging.info(f"kiln_os: {n} connection(s) of the other web "
+                         "interface closed")
+        return n
+
+    async def set_webui(self, name: str) -> Dict[str, Any]:
+        """Ask the agent to put NAME on port 80; the reply is the GET
+        object with "changed", "previous" and the agent's "message" """
+        if name not in WEBUIS:
+            raise bad_parameter(
+                "No name given (fluidd or mainsail)" if not name
+                else f"name must be fluidd or mainsail, not '{name}'")
+        if webui_plugin():
+            raise KilnError(
+                "plugin_manages_webui", f"The {WEBUI_PLUGIN} plugin serves "
+                "both web interfaces (its WEB macro swaps ports 80 and 81); "
+                "disable it to switch here", 409)
+        if not webui_available(name):
+            raise KilnError("not_available", "This image has no "
+                            f"{WEBUI_TITLES[name]}", 409)
+        previous = webui_choice()
+        was_served = webui_served()
+        status = await ask_agent(self.server, AGENT_WEBUI, f"{name}\n",
+                                 ("done",), timeout=30)
+        logging.info(f"kiln_os: web interface {previous} -> {name}: "
+                     f"{status}")
+        # (webui_full_status closes the old interface's connections)
+        st = await self.webui_full_status()
+        st["previous"] = previous
+        st["changed"] = st["webui"] != previous \
+            or st["served"] != was_served
+        st["message"] = status.partition(":")[2].strip() or None
+        return st
+
+    async def _handle_webui(self, web_request: WebRequest
+                            ) -> Dict[str, Any]:
+        if web_request.get_request_type() == RequestType.POST:
+            name = web_request.get_str("name", None)
+            return await self.set_webui(
+                str(name).strip().lower() if name is not None else "")
+        return await self.webui_full_status()
+
+    async def _remote_webui(self, name: Any = None) -> None:
+        """KILN_WEBUI [NAME=fluidd|mainsail]: the web interface, or switch
+        it; the answer in the G-code console"""
+        try:
+            if name is None or str(name).strip() == "":
+                st = await self.webui_full_status()
+                lines = [f"// Web interface on port 80: "
+                         f"{WEBUI_TITLES[st['webui']]} (available: "
+                         + ", ".join(WEBUI_TITLES[n] for n in st["available"])
+                         + ")"]
+                if st["plugin"]:
+                    lines.append(f"// The {st['plugin']} plugin serves both "
+                                 "(its WEB macro swaps them)")
+            else:
+                st = await self.set_webui(str(name).strip().lower())
+                t = WEBUI_TITLES[st["webui"]]
+                lines = [f"// Web interface on port 80: {t}"
+                         + ("; reload the page" if st["changed"] else
+                            " (no change)")]
+        except Exception as e:
+            if not isinstance(e, KilnError):
+                logging.exception("kiln_os: KILN_WEBUI")
+            lines = [f"!! KILN_WEBUI: {e}"]
+        for line in lines:
+            self.server.send_event("server:gcode_response", line)
 
     # The notice as a Moonraker announcement (feed kiln_os): there while
     # notice_pending, removed otherwise. Its id changes with each add

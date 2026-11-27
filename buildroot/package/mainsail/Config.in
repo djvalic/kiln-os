@@ -1,0 +1,19 @@
+config BR2_PACKAGE_MAINSAIL
+	bool "mainsail"
+	depends on BR2_USE_MMU # nginx
+	select BR2_PACKAGE_NGINX
+	select BR2_PACKAGE_NGINX_HTTP
+	select BR2_PACKAGE_NGINX_HTTP_PROXY_MODULE
+	select BR2_PACKAGE_NGINX_HTTP_MAP_MODULE
+	select BR2_PACKAGE_NGINX_HTTP_GZIP_MODULE
+	select BR2_PACKAGE_NGINX_HTTP_GUNZIP_MODULE # nginx.conf, assets/
+	select BR2_PACKAGE_NGINX_HTTP_GZIP_STATIC_MODULE # nginx.conf
+	help
+	  Mainsail, the other web front end for Klipper/Moonraker: the
+	  prebuilt release, in /usr/share/mainsail. Off by default on the
+	  printer: Fluidd is served on port 80 until the owner picks
+	  Mainsail (ad5x-webui mainsail, POST /machine/kiln_os/webui;
+	  docs/web-interface.md). One of the two is served at a time, by
+	  the same nginx server as Fluidd.
+
+	  https://github.com/mainsail-crew/mainsail
