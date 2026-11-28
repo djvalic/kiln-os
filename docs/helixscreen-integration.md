@@ -23,8 +23,8 @@ for `LW` `https://github.com/Hrybmo/lesswaste/blob/3d42421a6ed020baaa7563c94a56a
 
 ## Our patches
 
-`buildroot/package/helixscreen/*.patch` on HelixScreen v1.2.0-alpha.1: 100
-files, `0001` to `0110` (the missing numbers were dropped because upstream
+`buildroot/package/helixscreen/*.patch` on HelixScreen v1.2.0-alpha.1: 101
+files, `0001` to `0111` (the missing numbers were dropped because upstream
 has them, or with the move to 1.2: 0061, the Z offset arrows, whose buttons
 1.2 names for what moves, and 0073, a test fix 1.2 has). `docs/setup-wizard.md` ("HelixScreen side") lists `0001` to
 `0019` with what each does: among them the AD5X setup steps (0001, 0002,
@@ -930,3 +930,16 @@ when it wakes (only a change, and only when the printer has the `ifs`
 object). Klipper's IFS module (`klipper/extras/ifs.py`) then switches the
 IFS status light off while the printer is idle; during a print or IFS work
 it stays on, and red always shows. No setting of its own.
+
+## Wi-Fi status poll reads the last scan (implemented: HelixScreen patch 0111)
+
+HelixScreen's NetworkManager backend polls the Wi-Fi status every 5 s and
+reads the SSID and signal from `nmcli device wifi list`. nmcli scans
+whenever its list is older than 30 s, so a connected printer scanned all
+channels about every 45 s, about 12 s off its channel each time; the
+RTL8821CU (rtw88) logs `timed out to flush queue 2` for each scan. On an
+AD5X with HelixScreen stopped there were no scans in 3 minutes. The poll
+now passes `--rescan no` and reads NetworkManager's last scan; the scan on
+the Wi-Fi page still scans. Test: `tests/unit/test_wifi_backend_networkmanager.cpp`
+(the fake nmcli marks a status read without `--rescan no`; the CONNECTED
+case requires none).

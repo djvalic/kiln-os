@@ -8,7 +8,7 @@ made.
 Risk: **High** = could damage hardware or stop a print, **Med** = could stop startup, a swap or a
 feature, **Low** = cosmetic or easy to spot.
 
-Last updated: 2026-11-27 (IFS status light on Klipper firmware: `generic-flashforge-ifs.cfg` names PB5/PB6 `_ifs_led_red`/`_ifs_led_green`, both off at start, hidden from Fluidd and Mainsail; `ifs.py` drives them, green ready, blinking busy, red after an error, off while the screen sleeps and no print runs; `IFS_LED ENABLE=` kept, `SLEEP=` not).
+Last updated: 2026-11-27 (IFS status light on Klipper firmware: `generic-flashforge-ifs.cfg` names PB5/PB6 `_ifs_led_red`/`_ifs_led_green` (both inverted: the LEDs light on a low pin), both off at start, hidden from Fluidd and Mainsail; `ifs.py` drives them, green ready, blinking busy, red after an error, off while the screen sleeps and no print runs; `IFS_LED ENABLE=` kept, `SLEEP=` not).
 Last updated: 2026-11-26 (PR #99: optional pre-cut retract before the cut in mode-2 PLA swaps, `[ifs] pre_cut_retract_length`, off by default; row "Pre-cut retract").
 Last updated: 2026-11-26 (PR #100: both print starts wait for the nozzle to reach 180 before brushing and 140 before the bed probe or mesh, part fan on during the second wait; row "Nozzle temperature for brushing and probing").
 Last updated: 2026-11-26 (HelixScreen patch 0109: with Settings > Advanced settings off, tips that only lead to a hidden row are not shown and problem messages naming one say to turn it on first; row "Advanced settings on the touch screen").

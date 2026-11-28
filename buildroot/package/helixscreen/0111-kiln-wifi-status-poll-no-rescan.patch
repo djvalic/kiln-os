@@ -1,0 +1,76 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: djvalic <djvalic@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 17:45:00 -0500
+Subject: [PATCH] wifi: the NetworkManager status poll reads the last scan, no
+ rescan
+
+Kiln OS: the 5 s status poll ran "nmcli device wifi list" for the SSID and
+signal. nmcli scans whenever its list is older than 30 s, so a connected
+printer scanned all channels every ~45 s, ~12 s off channel each time, and
+the RTL8821CU (rtw88) logged "timed out to flush queue 2" for each scan.
+Measured on an AD5X: 0 scans in 3 minutes with HelixScreen stopped. The
+poll now passes "--rescan no"; the Wi-Fi page's scan still scans.
+---
+ src/network/wifi_backend_networkmanager.cpp     | 10 +++++++---
+ tests/unit/test_wifi_backend_networkmanager.cpp | 10 +++++++++-
+ 2 files changed, 16 insertions(+), 4 deletions(-)
+
+diff --git a/src/network/wifi_backend_networkmanager.cpp b/src/network/wifi_backend_networkmanager.cpp
+index cc44de585a..62acfaae8f 100644
+--- a/src/network/wifi_backend_networkmanager.cpp
++++ b/src/network/wifi_backend_networkmanager.cpp
+@@ -1349,9 +1349,13 @@ std::optional<WifiBackend::ConnectionStatus> WifiBackendNetworkManager::poll_sta
+     // GENERAL.CONNECTION gives the NM profile name which can be "preconfigured"
+     // or other non-SSID values. The wifi list gives the real broadcast SSID.
+     if (status.connected) {
+-        // Get actual SSID and signal from the IN-USE network in wifi list
+-        std::string wifi_info =
+-            exec_nmcli("-t -f IN-USE,SSID,SIGNAL device wifi list ifname " + wifi_interface_);
++        // Get actual SSID and signal from the IN-USE network in wifi list.
++        // Kiln: "--rescan no" reads NetworkManager's last scan. Without it
++        // nmcli scans whenever that list is older than 30 s, so this 5 s poll
++        // kept a connected rtw88 (RTL8821CU) adapter scanning every ~45 s,
++        // ~12 s off channel each time ("timed out to flush queue" in dmesg).
++        std::string wifi_info = exec_nmcli("-t -f IN-USE,SSID,SIGNAL device wifi list ifname " +
++                                           wifi_interface_ + " --rescan no");
+         if (!wifi_info.empty()) {
+             std::istringstream wifi_stream(wifi_info);
+             std::string wifi_line;
+diff --git a/tests/unit/test_wifi_backend_networkmanager.cpp b/tests/unit/test_wifi_backend_networkmanager.cpp
+index 6fbb7b1b3a..886331798a 100644
+--- a/tests/unit/test_wifi_backend_networkmanager.cpp
++++ b/tests/unit/test_wifi_backend_networkmanager.cpp
+@@ -204,8 +204,10 @@ case "$*" in
+   exit 0 ;;
+ "-t -f GENERAL device show "*)
+   cat "$NMCLI_DIR/status-general" 2>/dev/null; exit 0 ;;
+-"-t -f IN-USE,SSID,SIGNAL device wifi list ifname "*)
++"-t -f IN-USE,SSID,SIGNAL device wifi list ifname "*" --rescan no")
+   cat "$NMCLI_DIR/status-wifi" 2>/dev/null; exit 0 ;;
++"-t -f IN-USE,SSID,SIGNAL device wifi list ifname "*)
++  : > "$NMCLI_DIR/status-scanned"; cat "$NMCLI_DIR/status-wifi" 2>/dev/null; exit 0 ;;
+ "-t -f IP4.ADDRESS device show "*)
+   cat "$NMCLI_DIR/status-ip4" 2>/dev/null; exit 0 ;;
+ esac
+@@ -301,6 +303,10 @@ exit 0
+         std::ofstream(dir + "/status-ip4") << ip4;
+     }
+ 
++    /// Kiln: whether a status read listed Wi-Fi without "--rescan no", which
++    /// makes nmcli scan when its list is older than 30 s.
++    bool status_scanned() const { return std::filesystem::exists(dir + "/status-scanned"); }
++
+     /// Every acting invocation's argv, in order.
+     std::vector<std::vector<std::string>> history() {
+         std::ifstream f(history_file);
+@@ -775,6 +781,8 @@ TEST_CASE("NM backend: Kiln: CONNECTED listeners read the joined network",
+     CHECK(seen.mac_address == "88:A9:A7:00:11:22");
+     // The reads are not joins: only the connect itself acted
+     CHECK(fake.call_count() == 1);
++    // The status reads never ask NetworkManager for a new scan
++    CHECK_FALSE(fake.status_scanned());
+ 
+     // The poll after it, reading the same network, sees no transition: no
+     // second CONNECTED and (1.2) no ADDRESS_CHANGED either
+-- 
+2.47.0

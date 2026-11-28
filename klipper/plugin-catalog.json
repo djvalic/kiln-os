@@ -73,10 +73,10 @@
     },
     {
       "name": "ff_nfc",
-      "title": "NFC filament tags",
-      "description": "Scan a spool's NFC/RFID tag, pick the IFS slot, and its material, colour and Spoolman spool are set (needs a USB NFC reader: PN532 or ACR122U)",
+      "title": "NFC filament tags (LaneTag USB)",
+      "description": "Scan a spool's NFC/RFID tag, pick the IFS slot, and its material, colour and Spoolman spool are set (needs a USB NFC reader: ACR1552U, ACR122U or another PC/SC reader, or a PN532; RC522 and PN5180 through a USB bridge)",
       "url": "https://github.com/DIEHARDave/FF_NFC.git",
-      "commit": "7b15a271d08fcf0642ff3b8a358472c224ec486b",
+      "commit": "7f357b2b7d4a73948d5119166186b19fed72967f",
       "follow": "tags",
       "author": "DIEHARDave",
       "requires_os": "1.6",

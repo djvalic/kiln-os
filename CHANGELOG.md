@@ -11,6 +11,26 @@ the issue: it is closed by hand after the release.
 
 ## Unreleased
 
+## v1.0.1-rc5 (2026-11-27)
+
+- **The IFS status light is off while the printer is idle** and comes back
+  when the screen wakes (IFS on Klipper firmware). It was wired the other
+  way round, so "off" showed red and green together; green now means
+  ready, blinking means working, red means a problem.
+- **Wi-Fi no longer scans all the time while connected.** The touch
+  screen's Wi-Fi status check made the Wi-Fi chip scan every channel about
+  every 45 seconds, taking it off your network for about 12 seconds each
+  time. This is the likely cause of Wi-Fi dropping a few minutes after
+  start on some printers. The status check now reads the last scan; the
+  scan on the Wi-Fi page still scans.
+- **NFC filament tags plugin moved to v0.5.0** (DIEHARDave's FF_NFC, now
+  named LaneTag USB). With the AFC plugin from the catalog, a scanned spool
+  goes to the slot's AFC lane again: v0.4.0 did not find the lanes of
+  AFC's v0.3.0. Without AFC, a scan now also gives the slot its Spoolman
+  spool, vendor, name and bed temperature (plugin API 1.12, issue #101),
+  and `NFC_ASSIGN` takes `LANE=` as well as `SLOT=`. The plugin keeps its
+  name `ff_nfc`, so installs keep updating.
+
 ## v1.0.1-rc4 (2026-11-27)
 
 - **`LOAD_FILAMENT` is refused while a print is running** (it would push

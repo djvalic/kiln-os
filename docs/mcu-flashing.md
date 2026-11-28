@@ -210,9 +210,12 @@ firmware, so the IFS can always be written again:
   of a working IFS.
 
 **Status light.** On Klipper firmware Kiln drives the light on the IFS
-(`generic-flashforge-ifs.cfg`: `[output_pin _ifs_led_red]` on PB5,
-`[output_pin _ifs_led_green]` on PB6; the leading `_` keeps them out of
-Fluidd's and Mainsail's outputs). Both are off until Klipper is ready.
+(`generic-flashforge-ifs.cfg`: `[output_pin _ifs_led_red]` on `!PB5`,
+`[output_pin _ifs_led_green]` on `!PB6`: each colour lights when its pin
+is low, so both pins are inverted; the leading `_` keeps them out of
+Fluidd's and Mainsail's outputs). Both are off until Klipper is ready
+(while the IFS board itself starts, before Klipper configures it, the
+light can show for a moment).
 Then:
 
 | The IFS | Light |
@@ -230,7 +233,8 @@ the screen went to sleep or woke up (the touch screen sends it; not kept,
 awake at every Klipper start). `IFS_LED` alone shows both. On
 Flashforge's firmware the IFS drives its own light and Kiln leaves it
 alone. Before v1.0.2 the config held PB5 on, so the IFS showed red all
-the time.
+the time. In v1.0.1-rc4 the pins were not inverted, so "off" lit red and
+green together (seen idle with the screen asleep); fixed in v1.0.1-rc5.
 
 Tests: `tools/test_update_agent_ifs.sh` (the agent: opt-in, refusals, the
 background job, the other requests while it runs, interrupted at start),
